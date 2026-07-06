@@ -1,6 +1,5 @@
 ﻿/**
  * Utility functions for memory plugin
- * Supports both deveco and opencode CLI tools
  */
 import path from 'path'
 import os from 'os'
@@ -13,17 +12,11 @@ export const MEMORY_DIR_NAME = 'memory'
 export const FRONTMATTER_MAX_LINES = 30
 
 /**
- * Detect which CLI is running (deveco vs opencode)
- * Returns 'deveco' if the binary name contains 'deveco', otherwise 'opencode'
+ * Get the global data directory.
+ * Default: ~/.deveco
  */
-export function detectCLI(): 'deveco' | 'opencode' {
-  const argv1 = process.argv[1] || ''
-  return argv1.includes('deveco') ? 'deveco' : 'opencode'
-}
-
 export function getGlobalDataDir(): string {
-  const cli = detectCLI()
-  return path.join(os.homedir(), cli === 'deveco' ? '.deveco' : '.opencode')
+  return path.join(os.homedir(), '.deveco')
 }
 
 export function getMemoryPath(
@@ -37,8 +30,7 @@ export function getMemoryPath(
   }
 
   if (storageMode === 'project') {
-    const cli = detectCLI()
-    return path.join(directory, cli === 'deveco' ? '.deveco' : '.opencode', MEMORY_DIR_NAME)
+    return path.join(directory, '.deveco', MEMORY_DIR_NAME)
   }
 
   const globalDir = getGlobalDataDir()

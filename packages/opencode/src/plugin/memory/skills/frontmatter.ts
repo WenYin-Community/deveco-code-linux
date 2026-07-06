@@ -36,7 +36,7 @@ export function parseSkillFrontmatter(rawContent: string): {
   
   // Parse YAML frontmatter (simple key: value parsing)
   const frontmatterLines = lines.slice(1, endIndex)
-  const metadata: Record<string, any> = {}
+  const metadata: Record<string, unknown> = {}
   
 for (const line of frontmatterLines) {
     const colonIndex = line.indexOf(':')
@@ -58,12 +58,12 @@ for (const line of frontmatterLines) {
   
   return {
     metadata: {
-      name: metadata.name || '',
-      description: metadata.description || '',
-      platforms: metadata.platforms,
-      slashCommand: metadata.slashCommand || undefined,
-      created: metadata.created ? parseInt(metadata.created) : undefined,
-      updated: metadata.updated ? parseInt(metadata.updated) : undefined,
+      name: (metadata.name as string) || '',
+      description: (metadata.description as string) || '',
+      platforms: metadata.platforms as string[] | undefined,
+      slashCommand: (metadata.slashCommand as string) || undefined,
+      created: metadata.created ? parseInt(metadata.created as string) : undefined,
+      updated: metadata.updated ? parseInt(metadata.updated as string) : undefined,
     },
     content,
   }

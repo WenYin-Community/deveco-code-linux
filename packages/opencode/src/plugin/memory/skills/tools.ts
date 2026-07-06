@@ -89,7 +89,7 @@ function fuzzyMatch(content: string, target: string): { found: boolean; index: n
 /**
  * skill-manage tool handler
  */
-async function handleSkillManage(args: Record<string, unknown>, _ctx: any): Promise<string> {
+async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
   const action = args.action as string
   const category = args.category as string
   const name = args.name as string
@@ -284,7 +284,7 @@ const SKILL_LIST_SCHEMA = {
     .describe('Filter by category (optional)'),
 }
 
-async function handleSkillList(args: Record<string, unknown>, _ctx: any): Promise<string> {
+async function handleSkillList(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
   const category = args.category as string | undefined
   
   // Initialize storage
@@ -366,7 +366,7 @@ const SKILL_VIEW_SCHEMA = {
     .describe('Optional supporting file to also view (e.g., "references/example.md")'),
 }
 
-async function handleSkillView(args: Record<string, unknown>, _ctx: any): Promise<string> {
+async function handleSkillView(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
   const category = args.category as string
   const name = args.name as string
   const filePath = args.file_path as string | undefined

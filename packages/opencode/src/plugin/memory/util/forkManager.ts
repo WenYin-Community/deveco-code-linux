@@ -17,6 +17,18 @@ import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from './logger'
 import { sleep } from './async'
 
+/**
+ * Lock/state file names used by the memory plugin.
+ * Shared between forkManager (permission rules) and index.ts (permission.ask handler).
+ */
+export const LOCK_FILE_NAMES = [
+  '.extraction-lock',
+  '.consolidate-lock',
+  '.skill-review-lock',
+  '.auto-dream-state.json',
+  '.pending-expiry.json',
+] as const
+
 const activeForkSessionIDs = new Set<string>()
 const forkSessionAgentType = new Map<string, ForkedAgentType>()
 
@@ -160,13 +172,11 @@ function buildExternalDirectoryRules(memoryRoot: string): PermissionRule[] {
 
 function buildLockWriteRules(memoryRoot: string): PermissionRule[] {
   const normalizedRoot = memoryRoot.replace(/\\/g, '/')
-  return [
-    { permission: 'edit', pattern: normalizedRoot + '/.extraction-lock', action: 'allow' },
-    { permission: 'edit', pattern: normalizedRoot + '/.consolidate-lock', action: 'allow' },
-    { permission: 'edit', pattern: normalizedRoot + '/.skill-review-lock', action: 'allow' },
-    { permission: 'edit', pattern: normalizedRoot + '/.auto-dream-state.json', action: 'allow' },
-    { permission: 'edit', pattern: normalizedRoot + '/.pending-expiry.json', action: 'allow' },
-  ]
+  return LOCK_FILE_NAMES.map(name => ({
+    permission: 'edit',
+    pattern: normalizedRoot + '/' + name,
+    action: 'allow',
+  }))
 }
 
 export function getExtractionPermissionRules(includeSkills: boolean = false, memoryRoot?: string): PermissionRuleset {
@@ -234,9 +244,9 @@ export async function setSessionPermissions(
   rules: PermissionRuleset,
 ): Promise<boolean> {
   try {
-    const result = await client.session.update({
-      path: { id: sessionID } as any,
-      body: { permission: rules } as any,
+    const result = await (client.session.update as unknown as (args: Record<string, unknown>) => Promise<{ error?: unknown; data?: unknown }>)({
+      path: { id: sessionID },
+      body: { permission: rules },
     })
 
     if (result.error) {

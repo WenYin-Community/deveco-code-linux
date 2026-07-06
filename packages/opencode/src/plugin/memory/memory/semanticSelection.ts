@@ -120,6 +120,8 @@ private async forkSession(): Promise<string | undefined> {
         const retryResult = await this.client.session.get({ path: { id: forkedID } })
         if (retryResult.error || !retryResult.data) {
           logger.warn('[SemanticSelection]', 'Forked session verification failed:', verifyResult.error)
+          // Clean up the leaked forked session
+          try { await this.client.session.delete({ path: { id: forkedID } }) } catch {}
           return undefined
         }
       }
@@ -147,12 +149,14 @@ private async forkSession(): Promise<string | undefined> {
       },
     })
 
+    let timer: ReturnType<typeof setTimeout> | undefined
     const result = await Promise.race([
       resultPromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Semantic selection timeout')), timeoutMs)
-      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Semantic selection timeout')), timeoutMs)
+      }),
     ])
+    clearTimeout(timer)
 
     if (result.error) {
       throw new Error(`Prompt failed: ${JSON.stringify(result.error)}`)
@@ -170,7 +174,7 @@ private async forkSession(): Promise<string | undefined> {
 
   parseSelectionResult(rawOutput: string): SelectionResult[] {
     try {
-      const jsonMatch = rawOutput.match(/\[[\s\S]*\]/)
+      const jsonMatch = rawOutput.match(/\[[\s\S]*?\]/)
       if (!jsonMatch) {
         logger.warn('[SemanticSelection]', 'No JSON array found in output')
         return []
@@ -184,11 +188,11 @@ private async forkSession(): Promise<string | undefined> {
       }
 
       return parsed
-        .filter((item: any) =>
-          typeof item.name === 'string' &&
-          typeof item.relevance === 'number'
+        .filter((item: unknown): item is { name: string; relevance: number } =>
+          typeof (item as Record<string, unknown>).name === 'string' &&
+          typeof (item as Record<string, unknown>).relevance === 'number'
         )
-        .map((item: any) => ({
+        .map((item) => ({
           name: item.name,
           relevance: Math.min(Math.max(item.relevance, 0), 1),
         }))

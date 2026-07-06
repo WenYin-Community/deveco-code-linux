@@ -226,52 +226,54 @@ export class MemoryStorage {
   async parseEntrypoint(): Promise<MemoryHeader[]> {
     const content = await this.readEntrypoint()
     if (!content) return []
-    
-    const headers: MemoryHeader[] = []
+
     const lines = content.split("\n")
-    
-    // Find the "## Memories" section
+
+    // Find the "## Memories" section and collect entries
     let inMemoriesSection = false
-    
+    const entries: { name: string; filename: string; description: string }[] = []
+
     for (const line of lines) {
       if (line.trim() === "## Memories") {
         inMemoriesSection = true
         continue
       }
-      
+
       if (!inMemoriesSection) continue
-      
+
       // Stop at next section header
       if (line.startsWith("## ") && line.trim() !== "## Memories") {
         break
       }
-      
+
       // Parse entry format: - [name](filename.md) description
       const match = line.match(/^- \[([^\]]+)\]\(([^)]+)\) (.+)$/)
       if (match) {
-        const [, name, filename, description] = match
-        
-        // Determine type from description prefix or read from file
-        const filepath = path.join(this.memoryPath, filename)
-        const header = await readFrontmatter(filepath)
-        
-        if (header) {
-          headers.push(header)
-        } else {
-          // Fallback: create header from parsed info with unknown type
-          headers.push({
-            name,
-            description,
-            type: "project", // Default type
-            filepath,
-          })
-        }
+        entries.push({ name: match[1], filename: match[2], description: match[3] })
       }
     }
-    
+
+    // Parallel frontmatter reads
+    const results = await Promise.all(
+      entries.map(async (entry) => {
+        const filepath = path.join(this.memoryPath, entry.filename)
+        const header = await readFrontmatter(filepath)
+        if (header) return header
+        // Fallback: create header from parsed info with unknown type
+        return {
+          name: entry.name,
+          description: entry.description,
+          type: "project" as const,
+          filepath,
+        }
+      })
+    )
+
+    const headers = results.filter((h): h is MemoryHeader => h !== null)
+
     // Sort by modification time, newest first
     headers.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
-    
+
     return headers
   }
 
@@ -296,8 +298,8 @@ export class MemoryStorage {
       try {
         const entrypointContent = await this.readEntrypoint()
         logger.warn('[MemoryStorage]', 'MEMORY.md content length:', entrypointContent.length, 'first 200 chars:', entrypointContent.slice(0, 200))
-      } catch (e: any) {
-        logger.warn('[MemoryStorage]', 'Failed to read MEMORY.md:', e.message)
+      } catch (e) {
+        logger.warn('[MemoryStorage]', 'Failed to read MEMORY.md:', e instanceof Error ? e.message : String(e))
       }
     }
 
@@ -310,8 +312,8 @@ export class MemoryStorage {
         const entrypointExists = files.includes(ENTRYPOINT_NAME)
         const mdFiles = files.filter(f => f.endsWith('.md') && f !== ENTRYPOINT_NAME && !f.startsWith('.'))
         logger.warn('[MemoryStorage]', 'directory contents:', JSON.stringify(files), 'entrypointExists:', entrypointExists, 'mdFilesCount:', mdFiles.length, 'mdFiles:', mdFiles.join(','))
-      } catch (e: any) {
-        logger.warn('[MemoryStorage]', 'cannot read directory:', e.message)
+      } catch (e) {
+        logger.warn('[MemoryStorage]', 'cannot read directory:', e instanceof Error ? e.message : String(e))
       }
     } else {
       logger.info('[MemoryStorage]', 'list() returning:', dirHeaders.length, 'names:', dirHeaders.map(h => h.name).join(','))
@@ -325,15 +327,11 @@ export class MemoryStorage {
   private async listFromDirectory(): Promise<MemoryHeader[]> {
     const files = await fs.readdir(this.memoryPath)
     const memoryFiles = files.filter(isMemoryFile)
-    const headers: MemoryHeader[] = []
 
-    for (const file of memoryFiles) {
-      const filepath = path.join(this.memoryPath, file)
-      const header = await readFrontmatter(filepath)
-      if (header) {
-        headers.push(header)
-      }
-    }
+    const results = await Promise.all(
+      memoryFiles.map(f => readFrontmatter(path.join(this.memoryPath, f)))
+    )
+    const headers = results.filter((h): h is MemoryHeader => h !== null)
 
     // Sort by modification time, newest first
     headers.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))

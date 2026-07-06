@@ -3,8 +3,8 @@
  * Manages persistent state for gate checks across process restarts
  */
 
-import { promises as fs } from 'fs'
-import * as path from 'path'
+import fs from "fs/promises"
+import path from "path"
 
 export interface AutoDreamState {
   lastConsolidationAt: number
@@ -44,8 +44,8 @@ export async function readDreamState(memoryRoot: string): Promise<AutoDreamState
     state.lastCountedSessionID = state.lastCountedSessionID ?? ''
     
     return state
-  } catch (error: any) {
-    if (error.code === 'ENOENT') {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return DEFAULT_DREAM_STATE
     }
     return DEFAULT_DREAM_STATE

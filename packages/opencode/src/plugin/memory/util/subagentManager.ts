@@ -32,7 +32,7 @@ export async function detectAndRegisterSubagent(
         data?: {
           parentID?: string
         }
-        error?: any
+        error?: unknown
       }>
     }
   },

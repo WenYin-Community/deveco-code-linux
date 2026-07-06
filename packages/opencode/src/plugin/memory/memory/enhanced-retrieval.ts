@@ -9,6 +9,7 @@ import { formatMemoryManifest } from "../util/path"
 import { logger } from "../util/logger"
 import { BM25 } from "../util/bm25"
 import { SemanticSelectionExecutor } from "./semanticSelection"
+import type { OpencodeClient } from "@opencode-ai/sdk"
 
 export interface RetrievalOptions {
   limit?: number
@@ -22,14 +23,14 @@ export interface RetrievalOptions {
 export class EnhancedMemoryRetrieval {
   private recallConfig: MemoryRecallConfig
   private semanticConfig: SemanticSelectionConfig
-  private client: any
+  private client?: OpencodeClient
 
   constructor(
     private storage: MemoryStorage,
     private config: MemoryConfig = DEFAULT_MEMORY_CONFIG,
     recallConfig?: Partial<MemoryRecallConfig>,
     semanticConfig?: Partial<SemanticSelectionConfig>,
-    client?: any,
+    client?: OpencodeClient,
   ) {
     this.recallConfig = { ...DEFAULT_MEMORY_RECALL_CONFIG, ...recallConfig }
     this.semanticConfig = { ...DEFAULT_SEMANTIC_SELECTION_CONFIG, ...semanticConfig }
@@ -38,7 +39,7 @@ export class EnhancedMemoryRetrieval {
 
   getRecallConfig(): MemoryRecallConfig { return this.recallConfig }
   getSemanticConfig(): SemanticSelectionConfig { return this.semanticConfig }
-  getClient(): any { return this.client }
+  getClient(): OpencodeClient | undefined { return this.client }
 
   /**
    * Find relevant memories using hybrid retrieval
@@ -227,7 +228,7 @@ export class EnhancedMemoryRetrieval {
    * Get memories formatted for injection
    * Uses smart truncation instead of hard limit when truncation.enabled
    */
-  async getMemoriesForPrompt(query?: string, limit?: number, sessionID?: string): Promise<{ index: string; content: string; truncated: boolean }> {
+  async getMemoriesForPrompt(query?: string, limit?: number, sessionID?: string): Promise<{ index: string; content: string; truncated: boolean; count: number }> {
     // Merge truncation config with defaults
     const truncationConfig: TruncationConfig = {
       ...DEFAULT_TRUNCATION_CONFIG,
@@ -296,7 +297,7 @@ export class EnhancedMemoryRetrieval {
       .map((m) => `### ${m.header.name} (${m.header.type})\n\n${m.content}`)
       .join("\n\n---\n\n")
     
-    return { index, content, truncated: wasTruncated }
+    return { index, content, truncated: wasTruncated, count: truncatedMemories.length }
   }
 
   /**

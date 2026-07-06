@@ -1,28 +1,16 @@
 /**
  * Skill Path Utilities
- * Resolve skills root directory using XDG config path
- * Supports both deveco and opencode CLI tools
+ * Resolve skills root directory using Global.Path.config (XDG-compliant).
  */
-import { homedir } from 'os'
 import { join } from 'path'
-import { detectCLI } from '../util/path'
-
-/**
- * Get XDG config directory
- * Uses ~/.config/deveco or ~/.config/opencode based on CLI detection
- */
-function getXdgConfigDir(): string {
-  const cli = detectCLI()
-  return join(homedir(), '.config', cli === 'deveco' ? 'deveco' : 'opencode')
-}
+import { Global } from '@opencode-ai/core/global'
 
 /**
  * Get the skills root directory
- * Skills are stored globally at XDG config path to match CLI's skill loading
- * Pattern: ~/.config/<cli>/skills/ (all platforms)
+ * Skills are stored globally at XDG config path: Global.Path.config/skills/
  */
 export function getSkillsRoot(): string {
-  return join(getXdgConfigDir(), 'skills')
+  return join(Global.Path.config, 'skills')
 }
 
 /**

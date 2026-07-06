@@ -1,20 +1,21 @@
-import type { Plugin } from "@opencode-ai/plugin"
-import { initLogger, logger } from './util/logger';
+import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext } from "@opencode-ai/plugin"
+import type { OpencodeClient } from "@opencode-ai/sdk"
+import { initLogger, logger, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
 import { normalizeProjectPath } from './util/path';
 import { MemoryInjection } from './memory/injection';
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
-import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG } from './memory/types';
+import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType } from './memory/types';
 // Auto Dream imports
 import { initAutoDream, executeAutoDream, handleChatMessageTrigger, checkAllGates, isConsolidationInProgress, markDreamDone } from './autoDream/autoDream';
-import { isForkedSession, unregisterForkSession, getForkSessionAgent } from './util/forkManager';
+import { isForkedSession, unregisterForkSession, getForkSessionAgent, LOCK_FILE_NAMES } from './util/forkManager';
 import { isSubagentSession, isBackgroundSession, detectAndRegisterSubagent } from './util/subagentManager';
 
 
 // Auto Memory Extraction imports
 import { initAutoMemoryExtraction, getExtractionRunner, } from './memory/extractionRunner';
 import { releaseExtractionLock } from './memory/extractionLock';
-import { processToolCallForSkill, incrementTurnCounter, markExtractionCompleted, resetSkillCounter as resetExtractionSkillCounter, getThresholdState, updateThresholdState } from './memory/extractionThreshold';
+import { processToolCallForSkill, incrementTurnCounter, markExtractionCompleted, resetExtractionSkillCounter, getThresholdState, updateThresholdState } from './memory/extractionThreshold';
 // Skills imports
 import { SkillStorage, SkillInjection, SKILLS_GUIDANCE, SLASH_COMMANDS_GUIDANCE, } from './skills';
 import { checkSkillThreshold, incrementSkillCounter, resetSkillCounter, DEFAULT_SKILL_TRIGGER_STATE, } from './skills/trigger';
@@ -44,35 +45,53 @@ const DEFAULT_PLUGIN_CONFIG = {
     subagentHooks: DEFAULT_SUBAGENT_HOOKS_CONFIG,
 };
 
-const stateMap = new Map();
-const pendingRecallMap = new Map();
-const pendingWriteMap = new Map();
-const recalledUserMsgIds = new Set<string>();
-
-function setPendingWrite(sessionID: string, text: string) {
-    const existing = pendingWriteMap.get(sessionID);
-    if (existing) {
-        pendingWriteMap.set(sessionID, existing + ', ' + text);
-    } else {
-        pendingWriteMap.set(sessionID, text);
-    }
+interface PluginState {
+    storage: MemoryStorage
+    retrieval: EnhancedMemoryRetrieval
+    injection: MemoryInjection
+    config: ReturnType<typeof mergeConfig>['autoMemory']
+    autoDreamConfig: ReturnType<typeof mergeConfig>['autoDream']
+    extractionConfig: ReturnType<typeof mergeConfig>['extraction']
+    skillStorage: SkillStorage
+    skillInjection: SkillInjection
+    skillConfig: ReturnType<typeof mergeConfig>['skills']
+    skillTriggerState: typeof DEFAULT_SKILL_TRIGGER_STATE
+    slashCommandsEnabled: boolean
+    commandRegistry: ReturnType<typeof getCommandRegistry>
+    client: OpencodeClient | undefined
+    memoryRecallConfig: ReturnType<typeof mergeConfig>['memoryRecall']
+    semanticSelectionConfig: ReturnType<typeof mergeConfig>['semanticSelection']
+    subagentHooksConfig: typeof DEFAULT_SUBAGENT_HOOKS_CONFIG
+    expiryConfig: ReturnType<typeof mergeConfig>['expiry']
+    pendingRecallMap: Map<string, string>
+    pendingWriteMap: Map<string, string>
+    recalledUserMsgIds: Set<string>
+    pendingExpiryToastShown: boolean
 }
 
-let pendingExpiryToastShown = false;
+interface PendingDeletion {
+    name: string
+    type: string
+    ageDays: number
+    ttlDays: number | null
+}
 
-async function getPendingExpiryNotice(state: any): Promise<string | null> {
+const stateMap = new Map<string, PluginState>();
+const initPromises = new Map<string, Promise<PluginState>>();
+
+async function getPendingExpiryNotice(state: PluginState): Promise<string | null> {
     if (!state.expiryConfig?.enabled) return null;
     const pending = await state.storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return null;
-    const items = pending.pendingDeletions.map((d: any) => `- **${d.name}** (${d.type}, age: ${d.ageDays}d, TTL: ${d.ttlDays ?? '∞'})`).join('\n');
+    const items = pending.pendingDeletions.map((d: PendingDeletion) => `- **${d.name}** (${d.type}, age: ${d.ageDays}d, TTL: ${d.ttlDays ?? '∞'})`).join('\n');
     return `\n\n---\n⚠️ **Pending expiry**: ${pending.pendingDeletions.length} memories marked for deletion:\n${items}\n\n**You MUST immediately use the \`question\` tool to present the user with interactive approve/reject choices.** Do not just describe the expiry passively — ask the user to decide: "确认删除" (call \`dream-approve\`) or "保留" (call \`dream-reject\`).`;
 }
 
-async function showPendingExpiryToast(state: any): Promise<void> {
-    if (pendingExpiryToastShown || !state.client) return;
+async function showPendingExpiryToast(state: PluginState): Promise<void> {
+    if (state.pendingExpiryToastShown || !state.client) return;
     const pending = await state.storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return;
-    pendingExpiryToastShown = true;
+    state.pendingExpiryToastShown = true;
     try {
         await state.client.tui.showToast({
             body: {
@@ -85,11 +104,21 @@ async function showPendingExpiryToast(state: any): Promise<void> {
     } catch (e) { logger.error('[PendingExpiry]', 'toast failed:', e); }
 }
 
-function mergeConfig(pluginConfig: any) {
+type PluginConfig = Record<string, unknown> & {
+    autoMemory?: Record<string, unknown>
+    autoDream?: Record<string, unknown>
+    extraction?: Record<string, unknown>
+    skills?: Record<string, unknown>
+    memoryRecall?: Record<string, unknown>
+    semanticSelection?: Record<string, unknown>
+    subagentHooks?: Record<string, unknown>
+}
+
+function mergeConfig(pluginConfig: PluginConfig) {
     const legacyEnabled = pluginConfig.enabled;
     const autoMemoryConfig = {
         ...DEFAULT_MEMORY_CONFIG,
-        ...pluginConfig.autoMemory,
+        ...(pluginConfig.autoMemory as Record<string, unknown> | undefined),
         enabled: pluginConfig.autoMemory?.enabled ?? legacyEnabled ?? DEFAULT_MEMORY_CONFIG.enabled,
         maxMemoryFiles: pluginConfig.maxMemoryFiles ?? pluginConfig.autoMemory?.maxMemoryFiles ?? DEFAULT_MEMORY_CONFIG.maxMemoryFiles,
         maxEntrypointLines: pluginConfig.maxEntrypointLines ?? pluginConfig.autoMemory?.maxEntrypointLines ?? DEFAULT_MEMORY_CONFIG.maxEntrypointLines,
@@ -100,47 +129,47 @@ function mergeConfig(pluginConfig: any) {
         minHoursBetweenConsolidation: pluginConfig.minHoursBetweenConsolidation ?? pluginConfig.autoMemory?.minHoursBetweenConsolidation ?? DEFAULT_MEMORY_CONFIG.minHoursBetweenConsolidation,
         truncation: {
             ...DEFAULT_TRUNCATION_CONFIG,
-            ...pluginConfig.autoMemory?.truncation,
+            ...(pluginConfig.autoMemory?.truncation as Record<string, unknown> | undefined),
         },
-    };
+    } as MemoryConfig;
     const autoDreamConfig = {
         ...DEFAULT_AUTO_DREAM_CONFIG,
-        ...pluginConfig.autoDream,
+        ...(pluginConfig.autoDream as Record<string, unknown> | undefined),
         enabled: pluginConfig.autoDream?.enabled ?? DEFAULT_AUTO_DREAM_CONFIG.enabled,
-    };
+    } as AutoDreamConfig;
     const extractionConfig = {
         ...DEFAULT_EXTRACTION_CONFIG,
-        ...pluginConfig.extraction,
+        ...(pluginConfig.extraction as Record<string, unknown> | undefined),
         enabled: pluginConfig.extraction?.enabled ?? DEFAULT_EXTRACTION_CONFIG.enabled,
         syncMode: pluginConfig.extraction?.syncMode ?? DEFAULT_EXTRACTION_CONFIG.syncMode,
         syncWaitTimeoutMs: pluginConfig.extraction?.syncWaitTimeoutMs ?? DEFAULT_EXTRACTION_CONFIG.syncWaitTimeoutMs,
-    };
+    } as ExtractionConfig;
 const skillConfig = {
         ...DEFAULT_SKILL_CONFIG,
-        ...pluginConfig.skills,
+        ...(pluginConfig.skills as Record<string, unknown> | undefined),
         enabled: pluginConfig.skills?.enabled ?? DEFAULT_SKILL_CONFIG.enabled,
-    };
+    } as SkillConfig;
     const memoryRecallConfig = {
         ...DEFAULT_MEMORY_RECALL_CONFIG,
-        ...pluginConfig.memoryRecall,
+        ...(pluginConfig.memoryRecall as Record<string, unknown> | undefined),
         enabled: pluginConfig.memoryRecall?.enabled ?? DEFAULT_MEMORY_RECALL_CONFIG.enabled,
         visibleRecall: pluginConfig.memoryRecall?.visibleRecall ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleRecall,
         visibleWrite: pluginConfig.memoryRecall?.visibleWrite ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleWrite,
         minRelevanceScore: pluginConfig.memoryRecall?.minRelevanceScore ?? DEFAULT_MEMORY_RECALL_CONFIG.minRelevanceScore,
         maxInjectChars: pluginConfig.memoryRecall?.maxInjectChars ?? DEFAULT_MEMORY_RECALL_CONFIG.maxInjectChars,
-    };
+    } as MemoryRecallConfig;
     const semanticSelectionConfig = {
         ...DEFAULT_SEMANTIC_SELECTION_CONFIG,
-        ...pluginConfig.semanticSelection,
+        ...(pluginConfig.semanticSelection as Record<string, unknown> | undefined),
         enabled: pluginConfig.semanticSelection?.enabled ?? DEFAULT_SEMANTIC_SELECTION_CONFIG.enabled,
-    };
+    } as SemanticSelectionConfig;
     const subagentHooksConfig = {
         ...DEFAULT_SUBAGENT_HOOKS_CONFIG,
-        ...pluginConfig.subagentHooks,
+        ...(pluginConfig.subagentHooks as Record<string, unknown> | undefined),
     };
     const expiryConfig = {
         ...DEFAULT_MEMORY_EXPIRY_CONFIG,
-        ...pluginConfig.autoMemory?.expiry,
+        ...(pluginConfig.autoMemory?.expiry as Record<string, unknown> | undefined),
     };
     return {
         autoMemory: autoMemoryConfig,
@@ -154,18 +183,22 @@ const skillConfig = {
     };
 }
 
-async function getState(projectID: string, directory: string, pluginConfig: any = {}, client: any) {
-    let state = stateMap.get(projectID);
-    if (!state) {
-        initLogger(pluginConfig.logLevel || 'error');
+async function getState(projectID: string, directory: string, pluginConfig: PluginConfig = {}, client?: OpencodeClient): Promise<PluginState> {
+    const existing = stateMap.get(projectID);
+    if (existing) return existing;
+    const inflight = initPromises.get(projectID);
+    if (inflight) return inflight;
+
+    const initPromise = (async (): Promise<PluginState> => {
+        initLogger((pluginConfig.logLevel as LogLevel) || 'error');
         const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
         logger.info('[PluginInit]', 'projectID:', projectID, 'memoryPath:', storage.getMemoryPath());
         const skillStorage = new SkillStorage();
         await skillStorage.init();
-const skillInjection = new SkillInjection(skillStorage, skillConfig);
-        const slashCommandsEnabled = pluginConfig.slashCommands?.enabled ?? true;
+        const skillInjection = new SkillInjection(skillStorage, skillConfig);
+        const slashCommandsEnabled = (pluginConfig.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
         const commandRegistry = getCommandRegistry();
         const slashCommandTargetMap: Record<string, string> = {
             'dream': 'dream-trigger',
@@ -189,7 +222,7 @@ const skillInjection = new SkillInjection(skillStorage, skillConfig);
             }
             catch { }
         }
-        state = {
+        const state: PluginState = {
             storage,
             retrieval: new EnhancedMemoryRetrieval(storage, fullConfig, memoryRecallConfig, semanticSelectionConfig, client),
             injection: new MemoryInjection(storage, fullConfig),
@@ -200,13 +233,17 @@ const skillInjection = new SkillInjection(skillStorage, skillConfig);
             skillInjection,
             skillConfig,
             skillTriggerState: DEFAULT_SKILL_TRIGGER_STATE,
-            slashCommandsEnabled,
+            slashCommandsEnabled: slashCommandsEnabled as boolean,
             commandRegistry,
             client,
             memoryRecallConfig,
             semanticSelectionConfig,
             subagentHooksConfig,
             expiryConfig,
+            pendingRecallMap: new Map(),
+            pendingWriteMap: new Map(),
+            recalledUserMsgIds: new Set(),
+            pendingExpiryToastShown: false,
         };
         if (client) {
             initAutoDream(client, storage, autoDreamConfig);
@@ -215,33 +252,37 @@ const skillInjection = new SkillInjection(skillStorage, skillConfig);
             initAutoMemoryExtraction(client, storage, extractionConfig, undefined, skillStorage, skillConfig);
         }
         stateMap.set(projectID, state);
+        return state;
+    })();
+
+    initPromises.set(projectID, initPromise);
+    try {
+        return await initPromise;
+    } finally {
+        initPromises.delete(projectID);
     }
-    return state;
 }
 
-export const MemoryPlugin: Plugin = async (input: any, options: any = {}) => {
+export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOptions = {}) => {
     const rawDirectory = input.directory || 'default';
     const projectID = normalizeProjectPath(rawDirectory);
     const directory = input.directory || '';
     const client = input.client;
     logger.info('[PluginInit]', 'rawDirectory:', rawDirectory, 'projectID:', projectID, 'normalized:', projectID !== rawDirectory);
-    const slashCommandsEnabled = options.slashCommands?.enabled ?? true;
-    const state = await getState(projectID, directory, options, client);
+    const slashCommandsEnabled = (options.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
+    const state = await getState(projectID, directory, options as PluginConfig, client);
 
-    const hooks = {
+    const hooks: Hooks = {
         dispose: async () => {
-            stateMap.clear();
-            pendingRecallMap.clear();
-            pendingWriteMap.clear();
-            recalledUserMsgIds.clear();
+            stateMap.delete(projectID);
         },
-'permission.ask': async (input: any, output: any) => {
+'permission.ask': async (input, output) => {
             // NOTE: This hook is ineffective for PermissionNext flow (used by session/prompt.ts).
             // PermissionNext.ask() does NOT trigger plugin hooks — it uses its own rule evaluation.
             // This hook only works for the legacy Permission system. Keeping it for future compatibility.
             const sessionID = input.sessionID || '';
-            const permission = input.permission || '';
-            const pattern = input.pattern || '';
+            const permission = (input as unknown as Record<string, string>).permission || '';
+            const pattern = Array.isArray(input.pattern) ? input.pattern[0] || '' : (input.pattern || '');
             logger.info('[PermissionAsk]', 'sessionID:', sessionID, 'permission:', permission, 'pattern:', pattern);
             
             if (isForkedSession(sessionID)) {
@@ -257,8 +298,8 @@ export const MemoryPlugin: Plugin = async (input: any, options: any = {}) => {
                     return;
                 }
 if (permission === 'edit') {
-                    const lockFiles = ['.extraction-lock', '.consolidate-lock', '.skill-review-lock', '.auto-dream-state.json', '.pending-expiry.json'];
-                    const isLockFile = lockFiles.some(lock => pattern.endsWith(lock) || pattern.includes(lock));
+                    const baseName = pattern.split(/[/\\]/).pop() || '';
+                    const isLockFile = LOCK_FILE_NAMES.includes(baseName as typeof LOCK_FILE_NAMES[number]);
                     if (isLockFile) {
                         output.status = 'allow';
                         logger.info('[PermissionAsk]', 'Auto-allowed edit (lock file):', pattern);
@@ -285,7 +326,7 @@ if (permission === 'edit') {
                 }
             }
         },
-event: async ({ event }: any) => {
+event: async ({ event }) => {
             if (event.type === 'session.idle') {
                 const sid = event.properties?.sessionID || '';
                 if (!sid) return;
@@ -295,7 +336,7 @@ event: async ({ event }: any) => {
                     const memRoot = state.storage.getMemoryPath();
                     if (agentType === 'extraction') {
                         try { await releaseExtractionLock(memRoot); }
-                        catch (e: any) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e?.message || e); }
+                        catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
                         updateThresholdState(markExtractionCompleted(getThresholdState()));
                         logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset:', sid);
                     } else if (agentType === 'dream') {
@@ -303,7 +344,7 @@ event: async ({ event }: any) => {
                         logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);
                     } else if (agentType === 'skill-review') {
                         try { await releaseSkillReviewLock(getSkillReviewLockPath(memRoot)); }
-                        catch (e: any) { logger.warn('[SessionIdle]', 'skill-review lock release failed:', e?.message || e); }
+                        catch (e) { logger.warn('[SessionIdle]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
                         updateThresholdState(resetExtractionSkillCounter(getThresholdState()));
                         logger.info('[SessionIdle]', 'Forked skill-review done — lock released, skill counter reset:', sid);
                     } else {
@@ -336,7 +377,7 @@ event: async ({ event }: any) => {
                 }
             }
         },
-'experimental.chat.system.transform': async (_input: any, output: any) => {
+'experimental.chat.system.transform': async (_input, output) => {
             if (!state.config.enabled)
                 return;
             const sid = _input.sessionID || '';
@@ -378,7 +419,7 @@ event: async ({ event }: any) => {
                 output.system.push(SLASH_COMMANDS_GUIDANCE);
             }
         },
-        'experimental.session.compacting': async (_input: any, output: any) => {
+        'experimental.session.compacting': async (_input, output) => {
             if (!state.config.enabled)
                 return;
             const sid = _input.sessionID || '';
@@ -402,13 +443,13 @@ event: async ({ event }: any) => {
             }
             catch { }
         },
-'experimental.chat.messages.transform': async (_input: any, output: any) => {
+'experimental.chat.messages.transform': async (_input, output) => {
             if (!state.memoryRecallConfig.enabled) { logger.debug('[Recall]', 'memoryRecall disabled, skip'); return; }
             try {
                 const messages = output.messages;
                 if (!messages || messages.length === 0) { logger.debug('[Recall]', 'no messages, skip'); return; }
 
-                const sid = (messages[0]?.info?.sessionID || messages.findLast((m: any) => m.info?.role === 'user')?.info?.sessionID) || 'default';
+                const sid = (messages[0]?.info?.sessionID || messages.findLast((m) => m.info?.role === 'user')?.info?.sessionID) || 'default';
                 if (isForkedSession(sid)) { logger.debug('[Recall]', 'forked session, skip'); return; }
                 if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { logger.debug('[Recall]', 'subagent without memoryRecall hook, skip'); return; }
                 if (sid && !isSubagentSession(sid)) {
@@ -416,18 +457,18 @@ event: async ({ event }: any) => {
                     if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { logger.debug('[Recall]', 'became subagent without memoryRecall hook, skip'); return; }
                 }
 
-                const lastUserMsg = messages.findLast((m: any) => m.info?.role === 'user');
+                const lastUserMsg = messages.findLast((m) => m.info?.role === 'user');
                 if (!lastUserMsg) { logger.debug('[Recall]', 'no user message found, skip'); return; }
 
                 const userMsgId = lastUserMsg.info?.id;
-                if (userMsgId && recalledUserMsgIds.has(userMsgId)) {
+                if (userMsgId && state.recalledUserMsgIds.has(userMsgId)) {
                     logger.info('[Recall]', 'same turn already recalled for userMsg', userMsgId, ', skip (reuse first)');
                     return;
                 }
 
                 const userText = (lastUserMsg.parts || [])
-                    .filter((p: any) => p.type === 'text' && !p.synthetic)
-                    .map((p: any) => p.text || '')
+                    .filter((p) => p.type === 'text' && !(p as { synthetic?: boolean }).synthetic)
+                    .map((p) => (p as { text?: string }).text || '')
                     .join(' ');
                 if (!userText.trim()) { logger.debug('[Recall]', 'empty user text, skip'); return; }
 
@@ -435,7 +476,7 @@ event: async ({ event }: any) => {
 
 const alreadyInjected = new Set<string>();
                  for (const part of (lastUserMsg.parts || [])) {
-                     if (part.synthetic && part.type === 'text' && part.text) {
+                     if (part.type === 'text' && (part as { synthetic?: boolean }).synthetic && part.text) {
                          const names = part.text.match(/### (\S+) \(/g);
                          if (names) {
                              names.forEach((n: string) => {
@@ -457,18 +498,18 @@ const alreadyInjected = new Set<string>();
 
                 logger.info('[Recall]', 'findRelevant returned:', relevant.length, 'memories');
                 if (relevant.length > 0) {
-                    logger.debug('[Recall]', 'raw scores:', relevant.map((r: any) => `${r.name}=${r.relevance?.toFixed(2)}`).join(', '));
+                    logger.debug('[Recall]', 'raw scores:', relevant.map((r) => `${r.name}=${r.relevance?.toFixed(2)}`).join(', '));
                 }
 
                 const threshold = state.memoryRecallConfig.minRelevanceScore;
-                const filtered = relevant.filter((r: any) => !alreadyInjected.has(r.name) && (r.relevance ?? 0) >= threshold);
+                const filtered = relevant.filter((r) => !alreadyInjected.has(r.name) && (r.relevance ?? 0) >= threshold);
                 if (filtered.length === 0) { logger.info('[Recall]', 'no memories above threshold', threshold, ', skip'); return; }
 
-                logger.info('[Recall]', 'injecting', filtered.length, 'memories:', filtered.map((r: any) => `${r.name}(score:${r.relevance?.toFixed(2)})`).join(', '));
+                logger.info('[Recall]', 'injecting', filtered.length, 'memories:', filtered.map((r) => `${r.name}(score:${r.relevance?.toFixed(2)})`).join(', '));
 
                 const memories = await state.retrieval.loadMemories(filtered);
                 const maxChars = state.memoryRecallConfig.maxInjectChars;
-                const recallContent = memories.map((m: any, i: any) => {
+                const recallContent = memories.map((m, i) => {
                     const score = filtered[i]?.relevance ?? 'N/A';
                     const truncated = m.content.slice(0, maxChars) + (m.content.length > maxChars ? '...' : '');
                     const memPath = m.filepath || '';
@@ -479,27 +520,27 @@ const alreadyInjected = new Set<string>();
                     type: 'text',
                     text: `<system-reminder>\nRelevant memories recalled for your question:\n\n${recallContent}\n</system-reminder>`,
                     synthetic: true,
-                });
+                } as unknown as typeof lastUserMsg.parts[number]);
 
                 if (userMsgId) {
-                    recalledUserMsgIds.add(userMsgId);
-                    if (recalledUserMsgIds.size > 200) {
-                        const oldest = recalledUserMsgIds.values().next().value;
-                        if (oldest) recalledUserMsgIds.delete(oldest);
+                    state.recalledUserMsgIds.add(userMsgId);
+                    if (state.recalledUserMsgIds.size > 200) {
+                        const oldest = state.recalledUserMsgIds.values().next().value;
+                        if (oldest) state.recalledUserMsgIds.delete(oldest);
                     }
                 }
 
                 if (state.memoryRecallConfig.visibleRecall && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall)) {
-                    const visibleSummary = memories.map((m: any) =>
+                    const visibleSummary = memories.map((m) =>
                         `${m.name}(${m.type})`
                     ).join(', ');
-                    pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${visibleSummary}`);
+                    state.pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${visibleSummary}`);
                     logger.info('[Recall]', 'set pendingRecallMap for', sid || 'default', ':', `Recalled ${memories.length} memories: ${visibleSummary}`);
                 }
  }
             catch { }
         },
-        'tool.execute.after': async (input: any, output: any) => {
+        'tool.execute.after': async (input, output) => {
             if (isForkedSession(input.sessionID))
                 return;
             const sid = input.sessionID;
@@ -548,28 +589,28 @@ const alreadyInjected = new Set<string>();
                 catch { }
             }
         },
-        'experimental.text.complete': async (input: any, output: any) => {
+        'experimental.text.complete': async (input, output) => {
             const sid = input.sessionID || 'default';
             if (isForkedSession(sid)) return;
             const isSub = isSubagentSession(sid);
             const subHooks = state.subagentHooksConfig;
             if (isSub) {
-                if (!subHooks.visibleRecall) pendingRecallMap.delete(sid);
-                if (!subHooks.visibleWrite) pendingWriteMap.delete(sid);
+                if (!subHooks.visibleRecall) state.pendingRecallMap.delete(sid);
+                if (!subHooks.visibleWrite) state.pendingWriteMap.delete(sid);
                 if (!subHooks.visibleRecall && !subHooks.visibleWrite)
                     return;
             } else {
                 await detectAndRegisterSubagent(sid, client);
                 if (isSubagentSession(sid)) {
                     const subHooks2 = state.subagentHooksConfig;
-                    if (!subHooks2.visibleRecall) pendingRecallMap.delete(sid);
-                    if (!subHooks2.visibleWrite) pendingWriteMap.delete(sid);
+                    if (!subHooks2.visibleRecall) state.pendingRecallMap.delete(sid);
+                    if (!subHooks2.visibleWrite) state.pendingWriteMap.delete(sid);
                     if (!subHooks2.visibleRecall && !subHooks2.visibleWrite)
                         return;
                 }
             }
-            const pendingWrite = pendingWriteMap.get(sid);
-            const pendingRecall = pendingRecallMap.get(sid);
+            const pendingWrite = state.pendingWriteMap.get(sid);
+            const pendingRecall = state.pendingRecallMap.get(sid);
             const canShowWrite = pendingWrite && (!isSubagentSession(sid) || subHooks.visibleWrite);
             const canShowRecall = pendingRecall && (!isSubagentSession(sid) || subHooks.visibleRecall);
             logger.info('[TextComplete]', 'sid:', sid, 'pendingWrite:', pendingWrite || 'none', 'pendingRecall:', pendingRecall || 'none', 'canShowWrite:', canShowWrite, 'canShowRecall:', canShowRecall);
@@ -582,7 +623,7 @@ const alreadyInjected = new Set<string>();
                 } else {
                     logger.debug('[TextComplete]', 'skip writeMsg (already in output.text)');
                 }
-                pendingWriteMap.delete(sid);
+                state.pendingWriteMap.delete(sid);
             }
             if (canShowRecall) {
                 const recallMsg = `💡 ${pendingRecall}`;
@@ -592,13 +633,13 @@ const alreadyInjected = new Set<string>();
                 } else {
                     logger.debug('[TextComplete]', 'skip recallMsg (already in output.text)');
                 }
-                pendingRecallMap.delete(sid);
+                state.pendingRecallMap.delete(sid);
             }
             if (prefix) {
                 output.text = prefix + output.text;
             }
         },
-'chat.message': async (input: any, output: any) => {
+'chat.message': async (input, output) => {
             const msgInput = input;
             const sid = msgInput.sessionID || '';
             let isBg = isForkedSession(sid);
@@ -667,7 +708,7 @@ const alreadyInjected = new Set<string>();
                                             directory: directory,
                                             skillsRoot: state.skillStorage.getSkillsRoot(),
                                             memoryRoot: state.storage.getMemoryPath(),
-                                            messages: msgInput.messages || [],
+                                            messages: (msgInput as Record<string, unknown>).messages as unknown[] || [],
                                             skillConfig: state.skillConfig,
                                             client: state.client,
                                             reviewMode: 'skill-only',
@@ -679,9 +720,9 @@ const alreadyInjected = new Set<string>();
                                             body: {
                                                 parts: [{ type: 'text', text: 'Please call the dream-approve tool to confirm deletion of expired memories. Do not explain, just call the tool.' }],
                                             },
-                                        }).then((result: any) => {
+                                        }).then((result) => {
                                             if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
-                                        }).catch((err: any) => logger.error('[SlashCommand]', 'Prompt error:', err));
+                                        }).catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
                                     }
                                     else if (cmd.targetTool === 'dream-reject') {
                                         void state.client.session.prompt({
@@ -689,9 +730,9 @@ const alreadyInjected = new Set<string>();
                                             body: {
                                                 parts: [{ type: 'text', text: 'Please call the dream-reject tool to cancel pending expiry deletions. Do not explain, just call the tool.' }],
                                             },
-                                        }).then((result: any) => {
+                                        }).then((result) => {
                                             if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
-                                        }).catch((err: any) => logger.error('[SlashCommand]', 'Prompt error:', err));
+                                        }).catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
                                     }
                                     else {
                                         const forceArg = parsed.args.force ? ' with force=true' : '';
@@ -701,11 +742,11 @@ const alreadyInjected = new Set<string>();
                                             body: {
                                                 parts: [{ type: 'text', text: promptText }],
                                             },
-                                        }).then((result: any) => {
+                                        }).then((result) => {
                                             if (result.error) {
                                                 logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
                                             }
-                                        }).catch((err: any) => {
+                                        }).catch((err) => {
                                             logger.error('[SlashCommand]', 'Prompt error:', err);
                                         });
                                     }
@@ -724,7 +765,7 @@ const alreadyInjected = new Set<string>();
                 args: {
                     name: z.string().optional().describe('Memory name to read'),
                 },
-                async execute(args: any, _ctx: any) {
+                async execute(args: { name?: string }, _ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true';
                     }
@@ -775,7 +816,7 @@ const alreadyInjected = new Set<string>();
                     pin: z.boolean().optional().describe('Pin memory to prevent expiry (default: false)'),
                     ttl: z.number().optional().describe('Custom TTL in days (overrides type default)'),
                 },
-                async execute(args: any, ctx: any) {
+                async execute(args: { name: string; description: string; type: string; content: string; pin?: boolean; ttl?: number }, ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return {
                             title: 'Auto-Memory disabled',
@@ -786,7 +827,7 @@ const alreadyInjected = new Set<string>();
                     try {
                         const name = args.name;
                         const description = args.description;
-                        const type = args.type;
+                        const type = args.type as MemoryType;
                         const content = args.content;
                         const pin = args.pin;
                         const ttl = args.ttl;
@@ -804,7 +845,9 @@ const alreadyInjected = new Set<string>();
                         const sid = ctx.sessionID || 'default';
                         const visibleWriteEnabled = state.memoryRecallConfig.visibleWrite && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleWrite);
                         if (visibleWriteEnabled) {
-                            setPendingWrite(sid, `'${memory.name}' ${action}`);
+                            const existing = state.pendingWriteMap.get(sid);
+                            const writeText = `'${memory.name}' ${action}`;
+                            state.pendingWriteMap.set(sid, existing ? existing + ', ' + writeText : writeText);
                         }
                         await showPendingExpiryToast(state);
                         const expiryNotice = await getPendingExpiryNotice(state);
@@ -829,7 +872,7 @@ const alreadyInjected = new Set<string>();
                     query: z.string().describe('Search query'),
                     limit: z.number().default(5),
                 },
-                async execute(args: any, ctx: any) {
+                async execute(args: { query: string; limit: number }, ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return {
                             title: 'Auto-Memory disabled',
@@ -879,7 +922,7 @@ const alreadyInjected = new Set<string>();
                 args: {
                     name: z.string().describe('Memory name to delete'),
                 },
-                async execute(args: any, _ctx: any) {
+                async execute(args: { name: string }, _ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return {
                             title: 'Auto-Memory disabled',
@@ -910,7 +953,7 @@ const alreadyInjected = new Set<string>();
                 args: {
                     force: z.boolean().optional().default(false).describe('Force consolidation even if thresholds not met'),
                 },
-                async execute(args: any, ctx: any) {
+                async execute(args: { force?: boolean }, ctx: ToolContext) {
                     if (!state.autoDreamConfig.enabled) {
                         return 'Auto Dream is disabled. Enable it via config: autoDream.enabled = true';
                     }
@@ -945,7 +988,7 @@ const alreadyInjected = new Set<string>();
             'dream-approve': {
                 description: 'Approve pending memory expiry deletions. Deletes all memories listed in .pending-expiry.json and clears the file.',
                 args: {},
-                async execute(_args: any, _ctx: any) {
+                async execute(_args: Record<string, unknown>, _ctx: ToolContext) {
                     if (!state.expiryConfig?.enabled) {
                         return 'Memory expiry is disabled.';
                     }
@@ -962,7 +1005,7 @@ const alreadyInjected = new Set<string>();
                             else failedCount++;
                         }
                         await state.storage.clearPendingExpiry();
-                        pendingExpiryToastShown = false;
+                        state.pendingExpiryToastShown = false;
                         let msg = `## Expiry Approved\n\nDeleted ${deletedCount} expired memories.`;
                         if (failedCount > 0) msg += ` Failed to delete ${failedCount} memories.`;
                         return msg;
@@ -975,7 +1018,7 @@ const alreadyInjected = new Set<string>();
             'dream-reject': {
                 description: 'Reject pending memory expiry deletions. Keeps all memories and clears .pending-expiry.json.',
                 args: {},
-                async execute(_args: any, _ctx: any) {
+                async execute(_args: Record<string, unknown>, _ctx: ToolContext) {
                     if (!state.expiryConfig?.enabled) {
                         return 'Memory expiry is disabled.';
                     }
@@ -986,7 +1029,7 @@ const alreadyInjected = new Set<string>();
                         }
                         const count = pending.pendingDeletions.length;
                         await state.storage.clearPendingExpiry();
-                        pendingExpiryToastShown = false;
+                        state.pendingExpiryToastShown = false;
                         return `## Expiry Rejected\n\nKept ${count} memories. Pending expiry cleared.`;
                     }
                     catch (e) {

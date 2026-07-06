@@ -15,7 +15,7 @@ import {
   DEFAULT_EXTRACTION_THRESHOLD_STATE,
   shouldTriggerExtraction,
   markExtractionStarted,
-  resetSkillCounter,
+  resetExtractionSkillCounter,
   getThresholdState,
   updateThresholdState,
   initExtractionThreshold,
@@ -162,7 +162,7 @@ export function determineReviewMode(
 }
 
 interface FetchMessagesResult {
-  messages: any[]
+  messages: unknown[]
   error?: string
   isNotFound?: boolean
 }
@@ -178,8 +178,9 @@ async function fetchSessionMessages(sessionID: string): Promise<FetchMessagesRes
     })
     
     if (result.error || !result.data) {
-      const errorName = (result.error as any)?.name
-      const errorDataName = (result.error as any)?.data?.name
+      const err = result.error as { name?: string; data?: { name?: string } } | undefined
+      const errorName = err?.name
+      const errorDataName = err?.data?.name
       
       if (errorName === 'NotFoundError' || errorDataName === 'NotFoundError') {
         logger.warn('[AutoMemoryExtraction]', 'Session not found:', sessionID)
@@ -192,7 +193,7 @@ async function fetchSessionMessages(sessionID: string): Promise<FetchMessagesRes
     
     return { messages: result.data }
   } catch (error) {
-    const errorName = (error as any)?.name
+    const errorName = (error as { name?: string })?.name
     
     if (errorName === 'NotFoundError') {
       logger.warn('[AutoMemoryExtraction]', 'Session not found (catch):', sessionID)
@@ -392,7 +393,7 @@ export async function executeExtraction(
     }
     
     if (reviewMode === 'combined' || reviewMode === 'skill-only') {
-      updateThresholdState(resetSkillCounter(getThresholdState()))
+      updateThresholdState(resetExtractionSkillCounter(getThresholdState()))
     }
     
     logger.info('[AutoMemoryExtraction]', 'Extraction agent launched (fire-and-forget)')

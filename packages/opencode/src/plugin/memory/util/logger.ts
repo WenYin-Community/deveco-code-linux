@@ -23,25 +23,25 @@ function shouldLog(level: LogLevel): boolean {
 }
 
 export const logger = {
-  error(tag: string, ...args: any[]): void {
+  error(tag: string, ...args: unknown[]): void {
     if (shouldLog('error')) {
       console.error(tag, ...args)
     }
   },
   
-  warn(tag: string, ...args: any[]): void {
+  warn(tag: string, ...args: unknown[]): void {
     if (shouldLog('warn')) {
       console.warn(tag, ...args)
     }
   },
   
-  info(tag: string, ...args: any[]): void {
+  info(tag: string, ...args: unknown[]): void {
     if (shouldLog('info')) {
       console.log(tag, ...args)
     }
   },
   
-  debug(tag: string, ...args: any[]): void {
+  debug(tag: string, ...args: unknown[]): void {
     if (shouldLog('debug')) {
       console.log(tag, ...args)
     }

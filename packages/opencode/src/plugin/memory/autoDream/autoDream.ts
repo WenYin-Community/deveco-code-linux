@@ -103,8 +103,8 @@ export async function markDreamDone(memoryRoot: string): Promise<void> {
   consolidationInProgress = false
   try {
     await releaseConsolidationLock(getLockFilePath(memoryRoot))
-  } catch (e: any) {
-    logger.warn('[AutoDream]', 'markDreamDone: failed to release lock:', e?.message || e)
+  } catch (e) {
+    logger.warn('[AutoDream]', 'markDreamDone: failed to release lock:', e instanceof Error ? e.message : String(e))
   }
 }
 

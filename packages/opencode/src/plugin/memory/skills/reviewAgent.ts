@@ -14,9 +14,7 @@ import { buildSkillReviewPrompt, buildCombinedReviewPrompt } from './prompts'
 import { SkillStorage } from './storage'
 import { canTriggerSkillReview } from './trigger'
 import { MemoryStorage } from '../memory/storage'
-import { promises as fs } from 'fs'
-import * as path from 'path'
-import { isProcessRunning } from '../autoDream/consolidationLock'
+import { createPidLock } from '../util/pidLock'
 
 // ============================================================================
 // Types
@@ -29,7 +27,7 @@ interface SkillReviewContext {
   directory: string
   skillsRoot: string
   memoryRoot: string
-  messages: any[]
+  messages: unknown[]
   skillConfig: SkillConfig
   reviewMode: 'skill-only' | 'combined'
 }
@@ -74,68 +72,30 @@ async function sendSkillReviewPrompt(
 }
 
 // ============================================================================
-// File-based Lock
+// File-based Lock (using shared pidLock factory)
 // ============================================================================
 
 const SKILL_REVIEW_LOCK_STALE_MS = 10 * 60 * 1000
 
+const skillReviewLock = createPidLock({
+  filename: ".skill-review-lock",
+  staleMs: SKILL_REVIEW_LOCK_STALE_MS,
+})
+
 export function getSkillReviewLockPath(memoryRoot: string): string {
-  return path.join(memoryRoot, '.skill-review-lock')
-}
-
-interface SkillReviewLock {
-  pid: number
-  mtime: number
-  sessionID?: string
-}
-
-async function readSkillReviewLock(lockPath: string): Promise<SkillReviewLock | null> {
-  try {
-    const content = await fs.readFile(lockPath, 'utf-8')
-    const lock = JSON.parse(content) as SkillReviewLock
-    if (typeof lock.pid !== 'number' || typeof lock.mtime !== 'number') {
-      return null
-    }
-    return lock
-  } catch {
-    return null
-  }
-}
-
-async function writeSkillReviewLock(lockPath: string, lock: SkillReviewLock): Promise<void> {
-  await fs.writeFile(lockPath, JSON.stringify(lock), 'utf-8')
+  return skillReviewLock.getLockPath(memoryRoot)
 }
 
 export async function releaseSkillReviewLock(lockPath: string): Promise<void> {
-  try {
-    await fs.unlink(lockPath)
-  } catch (error: any) {
-    if (error.code !== 'ENOENT') throw error
-  }
+  await skillReviewLock.release(lockPath)
 }
 
 export async function isSkillReviewInProgress(memoryRoot: string): Promise<boolean> {
-  const lockPath = getSkillReviewLockPath(memoryRoot)
-  const lock = await readSkillReviewLock(lockPath)
-  if (!lock) return false
-  const stale = (Date.now() - lock.mtime) > SKILL_REVIEW_LOCK_STALE_MS
-  if (stale) {
-    await releaseSkillReviewLock(lockPath)
-    return false
-  }
-  if (!isProcessRunning(lock.pid)) {
-    await releaseSkillReviewLock(lockPath)
-    return false
-  }
-  return true
+  return skillReviewLock.isLocked(memoryRoot)
 }
 
 export async function acquireSkillReviewLock(memoryRoot: string, sessionID?: string): Promise<boolean> {
-  const lockPath = getSkillReviewLockPath(memoryRoot)
-  if (await isSkillReviewInProgress(memoryRoot)) return false
-  await writeSkillReviewLock(lockPath, { pid: process.pid, mtime: Date.now(), sessionID })
-  const verify = await readSkillReviewLock(lockPath)
-  return verify?.pid === process.pid
+  return skillReviewLock.acquire(memoryRoot, sessionID)
 }
 
 /**

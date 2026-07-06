@@ -18,7 +18,7 @@ import {
  */
 export interface ExtractionPendingContext {
   // Messages to extract from
-  messages: any[]
+  messages: unknown[]
   // Session ID for context
   sessionID: string
   // Timestamp when context was captured
@@ -209,7 +209,7 @@ export function incrementSkillCounter(
  * @param state - Current extraction threshold state
  * @returns Updated state with reset skill counter
  */
-export function resetSkillCounter(
+export function resetExtractionSkillCounter(
   state: ExtractionThresholdState
 ): ExtractionThresholdState {
   return {
@@ -334,7 +334,7 @@ export function processToolCallForSkill(
   toolName: string
 ): ExtractionThresholdState {
   if (toolName === "skill-manage") {
-    thresholdState = resetSkillCounter(thresholdState)
+    thresholdState = resetExtractionSkillCounter(thresholdState)
   } else {
     thresholdState = incrementSkillCounter(thresholdState)
   }

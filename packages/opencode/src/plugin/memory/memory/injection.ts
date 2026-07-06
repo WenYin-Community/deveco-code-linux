@@ -92,7 +92,7 @@ export class MemoryInjection {
     }
 
     // Get relevant memories with truncation info
-    const { index, content, truncated } = await this.getRetrieval().getMemoriesForPrompt(query)
+    const { index, content, truncated, count } = await this.getRetrieval().getMemoriesForPrompt(query)
 
     // If no memories, return empty
     if (!index && !content) {
@@ -108,7 +108,7 @@ export class MemoryInjection {
     const systemPrompt = this.buildSystemPrompt(index, content, truncated)
 
     // Count memories loaded
-    const memoriesLoaded = index ? index.split("\n").filter((l) => l.trim()).length : 0
+    const memoriesLoaded = count
 
     return {
       systemPrompt,
