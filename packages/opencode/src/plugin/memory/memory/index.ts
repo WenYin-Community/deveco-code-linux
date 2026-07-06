@@ -15,9 +15,6 @@ export * from './injection'
 // Enhanced retrieval module
 export { EnhancedMemoryRetrieval } from './enhanced-retrieval'
 
-// Consolidation module
-export * from './consolidation'
-
 // Auto Memory Extraction Threshold module
 export * from './extractionThreshold'
 
