@@ -94,8 +94,12 @@ private async forkSession(): Promise<string | undefined> {
     }
 
     try {
-      const result = await this.client.session.fork({
-        path: { id: this.parentSessionID },
+      // Use session.create (not session.fork) — semantic selection only needs
+      // the query and manifest (already in the prompt), not the parent's
+      // conversation history. session.create avoids FK constraint races with
+      // the parent session's ongoing DB writes (cleanup, streaming parts, etc).
+      const result = await this.client.session.create({
+        body: { title: 'semantic-selection' },
       })
 
       if (result.error) {

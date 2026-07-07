@@ -60,12 +60,22 @@ export function buildForkedSessionTitle(
 
 const CREATE_VERIFY_SLEEP_MS = 500
 const CREATE_VERIFY_RETRY_SLEEP_MS = 1000
+// Delay before forking to avoid race with SessionProcessor.cleanup().
+// halt() sets status to "idle" before cleanup() completes, so we wait
+// for cleanup's DB transactions to finish before starting our fork.
+const FORK_DELAY_MS = 3000
 
 /**
  * Create a child session for a forked agent by forking the parent session.
  * Uses session.fork (not session.create) so the child inherits the parent's
  * full conversation history — this is critical for extraction and skill-review
  * agents that need to analyze the conversation context.
+ *
+ * A delay is applied before forking to avoid a race condition: the platform's
+ * halt() sets session status to "idle" before cleanup() finishes writing to the
+ * DB. Without this delay, fork's transactions can interleave with cleanup's,
+ * causing FOREIGN KEY constraint failures.
+ *
  * Returns the child session ID, or null on failure.
  */
 export async function createForkedChildSession(
@@ -74,6 +84,9 @@ export async function createForkedChildSession(
   agentKey: ForkedAgentType,
   _directory?: string,
 ): Promise<string | null> {
+  // Wait for SessionProcessor.cleanup() to finish its DB writes
+  await sleep(FORK_DELAY_MS)
+
   try {
     const parentResult = await client.session.get({ path: { id: parentSessionID } })
     if (parentResult.error || !parentResult.data) {
