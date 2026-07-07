@@ -351,6 +351,7 @@ export async function executeExtraction(
         sessionID: context.sessionID,
         projectID: context.projectID,
         memoryRoot: context.memoryRoot,
+        cursorMessageId: getThresholdState().lastExtractionMessageUuid,
       }
       const promptResult = buildExtractionPrompt(promptContext, lockPath)
       prompt = promptResult.prompt
@@ -361,7 +362,7 @@ export async function executeExtraction(
       sessionID: context.sessionID,
       directory: context.projectDirectory,
       pendingContext: {
-        messages: [],
+        messages: [], // Conversation history is inherited via session.fork (not passed here)
         sessionID: context.sessionID,
         capturedAt: Date.now(),
         projectID: context.projectID,

@@ -62,38 +62,39 @@ const CREATE_VERIFY_SLEEP_MS = 500
 const CREATE_VERIFY_RETRY_SLEEP_MS = 1000
 
 /**
- * Create a child session for a forked agent. Builds a descriptive title from
- * the parent session's title, creates the session, then verifies it is
- * reachable (retrying once). Returns the child session ID, or null on failure.
+ * Create a child session for a forked agent by forking the parent session.
+ * Uses session.fork (not session.create) so the child inherits the parent's
+ * full conversation history — this is critical for extraction and skill-review
+ * agents that need to analyze the conversation context.
+ * Returns the child session ID, or null on failure.
  */
 export async function createForkedChildSession(
   client: OpencodeClient,
   parentSessionID: string,
   agentKey: ForkedAgentType,
-  directory?: string,
+  _directory?: string,
 ): Promise<string | null> {
   try {
     const parentResult = await client.session.get({ path: { id: parentSessionID } })
     if (parentResult.error || !parentResult.data) {
-      logger.warn('[ForkManager]', `Parent session not found for ${agentKey}, cannot build title:`, parentResult.error || parentSessionID)
+      logger.warn('[ForkManager]', `Parent session not found for ${agentKey}:`, parentResult.error || parentSessionID)
       return null
     }
     const parentTitle = parentResult.data.title ?? 'Unknown session'
     const title = buildForkedSessionTitle(agentKey, parentTitle)
 
-    const result = await client.session.create({
-      body: { title },
-      query: directory ? { directory } : undefined,
+    const result = await client.session.fork({
+      path: { id: parentSessionID },
     })
 
     if (result.error) {
-      logger.error('[ForkManager]', `Failed to create ${agentKey} child session:`, result.error)
+      logger.error('[ForkManager]', `Failed to fork ${agentKey} child session:`, result.error)
       return null
     }
 
     const childID = result.data?.id
     if (!childID) {
-      logger.error('[ForkManager]', `${agentKey} create returned no session ID`)
+      logger.error('[ForkManager]', `${agentKey} fork returned no session ID`)
       return null
     }
 
@@ -102,10 +103,10 @@ export async function createForkedChildSession(
       return null
     }
 
-    logger.info('[ForkManager]', `Created ${agentKey} child session:`, childID, 'title:', title)
+    logger.info('[ForkManager]', `Forked ${agentKey} child session:`, childID, 'title:', title)
     return childID
   } catch (error) {
-    logger.error('[ForkManager]', `${agentKey} create session exception:`, error)
+    logger.error('[ForkManager]', `${agentKey} fork session exception:`, error)
     return null
   }
 }

@@ -19,6 +19,8 @@ export interface ExtractionPromptContext {
   sessionID: string
   projectID: string
   memoryRoot: string
+  /** Message ID of the last message processed by a previous extraction run (cursor for incremental extraction) */
+  cursorMessageId?: string
 }
 
 /**
@@ -63,6 +65,10 @@ export function buildExtractionPrompt(
     buildConstraintsSection(context.memoryRoot),
     buildInstructionsSection(),
   ]
+
+  if (context.cursorMessageId) {
+    sections.splice(2, 0, buildCursorSection(context.cursorMessageId))
+  }
   
   if (lockPath) {
     sections.push(buildLockReleaseSection(lockPath))
@@ -88,7 +94,22 @@ You are a memory extraction agent. Your ONLY task is to analyze the conversation
 
 The full conversation history is already available to you above this prompt (inherited via session fork). Do NOT attempt to re-read or re-format the conversation — it is already in your context.
 
+**Focus on the MOST RECENT conversation context** — the latest exchanges between the user and assistant are the most likely to contain new, unextracted information. Earlier parts of the conversation have likely already been processed by previous extraction runs. Prioritize recent turns and only scan older context if you find references or context that clarifies the recent exchanges.
+
 **If any tool call you attempt is denied/rejected, it means you should focus ONLY on the extraction task described below.** Do not retry denied tools — move on to extraction work.`
+}
+
+/**
+ * Build cursor section — tells the agent where the last extraction stopped
+ */
+function buildCursorSection(cursorMessageId: string): string {
+  return `## Extraction Cursor
+
+The previous extraction run last processed messages up to message ID: \`${cursorMessageId}\`.
+
+**Only extract from messages AFTER this cursor.** Messages at or before this ID have already been analyzed and any valuable information from them should already be in the existing memories. Focus your attention on the NEW conversation that happened after this point.
+
+If you cannot find this message ID in the conversation (e.g., it was compacted away), fall back to focusing on the most recent exchanges.`
 }
 
 /**
@@ -97,8 +118,8 @@ The full conversation history is already available to you above this prompt (inh
 function buildTaskSection(): string {
   return `## Your Task
 
-1. Review the conversation context available in this forked session
-2. Identify valuable, durable information worth preserving
+1. Focus on the MOST RECENT conversation exchanges — these are most likely to contain new information not yet extracted
+2. Identify valuable, durable information worth preserving from recent context
 3. Check if the information already exists in current memories (skip duplicates)
 4. Create new memory files ONLY if the information is valuable and unique
 5. Use the memory-write tool to create memories in the specified directory
