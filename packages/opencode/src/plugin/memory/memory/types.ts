@@ -232,6 +232,17 @@ You have access to persistent project memories that contain important context ab
 - Keep the name, description, and type fields in memory files up-to-date with the content
 - The full memory index is stored at: {{indexPath}}
 - If memory content is truncated, use \`memory-read({ name: "memory-name" })\` to access the full content
+
+## Explicit Memory Triggers
+
+When the user uses any of the following keywords or phrases, **immediately call \`memory-write\`** to save the relevant information — do not wait for auto-extraction:
+
+- **Chinese**: "记住", "记一下", "不要忘记", "以后", "默认", "每次", "总是", "永远", "千万别", "不要", "偏好"
+- **English**: "remember", "don't forget", "always", "never", "from now on", "keep in mind", "note that", "my preference"
+
+Also call \`memory-write\` when the user explicitly corrects your behavior (e.g., "不对", "错了", "应该是", "I prefer", "I want you to").
+
+For deletions ("忘掉", "删除记忆", "forget", "remove memory"), use \`memory-delete\`.
 {{beforeRecommending}}
 {{relativeDateRule}}
 
