@@ -67,6 +67,7 @@ interface PluginState {
     pendingWriteMap: Map<string, string>
     recalledUserMsgIds: Set<string>
     pendingExpiryToastShown: boolean
+    memoryToolUsedThisTurn: Set<string>
 }
 
 interface PendingDeletion {
@@ -244,6 +245,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
             pendingWriteMap: new Map(),
             recalledUserMsgIds: new Set(),
             pendingExpiryToastShown: false,
+            memoryToolUsedThisTurn: new Set(),
         };
         if (client) {
             initAutoDream(client, storage, autoDreamConfig);
@@ -361,6 +363,12 @@ event: async ({ event }) => {
                 // Count this user turn toward the extraction throttle (subagent idles don't count).
                 if (!isSub) {
                     updateThresholdState(incrementTurnCounter(getThresholdState()));
+                }
+                // Skip extraction if memory tools were already called explicitly this turn
+                if (state.memoryToolUsedThisTurn.has(sid)) {
+                    state.memoryToolUsedThisTurn.delete(sid);
+                    logger.info('[SessionIdle]', 'Skipping extraction — memory tool used this turn:', sid);
+                    return;
                 }
                 if (state.config.enabled) {
                     const extractionRunner = getExtractionRunner();
@@ -843,6 +851,7 @@ const alreadyInjected = new Set<string>();
                         });
                         const action = existing ? 'updated' : 'created';
                         const sid = ctx.sessionID || 'default';
+                        state.memoryToolUsedThisTurn.add(sid);
                         const visibleWriteEnabled = state.memoryRecallConfig.visibleWrite && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleWrite);
                         if (visibleWriteEnabled) {
                             const existing = state.pendingWriteMap.get(sid);
@@ -922,7 +931,7 @@ const alreadyInjected = new Set<string>();
                 args: {
                     name: z.string().describe('Memory name to delete'),
                 },
-                async execute(args: { name: string }, _ctx: ToolContext) {
+                async execute(args: { name: string }, ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return {
                             title: 'Auto-Memory disabled',
@@ -933,6 +942,9 @@ const alreadyInjected = new Set<string>();
                     try {
                         const name = args.name;
                         const deleted = await state.storage.delete(name);
+                        if (deleted) {
+                            state.memoryToolUsedThisTurn.add(ctx.sessionID || 'default');
+                        }
                         return {
                             title: deleted ? `Memory deleted: ${name}` : `Memory not found: ${name}`,
                             output: deleted ? 'Deleted: ' + name : 'Not found: ' + name,

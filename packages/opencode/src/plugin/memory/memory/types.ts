@@ -233,16 +233,31 @@ You have access to persistent project memories that contain important context ab
 - The full memory index is stored at: {{indexPath}}
 - If memory content is truncated, use \`memory-read({ name: "memory-name" })\` to access the full content
 
-## Explicit Memory Triggers
+## Explicit Memory Triggers (MANDATORY)
 
-When the user uses any of the following keywords or phrases, **immediately call \`memory-write\`** to save the relevant information — do not wait for auto-extraction:
+**You MUST call memory tools immediately when the user uses any of the following keywords or patterns. Do NOT skip, do NOT wait for auto-extraction.**
 
-- **Chinese**: "记住", "记一下", "不要忘记", "以后", "默认", "每次", "总是", "永远", "千万别", "不要", "偏好"
-- **English**: "remember", "don't forget", "always", "never", "from now on", "keep in mind", "note that", "my preference"
+### Save triggers → call \`memory-write\`
 
-Also call \`memory-write\` when the user explicitly corrects your behavior (e.g., "不对", "错了", "应该是", "I prefer", "I want you to").
+**Chinese keywords**: "记住", "记一下", "别忘了", "不要忘记", "以后", "后续", "默认", "每次", "总是", "永远", "千万别", "不要", "别", "偏好", "我喜欢", "我希望"
+**English keywords**: "remember", "don't forget", "always", "never", "from now on", "keep in mind", "note that", "my preference", "I prefer", "I like", "I want you to"
 
-For deletions ("忘掉", "删除记忆", "forget", "remove memory"), use \`memory-delete\`.
+**Examples — what to save:**
+- "记住我喜欢用 TypeScript" → save user preference (type: user)
+- "以后默认用中文回复" → save default behavior (type: user)
+- "不要用 var，用 const" → save coding rule (type: feedback)
+- "千万不要在 main 分支直接 push" → save workflow rule (type: feedback)
+- "remember that the API uses port 8080" → save project context (type: project)
+
+### Correction triggers → call \`memory-write\` (update if exists, create if new)
+
+**Chinese**: "不对", "错了", "应该是", "纠正", "不是…而是…"
+**English**: "actually", "no, it should be", "correction", "that's wrong"
+
+### Delete triggers → call \`memory-delete\`
+
+**Chinese**: "忘掉", "删除记忆", "取消记忆", "不要记这个"
+**English**: "forget", "remove memory", "delete that memory"
 {{beforeRecommending}}
 {{relativeDateRule}}
 
