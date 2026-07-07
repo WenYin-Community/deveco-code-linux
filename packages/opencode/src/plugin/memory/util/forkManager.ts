@@ -103,6 +103,17 @@ export async function createForkedChildSession(
       return null
     }
 
+    // session.fork generates a generic "Parent Title (fork #N)" title —
+    // override with our descriptive title (e.g. "🧠 记忆提取 — ...")
+    try {
+      await client.session.update({
+        path: { id: childID },
+        body: { title },
+      } as any)
+    } catch (e) {
+      logger.warn('[ForkManager]', `Failed to set ${agentKey} title (non-fatal):`, e)
+    }
+
     logger.info('[ForkManager]', `Forked ${agentKey} child session:`, childID, 'title:', title)
     return childID
   } catch (error) {
