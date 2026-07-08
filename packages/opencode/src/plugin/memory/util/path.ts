@@ -9,7 +9,7 @@ import type { MemoryType, MemoryHeader, MemoryFrontmatter } from '../memory/type
 
 export const ENTRYPOINT_NAME = 'MEMORY.md'
 export const MEMORY_DIR_NAME = 'memory'
-export const FRONTMATTER_MAX_LINES = 30
+const FRONTMATTER_MAX_LINES = 30
 
 /**
  * Get the global data directory.
@@ -178,7 +178,7 @@ export function parseFrontmatter(content: string): {
   }
 }
 
-export function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
+function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
   const lines = ['---']
   lines.push('name: "' + frontmatter.name + '"')
   lines.push('description: "' + frontmatter.description + '"')

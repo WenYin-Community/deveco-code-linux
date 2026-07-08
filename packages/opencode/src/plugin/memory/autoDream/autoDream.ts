@@ -74,19 +74,19 @@ export function initAutoDream(
   })
 }
 
-export function getAutoDreamRunner(): AutoDreamRunner | null {
+function getAutoDreamRunner(): AutoDreamRunner | null {
   return runner
 }
 
-export function getClient(): OpencodeClient | null {
+function getClient(): OpencodeClient | null {
   return initializedClient
 }
 
-export function getStorage(): MemoryStorage | null {
+function getStorage(): MemoryStorage | null {
   return initializedStorage
 }
 
-export function getConfig(): AutoDreamConfig {
+function getConfig(): AutoDreamConfig {
   return initializedConfig
 }
 
@@ -108,9 +108,8 @@ export async function markDreamDone(memoryRoot: string): Promise<void> {
   }
 }
 
-export { isForkedSession } from '../util/forkManager'
 
-export function isGateOpen(config: AutoDreamConfig): boolean {
+function isGateOpen(config: AutoDreamConfig): boolean {
   return config.enabled
 }
 

@@ -14,7 +14,7 @@ export function initLogger(level: LogLevel): void {
   currentLevel = level
 }
 
-export function getLogLevel(): LogLevel {
+function getLogLevel(): LogLevel {
   return currentLevel
 }
 

@@ -53,7 +53,7 @@ Do not respond with text before invoking the tool.
  * 
  * Triggered by forked agent when skillReviewInterval is reached
  */
-export const SKILL_REVIEW_PROMPT = `
+const SKILL_REVIEW_PROMPT = `
 Review the conversation above and consider saving or updating a skill if appropriate.
 
 Focus on: was a non-trivial approach used to complete a task that required trial 
@@ -72,7 +72,7 @@ If nothing is worth saving, just say 'Nothing to save.' and stop.
  * 
  * This combines memory extraction and skill review in one agent call
  */
-export const COMBINED_REVIEW_PROMPT = `
+const COMBINED_REVIEW_PROMPT = `
 Review the conversation above and consider two things:
 
 **Memory**: Has the user revealed things about themselves — their persona, 

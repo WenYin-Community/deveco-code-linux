@@ -169,11 +169,11 @@ export function getForkSessionAgent(sessionID: string): ForkedAgentType | undefi
   return forkSessionAgentType.get(sessionID)
 }
 
-export function getActiveForkSessions(): string[] {
+function getActiveForkSessions(): string[] {
   return Array.from(activeForkSessionIDs)
 }
 
-export function clearAllForkSessions(): void {
+function clearAllForkSessions(): void {
   activeForkSessionIDs.clear()
   forkSessionAgentType.clear()
 }

@@ -2,14 +2,14 @@ import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext } from "@op
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import { initLogger, logger, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
-import { normalizeProjectPath } from './util/path';
+import { normalizeProjectPath, getGlobalDataDir } from './util/path';
 import { MemoryInjection } from './memory/injection';
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
 import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType } from './memory/types';
 // Auto Dream imports
 import { initAutoDream, executeAutoDream, handleChatMessageTrigger, checkAllGates, isConsolidationInProgress, markDreamDone } from './autoDream/autoDream';
 import { isForkedSession, unregisterForkSession, getForkSessionAgent, LOCK_FILE_NAMES } from './util/forkManager';
-import { isSubagentSession, isBackgroundSession, detectAndRegisterSubagent } from './util/subagentManager';
+import { isSubagentSession, detectAndRegisterSubagent } from './util/subagentManager';
 
 
 // Auto Memory Extraction imports
@@ -265,14 +265,40 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
     }
 }
 
+const MEMORY_CONFIG_FILENAME = 'memory-config.json'
+
+async function loadMemoryConfigFile(configPath: string): Promise<PluginConfig> {
+    try {
+        const file = Bun.file(configPath)
+        if (!(await file.exists())) return {}
+        const parsed = await file.json()
+        logger.info('[PluginInit]', 'Loaded memory config from:', configPath)
+        return parsed as PluginConfig
+    } catch (e) {
+        logger.warn('[PluginInit]', 'Failed to load memory config:', configPath, e instanceof Error ? e.message : String(e))
+        return {}
+    }
+}
+
+async function loadMemoryConfigs(directory: string): Promise<PluginConfig> {
+    // Merge order: user-level < project-level < options (later overrides earlier)
+    const userConfig = await loadMemoryConfigFile(`${getGlobalDataDir()}/${MEMORY_CONFIG_FILENAME}`)
+    const projectConfig = directory
+        ? await loadMemoryConfigFile(`${directory}/.deveco/${MEMORY_CONFIG_FILENAME}`)
+        : {}
+    return { ...userConfig, ...projectConfig }
+}
+
 export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOptions = {}) => {
     const rawDirectory = input.directory || 'default';
     const projectID = normalizeProjectPath(rawDirectory);
     const directory = input.directory || '';
     const client = input.client;
+    const fileConfig = await loadMemoryConfigs(directory)
+    const mergedOptions = { ...fileConfig, ...options } as PluginConfig
     logger.info('[PluginInit]', 'rawDirectory:', rawDirectory, 'projectID:', projectID, 'normalized:', projectID !== rawDirectory);
-    const slashCommandsEnabled = (options.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
-    const state = await getState(projectID, directory, options as PluginConfig, client);
+    const slashCommandsEnabled = (mergedOptions.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
+    const state = await getState(projectID, directory, mergedOptions, client);
 
     const hooks: Hooks = {
         dispose: async () => {
@@ -339,8 +365,9 @@ event: async ({ event }) => {
                     if (agentType === 'extraction') {
                         try { await releaseExtractionLock(memRoot); }
                         catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
-                        updateThresholdState(markExtractionCompleted(getThresholdState()));
-                        logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset:', sid);
+                        const state = getThresholdState()
+                        updateThresholdState(markExtractionCompleted(state, state.pendingLastMessageUuid));
+                        logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', state.pendingLastMessageUuid || '(none)', sid);
                     } else if (agentType === 'dream') {
                         await markDreamDone(memRoot);
                         logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);

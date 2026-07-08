@@ -76,7 +76,7 @@ export function isSlashCommand(message: string): boolean {
 /**
  * Extract command name from message (without validation)
  */
-export function extractCommandName(message: string): string | null {
+function extractCommandName(message: string): string | null {
   const trimmed = message.trim()
   if (!trimmed.startsWith('/')) return null
   

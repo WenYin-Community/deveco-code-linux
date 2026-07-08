@@ -336,7 +336,7 @@ function buildInstructionsSection(): string {
  * @param messages - Conversation messages
  * @returns Formatted conversation string
  */
-export function formatCurrentMemories(memories: string[]): string {
+function formatCurrentMemories(memories: string[]): string {
   if (memories.length === 0) {
     return "No existing memories."
   }

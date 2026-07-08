@@ -463,7 +463,7 @@ export function estimateTokens(
 /**
  * Estimate total tokens for multiple texts
  */
-export function estimateTotalTokens(
+function estimateTotalTokens(
   texts: string[],
   config: TruncationConfig = DEFAULT_TRUNCATION_CONFIG,
 ): number {
@@ -478,7 +478,7 @@ export function estimateTotalTokens(
  * Truncate a single memory content to fit token limit
  * Adds truncation marker if content was reduced
  */
-export function truncateMemoryContent(
+function truncateMemoryContent(
   content: string,
   maxTokens: number,
   config: TruncationConfig = DEFAULT_TRUNCATION_CONFIG,
@@ -506,7 +506,7 @@ export function truncateMemoryContent(
 /**
  * Truncated memory entry with metadata
  */
-export interface TruncatedMemory {
+interface TruncatedMemory {
   header: MemoryHeader
   content: string
   tokens: number

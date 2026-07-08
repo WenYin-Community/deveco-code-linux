@@ -67,11 +67,11 @@ export function isBackgroundSession(sessionID: string): boolean {
   return isForkedSession(sessionID) || isSubagentSession(sessionID)
 }
 
-export function getActiveSubagentSessions(): string[] {
+function getActiveSubagentSessions(): string[] {
   return Array.from(taskSubagentSessionIDs)
 }
 
-export function clearAllSubagentSessions(): void {
+function clearAllSubagentSessions(): void {
   taskSubagentSessionIDs.clear()
   regularSessionIDs.clear()
 }

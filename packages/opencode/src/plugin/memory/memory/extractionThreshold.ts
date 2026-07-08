@@ -42,6 +42,8 @@ export interface ExtractionThresholdState {
   pendingContext?: ExtractionPendingContext
   // Skill iterations since last review (for skill review threshold)
   skill_iters_since_review: number
+  // Last message UUID of current extraction run (set before agent trigger, consumed on idle)
+  pendingLastMessageUuid?: string
 }
 
 /**
@@ -53,6 +55,7 @@ export const DEFAULT_EXTRACTION_THRESHOLD_STATE: ExtractionThresholdState = {
   turnsSinceLastExtraction: 0,
   pendingContext: undefined,
   skill_iters_since_review: 0,
+  pendingLastMessageUuid: undefined,
 }
 
 /**
@@ -177,7 +180,7 @@ export function incrementTurnCounter(
  * @param state - Current extraction threshold state
  * @returns Updated state with reset turn counter
  */
-export function resetTurnCounter(
+function resetTurnCounter(
   state: ExtractionThresholdState
 ): ExtractionThresholdState {
   return {
@@ -251,6 +254,7 @@ export function markExtractionCompleted(
     inProgress: false,
     lastExtractionMessageUuid: lastMessageUuid || state.lastExtractionMessageUuid,
     pendingContext: undefined,
+    pendingLastMessageUuid: undefined,
   }
 }
 
@@ -260,7 +264,7 @@ export function markExtractionCompleted(
  * @param state - Current extraction threshold state
  * @returns Pending context if available, undefined otherwise
  */
-export function getPendingContext(
+function getPendingContext(
   state: ExtractionThresholdState
 ): ExtractionPendingContext | undefined {
   return state.pendingContext
@@ -274,7 +278,7 @@ export function getPendingContext(
  * @param context - Pending context to store
  * @returns Updated state with pending context
  */
-export function setPendingContext(
+function setPendingContext(
   state: ExtractionThresholdState,
   context: ExtractionPendingContext
 ): ExtractionThresholdState {
@@ -290,7 +294,7 @@ export function setPendingContext(
  * @param state - Current extraction threshold state
  * @returns Updated state without pending context
  */
-export function clearPendingContext(
+function clearPendingContext(
   state: ExtractionThresholdState
 ): ExtractionThresholdState {
   return {

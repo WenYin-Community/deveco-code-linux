@@ -8,7 +8,7 @@ import type { SlashCommand, CommandRegistry, FallbackMapping } from './types'
 /**
  * Default fallback mappings for legacy skills without slashCommand field
  */
-export const DEFAULT_FALLBACK_MAPPINGS: FallbackMapping[] = [
+const DEFAULT_FALLBACK_MAPPINGS: FallbackMapping[] = [
   {
     skillName: 'dream',
     commandName: 'dream',
@@ -39,7 +39,7 @@ export const DEFAULT_FALLBACK_MAPPINGS: FallbackMapping[] = [
 /**
  * In-memory command registry implementation
  */
-export class InMemoryCommandRegistry implements CommandRegistry {
+class InMemoryCommandRegistry implements CommandRegistry {
   private commands: Map<string, SlashCommand> = new Map()
   private fallbackMappings: FallbackMapping[]
   
@@ -130,6 +130,6 @@ export function getCommandRegistry(): InMemoryCommandRegistry {
 /**
  * Reset global registry (for testing)
  */
-export function resetCommandRegistry(): void {
+function resetCommandRegistry(): void {
   globalRegistry = null
 }

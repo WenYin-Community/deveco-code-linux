@@ -61,7 +61,7 @@ export interface ExtractionRunnerResult {
   reviewMode?: ReviewMode
 }
 
-export type AppendSystemMessage = (message: string) => void
+type AppendSystemMessage = (message: string) => void
 
 // ============================================================================
 // Closure State Pattern
@@ -121,23 +121,23 @@ export function initAutoMemoryExtraction(
   })
 }
 
-export function getExtractionThresholdState(): ExtractionThresholdState {
+function getExtractionThresholdState(): ExtractionThresholdState {
   return getThresholdState()
 }
 
-export function getExtractionConfig(): ExtractionConfig {
+function getExtractionConfig(): ExtractionConfig {
   return initializedConfig
 }
 
-export function getExtractionSkillConfig(): SkillConfig {
+function getExtractionSkillConfig(): SkillConfig {
   return initializedSkillConfig
 }
 
-export function isExtractionInitialized(): boolean {
+function isExtractionInitialized(): boolean {
   return initializedClient !== null && initializedStorage !== null
 }
 
-export function resetExtractionState(): void {
+function resetExtractionState(): void {
   resetExtractionThresholdState()
 }
 
@@ -373,7 +373,13 @@ export async function executeExtraction(
       reviewMode: reviewMode,
       skillConfig: initializedSkillConfig,
     }
-    
+
+    // Store last message UUID as cursor for incremental extraction
+    const lastMsg = messages[messages.length - 1] as { info?: { id?: string } } | undefined
+    if (lastMsg?.info?.id) {
+      updateThresholdState({ ...getThresholdState(), pendingLastMessageUuid: lastMsg.info.id })
+    }
+
     const agentResult = await runExtractionAgent(agentContext)
     
     result.extractionRan = true
@@ -422,7 +428,7 @@ export function getExtractionRunner():
   return executeExtraction
 }
 
-export function processNewTurnAndCheck(
+function processNewTurnAndCheck(
   context: ExtractionRunnerContext
 ): Promise<ExtractionRunnerResult> {
   return executeExtraction(context)

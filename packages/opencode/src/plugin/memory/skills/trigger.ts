@@ -27,7 +27,7 @@ import { logger } from "../util/logger"
  * Skill trigger state (tracked per session)
  * Tracks tool call counter for skill review threshold
  */
-export interface SkillTriggerState {
+interface SkillTriggerState {
   // Tool call counter since last skill review
   itersSinceSkill: number
   // Flag for triggering background review
