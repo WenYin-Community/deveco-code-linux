@@ -373,7 +373,7 @@ export interface MemoryRecallConfig {
 export const DEFAULT_MEMORY_RECALL_CONFIG: MemoryRecallConfig = {
   enabled: true,
   maxRecall: 3,
-  recallStrategy: 'hybrid',
+  recallStrategy: 'keyword',
   visibleRecall: true,
   visibleWrite: true,
   minRelevanceScore: 0.3,
