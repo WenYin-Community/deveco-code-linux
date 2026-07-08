@@ -8,7 +8,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { registerForkSession, setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
 import type { SkillConfig } from '../memory/types'
 import { buildSkillReviewPrompt, buildCombinedReviewPrompt } from './prompts'
 import { SkillStorage } from './storage'
@@ -123,9 +123,8 @@ export async function spawnSkillReviewAgent(
       await releaseSkillReviewLock(getSkillReviewLockPath(context.memoryRoot))
       return { success: false, error: "Failed to fork session", method: "fallback", notification: '' }
     }
-    
-    registerForkSession(childSessionID, 'skill-review')
-    logger.info('[SkillReviewAgent]', 'Registered forked session:', childSessionID)
+
+    logger.info('[SkillReviewAgent]', 'Forked session:', childSessionID)
     
     const permRules = getExtractionPermissionRules(true, context.memoryRoot)
     const permResult = await setSessionPermissions(context.client, childSessionID, permRules)

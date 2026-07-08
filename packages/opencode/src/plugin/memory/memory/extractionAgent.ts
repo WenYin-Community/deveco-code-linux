@@ -8,7 +8,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { registerForkSession, setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
 import type { ExtractionConfig, SkillConfig } from './types'
 import type { ExtractionPendingContext } from './extractionThreshold'
 import type { ReviewMode } from './extractionRunner'
@@ -58,7 +58,6 @@ export async function runExtractionAgent(
     }
 
     result.childSessionID = childSessionID
-    registerForkSession(childSessionID, 'extraction')
     logger.info('[ExtractionAgent]', 'Forked session:', childSessionID)
 
     const includeSkills = context.reviewMode === 'combined' || context.reviewMode === 'skill-only'

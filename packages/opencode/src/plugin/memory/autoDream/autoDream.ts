@@ -9,7 +9,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { registerForkSession, setSessionPermissions, getDreamPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getDreamPermissionRules, createForkedChildSession } from '../util/forkManager'
 import type { AutoDreamConfig, MemoryExpiryConfig } from '../memory/types'
 import { DEFAULT_AUTO_DREAM_CONFIG } from '../memory/types'
 import { MemoryStorage } from '../memory/storage'
@@ -227,7 +227,6 @@ export async function executeAutoDream(
       return result
     }
 
-    registerForkSession(childSessionID, 'dream')
     logger.info('[AutoDream]', 'Created child session:', childSessionID)
 
     const dreamPermRules = getDreamPermissionRules(context.memoryRoot)

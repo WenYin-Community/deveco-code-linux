@@ -111,6 +111,12 @@ export async function createForkedChildSession(
       return null
     }
 
+    // Register IMMEDIATELY after fork returns the child ID — before any
+    // further async work (verify, title update). This closes the race
+    // window where the child session could emit session.idle before being
+    // recognized as a forked session by the event handler.
+    registerForkSession(childID, agentKey)
+
     if (!(await verifySessionReady(client, childID))) {
       logger.error('[ForkManager]', `${agentKey} child session verification failed:`, childID)
       return null
