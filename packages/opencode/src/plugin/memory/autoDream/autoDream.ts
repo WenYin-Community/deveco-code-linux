@@ -288,7 +288,7 @@ export async function handleChatMessageTrigger(
   
   try {
     await incrementSessionCount(input.memoryRoot, input.sessionID)
-  } catch {}
+  } catch (e) { logger.warn('[AutoDream]', 'incrementSessionCount error:', e instanceof Error ? e.message : String(e)); }
   
   const gates = await checkAllGates(
     input.memoryRoot,

@@ -1,6 +1,6 @@
 import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext } from "@opencode-ai/plugin"
 import type { OpencodeClient } from "@opencode-ai/sdk"
-import { initLogger, logger, type LogLevel } from './util/logger';
+import { initLogger, logger, setLogDir, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
 import { normalizeProjectPath, getGlobalDataDir } from './util/path';
 import { MemoryInjection } from './memory/injection';
@@ -195,6 +195,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
         const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
+        await setLogDir(storage.getMemoryPath() + '/logs');
         logger.info('[PluginInit]', 'projectID:', projectID, 'memoryPath:', storage.getMemoryPath());
         const skillStorage = new SkillStorage();
         await skillStorage.init();
@@ -221,7 +222,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
                     });
                 }
             }
-            catch { }
+            catch (e) { logger.warn('[PluginInit]', 'Failed to register skill slash commands:', e instanceof Error ? e.message : String(e)); }
         }
         const state: PluginState = {
             storage,
@@ -439,7 +440,7 @@ event: async ({ event }) => {
                     }
                 }
             }
-            catch { }
+            catch (e) { logger.error('[SystemTransform]', 'Memory injection failed:', e instanceof Error ? e.message : String(e)); }
             if (state.skillConfig.enabled && (!isSubNow || state.subagentHooksConfig.skillReviewTrigger)) {
                 try {
                     const skillResult = await state.skillInjection.inject();
@@ -448,7 +449,7 @@ event: async ({ event }) => {
                     }
                     output.system.push(SKILLS_GUIDANCE);
                 }
-                catch { }
+                catch (e) { logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e)); }
             }
             if (state.slashCommandsEnabled) {
                 output.system.push(SLASH_COMMANDS_GUIDANCE);
@@ -476,7 +477,7 @@ event: async ({ event }) => {
                     output.context.push(context);
                 }
             }
-            catch { }
+            catch (e) { logger.error('[Compacting]', 'Failed to get compaction context:', e instanceof Error ? e.message : String(e)); }
         },
 'experimental.chat.messages.transform': async (_input, output) => {
             if (!state.memoryRecallConfig.enabled) { logger.debug('[Recall]', 'memoryRecall disabled, skip'); return; }
@@ -573,7 +574,7 @@ const alreadyInjected = new Set<string>();
                     logger.info('[Recall]', 'set pendingRecallMap for', sid || 'default', ':', `Recalled ${memories.length} memories: ${visibleSummary}`);
                 }
  }
-            catch { }
+            catch (e) { logger.error('[Recall]', 'messages.transform error:', e instanceof Error ? e.message : String(e)); }
         },
         'tool.execute.after': async (input, output) => {
             if (isForkedSession(input.sessionID))
@@ -593,7 +594,7 @@ const alreadyInjected = new Set<string>();
                 try {
                     if (input.tool === 'skill-manage') {
                         state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
-                        try { await releaseSkillReviewLock(getSkillReviewLockPath(state.storage.getMemoryPath())); } catch { }
+                        try { await releaseSkillReviewLock(getSkillReviewLockPath(state.storage.getMemoryPath())); } catch (e) { logger.warn('[ToolExecute]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
                     } else {
                         state.skillTriggerState = incrementSkillCounter(state.skillTriggerState);
                         if (!(await isSkillReviewInProgress(state.storage.getMemoryPath()))) {
@@ -615,13 +616,13 @@ const alreadyInjected = new Set<string>();
                         }
                     }
                 }
-                catch { }
+                catch (e) { logger.error('[ToolExecute]', 'Skill trigger check error:', e instanceof Error ? e.message : String(e)); }
             }
             if (state.skillConfig.enabled && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
                 try {
                     processToolCallForSkill(input.tool);
                 }
-                catch { }
+                catch (e) { logger.error('[ToolExecute]', 'processToolCallForSkill error:', e instanceof Error ? e.message : String(e)); }
             }
         },
         'experimental.text.complete': async (input, output) => {
@@ -790,7 +791,7 @@ const alreadyInjected = new Set<string>();
                         }
                     }
                 }
-                catch { }
+                catch (e) { logger.error('[ChatMessage]', 'Slash command handling error:', e instanceof Error ? e.message : String(e)); }
             }
             
 },

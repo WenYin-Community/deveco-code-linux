@@ -10,6 +10,9 @@ import { getSkillDirectory, getSkillsRoot } from './path'
 import type { SkillHeader } from './types'
 import fs from 'fs/promises'
 import path from 'path'
+import { createLogger } from '../util/logger'
+
+const log = createLogger('[SkillTools]')
 
 // Shared storage instance
 const storage = new SkillStorage()
@@ -271,6 +274,7 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
         return `Error: Unknown action "${action}"`
     }
   } catch (e) {
+    log.error('handleSkillManage error:', action, e)
     return e instanceof Error ? e.message : 'Unknown error'
   }
 }
@@ -349,6 +353,7 @@ async function handleSkillList(args: Record<string, unknown>, _ctx: unknown): Pr
     
     return output
   } catch (e) {
+    log.error('handleSkillList error:', e)
     return e instanceof Error ? e.message : 'Unknown error'
   }
 }
@@ -428,6 +433,7 @@ async function handleSkillView(args: Record<string, unknown>, _ctx: unknown): Pr
     
     return output
   } catch (e) {
+    log.error('handleSkillView error:', category, name, e)
     return e instanceof Error ? e.message : 'Unknown error'
   }
 }

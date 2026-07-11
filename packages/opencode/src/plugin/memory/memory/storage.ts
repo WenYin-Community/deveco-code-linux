@@ -189,7 +189,7 @@ export class MemoryStorage {
     const filepath = path.join(this.memoryPath, '.pending-expiry.json')
     try {
       await fs.unlink(filepath)
-    } catch {}
+    } catch (e) { logger.warn('[MemoryStorage]', 'clearPendingExpiry failed:', e instanceof Error ? e.message : String(e)); }
   }
 
   /**

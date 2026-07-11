@@ -6,6 +6,9 @@ import os from 'os'
 import fs from 'fs/promises'
 import crypto from 'crypto'
 import type { MemoryType, MemoryHeader, MemoryFrontmatter } from '../memory/types'
+import { createLogger } from './logger'
+
+const log = createLogger('[PathUtils]')
 
 export const ENTRYPOINT_NAME = 'MEMORY.md'
 export const MEMORY_DIR_NAME = 'memory'
@@ -26,16 +29,21 @@ export function getMemoryPath(
   customMemoryDir?: string,
 ): string {
   if (customMemoryDir) {
+    log.debug('getMemoryPath: custom:', customMemoryDir)
     return customMemoryDir
   }
 
   if (storageMode === 'project') {
-    return path.join(directory, '.deveco', MEMORY_DIR_NAME)
+    const result = path.join(directory, '.deveco', MEMORY_DIR_NAME)
+    log.debug('getMemoryPath: project mode:', result)
+    return result
   }
 
   const globalDir = getGlobalDataDir()
   const safeProjectID = slugifyProjectID(projectID)
-  return path.join(globalDir, MEMORY_DIR_NAME, safeProjectID)
+  const result = path.join(globalDir, MEMORY_DIR_NAME, safeProjectID)
+  log.debug('getMemoryPath: global mode:', result)
+  return result
 }
 
 export function normalizeProjectPath(raw: string): string {
@@ -79,10 +87,12 @@ export async function migrateLegacyMemoryDir(
   const globalDir = getGlobalDataDir()
   const legacySlug = computeLegacyHash(rawDirectory)
   const legacyPath = path.join(globalDir, MEMORY_DIR_NAME, legacySlug)
+  log.debug('migrateLegacyMemoryDir: legacy:', legacyPath, 'new:', normalizedMemoryPath)
 
   try {
     await fs.access(legacyPath)
   } catch {
+    log.debug('migrateLegacyMemoryDir: no legacy dir found, skip')
     return false
   }
 
@@ -111,8 +121,10 @@ export async function migrateLegacyMemoryDir(
     try { await fs.unlink(legacyMemoryMd) } catch {}
     try { await fs.rm(legacyPath, { recursive: true }) } catch {}
 
+    log.info('migrateLegacyMemoryDir: migrated successfully')
     return true
-  } catch {
+  } catch (e) {
+    log.warn('migrateLegacyMemoryDir: migration failed:', e instanceof Error ? e.message : String(e))
     return false
   }
 }

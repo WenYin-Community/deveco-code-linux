@@ -7,6 +7,9 @@ import {
   DEFAULT_EXTRACTION_CONFIG,
   DEFAULT_SKILL_CONFIG,
 } from "./types"
+import { createLogger } from "../util/logger"
+
+const log = createLogger('[ExtractionThreshold]')
 
 // ============================================================================
 // Types
@@ -123,6 +126,7 @@ export function shouldTriggerExtraction(
   }
 
   if (newMessageCount < config.minMessages) {
+    log.debug('shouldTriggerExtraction: minMessages not met:', newMessageCount, '<', config.minMessages)
     return {
       shouldTrigger: false,
       reason: "min_messages_not_met",
@@ -135,6 +139,7 @@ export function shouldTriggerExtraction(
   }
 
   if (state.turnsSinceLastExtraction < config.throttle) {
+    log.debug('shouldTriggerExtraction: throttle not met:', state.turnsSinceLastExtraction, '<', config.throttle)
     return {
       shouldTrigger: false,
       reason: "throttle_not_met",
@@ -146,6 +151,7 @@ export function shouldTriggerExtraction(
     }
   }
 
+  log.debug('shouldTriggerExtraction: TRIGGERED — msgs:', newMessageCount, 'turns:', state.turnsSinceLastExtraction)
   return {
     shouldTrigger: true,
     reason: "threshold_met",
@@ -318,6 +324,7 @@ export function initExtractionThreshold(
   initializedConfig = config
   initializedSkillConfig = skillConfig
   thresholdState = DEFAULT_EXTRACTION_THRESHOLD_STATE
+  log.info('initExtractionThreshold: enabled:', config.enabled, 'minMessages:', config.minMessages, 'throttle:', config.throttle)
 }
 
 export function getThresholdState(): ExtractionThresholdState {
@@ -327,6 +334,7 @@ export function getThresholdState(): ExtractionThresholdState {
 export function updateThresholdState(
   newState: ExtractionThresholdState
 ): void {
+  log.debug('updateThresholdState: inProgress:', newState.inProgress, 'turns:', newState.turnsSinceLastExtraction, 'skill_iters:', newState.skill_iters_since_review)
   thresholdState = newState
 }
 

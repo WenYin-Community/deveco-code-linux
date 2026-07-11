@@ -5,6 +5,9 @@
 
 import fs from "fs/promises"
 import path from "path"
+import { createLogger } from "../util/logger"
+
+const log = createLogger('[DreamState]')
 
 export interface AutoDreamState {
   lastConsolidationAt: number
@@ -28,11 +31,13 @@ export function getDreamStatePath(memoryRoot: string): string {
 
 export async function readDreamState(memoryRoot: string): Promise<AutoDreamState> {
   const statePath = getDreamStatePath(memoryRoot)
-  
+  log.debug('readDreamState: path:', statePath)
+
   try {
     const content = await fs.readFile(statePath, 'utf-8')
     const state = JSON.parse(content) as AutoDreamState
-    
+    log.debug('readDreamState: loaded, sessionCount:', state.sessionCount)
+
     if (
       typeof state.lastConsolidationAt !== 'number' ||
       typeof state.sessionCount !== 'number' ||
@@ -46,8 +51,10 @@ export async function readDreamState(memoryRoot: string): Promise<AutoDreamState
     return state
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      log.debug('readDreamState: file not found, using defaults')
       return DEFAULT_DREAM_STATE
     }
+    log.warn('readDreamState: parse error, using defaults:', error)
     return DEFAULT_DREAM_STATE
   }
 }
@@ -55,6 +62,7 @@ export async function readDreamState(memoryRoot: string): Promise<AutoDreamState
 export async function writeDreamState(memoryRoot: string, state: AutoDreamState): Promise<void> {
   const statePath = getDreamStatePath(memoryRoot)
   const content = JSON.stringify(state, null, 2)
+  log.debug('writeDreamState: path:', statePath)
   await fs.writeFile(statePath, content, 'utf-8')
 }
 
@@ -64,13 +72,16 @@ export async function updateDreamState(
 ): Promise<AutoDreamState> {
   const current = await readDreamState(memoryRoot)
   const updated = { ...current, ...updates }
+  log.info('updateDreamState:', JSON.stringify(updates))
   await writeDreamState(memoryRoot, updated)
   return updated
 }
 
 export async function incrementSessionCount(memoryRoot: string, sessionID: string): Promise<number> {
   const state = await readDreamState(memoryRoot)
+  log.debug('incrementSessionCount: sessionID:', sessionID, 'currentCount:', state.sessionCount)
   if (state.lastCountedSessionID === sessionID) {
+    log.debug('incrementSessionCount: already counted this session, skip')
     return state.sessionCount
   }
   const newCount = state.sessionCount + 1
@@ -80,10 +91,12 @@ export async function incrementSessionCount(memoryRoot: string, sessionID: strin
     lastSessionScanAt: Date.now(),
     lastCountedSessionID: sessionID
   })
+  log.info('incrementSessionCount: newCount:', newCount)
   return newCount
 }
 
 export async function markConsolidationComplete(memoryRoot: string): Promise<void> {
+  log.info('markConsolidationComplete: memoryRoot:', memoryRoot)
   await updateDreamState(memoryRoot, {
     lastConsolidationAt: Date.now(),
     sessionCount: 0,

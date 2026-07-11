@@ -7,6 +7,9 @@ import { EnhancedMemoryRetrieval } from "./enhanced-retrieval"
 import { MemoryStorage } from "./storage"
 import type { MemoryConfig } from "./types"
 import { DEFAULT_MEMORY_CONFIG, MEMORY_SYSTEM_PROMPT_TEMPLATE, MEMORY_TYPE_DESCRIPTIONS, BEFORE_RECOMMENDING_SECTION, RELATIVE_DATE_RULE } from "./types"
+import { createLogger } from "../util/logger"
+
+const log = createLogger('[MemoryInjection]')
 
 interface InjectionResult {
   systemPrompt: string
@@ -36,10 +39,12 @@ export class MemoryInjection {
   */
   async injectIndexOnly(): Promise<InjectionResult> {
     if (!this.config.enabled) {
+      log.debug('injectIndexOnly: disabled')
       return { systemPrompt: "", memoriesLoaded: 0, indexContent: "", truncated: false }
     }
 
     const headers = await this.storage.list()
+    log.debug('injectIndexOnly: loaded', headers.length, 'headers')
     if (headers.length === 0) {
       return { systemPrompt: "", memoriesLoaded: 0, indexContent: "", truncated: false }
     }
@@ -81,6 +86,7 @@ export class MemoryInjection {
    * Generate memory system prompt for injection (legacy: full content)
    */
   async inject(query?: string): Promise<InjectionResult> {
+    log.debug('inject called, enabled:', this.config.enabled, 'query:', query?.slice(0, 50) || '(none)')
     // Check if memory is enabled
     if (!this.config.enabled) {
       return {
@@ -96,6 +102,7 @@ export class MemoryInjection {
 
     // If no memories, return empty
     if (!index && !content) {
+      log.debug('inject: no memories found')
       return {
         systemPrompt: "",
         memoriesLoaded: 0,
@@ -109,6 +116,7 @@ export class MemoryInjection {
 
     // Count memories loaded
     const memoriesLoaded = count
+    log.info('inject:', memoriesLoaded, 'memories loaded, truncated:', truncated)
 
     return {
       systemPrompt,
@@ -149,6 +157,7 @@ export class MemoryInjection {
    */
   async getCompactionContext(): Promise<string> {
     const stats = await this.storage.getStats()
+    log.debug('getCompactionContext: total memories:', stats.total)
 
     if (stats.total === 0) {
       return ""

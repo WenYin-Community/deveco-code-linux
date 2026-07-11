@@ -125,7 +125,7 @@ private async forkSession(): Promise<string | undefined> {
         if (retryResult.error || !retryResult.data) {
           logger.warn('[SemanticSelection]', 'Forked session verification failed:', verifyResult.error)
           // Clean up the leaked forked session
-          try { await this.client.session.delete({ path: { id: forkedID } }) } catch {}
+          try { await this.client.session.delete({ path: { id: forkedID } }) } catch (e) { logger.warn('[SemanticSelection]', 'Session cleanup failed:', e instanceof Error ? e.message : String(e)); }
           return undefined
         }
       }
