@@ -11,11 +11,16 @@ import type { SkillHeader } from './types'
 import fs from 'fs/promises'
 import path from 'path'
 import { createLogger } from '../util/logger'
+import { isForkedSession, getForkSessionAgent } from '../util/forkManager'
 
 const log = createLogger('[SkillTools]')
 
 // Shared storage instance
 const storage = new SkillStorage()
+
+// Module-level skill enabled flag, set by index.ts during init
+let skillEnabled = false
+export function setSkillEnabled(enabled: boolean): void { skillEnabled = enabled }
 
 // ============================================================================
 // skill-manage Tool
@@ -93,6 +98,15 @@ function fuzzyMatch(content: string, target: string): { found: boolean; index: n
  * skill-manage tool handler
  */
 async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
+  // Execute guard: when skill.enabled=false, only allow from /auto-skill (skill-review forked session)
+  if (!skillEnabled) {
+    const ctx = _ctx as Record<string, unknown> | undefined
+    const sessionID = (ctx?.sessionID as string) || ''
+    if (!isForkedSession(sessionID) || getForkSessionAgent(sessionID) !== 'skill-review') {
+      return 'Error: skill-manage is only available via /auto-skill command. Enable skills in memory-config.json to allow automatic skill management.'
+    }
+  }
+
   const action = args.action as string
   const category = args.category as string
   const name = args.name as string
@@ -309,7 +323,9 @@ async function handleSkillList(args: Record<string, unknown>, _ctx: unknown): Pr
       if (category) {
         return `No skills found in category "${category}"`
       }
-      return 'No skills found. Create one with skill-manage (create action).'
+      return skillEnabled
+        ? 'No skills found. Create one with skill-manage (create action).'
+        : 'No skills found. Use /auto-skill to create skills.'
     }
     
     // Progressive disclosure: show metadata only

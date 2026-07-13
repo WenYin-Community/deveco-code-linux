@@ -9,7 +9,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { setSessionPermissions, getDreamPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getDreamPermissionRules, createForkedChildSession, type ForkedSessionInfo } from '../util/forkManager'
 import type { AutoDreamConfig, MemoryExpiryConfig } from '../memory/types'
 import { DEFAULT_AUTO_DREAM_CONFIG } from '../memory/types'
 import { MemoryStorage } from '../memory/storage'
@@ -34,6 +34,7 @@ export interface AutoDreamContext {
   storage?: MemoryStorage
   skipGateCheck?: boolean
   expiryConfig?: MemoryExpiryConfig
+  skillEnabled?: boolean
 }
 
 export interface AutoDreamResult {
@@ -213,23 +214,24 @@ export async function executeAutoDream(
   await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() })
   
   try {
-    const childSessionID = await createForkedChildSession(
+    const forkInfo = await createForkedChildSession(
       initializedClient,
       context.sessionID,
       'dream',
       context.directory,
     )
 
-    if (!childSessionID) {
+    if (!forkInfo) {
       result.error = 'Session create failed'
       consolidationInProgress = false
       await rollbackConsolidationLock(lockPath, priorMtime)
       return result
     }
 
+    const childSessionID = forkInfo.sessionID
     logger.info('[AutoDream]', 'Created child session:', childSessionID)
 
-    const dreamPermRules = getDreamPermissionRules(context.memoryRoot)
+    const dreamPermRules = getDreamPermissionRules(context.memoryRoot, context.skillEnabled)
     const dreamPermResult = await setSessionPermissions(initializedClient!, childSessionID, dreamPermRules)
     if (!dreamPermResult) {
       logger.warn('[AutoDream]', 'Permission setup failed, agent may get stuck on tool approvals')
@@ -240,13 +242,14 @@ export async function executeAutoDream(
     const dreamStatePath = `${context.memoryRoot}/.auto-dream-state.json`
     const headers = context.storage ? await context.storage.list() : []
     const expiryConfig = context.expiryConfig
-    const prompt = buildDreamPrompt(state.sessionCount, undefined, lockFilePath, dreamStatePath, context.memoryRoot, headers, expiryConfig)
+    const prompt = buildDreamPrompt(state.sessionCount, undefined, lockFilePath, dreamStatePath, context.memoryRoot, headers, expiryConfig, context.skillEnabled)
 
     const promptResult = await initializedClient.session.promptAsync({
       path: { id: childSessionID },
       body: {
         parts: [{ type: 'text', text: prompt }],
         agent: 'build',
+        ...(forkInfo.model ? { model: forkInfo.model } : {}),
       }
     })
 
@@ -272,7 +275,7 @@ export async function executeAutoDream(
 }
 
 export async function handleChatMessageTrigger(
-  input: { sessionID: string; projectID: string; memoryRoot: string; directory: string; storage?: MemoryStorage; expiryConfig?: MemoryExpiryConfig }
+  input: { sessionID: string; projectID: string; memoryRoot: string; directory: string; storage?: MemoryStorage; expiryConfig?: MemoryExpiryConfig; skillEnabled?: boolean }
 ): Promise<void> {
   if (!runner || !initializedClient) {
     return
@@ -307,6 +310,7 @@ export async function handleChatMessageTrigger(
     skipGateCheck: true,
     storage: input.storage ?? initializedStorage ?? undefined,
     expiryConfig: input.expiryConfig,
+    skillEnabled: input.skillEnabled,
   }
   
   void runner(context)

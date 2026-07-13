@@ -56,6 +56,18 @@ export function buildForkedSessionTitle(
   return `${label.emoji} ${label.name} — ${truncated} (@${agentKey} subagent)`
 }
 
+// ── Forked Session Info ────────────────────────────────────────────
+
+/**
+ * Information returned after creating a forked child session.
+ * Includes the parent's model so callers can pass it explicitly to
+ * promptAsync, avoiding a DB read of the (potentially corrupt) model column.
+ */
+export interface ForkedSessionInfo {
+  sessionID: string
+  model?: { providerID: string; modelID: string }
+}
+
 // ── Child Session Creation (shared by all forked agent spawn sites) ──
 
 const CREATE_VERIFY_SLEEP_MS = 500
@@ -76,14 +88,15 @@ const FORK_DELAY_MS = 3000
  * DB. Without this delay, fork's transactions can interleave with cleanup's,
  * causing FOREIGN KEY constraint failures.
  *
- * Returns the child session ID, or null on failure.
+ * Returns ForkedSessionInfo (including parent model for explicit promptAsync),
+ * or null on failure.
  */
 export async function createForkedChildSession(
   client: OpencodeClient,
   parentSessionID: string,
   agentKey: ForkedAgentType,
   _directory?: string,
-): Promise<string | null> {
+): Promise<ForkedSessionInfo | null> {
   // Wait for SessionProcessor.cleanup() to finish its DB writes
   await sleep(FORK_DELAY_MS)
 
@@ -95,6 +108,13 @@ export async function createForkedChildSession(
     }
     const parentTitle = parentResult.data.title ?? 'Unknown session'
     const title = buildForkedSessionTitle(agentKey, parentTitle)
+
+    // Capture parent model — will be passed to promptAsync to avoid
+    // DB read of the forked session's (empty/corrupt) model column
+    const parentModel = (parentResult.data as any).model
+    const model = parentModel?.id && parentModel?.providerID
+      ? { providerID: parentModel.providerID as string, modelID: parentModel.id as string }
+      : undefined
 
     const result = await client.session.fork({
       path: { id: parentSessionID },
@@ -134,7 +154,7 @@ export async function createForkedChildSession(
     }
 
     logger.info('[ForkManager]', `Forked ${agentKey} child session:`, childID, 'title:', title)
-    return childID
+    return { sessionID: childID, model }
   } catch (error) {
     logger.error('[ForkManager]', `${agentKey} fork session exception:`, error)
     return null
@@ -244,7 +264,7 @@ export function getExtractionPermissionRules(includeSkills: boolean = false, mem
   return rules
 }
 
-export function getDreamPermissionRules(memoryRoot?: string): PermissionRuleset {
+export function getDreamPermissionRules(memoryRoot?: string, skillEnabled?: boolean): PermissionRuleset {
   const rules: PermissionRuleset = [
     { permission: '*', pattern: '*', action: 'deny' },
     { permission: 'read', pattern: '*', action: 'allow' },
@@ -256,10 +276,15 @@ export function getDreamPermissionRules(memoryRoot?: string): PermissionRuleset 
     { permission: 'memory-delete', pattern: '*', action: 'allow' },
     { permission: 'bash', pattern: '*', action: 'deny' },
     { permission: 'edit', pattern: '*', action: 'deny' },
-    { permission: 'skill-list', pattern: '*', action: 'allow' },
-    { permission: 'skill-view', pattern: '*', action: 'allow' },
-    { permission: 'skill-manage', pattern: '*', action: 'allow' },
   ]
+
+  if (skillEnabled) {
+    rules.push(
+      { permission: 'skill-list', pattern: '*', action: 'allow' },
+      { permission: 'skill-view', pattern: '*', action: 'allow' },
+      { permission: 'skill-manage', pattern: '*', action: 'allow' },
+    )
+  }
 
   if (memoryRoot) {
     rules.push(...buildExternalDirectoryRules(memoryRoot))

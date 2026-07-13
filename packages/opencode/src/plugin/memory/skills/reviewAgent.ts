@@ -8,7 +8,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession, type ForkedSessionInfo } from '../util/forkManager'
 import type { SkillConfig } from '../memory/types'
 import { buildSkillReviewPrompt, buildCombinedReviewPrompt } from './prompts'
 import { SkillStorage } from './storage'
@@ -47,7 +47,8 @@ interface SkillReviewResult {
 async function sendSkillReviewPrompt(
   client: OpencodeClient,
   sessionID: string,
-  prompt: string
+  prompt: string,
+  model?: { providerID: string; modelID: string }
 ): Promise<boolean> {
   try {
     const result = await client.session.promptAsync({
@@ -55,6 +56,7 @@ async function sendSkillReviewPrompt(
       body: {
         parts: [{ type: 'text', text: prompt }],
         agent: 'build',
+        ...(model ? { model } : {}),
       }
     })
     
@@ -118,23 +120,24 @@ export async function spawnSkillReviewAgent(
       return { success: false, error: "skill_review_in_progress", method: "fallback", notification: '' }
     }
     
-    const childSessionID = await createForkedChildSession(context.client, context.sessionID, 'skill-review', context.directory)
-    if (!childSessionID) {
+    const forkInfo = await createForkedChildSession(context.client, context.sessionID, 'skill-review', context.directory)
+    if (!forkInfo) {
       await releaseSkillReviewLock(getSkillReviewLockPath(context.memoryRoot))
       return { success: false, error: "Failed to fork session", method: "fallback", notification: '' }
     }
 
+    const childSessionID = forkInfo.sessionID
     logger.info('[SkillReviewAgent]', 'Forked session:', childSessionID)
-    
+
     const permRules = getExtractionPermissionRules(true, context.memoryRoot)
     const permResult = await setSessionPermissions(context.client, childSessionID, permRules)
     if (!permResult) {
       logger.warn('[SkillReviewAgent]', 'Permission setup failed, agent may get stuck on tool approvals')
     }
-    
+
     const prompt = await buildReviewPrompt(context)
-    
-    const promptSuccess = await sendSkillReviewPrompt(context.client, childSessionID, prompt)
+
+    const promptSuccess = await sendSkillReviewPrompt(context.client, childSessionID, prompt, forkInfo.model)
     if (!promptSuccess) {
       await releaseSkillReviewLock(getSkillReviewLockPath(context.memoryRoot))
       return { success: false, error: "Failed to send review prompt", method: "forked_agent", childSessionID, notification: '' }

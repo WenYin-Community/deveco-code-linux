@@ -20,7 +20,7 @@ import { processToolCallForSkill, incrementTurnCounter, markExtractionCompleted,
 import { SkillStorage, SkillInjection, SKILLS_GUIDANCE, SLASH_COMMANDS_GUIDANCE, } from './skills';
 import { checkSkillThreshold, incrementSkillCounter, resetSkillCounter, DEFAULT_SKILL_TRIGGER_STATE, } from './skills/trigger';
 import { spawnSkillReviewAgent, isSkillReviewInProgress, releaseSkillReviewLock, getSkillReviewLockPath } from './skills/reviewAgent';
-import { skillManageTool, skillListTool, skillViewTool } from './skills/tools';
+import { skillManageTool, skillListTool, skillViewTool, setSkillEnabled } from './skills/tools';
 // Slash Commands imports
 import { parseSlashCommand, isSlashCommand, getCommandRegistry, } from './slashCommands';
 
@@ -193,6 +193,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
     const initPromise = (async (): Promise<PluginState> => {
         initLogger((pluginConfig.logLevel as LogLevel) || 'error');
         const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
+        setSkillEnabled(skillConfig.enabled);
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
         await setLogDir(storage.getMemoryPath() + '/logs');
@@ -318,7 +319,8 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                 const alwaysSafe = [
                     'read', 'grep', 'glob',
                     'memory-read', 'memory-write', 'memory-search', 'memory-delete',
-                    'skill-list', 'skill-view', 'skill-manage',
+                    'skill-list', 'skill-view',
+                    ...(state.skillConfig.enabled ? ['skill-manage'] : []),
                     'external_directory',
                 ];
                 if (alwaysSafe.includes(permission)) {
@@ -694,6 +696,7 @@ const alreadyInjected = new Set<string>();
                                 directory: directory,
                                 storage: state.storage,
                                 expiryConfig: state.expiryConfig,
+                                skillEnabled: state.skillConfig.enabled,
                             });
                         }
                     }
@@ -713,6 +716,7 @@ const alreadyInjected = new Set<string>();
                             directory: directory,
                             storage: state.storage,
                             expiryConfig: state.expiryConfig,
+                            skillEnabled: state.skillConfig.enabled,
                         });
                     }
                 }
@@ -1010,6 +1014,7 @@ const alreadyInjected = new Set<string>();
                             storage: state.storage,
                             skipGateCheck: force,
                             expiryConfig: state.expiryConfig,
+                            skillEnabled: state.skillConfig.enabled,
                         });
                         
                         if (!result.success) {

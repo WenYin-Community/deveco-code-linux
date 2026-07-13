@@ -7,18 +7,16 @@
 import type { MemoryHeader, MemoryExpiryConfig } from "../memory/types"
 import { DEFAULT_MEMORY_EXPIRY_CONFIG } from "../memory/types"
 
-export const DREAM_CONSOLIDATION_PROMPT = `# Dream: Memory Consolidation
+export const DREAM_CONSOLIDATION_PROMPT_BASE = `# Dream: Memory Consolidation
 
-You are a memory consolidation agent. Your task is to organize and optimize the project's memory files and skills.
+You are a memory consolidation agent. Your task is to organize and optimize the project's memory files.
 
 ## Phase 1 - Orient
 
-First, understand the current memory and skill state:
+First, understand the current memory state:
 - Use memory-read to list all memories (no args shows all)
 - Read existing memory files to understand themes
 - Note current MEMORY.md index structure
-- Use skill-list to list all skills with metadata
-- Review skill descriptions and categories for relevance
 
 ## Phase 2 - Gather recent signal
 
@@ -26,8 +24,6 @@ Collect information that needs consolidation:
 - Use memory-search to find overlapping topics
 - Identify memories that may have drifted from current project state
 - Look for contradictions between memories
-- Identify skills that haven't been used recently
-- Find skills with outdated or incomplete instructions
 
 ## Phase 3 - Consolidate
 
@@ -37,8 +33,6 @@ Perform consolidation actions:
 - **Delete contradicted facts — if current investigation overturns an old memory, delete the old version rather than keeping both**
 - Create new memory files for emerging topics
 - Remove redundant content using memory-delete
-- Update skills with new learnings using skill-manage (action='patch')
-- Merge similar skills if they cover the same workflow
 
 ## Phase 4 - Prune and index
 
@@ -49,8 +43,6 @@ Cleanup and organize:
 - **Convert relative dates ('yesterday', 'last week') to absolute dates so they remain interpretable after time passes**
 - Remove stale pointers
 - Resolve any remaining contradictions
-- Delete skills that are no longer relevant using skill-manage (action='delete')
-- Archive skills that haven't been used in recent sessions
 
 ## CRITICAL: Final Steps (Must Complete)
 
@@ -71,6 +63,31 @@ Use \`write\` or \`patch\` whichever is available. This clears the lock so futur
 **Both steps are mandatory.** If you skip them, future consolidation will be blocked.
 `
 
+export const DREAM_SKILL_SECTIONS = `
+## Skill Management (Additional Phases)
+
+In addition to memory consolidation, also review and manage skills:
+
+### Phase 1 (Skills)
+- Use skill-list to list all skills with metadata
+- Review skill descriptions and categories for relevance
+
+### Phase 2 (Skills)
+- Identify skills that haven't been used recently
+- Find skills with outdated or incomplete instructions
+
+### Phase 3 (Skills)
+- Update skills with new learnings using skill-manage (action='patch')
+- Merge similar skills if they cover the same workflow
+
+### Phase 4 (Skills)
+- Delete skills that are no longer relevant using skill-manage (action='delete')
+- Archive skills that haven't been used in recent sessions
+`
+
+/** @deprecated Use DREAM_CONSOLIDATION_PROMPT_BASE + conditional DREAM_SKILL_SECTIONS */
+export const DREAM_CONSOLIDATION_PROMPT = DREAM_CONSOLIDATION_PROMPT_BASE + DREAM_SKILL_SECTIONS
+
 export function buildDreamPrompt(
   sessionCount: number,
   skillCount?: number,
@@ -79,7 +96,13 @@ export function buildDreamPrompt(
   memoryRoot?: string,
   headers?: MemoryHeader[],
   expiryConfig?: MemoryExpiryConfig,
+  skillEnabled?: boolean,
 ): string {
+  // Use base prompt, conditionally add skill sections
+  const basePrompt = skillEnabled
+    ? DREAM_CONSOLIDATION_PROMPT_BASE + DREAM_SKILL_SECTIONS
+    : DREAM_CONSOLIDATION_PROMPT_BASE
+
   const contextSection = sessionCount > 0
     ? `
 ## Context
@@ -88,7 +111,7 @@ This consolidation runs after ${sessionCount} sessions. Prioritize recent signal
 `
     : ""
 
-  const skillContextSection = skillCount !== undefined && skillCount > 0
+  const skillContextSection = skillEnabled && skillCount !== undefined && skillCount > 0
     ? `
 There are ${skillCount} skills to review. Consider pruning skills that haven't been used recently or have become outdated.
 `
@@ -167,5 +190,5 @@ This marks memories as pending deletion — the user will confirm deletion in th
 `
   }
 
-  return DREAM_CONSOLIDATION_PROMPT + contextSection + skillContextSection + pathsSection + expirySection
+  return basePrompt + contextSection + skillContextSection + pathsSection + expirySection
 }

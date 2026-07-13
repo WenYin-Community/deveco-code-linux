@@ -8,7 +8,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession } from '../util/forkManager'
+import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession, type ForkedSessionInfo } from '../util/forkManager'
 import type { ExtractionConfig, SkillConfig } from './types'
 import type { ExtractionPendingContext } from './extractionThreshold'
 import type { ReviewMode } from './extractionRunner'
@@ -42,21 +42,23 @@ export async function runExtractionAgent(
   }
 
   let childSessionID: string | undefined
+  let forkInfo: ForkedSessionInfo | undefined
 
   try {
-    childSessionID = await createForkedChildSession(
+    forkInfo = await createForkedChildSession(
       context.client,
       context.sessionID,
       'extraction',
       context.directory,
     ) ?? undefined
 
-    if (!childSessionID) {
+    if (!forkInfo) {
       result.error = "Failed to fork session"
       result.method = "fork_failed"
       return result
     }
 
+    childSessionID = forkInfo.sessionID
     result.childSessionID = childSessionID
     logger.info('[ExtractionAgent]', 'Forked session:', childSessionID)
 
@@ -77,6 +79,7 @@ export async function runExtractionAgent(
       body: {
         parts: [{ type: 'text', text: fullPrompt }],
         agent: context.config.extractionAgent,
+        ...(forkInfo.model ? { model: forkInfo.model } : {}),
       }
     })
 
