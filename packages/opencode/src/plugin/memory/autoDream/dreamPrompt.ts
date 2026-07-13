@@ -146,17 +146,24 @@ There are ${skillCount} skills to review. Consider pruning skills that haven't b
       })
       .join('\n')
 
+    const ttlLabels: Record<string, string> = {
+      user: ttlByType.user === null ? 'Never expires (∞)' : `${ttlByType.user} days`,
+      feedback: `${ttlByType.feedback} days`,
+      project: `${ttlByType.project} days`,
+      reference: `${ttlByType.reference} days`,
+    }
+
     expirySection = `
 ## Phase 4 - Expiry Rules (MUST follow these quantified rules)
 
 ### Default TTL by memory type:
 
-| Type | Default TTL | Note |
-|------|------------|------|
-| user | Never expires (∞) | User preferences are long-term |
-| feedback | 180 days | Behavioral guidance may become outdated |
-| project | 90 days | Project context changes with version |
-| reference | 30 days | External resources decay quickly |
+| Type | Default TTL |
+|------|------------|
+| user | ${ttlLabels.user} |
+| feedback | ${ttlLabels.feedback} |
+| project | ${ttlLabels.project} |
+| reference | ${ttlLabels.reference} |
 
 ### Individual overrides:
 - If a memory has \`pin: true\` in frontmatter → NEVER delete it (excluded from expiry)

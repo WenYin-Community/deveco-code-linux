@@ -238,6 +238,8 @@ export async function readFrontmatter(
       updated: frontmatter.updated,
       filepath,
       mtime: stats.mtimeMs,
+      pin: frontmatter.pin,
+      ttl: frontmatter.ttl,
     }
   } catch {
     return null
