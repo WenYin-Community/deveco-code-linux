@@ -39,7 +39,7 @@ const DEFAULT_PLUGIN_CONFIG = {
     extraction: { enabled: true },
     skills: { enabled: false },
     slashCommands: { enabled: true },
-    logLevel: 'error',
+    logLevel: 'off',
     memoryRecall: { enabled: true, visibleRecall: true, visibleWrite: true, minRelevanceScore: 0.3, maxInjectChars: 200 },
     semanticSelection: { enabled: true },
     subagentHooks: DEFAULT_SUBAGENT_HOOKS_CONFIG,
@@ -195,12 +195,15 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
     if (inflight) return inflight;
 
     const initPromise = (async (): Promise<PluginState> => {
-        initLogger((pluginConfig.logLevel as LogLevel) || 'error');
+        const logLevel = (pluginConfig.logLevel as LogLevel) || 'off';
+        initLogger(logLevel);
         const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
         setSkillEnabled(skillConfig.enabled);
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
-        await setLogDir(storage.getMemoryPath() + '/logs');
+        // Structured logging is off by default; only open the log file when a
+        // level is configured, so no memory-plugin.log is created otherwise.
+        if (logLevel !== 'off') await setLogDir(storage.getMemoryPath() + '/logs');
         logger.info('[PluginInit]', 'projectID:', projectID, 'memoryPath:', storage.getMemoryPath());
         const skillStorage = new SkillStorage();
         await skillStorage.init();
