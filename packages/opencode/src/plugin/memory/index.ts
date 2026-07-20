@@ -79,6 +79,10 @@ interface PendingDeletion {
 
 const stateMap = new Map<string, PluginState>();
 const initPromises = new Map<string, Promise<PluginState>>();
+// Projects whose leftover extraction-fork sessions have been swept on startup.
+// The session.idle handler only deletes NEW completions; this one-time sweep
+// removes pre-existing / crash-before-idle extraction forks from prior runs.
+const sweptProjects = new Set<string>();
 
 async function getPendingExpiryNotice(state: PluginState): Promise<string | null> {
     if (!state.expiryConfig?.enabled) return null;
@@ -371,6 +375,15 @@ event: async ({ event }) => {
                         const state = getThresholdState()
                         updateThresholdState(markExtractionCompleted(state, state.pendingLastMessageUuid));
                         logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', state.pendingLastMessageUuid || '(none)', sid);
+                        // Delete the completed extraction fork so it doesn't linger as a
+                        // top-level session. Forks have no parent_id (session.fork doesn't
+                        // set one), so they'd otherwise clutter the session list; the list
+                        // query doesn't exclude archived sessions, so archiving wouldn't
+                        // hide them — delete is the memory-only way to remove them. The
+                        // extracted memories are persisted separately and survive. Only
+                        // extraction forks are removed — dream/skill-review remain visible.
+                        try { await client.session.delete({ path: { id: sid } }); }
+                        catch (e) { logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e)); }
                     } else if (agentType === 'dream') {
                         await markDreamDone(memRoot);
                         logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);
@@ -420,6 +433,22 @@ event: async ({ event }) => {
                 return;
             const sid = _input.sessionID || '';
             if (isForkedSession(sid)) return;
+            if (!sweptProjects.has(projectID)) {
+                sweptProjects.add(projectID);
+                // Delete any extraction-fork sessions left from prior runs. The idle
+                // handler only deletes new completions; this sweep covers pre-fix /
+                // crash-before-idle stragglers so they don't linger as top-level
+                // sessions. Runs once per project after the server is serving.
+                void (async () => {
+                    try {
+                        const res = await client.session.list();
+                        for (const s of res.data ?? []) {
+                            if (!s.title?.includes('(@extraction subagent)')) continue;
+                            await client.session.delete({ path: { id: s.id } });
+                        }
+                    } catch (e) { logger.warn('[Sweep]', 'leftover extraction-fork sweep failed:', e instanceof Error ? e.message : String(e)); }
+                })();
+            }
             const isSub = isSubagentSession(sid);
             if (isSub) {
                 const subHooks = state.subagentHooksConfig;
