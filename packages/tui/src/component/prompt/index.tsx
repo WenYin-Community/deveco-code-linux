@@ -63,6 +63,20 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { shouldKeepMessagesOnInterrupt } from "./interrupt"
+import { DialogConfirm } from "../../ui/dialog-confirm"
+import { DialogGoalBudget } from "../../routes/session/dialog-goal-budget"
+import {
+  GOAL_AGENT,
+  GOAL_BUDGET_KV_KEY,
+  GOAL_HELP,
+  formatGoalTokenCount,
+  goalElapsedSeconds,
+  goalFromMetadata,
+  goalTokenUsage,
+  isGoalCommandAgent,
+  parseGoalBudget,
+  parseGoalCommand,
+} from "../../prompt/goal"
 
 registerSpinner()
 
@@ -365,6 +379,40 @@ export function Prompt(props: PromptProps) {
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
+
+  function defaultGoalBudget() {
+    const value = kv.get(GOAL_BUDGET_KV_KEY, null)
+    if (typeof value !== "number") return null
+    const parsed = parseGoalBudget(String(value))
+    return parsed.valid ? parsed.value : null
+  }
+
+  function goalBudgetLabel(value: number | null) {
+    return value === null ? "Unlimited" : `${formatGoalTokenCount(value)} tokens`
+  }
+
+  function goalHelpMessage() {
+    const configured = defaultGoalBudget()
+    if (!props.sessionID)
+      return `${GOAL_HELP}\n\nCurrent budget: ${goalBudgetLabel(configured)}\n\nCurrent goal\nNo goal exists for this session.`
+    const current = goalFromMetadata(sync.session.get(props.sessionID)?.metadata)
+    if (!current)
+      return `${GOAL_HELP}\n\nCurrent budget: ${goalBudgetLabel(configured)}\n\nCurrent goal\nNo goal exists for this session.`
+    const duration = formatDuration(goalElapsedSeconds(current)) || "0s"
+    const tokens = goalTokenUsage(current, sync.data.message[props.sessionID] ?? [])
+    return [
+      GOAL_HELP,
+      "",
+      `Current budget: ${goalBudgetLabel(current.tokenBudget)}`,
+      `Used: ${formatGoalTokenCount(tokens)} tokens`,
+      "",
+      "Current goal",
+      `Task: ${current.objective}`,
+      `Status: ${current.status}`,
+      `Elapsed: ${duration}`,
+      ...(current.reason ? [`Reason: ${current.reason}`] : []),
+    ].join("\n")
+  }
 
   const [store, setStore] = createStore<{
     prompt: PromptInfo
@@ -1143,6 +1191,21 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
+  function clearSubmittedPrompt(mode: PromptInfo["mode"]) {
+    history.append({
+      ...store.prompt,
+      mode,
+    })
+    input.extmarks.clear()
+    setStore("prompt", {
+      input: "",
+      parts: [],
+    })
+    setStore("extmarkToPartIndex", new Map())
+    input.clear()
+    props.onSubmit?.()
+  }
+
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -1173,9 +1236,29 @@ export function Prompt(props: PromptProps) {
     if (workspace.creating() || move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    const trimmed = store.prompt.input.trim()
+    const initialGoalCommand = parseGoalCommand(trimmed)
     const agent = local.agent.current()
     if (!agent) return false
-    const trimmed = store.prompt.input.trim()
+    if (initialGoalCommand && !isGoalCommandAgent(agent.name)) {
+      clearSubmittedPrompt(store.mode)
+      toast.show({
+        message: "/goal is only available in the build agent. Switch to build and try again.",
+        variant: "warning",
+      })
+      return true
+    }
+    if (initialGoalCommand?.action === "open_budget") {
+      clearSubmittedPrompt(store.mode)
+      const budget = await DialogGoalBudget.show(dialog, defaultGoalBudget())
+      if (budget === undefined) return true
+      kv.set(GOAL_BUDGET_KV_KEY, budget)
+      toast.show({
+        variant: "success",
+        message: budget === null ? "Goal budget set to Unlimited." : `Goal budget set to ${goalBudgetLabel(budget)}.`,
+      })
+      return true
+    }
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
@@ -1191,6 +1274,65 @@ export function Prompt(props: PromptProps) {
       setStore("prompt", { input: "", parts: [] })
       setStore("extmarkToPartIndex", new Map())
       showBtwUsage()
+      return true
+    }
+    if (initialGoalCommand?.action === "help") {
+      clearSubmittedPrompt(store.mode)
+      void DialogAlert.show(dialog, "Goal mode", goalHelpMessage())
+      return true
+    }
+    if (
+      initialGoalCommand &&
+      (initialGoalCommand.action === "stop" ||
+        initialGoalCommand.action === "clear" ||
+        initialGoalCommand.action === "resume")
+    ) {
+      clearSubmittedPrompt(store.mode)
+      if (!props.sessionID) {
+        toast.show({
+          message: initialGoalCommand.action === "resume" ? "No goal exists to resume." : "No session goal exists yet.",
+          variant: initialGoalCommand.action === "resume" ? "info" : "error",
+        })
+        return true
+      }
+      const currentGoal =
+        initialGoalCommand.action === "resume"
+          ? goalFromMetadata(sync.session.get(props.sessionID)?.metadata)
+          : null
+      if (initialGoalCommand.action === "resume" && !currentGoal) {
+        toast.show({ message: "No goal exists to resume.", variant: "info" })
+        return true
+      }
+      if (initialGoalCommand.action === "resume" && currentGoal?.budgetExhaustedAt != null) {
+        const tokenBudget = defaultGoalBudget()
+        const usedTokens = goalTokenUsage(currentGoal, sync.data.message[props.sessionID] ?? [])
+        if (tokenBudget !== null && tokenBudget <= usedTokens) {
+          toast.show({
+            message: "Goal budget exhausted. Increase it with /goal budget before resuming.",
+            variant: "warning",
+          })
+          return true
+        }
+      }
+      try {
+        const body =
+          initialGoalCommand.action === "resume" && currentGoal?.budgetExhaustedAt != null
+            ? { action: "resume" as const, tokenBudget: defaultGoalBudget() }
+            : { action: initialGoalCommand.action }
+        await sdk.client.session.goal(
+          {
+            sessionID: props.sessionID,
+            body,
+          },
+          { throwOnError: true },
+        )
+      } catch (error) {
+        toast.show({
+          title: "Goal command failed",
+          message: errorMessage(error),
+          variant: "error",
+        })
+      }
       return true
     }
     const selectedModel = local.model.current()
@@ -1317,6 +1459,75 @@ export function Prompt(props: PromptProps) {
       return true
     }
 
+    const goalCommand = parseGoalCommand(inputText)
+    if (goalCommand) {
+      clearSubmittedPrompt(currentMode)
+      if (goalCommand.action === "open_budget") return true
+      if (goalCommand.action === "help") {
+        void DialogAlert.show(dialog, "Goal mode", goalHelpMessage())
+        return true
+      }
+
+      const currentGoal = goalFromMetadata(workspaceSession?.metadata)
+      if (goalCommand.action === "start" && (currentGoal?.status === "active" || currentGoal?.status === "paused")) {
+        const confirmed = await DialogConfirm.show(
+          dialog,
+          "Replace active goal?",
+          `Current: ${currentGoal.objective}\n\nNew: ${goalCommand.objective}`,
+          { confirmLabel: "Replace", initialActive: "cancel" },
+        )
+        if (!confirmed) return true
+      }
+
+      move.startSubmit()
+      try {
+        if (goalCommand.action === "start") {
+          const tokenBudget = defaultGoalBudget()
+          await sdk.client.session.goal(
+            {
+              sessionID,
+              body: {
+                action: "start",
+                objective: goalCommand.objective,
+                ...(tokenBudget === null ? {} : { tokenBudget }),
+                agent: GOAL_AGENT,
+                model: {
+                  providerID: selectedModel.providerID,
+                  modelID: selectedModel.modelID,
+                },
+                variant,
+                parts: [...editorParts, ...nonTextParts],
+              },
+            },
+            { throwOnError: true },
+          )
+          if (editorParts.length > 0) editor.markSelectionSent()
+        } else {
+          await sdk.client.session.goal(
+            {
+              sessionID,
+              body: { action: goalCommand.action },
+            },
+            { throwOnError: true },
+          )
+        }
+      } catch (error) {
+        toast.show({
+          title: "Goal command failed",
+          message: errorMessage(error),
+          variant: "error",
+        })
+      }
+
+      if (!props.sessionID) {
+        setTimeout(() => {
+          route.navigate({ type: "session", sessionID })
+        }, 50)
+      }
+      if (finishMoveProgress) move.finishSubmit()
+      return true
+    }
+
     if (store.mode === "shell") {
       move.startSubmit()
       void sdk.client.session.shell({
@@ -1370,17 +1581,7 @@ export function Prompt(props: PromptProps) {
         mode: currentMode,
       }
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.()
+    clearSubmittedPrompt(currentMode)
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
@@ -1392,7 +1593,6 @@ export function Prompt(props: PromptProps) {
         })
       }, 50)
     }
-    input.clear()
     if (finishMoveProgress) move.finishSubmit()
     return true
   }

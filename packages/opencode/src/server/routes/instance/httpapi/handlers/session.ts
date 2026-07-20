@@ -16,6 +16,7 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { AsideService } from "@/session/aside"
+import { SessionGoal } from "@/session/goal"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
@@ -28,6 +29,7 @@ import {
   CommandPayload,
   DiffQuery,
   ForkPayload,
+  GoalCommandPayload,
   InitPayload,
   ListQuery,
   MessagesQuery,
@@ -38,7 +40,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { InvalidRequestError, PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -61,6 +63,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
+    const goals = yield* SessionGoal.Service
     const events = yield* EventV2Bridge.Service
     const asideSvc = yield* AsideService.Service
     const scope = yield* Scope.Scope
@@ -241,6 +244,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* goals.pause(ctx.params.sessionID, "interrupted by user").pipe(Effect.catchCause(() => Effect.void))
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
     })
@@ -347,6 +351,87 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* promptSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const goal = Effect.fn("SessionHttpApi.goal")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof GoalCommandPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      if (ctx.payload.action === "stop") {
+        const current = yield* goals.pause(ctx.params.sessionID, "stopped by user")
+        yield* promptSvc.cancel(ctx.params.sessionID)
+        return { goal: current, replaced: false }
+      }
+      if (ctx.payload.action === "clear") {
+        yield* goals.clear(ctx.params.sessionID)
+        yield* promptSvc.cancel(ctx.params.sessionID)
+        return { goal: null, replaced: false }
+      }
+      if (ctx.payload.action === "resume") {
+        const current = yield* goals.resume(ctx.params.sessionID, ctx.payload.tokenBudget)
+        if (current?.budgetExhaustedAt != null) {
+          return yield* Effect.fail(
+            new InvalidRequestError({
+              kind: "goalBudgetExhausted",
+              message: "Goal budget exhausted. Increase it with /goal budget before resuming.",
+            }),
+          )
+        }
+        if (current?.status === "active") {
+          yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+            Effect.catchCause((cause) => Effect.logError("goal resume failed", { cause })),
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+        }
+        return { goal: current, replaced: false }
+      }
+
+      const agent = ctx.payload.agent ?? SessionGoal.AGENT
+      if (agent !== SessionGoal.AGENT) {
+        return yield* Effect.fail(
+          new InvalidRequestError({
+            kind: "goalAgentRequired",
+            message: `/goal is only available in the ${SessionGoal.AGENT} agent.`,
+          }),
+        )
+      }
+
+      const started = yield* goals.start(
+        ctx.params.sessionID,
+        ctx.payload.objective,
+        ctx.payload.tokenBudget ?? SessionGoal.DEFAULT_TOKEN_BUDGET,
+      )
+      const message = yield* promptSvc
+        .prompt({
+          sessionID: ctx.params.sessionID,
+          agent: SessionGoal.AGENT,
+          model: ctx.payload.model,
+          variant: ctx.payload.variant,
+          noReply: true,
+          parts: [
+            {
+              type: "text",
+              text: started.replaced ? `目标已更新 → ${started.goal.objective}` : started.goal.objective,
+              synthetic: started.replaced,
+            },
+            ...(ctx.payload.parts ?? []),
+          ],
+        })
+        .pipe(
+          Effect.onError(() => goals.pause(ctx.params.sessionID, "failed to start goal execution").pipe(Effect.ignore)),
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
+      const current = yield* goals.bindPrompt({
+        sessionID: ctx.params.sessionID,
+        createdAt: started.goal.createdAt,
+        messageID: message.info.id,
+      })
+      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+        Effect.catchCause((cause) => Effect.logError("goal start failed", { cause })),
+        Effect.forkIn(scope, { startImmediately: true }),
+      )
+      return { goal: current, replaced: started.replaced }
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
@@ -458,6 +543,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)
+      .handle("goal", goal)
       .handle("shell", shell)
       .handle("revert", revert)
       .handle("unrevert", unrevert)

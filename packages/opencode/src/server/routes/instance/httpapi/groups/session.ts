@@ -21,11 +21,12 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, InvalidRequestError, PermissionNotFoundError, SessionBusyError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { SessionGoal } from "@/session/goal"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -79,6 +80,31 @@ export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
+const GoalTokenBudget = Schema.NullOr(
+  Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(SessionGoal.MIN_TOKEN_BUDGET),
+    Schema.isLessThanOrEqualTo(SessionGoal.MAX_TOKEN_BUDGET),
+  ),
+)
+const GoalStartPayload = Schema.Struct({
+  action: Schema.Literal("start"),
+  objective: Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())),
+  tokenBudget: Schema.optional(GoalTokenBudget),
+  agent: Schema.optional(Schema.String),
+  model: Schema.optional(SessionPrompt.PromptInput.fields.model),
+  variant: Schema.optional(Schema.String),
+  parts: Schema.optional(SessionPrompt.PromptInput.fields.parts),
+})
+export const GoalCommandPayload = Schema.Union([
+  GoalStartPayload,
+  Schema.Struct({ action: Schema.Literal("stop") }),
+  Schema.Struct({ action: Schema.Literal("clear") }),
+  Schema.Struct({ action: Schema.Literal("resume"), tokenBudget: Schema.optional(GoalTokenBudget) }),
+])
+export const GoalCommandResponse = Schema.Struct({
+  goal: Schema.NullOr(SessionGoal.Info),
+  replaced: Schema.Boolean,
+})
 
 export const BtwPayload = Schema.Struct({
   asideID: Schema.String,
@@ -107,6 +133,7 @@ export const SessionPaths = {
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
+  goal: `${root}/:sessionID/goal`,
   shell: `${root}/:sessionID/shell`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
@@ -376,6 +403,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.command",
             summary: "Send command",
             description: "Send a new command to a session for execution by the AI assistant.",
+          }),
+        ),
+        HttpApiEndpoint.post("goal", SessionPaths.goal, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: GoalCommandPayload,
+          success: described(GoalCommandResponse, "Updated goal state"),
+          error: [HttpApiError.BadRequest, InvalidRequestError, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.goal",
+            summary: "Control goal mode",
+            description: "Start, replace, stop, clear, or resume the long-running goal for a session. Starting a goal is limited to the build agent.",
           }),
         ),
         HttpApiEndpoint.post("shell", SessionPaths.shell, {

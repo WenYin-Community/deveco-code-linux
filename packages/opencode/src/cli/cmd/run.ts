@@ -16,7 +16,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { Effect } from "effect"
 import { UI } from "../ui"
-import { effectCmd } from "../effect-cmd"
+import { CliError, effectCmd } from "../effect-cmd"
 import { ServerAuth } from "@/server/auth"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
@@ -28,6 +28,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { trustPrompt } from "@/cli/trust"
+import { parseGoalBudget } from "@opencode-ai/core/util/goal-budget"
 
 const runtimeTask = import("./run/runtime")
 const ATTACH_FILE_MAX_BYTES = 10 * 1024 * 1024
@@ -144,8 +145,13 @@ export const RunCommand = effectCmd({
         default: [],
       })
       .option("command", {
-        describe: "the command to run, use message for args",
+        describe: "the command to run, use message for args (goal starts a local Goal loop)",
         type: "string",
+      })
+      .option("token-budget", {
+        describe: "token budget for --command goal (e.g., 200k, 1.5m; omitted: unlimited)",
+        type: "string",
+        requiresArg: true,
       })
       .option("continue", {
         alias: ["c"],
@@ -254,6 +260,20 @@ export const RunCommand = effectCmd({
         type: "boolean",
         default: false,
         describe: "enable direct interactive demo slash commands; pass one as the message to run it immediately",
+      })
+      .check((args) => {
+        if (args["token-budget"] !== undefined) {
+          if (args.command !== "goal") throw new CliError({ message: "--token-budget requires --command goal" })
+          if (!args["token-budget"]) throw new CliError({ message: "--token-budget must not be empty" })
+          const budget = parseGoalBudget(args["token-budget"])
+          if (!budget.valid) throw new CliError({ message: `Invalid --token-budget: ${budget.message}` })
+        }
+        if (args.command !== "goal") return true
+        if (args.attach !== undefined) throw new CliError({ message: "--command goal does not support --attach yet" })
+        if (args.interactive) throw new CliError({ message: "--interactive cannot be used with --command" })
+        if (args.agent !== undefined && args.agent !== "build")
+          throw new CliError({ message: "--command goal requires the build agent" })
+        return true
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
     const agentSvc = yield* Agent.Service
@@ -387,6 +407,10 @@ export const RunCommand = effectCmd({
       const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
+
+      if (args.command === "goal" && !initialInput?.trim()) {
+        die("--command goal requires a non-empty objective (message or stdin)")
+      }
 
       if (message.trim().length === 0 && !args.command && !args.interactive) {
         UI.error("You must provide a message or a command")
@@ -759,7 +783,8 @@ export const RunCommand = effectCmd({
             if (
               event.type === "session.status" &&
               event.properties.sessionID === sessionID &&
-              event.properties.status.type === "idle"
+              event.properties.status.type === "idle" &&
+              args.command !== "goal"
             ) {
               break
             }
@@ -797,6 +822,58 @@ export const RunCommand = effectCmd({
         await share(client, sessionID)
 
         if (!args.interactive) {
+          if (args.command === "goal") {
+            const { runGoal } = await import("./run/goal")
+            const budget = parseGoalBudget(args["token-budget"] ?? "")
+            if (!budget.valid) return die(budget.message)
+            const controller = new AbortController()
+            const interrupt = () => controller.abort()
+            process.on("SIGINT", interrupt)
+            try {
+              const result = await runGoal({
+                client,
+                sessionID,
+                body: {
+                  action: "start",
+                  objective: initialInput!,
+                  tokenBudget: budget.value,
+                  agent: "build",
+                  model: pick(args.model),
+                  variant: args.variant,
+                  parts: files,
+                },
+                signal: controller.signal,
+                consume: (events) => loop(client, events),
+              }).catch((error: unknown) => {
+                const message = formatRunError(error)
+                if (!emit("error", { error: { message } })) UI.error(message)
+                process.exitCode = 1
+              })
+              if (!result) return
+              process.exitCode = result.exitCode
+              const summary = {
+                status: result.goal?.status ?? "paused",
+                objective: result.goal?.objective ?? initialInput!,
+                usedTokens: result.goal?.usedTokens ?? 0,
+                tokenBudget: result.goal?.tokenBudget ?? budget.value,
+                reason: result.goal?.reason ?? (result.exitCode === 130 ? "interrupted by user" : null),
+                budgetExhaustedAt: result.goal?.budgetExhaustedAt ?? null,
+                exitCode: result.exitCode,
+              }
+              if (!emit("goal_result", summary)) {
+                process.stdout.write(
+                  `Goal · ${summary.status} · ${summary.usedTokens} / ${summary.tokenBudget ?? "unlimited"} tokens` +
+                    EOL +
+                    `Session: ${sessionID}` +
+                    EOL +
+                    (summary.reason ? `Reason: ${summary.reason}${EOL}` : ""),
+                )
+              }
+            } finally {
+              process.removeListener("SIGINT", interrupt)
+            }
+            return
+          }
           const events = await client.event.subscribe()
           const completed = loop(client, events).catch((e) => {
             console.error(e)

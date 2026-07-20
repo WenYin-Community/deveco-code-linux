@@ -26,6 +26,9 @@ function eventResponse(events: EventV2.Interface) {
   return Effect.gen(function* () {
     const instance = yield* InstanceState.context
     const workspaceID = yield* InstanceState.workspaceID
+    // ReadableStream cancellation can run the finalizer outside the request's
+    // logging context. Preserve it so CLI JSON stdout is never used for logs.
+    const context = yield* Effect.context<never>()
     // Listener registration is eager, so events published after this point cannot
     // be lost while the HTTP body fiber is starting or emitting server.connected.
     const queue = yield* Queue.unbounded<EventV2.Payload>()
@@ -72,7 +75,7 @@ function eventResponse(events: EventV2.Interface) {
         Stream.map(eventData),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,
-        Stream.ensuring(Effect.logInfo("event disconnected")),
+        Stream.ensuring(Effect.logInfo("event disconnected").pipe(Effect.provide(context))),
       ),
       {
         contentType: "text/event-stream",

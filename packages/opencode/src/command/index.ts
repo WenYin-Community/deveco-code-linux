@@ -69,6 +69,7 @@ export const Default = {
   INIT: "init",
   REVIEW: "review",
   ANALYZE: "analyze",
+  GOAL: "goal",
 } as const
 
 export interface Interface {
@@ -135,6 +136,14 @@ export const layer = Layer.effect(
         // task tool; the concise summary and report path return to the parent.
         subtask: true,
         hints: hints(PROMPT_DFX),
+      }
+      commands[Default.GOAL] = {
+        name: Default.GOAL,
+        description: "start or control a long-running goal (build agent only)",
+        source: "command",
+        agent: "build",
+        template: "$ARGUMENTS",
+        hints: ["$ARGUMENTS"],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

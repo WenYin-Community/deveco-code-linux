@@ -77,7 +77,9 @@ Options:
       --print-logs    print logs to stderr                                                 [boolean]
       --log-level     log level                 [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure          run without external plugins                                         [boolean]
-      --command       the command to run, use message for args                              [string]
+      --command       the command to run, use message for args (goal starts a local Goal loop)
+                                                                                             [string]
+      --token-budget  token budget for --command goal (e.g., 200k, 1.5m; omitted: unlimited)[string]
   -c, --continue      continue the last session                                            [boolean]
   -s, --session       session id to continue                                                [string]
       --fork          fork the session before continuing (requires --continue or --session)[boolean]

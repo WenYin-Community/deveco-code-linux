@@ -26,6 +26,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
+import { SessionGoal } from "@/session/goal"
 import { SessionSnip } from "../../src/session/snip"
 import { LLM } from "../../src/session/llm"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -258,6 +259,7 @@ const deps = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Global.defaultLayer,
 ).pipe(Layer.provideMerge(infra))
+const goal = SessionGoal.layer.pipe(Layer.provideMerge(deps))
 const question = Question.layer.pipe(Layer.provideMerge(deps))
 const todo = Todo.layer.pipe(Layer.provideMerge(deps))
 const registry = ToolRegistry.layer.pipe(
@@ -272,6 +274,7 @@ const registry = ToolRegistry.layer.pipe(
   Layer.provideMerge(agentMode),
   Layer.provideMerge(todo),
   Layer.provideMerge(question),
+  Layer.provideMerge(goal),
   Layer.provideMerge(deps),
 )
 const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
@@ -302,6 +305,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
+    Layer.provideMerge(goal),
     Layer.provide(instruction),
     Layer.provide(systemPrompt),
     Layer.provide(runtime),

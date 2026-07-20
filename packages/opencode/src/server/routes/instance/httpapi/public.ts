@@ -171,8 +171,32 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       for (const param of operation.parameters ?? []) normalizeParameter(param, route)
     }
   }
+  restoreGoalNullability(spec)
   deleteUnusedLegacyErrorComponents(spec)
   return input
+}
+
+// Goal uses explicit null for unlimited budgets, cleared state and inactive
+// timestamps. These are not the optional-field nulls removed for legacy SDKs.
+function restoreGoalNullability(spec: OpenApiSpec) {
+  const properties = spec.components?.schemas?.SessionGoal?.properties
+  for (const key of ["activeSince", "sourceMessageID", "reason", "tokenBudget", "budgetExhaustedAt"]) {
+    if (properties?.[key]) properties[key] = nullable(properties[key])
+  }
+  const operation = spec.paths?.["/session/{sessionID}/goal"]?.post
+  const restore = (schema: OpenApiSchema | undefined): void => {
+    if (!schema) return
+    if (schema.$ref) {
+      restore(spec.components?.schemas?.[schema.$ref.replace("#/components/schemas/", "")])
+      return
+    }
+    for (const key of ["tokenBudget", "goal"]) {
+      if (schema.properties?.[key]) schema.properties[key] = nullable(schema.properties[key])
+    }
+    for (const member of schema.anyOf ?? schema.oneOf ?? []) restore(member)
+  }
+  restore(operation?.requestBody?.content?.["application/json"]?.schema)
+  restore(operation?.responses?.["200"]?.content?.["application/json"]?.schema)
 }
 
 function isV2ApiPath(path: string) {

@@ -215,6 +215,8 @@ import type {
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionGoalErrors,
+  SessionGoalResponses,
   SessionInitErrors,
   SessionInitResponses,
   SessionListErrors,
@@ -4551,6 +4553,67 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<SessionCommandResponses, SessionCommandErrors, ThrowOnError>({
       url: "/session/{sessionID}/command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Control goal mode
+   *
+   * Start, replace, stop, clear, or resume the long-running goal for a session. Starting a goal is limited to the build agent.
+   */
+  public goal<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      body?:
+        | {
+            action: "start"
+            objective: string
+            tokenBudget?: number | null
+            agent?: string
+            model?: {
+              providerID: string
+              modelID: string
+            }
+            variant?: string
+            parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+          }
+        | {
+            action: "stop"
+          }
+        | {
+            action: "clear"
+          }
+        | {
+            action: "resume"
+            tokenBudget?: number | null
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionGoalResponses, SessionGoalErrors, ThrowOnError>({
+      url: "/session/{sessionID}/goal",
       ...options,
       ...params,
       headers: {

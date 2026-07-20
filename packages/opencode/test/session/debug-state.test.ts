@@ -33,6 +33,7 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSnip } from "../../src/session/snip"
 import { SessionDebugState } from "../../src/session/debug-state"
+import { SessionGoal } from "../../src/session/goal"
 import { SessionAgentMode } from "../../src/session/agent-mode/routing"
 import { ExitQueue } from "../../src/session/exit-queue"
 import { Instruction } from "../../src/session/instruction"
@@ -138,6 +139,7 @@ function makePrompt() {
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
+  const goal = SessionGoal.layer.pipe(Layer.provideMerge(deps))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
@@ -152,6 +154,7 @@ function makePrompt() {
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),
+    Layer.provideMerge(goal),
   )
   const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
   const proc = SessionProcessor.layer.pipe(
@@ -176,6 +179,7 @@ function makePrompt() {
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
+    Layer.provideMerge(goal),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),

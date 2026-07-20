@@ -2176,6 +2176,11 @@ export type Config = {
       tail_messages?: number
       threshold_tokens?: number
     }
+    memory?: {
+      enabled?: boolean
+      minimum_message_tokens_to_init?: number
+      minimum_tokens_between_update?: number
+    }
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -2792,6 +2797,20 @@ export type SubtaskPartInput = {
     modelID: string
   }
   command?: string
+}
+
+export type SessionGoal = {
+  objective: string
+  status: "active" | "paused" | "complete"
+  createdAt: number
+  updatedAt: number
+  activeSince: number | null
+  elapsedMilliseconds: number
+  sourceMessageID: string | null
+  reason: string | null
+  tokenBudget: number | null
+  budgetExhaustedAt: number | null
+  usedTokens: number
 }
 
 export type SessionBusyError = {
@@ -9817,6 +9836,65 @@ export type SessionCommandResponses = {
 }
 
 export type SessionCommandResponse = SessionCommandResponses[keyof SessionCommandResponses]
+
+export type SessionGoalData = {
+  body?:
+    | {
+        action: "start"
+        objective: string
+        tokenBudget?: number | null
+        agent?: string
+        model?: {
+          providerID: string
+          modelID: string
+        }
+        variant?: string
+        parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      }
+    | {
+        action: "stop"
+      }
+    | {
+        action: "clear"
+      }
+    | {
+        action: "resume"
+        tokenBudget?: number | null
+      }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/goal"
+}
+
+export type SessionGoalErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionGoalError = SessionGoalErrors[keyof SessionGoalErrors]
+
+export type SessionGoalResponses = {
+  /**
+   * Updated goal state
+   */
+  200: {
+    goal: SessionGoal | null
+    replaced: boolean
+  }
+}
+
+export type SessionGoalResponse = SessionGoalResponses[keyof SessionGoalResponses]
 
 export type SessionShellData = {
   body?: {

@@ -6,6 +6,7 @@ import { firstBy } from "remeda"
 import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useEditorContext } from "../../context/editor"
+import { useLocal } from "../../context/local"
 import { useProject } from "../../context/project"
 import { useSDK } from "../../context/sdk"
 import { useSync } from "../../context/sync"
@@ -22,6 +23,13 @@ import { useFrecency } from "../../prompt/frecency"
 import { useBindings, useCommandSlashes, useOpencodeModeStack, useOpencodeKeymap } from "../../keymap"
 import { displayCharAt, mentionTriggerIndex } from "../../prompt/display"
 import { useI18n } from "../../i18n"
+import {
+  GOAL_COMPLETIONS,
+  goalSubcommandQuery,
+  isGoalCommandAgent,
+  isGoalLifecyclePrefix,
+  matchesSelectedGoalCommand,
+} from "../../prompt/goal"
 
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
@@ -84,6 +92,7 @@ export function Autocomplete(props: {
   promptPartTypeId: () => number
 }) {
   const editor = useEditorContext()
+  const local = useLocal()
   const { t } = useI18n()
   const sdk = useSDK()
   const sync = useSync()
@@ -105,6 +114,7 @@ export function Autocomplete(props: {
   })
 
   const [positionTick, setPositionTick] = createSignal(0)
+  let selectedGoalCommand: string | undefined
 
   createEffect(() => {
     if (!store.visible) return
@@ -440,7 +450,26 @@ export function Autocomplete(props: {
       ),
   )
 
+  const goalCommandsEnabled = createMemo(() => isGoalCommandAgent(local.agent.current()?.name))
+
   const commands = createMemo((): AutocompleteOption[] => {
+    if (store.index === "/goal".length) {
+      if (!goalCommandsEnabled()) return []
+      const width = Math.max(...GOAL_COMPLETIONS.map((item) => item.command.length)) + 2
+      return GOAL_COMPLETIONS.map((item) => ({
+        display: item.command.padEnd(width),
+        description: item.description,
+        onSelect: () => {
+          selectedGoalCommand = item.command
+          const input = props.input()
+          const cursor = input.logicalCursor
+          input.deleteRange(0, 0, cursor.row, cursor.col)
+          input.insertText(item.command)
+          input.cursorOffset = Bun.stringWidth(item.command)
+        },
+      }))
+    }
+
     const commandDescOverrides: Record<string, string> = {
       debug: t("command.cmd_debug_desc"),
       analyze: t("command.cmd_analyze_desc"),
@@ -457,6 +486,7 @@ export function Autocomplete(props: {
 
     for (const serverCommand of sync.data.command) {
       if (serverCommand.source === "skill") continue
+      if (serverCommand.name === "goal" && !goalCommandsEnabled()) continue
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
       results.push({
         display: "/" + serverCommand.name + label,
@@ -695,7 +725,31 @@ export function Autocomplete(props: {
         return store.visible
       },
       onInput(value) {
+        if (selectedGoalCommand) {
+          if (matchesSelectedGoalCommand(selectedGoalCommand, value, props.input().cursorOffset)) return
+          selectedGoalCommand = undefined
+        }
         if (store.visible) {
+          if (store.visible === "/") {
+            const beforeCursor = value.slice(0, props.input().cursorOffset)
+            const query = goalCommandsEnabled() ? goalSubcommandQuery(value, props.input().cursorOffset) : null
+            if (query !== null) {
+              if (!query || isGoalLifecyclePrefix(query)) {
+                setStore("index", "/goal".length)
+                return
+              }
+              setStore("visible", false)
+              return
+            }
+            if (store.index === "/goal".length && beforeCursor.startsWith("/goal ")) {
+              setStore("visible", false)
+              return
+            }
+            if (store.index === "/goal".length && beforeCursor === "/goal") {
+              setStore("index", 0)
+              return
+            }
+          }
           if (
             // Typed text before the trigger
             props.input().cursorOffset <= store.index ||
@@ -712,6 +766,15 @@ export function Autocomplete(props: {
         // Check if autocomplete should reopen (e.g., after backspace deleted a space)
         const offset = props.input().cursorOffset
         if (offset === 0) return
+
+        const query = goalCommandsEnabled() ? goalSubcommandQuery(value, offset) : null
+        if (query !== null) {
+          if (!query || isGoalLifecyclePrefix(query)) {
+            show("/")
+            setStore("index", "/goal".length)
+          }
+          return
+        }
 
         // Check for "/" at position 0 - reopen slash commands
         if (value.startsWith("/") && !value.slice(0, offset).match(/\s/)) {

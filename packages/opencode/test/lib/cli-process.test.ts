@@ -5,6 +5,14 @@ import { tmpdir } from "../fixture/fixture"
 import { isolatedEnv } from "./cli-process"
 
 describe("isolated CLI environment", () => {
+  test("does not disable skill discovery globally", async () => {
+    await using tmp = await tmpdir()
+    const env = isolatedEnv(tmp.path, "{}", path.join(tmp.path, "missing-bun-store"))
+
+    expect(env.DEVECO_DISABLE_DEFAULT_SKILLS).toBeUndefined()
+    expect(env.DEVECO_DISABLE_EXTERNAL_SKILLS).toBeUndefined()
+  })
+
   test("omits NODE_PATH when the Bun isolated store is absent", async () => {
     await using tmp = await tmpdir()
     const env = isolatedEnv(tmp.path, "{}", path.join(tmp.path, "missing-bun-store"))

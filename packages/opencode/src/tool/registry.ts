@@ -59,6 +59,8 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { DebugExitTool } from "./debug-exit"
 import { SessionDebugState } from "@/session/debug-state"
+import { UpdateGoalTool } from "./goal"
+import { SessionGoal } from "@/session/goal"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
@@ -122,6 +124,7 @@ export const layer = Layer.effect(
     const saveuiscreenshot = yield* SaveUiScreenshotTool
     const compareimages = yield* CompareImagesTool
     const recognizeuicomponents = yield* RecognizeUIComponentsTool
+    const updategoal = yield* UpdateGoalTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -241,6 +244,7 @@ export const layer = Layer.effect(
           compare_images: Tool.init(compareimages),
           recognize_ui_components: Tool.init(recognizeuicomponents),
           debugexit: Tool.init(debugexit),
+          updategoal: Tool.init(updategoal),
         })
 
         return {
@@ -271,6 +275,7 @@ export const layer = Layer.effect(
             tool.compare_images,
             tool.recognize_ui_components,
             tool.debugexit,
+            tool.updategoal,
           ],
           task: tool.task,
           read: tool.read,
@@ -305,6 +310,7 @@ export const layer = Layer.effect(
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === DebugExitTool.id) return input.agent.name === "debug"
+        if (tool.id === UpdateGoalTool.id) return input.agent.name === SessionGoal.AGENT
 
         if (tool.id === WebSearchTool.id) {
           return webSearchEnabled(input.providerID, { exa: flags.enableExa, parallel: flags.enableParallel })
@@ -373,6 +379,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(FSUtil.defaultLayer),
       Layer.provide(EventV2Bridge.defaultLayer),
+      Layer.provide(SessionGoal.defaultLayer),
     )
     .pipe(
       Layer.provide(FetchHttpClient.layer),
@@ -481,6 +488,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Instruction.node,
   FSUtil.node,
   EventV2Bridge.node,
+  SessionGoal.node,
   httpClient,
   CrossSpawnSpawner.node,
   Format.node,

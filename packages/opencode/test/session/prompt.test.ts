@@ -28,6 +28,7 @@ import { awaitWithTimeout, pollWithTimeout } from "../lib/effect"
 import { reply } from "../lib/llm-server"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { SessionGoal } from "@/session/goal"
 import {
   processorCreateStarted,
   it,
@@ -514,6 +515,134 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.info.finish).toBe("stop")
     }
   }),
+)
+
+it.instance(
+  "active goal continues across provider turns until update_goal completes it",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
+      const session = yield* sessions.create({
+        title: "Goal loop",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const started = yield* goals.start(session.id, "finish the long-running task")
+      const user = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: started.goal.objective }],
+      })
+      yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: user.info.id })
+
+      yield* llm.text("partial progress")
+      yield* llm.tool("update_goal", { status: "complete", reason: "verified" })
+      yield* llm.text("goal finished")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(yield* llm.calls).toBe(3)
+      expect((yield* goals.get(session.id))?.status).toBe("complete")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "goal finished")).toBe(true)
+
+      const messages = yield* MessageV2.filterCompactedEffect(session.id)
+      expect(
+        messages.some((message) =>
+          message.parts.some(
+            (part) => part.type === "text" && part.synthetic === true && part.text.includes("Continue working toward"),
+          ),
+        ),
+      ).toBe(true)
+    }),
+  30_000,
+)
+
+it.instance(
+  "active goal continues after the user rejects a tool permission",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
+      const permission = yield* Permission.Service
+      const session = yield* sessions.create({
+        title: "Goal deny continue",
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "todowrite", pattern: "*", action: "ask" },
+        ],
+      })
+      const started = yield* goals.start(session.id, "finish the long-running task")
+      const user = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: started.goal.objective }],
+      })
+      yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: user.info.id })
+
+      const rejector = yield* Effect.gen(function* () {
+        while (true) {
+          const pending = yield* permission.list()
+          const request = pending[0]
+          if (request) {
+            yield* permission.reply({ requestID: request.id, reply: "reject" })
+            return
+          }
+          yield* Effect.sleep("20 millis")
+        }
+      }).pipe(Effect.forkChild)
+
+      yield* llm.tool("todowrite", {
+        todos: [{ content: "do the work", status: "in_progress", priority: "high" }],
+      })
+      yield* llm.tool("update_goal", { status: "complete", reason: "user skipped the denied step" })
+      yield* llm.text("goal finished without that tool")
+
+      const result = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.ensuring(Fiber.interrupt(rejector)))
+      expect(yield* llm.calls).toBe(3)
+      expect((yield* goals.get(session.id))?.status).toBe("complete")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "goal finished without that tool")).toBe(
+        true,
+      )
+    }),
+  30_000,
+)
+
+it.instance(
+  "active goal stops before another provider turn when its token budget is exhausted",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
+      const session = yield* sessions.create({
+        title: "Budgeted goal",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const started = yield* goals.start(session.id, "bounded task", 1_000)
+      const user = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: started.goal.objective }],
+      })
+      yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: user.info.id })
+
+      yield* llm.text("partial progress", { usage: { input: 700, output: 400 } })
+
+      yield* prompt.loop({ sessionID: session.id })
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* goals.get(session.id)).toMatchObject({
+        status: "paused",
+        reason: "token budget exhausted",
+      })
+    }),
+  30_000,
 )
 
 it.instance("glob tool keeps instance context during prompt runs", () =>

@@ -113,6 +113,7 @@ export type SpawnOpts = {
   readonly timeoutMs?: number
   readonly env?: Record<string, string>
   readonly cwd?: string
+  readonly stdin?: string
 }
 
 // Typed equivalent of constructing argv for `opencode run`. New flags should
@@ -122,6 +123,7 @@ export type RunOpts = SpawnOpts & {
   readonly agent?: string
   readonly format?: "default" | "json"
   readonly command?: string
+  readonly tokenBudget?: string
   readonly printLogs?: boolean
   readonly extraArgs?: string[]
 }
@@ -270,7 +272,7 @@ export function withCliFixture<A, E>(
           cwd: opts?.cwd ?? home,
           env: { ...env, ...opts?.env },
           extendEnv: true,
-          stdin: "ignore",
+          stdin: opts?.stdin === undefined ? "ignore" : "pipe",
         },
       )
       // Pass timeout to appProc.run rather than wrapping with
@@ -284,7 +286,7 @@ export function withCliFixture<A, E>(
       // Catch AppProcessError (timeout OR spawn failure) and synthesize a
       // non-zero result so the test sees it via the usual `expectExit`
       // path rather than as an unhandled Effect failure.
-      const result = yield* appProc.run(command, { timeout: Duration.millis(timeoutMs) }).pipe(
+      const result = yield* appProc.run(command, { timeout: Duration.millis(timeoutMs), stdin: opts?.stdin }).pipe(
         Effect.catchTag("AppProcessError", (err) =>
           Effect.succeed({
             command: err.command,
@@ -311,6 +313,7 @@ export function withCliFixture<A, E>(
       if (opts?.agent) argv.push("--agent", opts.agent)
       if (opts?.format) argv.push("--format", opts.format)
       if (opts?.command) argv.push("--command", opts.command)
+      if (opts?.tokenBudget !== undefined) argv.push("--token-budget", opts.tokenBudget)
       if (opts?.extraArgs) argv.push(...opts.extraArgs)
       argv.push(message)
       return spawn(argv, opts)

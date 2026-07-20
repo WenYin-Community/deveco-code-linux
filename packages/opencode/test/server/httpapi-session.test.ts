@@ -400,6 +400,161 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
+  it.instance(
+    "stops and clears goal mode through the native session route",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deveco-directory": test.directory, "content-type": "application/json" }
+        const now = Date.now()
+        const created = yield* createSession({
+          title: "goal controls",
+          metadata: {
+            deveco_goal: {
+              objective: "finish the feature",
+              status: "active",
+              createdAt: now,
+              updatedAt: now,
+              activeSince: now,
+              elapsedMilliseconds: 0,
+              sourceMessageID: null,
+              reason: null,
+            },
+          },
+        })
+
+        const stopped = yield* requestJson<{ goal: { status: string; reason: string | null }; replaced: boolean }>(
+          pathFor(SessionPaths.goal, { sessionID: created.id }),
+          { headers, method: "POST", body: JSON.stringify({ action: "stop" }) },
+        )
+        expect(stopped.goal.status).toBe("paused")
+        expect(stopped.goal.reason).toBe("stopped by user")
+        expect(stopped.replaced).toBe(false)
+
+        const cleared = yield* requestJson<{ goal: null; replaced: boolean }>(
+          pathFor(SessionPaths.goal, { sessionID: created.id }),
+          { headers, method: "POST", body: JSON.stringify({ action: "clear" }) },
+        )
+        expect(cleared).toEqual({ goal: null, replaced: false })
+        expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toBeUndefined()
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "pauses an active goal when the session is aborted",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const now = Date.now()
+        const created = yield* createSession({
+          title: "goal interrupt",
+          metadata: {
+            deveco_goal: {
+              objective: "finish the feature",
+              status: "active",
+              createdAt: now,
+              updatedAt: now,
+              activeSince: now,
+              elapsedMilliseconds: 0,
+              sourceMessageID: null,
+              reason: null,
+            },
+          },
+        })
+
+        const aborted = yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: created.id }), {
+          headers: { "x-deveco-directory": test.directory },
+          method: "POST",
+        })
+        expect(aborted).toBe(true)
+        expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toMatchObject({
+          status: "paused",
+          reason: "interrupted by user",
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "requires a larger token budget to resume an exhausted goal",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const now = Date.now()
+        const created = yield* createSession({
+          title: "goal budget exhausted",
+          metadata: {
+            deveco_goal: {
+              objective: "finish the feature",
+              status: "paused",
+              createdAt: now,
+              updatedAt: now,
+              activeSince: null,
+              elapsedMilliseconds: 1_000,
+              sourceMessageID: null,
+              reason: "token budget exhausted",
+              tokenBudget: 1_000,
+              budgetExhaustedAt: now,
+            },
+          },
+        })
+
+        const response = yield* request(pathFor(SessionPaths.goal, { sessionID: created.id }), {
+          headers: { "x-deveco-directory": test.directory, "content-type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ action: "resume" }),
+        })
+        expect(response.status).toBe(400)
+        expect(yield* responseJson(response)).toMatchObject({
+          _tag: "InvalidRequestError",
+          kind: "goalBudgetExhausted",
+          message: "Goal budget exhausted. Increase it with /goal budget before resuming.",
+        })
+        expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toMatchObject({
+          status: "paused",
+          budgetExhaustedAt: now,
+        })
+
+        const resumed = yield* requestJson<{ goal: { status: string; tokenBudget: number }; replaced: boolean }>(
+          pathFor(SessionPaths.goal, { sessionID: created.id }),
+          {
+            headers: { "x-deveco-directory": test.directory, "content-type": "application/json" },
+            method: "POST",
+            body: JSON.stringify({ action: "resume", tokenBudget: 2_000 }),
+          },
+        )
+        expect(resumed).toMatchObject({
+          goal: { status: "active", tokenBudget: 2_000 },
+          replaced: false,
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "rejects starting a goal with a non-build agent",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const created = yield* createSession({ title: "goal agent gate" })
+
+        const response = yield* request(pathFor(SessionPaths.goal, { sessionID: created.id }), {
+          headers: { "x-deveco-directory": test.directory, "content-type": "application/json" },
+          method: "POST",
+          body: JSON.stringify({ action: "start", objective: "finish the feature", agent: "plan" }),
+        })
+        expect(response.status).toBe(400)
+        expect(yield* responseJson(response)).toMatchObject({
+          _tag: "InvalidRequestError",
+          kind: "goalAgentRequired",
+          message: "/goal is only available in the build agent.",
+        })
+        expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toBeUndefined()
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
   it.live("uses the persisted session directory for prompt requests", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer

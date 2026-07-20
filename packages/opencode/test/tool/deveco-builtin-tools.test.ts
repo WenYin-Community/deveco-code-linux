@@ -43,6 +43,7 @@ describe("deveco builtin tools", () => {
         // identify_fault_log moved into the hmos-dfx-analyzer skill scripts; it must
         // no longer be registered as a builtin tool.
         expect(ids).not.toContain("identify_fault_log")
+        expect(ids).toContain("update_goal")
       }),
     30_000,
   )

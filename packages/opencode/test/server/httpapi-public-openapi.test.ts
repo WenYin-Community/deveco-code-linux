@@ -23,7 +23,10 @@ type OpenApiOperation = {
     readonly schema?: { readonly type?: string }
   }>
   readonly responses?: Record<string, OpenApiResponse>
-  readonly requestBody?: { readonly required?: boolean }
+  readonly requestBody?: {
+    readonly required?: boolean
+    readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
+  }
   readonly security?: unknown
 }
 type OpenApiPathItem = Partial<Record<Method, OpenApiOperation>>
@@ -68,6 +71,26 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
+  test("preserves explicit Goal nulls for unlimited budgets and inactive state", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const goal = spec.components.schemas.SessionGoal
+    expect(goal.properties?.usedTokens?.type).toBe("integer")
+    for (const key of ["activeSince", "sourceMessageID", "reason", "tokenBudget", "budgetExhaustedAt"]) {
+      expect(goal.properties?.[key]?.anyOf).toContainEqual({ type: "null" })
+    }
+    const operation = spec.paths["/session/{sessionID}/goal"].post!
+    expect(operation.responses?.["200"]?.content?.["application/json"]?.schema?.properties?.goal?.anyOf).toContainEqual(
+      { type: "null" },
+    )
+    const body = operation.requestBody?.content?.["application/json"]?.schema
+    const variants =
+      body?.anyOf?.flatMap((item) => (item.$ref ? [spec.components.schemas[componentName(item.$ref)]] : [item])) ?? []
+    expect(variants.filter((item) => item.properties?.tokenBudget).length).toBe(2)
+    for (const item of variants.filter((item) => item.properties?.tokenBudget)) {
+      expect(item.properties?.tokenBudget?.anyOf).toContainEqual({ type: "null" })
+    }
+  })
+
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated

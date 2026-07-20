@@ -65,6 +65,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { SessionAgentMode } from "./agent-mode/routing"
 import { LLMEvent } from "@opencode-ai/llm"
+import { SessionGoal } from "./goal"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -135,6 +136,7 @@ export const layer = Layer.effect(
         return { suspended: new Set<SessionID>(), pending: new Map<SessionID, string[]>() }
       }),
     )
+    const goals = yield* SessionGoal.Service
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1289,6 +1291,16 @@ export const layer = Layer.effect(
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
+          const budget = yield* goals.checkBudget(sessionID)
+          if (budget.exhausted) {
+            yield* Effect.logInfo("goal token budget exhausted", {
+              "session.id": sessionID,
+              usedTokens: budget.usedTokens,
+              tokenBudget: budget.goal?.tokenBudget,
+            })
+            break
+          }
+
           TurnRecovery.observe(recovery, lastUser, msgs)
           if (
             yield* TurnRecovery.shouldStop(recovery, {
@@ -1298,7 +1310,24 @@ export const layer = Layer.effect(
               messages: msgs,
               step,
             })
-          ) break
+          ) {
+            const goal = yield* goals.get(sessionID)
+            if (goal?.status === "active" && !lastAssistant?.error) {
+              yield* createUserMessage({
+                sessionID,
+                agent: lastUser.agent,
+                model: {
+                  providerID: lastUser.model.providerID,
+                  modelID: lastUser.model.modelID,
+                },
+                variant: lastUser.model.variant,
+                parts: [{ type: "text", text: SessionGoal.continuationPrompt(goal), synthetic: true }],
+              }).pipe(Effect.orDie)
+              yield* sessions.touch(sessionID)
+              continue
+            }
+            break
+          }
 
           step++
           if (step === 1)
@@ -1447,6 +1476,8 @@ export const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model, { injectMessageIds: true }),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : []), TURN_TAG_SYSTEM_NOTE]
+            const goal = yield* goals.get(sessionID)
+            if (goal?.status === "active") system.push(SessionGoal.systemPrompt(goal))
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const turn = {
@@ -1478,12 +1509,20 @@ export const layer = Layer.effect(
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
-            return yield* TurnRecovery.settle({
+            const outcome = yield* TurnRecovery.settle({
               ...turn,
               result,
               structured,
               structuredFormat: format.type === "json_schema",
             })
+            if (outcome !== "break") return outcome
+            if (handle.message.error) {
+              yield* goals.pause(sessionID, "model execution failed").pipe(Effect.ignore)
+              return outcome
+            }
+            if (result !== "stop") return outcome
+            const currentGoal = yield* goals.get(sessionID)
+            return currentGoal?.status === "active" ? "continue" as const : outcome
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
@@ -1500,7 +1539,25 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      const work = runLoop(input.sessionID).pipe(
+        Effect.tap(() =>
+          goals
+            .get(input.sessionID)
+            .pipe(
+              Effect.flatMap((goal) =>
+                goal?.status === "active"
+                  ? goals.pause(input.sessionID, "model execution stopped before goal completion")
+                  : Effect.void,
+              ),
+            ),
+        ),
+        Effect.onError((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : goals.pause(input.sessionID, "goal execution failed unexpectedly").pipe(Effect.ignore),
+        ),
+      )
+      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), work)
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
@@ -1684,6 +1741,7 @@ export const defaultLayer = Layer.suspend(() =>
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
         SessionSnip.defaultLayer,
+        SessionGoal.defaultLayer,
       ),
     ),
   ),
@@ -1797,6 +1855,7 @@ export const node = LayerNode.make(layer, [
   SessionProcessor.node,
   SessionCompaction.node,
   SessionSnip.node,
+  SessionGoal.node,
   Plugin.node,
   Command.node,
   Config.node,

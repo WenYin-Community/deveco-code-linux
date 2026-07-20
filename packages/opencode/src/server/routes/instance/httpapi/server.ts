@@ -39,6 +39,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { SessionGoal } from "@/session/goal"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
@@ -236,6 +237,7 @@ const app = LayerNode.group([
   SessionProjector.node,
   SessionStatus.node,
   Stats.node,
+  SessionGoal.node,
   BackgroundJob.node,
   RuntimeFlags.node,
   EventV2Bridge.node,
