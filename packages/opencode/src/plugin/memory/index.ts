@@ -39,7 +39,7 @@ const DEFAULT_PLUGIN_CONFIG = {
     extraction: { enabled: true },
     skills: { enabled: false },
     slashCommands: { enabled: true },
-    logLevel: 'off',
+    logLevel: 'error',
     memoryRecall: { enabled: true, visibleRecall: true, visibleWrite: true, minRelevanceScore: 0.3, maxInjectChars: 200 },
     semanticSelection: { enabled: true },
     subagentHooks: DEFAULT_SUBAGENT_HOOKS_CONFIG,
@@ -195,7 +195,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
     if (inflight) return inflight;
 
     const initPromise = (async (): Promise<PluginState> => {
-        const logLevel = (pluginConfig.logLevel as LogLevel) || 'off';
+        const logLevel = (pluginConfig.logLevel as LogLevel) || 'error';
         initLogger(logLevel);
         const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
         setSkillEnabled(skillConfig.enabled);

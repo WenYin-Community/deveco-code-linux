@@ -37,7 +37,7 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
   'debug': 'DEBUG',
 }
 
-let currentLevel: LogLevel = 'off'
+let currentLevel: LogLevel = 'error'
 let logDir: string | null = null
 let logFileStream: fs.FileHandle | null = null
 
