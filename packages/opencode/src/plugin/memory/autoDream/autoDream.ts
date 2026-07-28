@@ -24,6 +24,7 @@ import {
   readDreamState,
   updateDreamState,
   incrementSessionCount,
+  markConsolidationComplete,
 } from './dreamState'
 
 export interface AutoDreamContext {
@@ -52,7 +53,7 @@ let runner: AutoDreamRunner | null = null
 let initializedClient: OpencodeClient | null = null
 let initializedStorage: MemoryStorage | null = null
 let initializedConfig: AutoDreamConfig = DEFAULT_AUTO_DREAM_CONFIG
-let consolidationInProgress: boolean = false
+let consolidationInProgress: Map<string, boolean> = new Map()
 
 export function initAutoDream(
   client: OpencodeClient,
@@ -91,8 +92,8 @@ function getConfig(): AutoDreamConfig {
   return initializedConfig
 }
 
-export function isConsolidationInProgress(): boolean {
-  return consolidationInProgress
+export function isConsolidationInProgress(memoryRoot: string): boolean {
+  return consolidationInProgress.get(memoryRoot) === true
 }
 
 /**
@@ -101,11 +102,17 @@ export function isConsolidationInProgress(): boolean {
  * dream child session goes idle.
  */
 export async function markDreamDone(memoryRoot: string): Promise<void> {
-  consolidationInProgress = false
+  consolidationInProgress.delete(memoryRoot)
   try {
     await releaseConsolidationLock(getLockFilePath(memoryRoot))
   } catch (e) {
     logger.warn('[AutoDream]', 'markDreamDone: failed to release lock:', e instanceof Error ? e.message : String(e))
+  }
+  // Ensure dream state is reset even if LLM didn't write state file
+  try {
+    await markConsolidationComplete(memoryRoot)
+  } catch (e) {
+    logger.warn('[AutoDream]', 'markDreamDone: failed to reset dream state:', e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -175,11 +182,11 @@ export async function executeAutoDream(
     return result
   }
   
-  if (isConsolidationInProgress()) {
+  if (isConsolidationInProgress(context.memoryRoot)) {
     result.error = 'Consolidation already in progress'
     return result
   }
-  
+
   if (!context.skipGateCheck) {
     const gates = await checkAllGates(
       context.memoryRoot,
@@ -209,10 +216,17 @@ export async function executeAutoDream(
     return result
   }
   
-  consolidationInProgress = true
-  
-  await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() })
-  
+  consolidationInProgress.set(context.memoryRoot, true)
+
+  try {
+    await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() })
+  } catch (e) {
+    result.error = `Failed to update dream state: ${e instanceof Error ? e.message : 'Unknown error'}`
+    consolidationInProgress.delete(context.memoryRoot)
+    await rollbackConsolidationLock(lockPath, priorMtime)
+    return result
+  }
+
   try {
     const forkInfo = await createForkedChildSession(
       initializedClient,
@@ -223,7 +237,7 @@ export async function executeAutoDream(
 
     if (!forkInfo) {
       result.error = 'Session create failed'
-      consolidationInProgress = false
+      consolidationInProgress.delete(context.memoryRoot)
       await rollbackConsolidationLock(lockPath, priorMtime)
       return result
     }
@@ -242,7 +256,7 @@ export async function executeAutoDream(
     const dreamStatePath = `${context.memoryRoot}/.auto-dream-state.json`
     const headers = context.storage ? await context.storage.list() : []
     const expiryConfig = context.expiryConfig
-    const prompt = buildDreamPrompt(state.sessionCount, undefined, lockFilePath, dreamStatePath, context.memoryRoot, headers, expiryConfig, context.skillEnabled)
+    const prompt = buildDreamPrompt(state.sessionCount, lockFilePath, dreamStatePath, context.memoryRoot, headers, expiryConfig, context.skillEnabled)
 
     const promptResult = await initializedClient.session.promptAsync({
       path: { id: childSessionID },
@@ -255,20 +269,20 @@ export async function executeAutoDream(
 
     if (promptResult.error) {
       result.error = `Prompt failed: ${promptResult.error}`
-      consolidationInProgress = false
+      consolidationInProgress.delete(context.memoryRoot)
       await rollbackConsolidationLock(lockPath, priorMtime)
       return result
     }
 
     result.success = true
-    consolidationInProgress = false
+    consolidationInProgress.delete(context.memoryRoot)
 
     logger.info('[AutoDream]', 'Dream agent launched (fire-and-forget)')
     return result
 
   } catch (error) {
     result.error = error instanceof Error ? error.message : 'Unknown error'
-    consolidationInProgress = false
+    consolidationInProgress.delete(context.memoryRoot)
     await rollbackConsolidationLock(lockPath, priorMtime)
     return result
   }
@@ -285,7 +299,7 @@ export async function handleChatMessageTrigger(
     return
   }
   
-  if (isConsolidationInProgress()) {
+  if (isConsolidationInProgress(input.memoryRoot)) {
     return
   }
   

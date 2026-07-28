@@ -59,6 +59,10 @@ export async function setLogDir(dir: string): Promise<void> {
   try {
     await fs.mkdir(dir, { recursive: true })
     logDir = dir
+    // Close old file handle before opening new one
+    if (logFileStream) {
+      try { await logFileStream.close() } catch { /* best-effort */ }
+    }
     const logFilePath = path.join(dir, 'memory-plugin.log')
     logFileStream = await fs.open(logFilePath, 'a')
     // Write a startup marker so we can distinguish new sessions in the log

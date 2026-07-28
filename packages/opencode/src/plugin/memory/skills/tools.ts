@@ -229,7 +229,7 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
         }
         
         // Validate file path (no path traversal)
-        if (filePath.includes('..') || filePath.includes('/') || filePath.includes('\\')) {
+        if (filePath.includes('..')) {
           return 'Error: file_path must be relative and cannot contain path traversal'
         }
         
@@ -262,7 +262,7 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
         }
         
         // Validate file path (no path traversal)
-        if (filePath.includes('..') || filePath.includes('/') || filePath.includes('\\')) {
+        if (filePath.includes('..')) {
           return 'Error: file_path must be relative and cannot contain path traversal'
         }
         

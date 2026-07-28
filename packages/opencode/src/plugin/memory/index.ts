@@ -172,9 +172,14 @@ const skillConfig = {
         ...DEFAULT_SUBAGENT_HOOKS_CONFIG,
         ...(pluginConfig.subagentHooks as Record<string, unknown> | undefined),
     };
+    const userExpiry = pluginConfig.autoMemory?.expiry as Record<string, unknown> | undefined;
     const expiryConfig = {
         ...DEFAULT_MEMORY_EXPIRY_CONFIG,
-        ...(pluginConfig.autoMemory?.expiry as Record<string, unknown> | undefined),
+        ...userExpiry,
+        ttlByType: {
+            ...DEFAULT_MEMORY_EXPIRY_CONFIG.ttlByType,
+            ...(userExpiry?.ttlByType as Record<string, unknown> | undefined),
+        },
     };
     return {
         autoMemory: autoMemoryConfig,
@@ -295,13 +300,23 @@ async function loadMemoryConfigs(directory: string): Promise<PluginConfig> {
     const projectConfig = directory
         ? await loadMemoryConfigFile(`${directory}/.deveco/${MEMORY_CONFIG_FILENAME}`)
         : {}
-    return { ...userConfig, ...projectConfig }
+    // Deep merge top-level config sections so nested keys aren't lost
+    const merged: Record<string, unknown> = { ...userConfig }
+    for (const [key, value] of Object.entries(projectConfig)) {
+        const existing = merged[key]
+        if (existing && typeof existing === 'object' && typeof value === 'object' && !Array.isArray(value)) {
+            merged[key] = { ...(existing as Record<string, unknown>), ...(value as Record<string, unknown>) }
+        } else {
+            merged[key] = value
+        }
+    }
+    return merged as PluginConfig
 }
 
 export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOptions = {}) => {
     const rawDirectory = input.directory || 'default';
     const projectID = normalizeProjectPath(rawDirectory);
-    const directory = input.directory || '';
+    const directory = input.directory || rawDirectory;
     const client = input.client;
     const fileConfig = await loadMemoryConfigs(directory)
     const mergedOptions = { ...fileConfig, ...options } as PluginConfig
@@ -375,9 +390,12 @@ event: async ({ event }) => {
                     if (agentType === 'extraction') {
                         try { await releaseExtractionLock(memRoot); }
                         catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
-                        const state = getThresholdState()
-                        updateThresholdState(markExtractionCompleted(state, state.pendingLastMessageUuid));
-                        logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', state.pendingLastMessageUuid || '(none)', sid);
+                        const thresholdState = getThresholdState()
+                        updateThresholdState(markExtractionCompleted(thresholdState, thresholdState.pendingLastMessageUuid));
+                        // Sync System A skill counter — combined/skill-only extraction resets
+                        // System B inside extractionRunner but System A would otherwise drift
+                        state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
+                        logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', thresholdState.pendingLastMessageUuid || '(none)', sid);
                         // Delete the completed extraction fork so it doesn't linger as a
                         // top-level session. Forks have no parent_id (session.fork doesn't
                         // set one), so they'd otherwise clutter the session list; the list
@@ -720,7 +738,7 @@ const alreadyInjected = new Set<string>();
             if (isBg) {
                 if (state.autoDreamConfig.enabled && state.subagentHooksConfig.autoDreamGate) {
                     try {
-                        if (!isConsolidationInProgress()) {
+                        if (!isConsolidationInProgress(state.storage.getMemoryPath())) {
                             void handleChatMessageTrigger({
                                 sessionID: msgInput.sessionID,
                                 projectID: projectID,
@@ -740,7 +758,7 @@ const alreadyInjected = new Set<string>();
             }
             if (state.autoDreamConfig.enabled) {
                 try {
-                    if (!isConsolidationInProgress()) {
+                    if (!isConsolidationInProgress(state.storage.getMemoryPath())) {
                         void handleChatMessageTrigger({
                             sessionID: msgInput.sessionID,
                             projectID: projectID,

@@ -159,11 +159,11 @@ export function parseFrontmatter(content: string): {
     let value: string | number | boolean = line.slice(colonIndex + 1).trim()
 
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
+      value = (value as string).slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
     }
 
-    if (/^\d+$/.test(value as string)) {
-      value = parseInt(value as string, 10)
+    if (/^-?\d+(\.\d+)?$/.test(value as string)) {
+      value = Number(value)
     }
 
     if (value === 'true' || value === 'True') { value = true }
@@ -190,10 +190,14 @@ export function parseFrontmatter(content: string): {
   }
 }
 
+function escapeFrontmatterValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
+}
+
 function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
   const lines = ['---']
-  lines.push('name: "' + frontmatter.name + '"')
-  lines.push('description: "' + frontmatter.description + '"')
+  lines.push('name: "' + escapeFrontmatterValue(frontmatter.name) + '"')
+  lines.push('description: "' + escapeFrontmatterValue(frontmatter.description) + '"')
   lines.push('type: ' + frontmatter.type)
   if (frontmatter.created) {
     lines.push('created: ' + frontmatter.created)
@@ -204,7 +208,7 @@ function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
   if (frontmatter.pin) {
     lines.push('pin: true')
   }
-  if (frontmatter.ttl) {
+  if (frontmatter.ttl !== undefined) {
     lines.push('ttl: ' + frontmatter.ttl)
   }
   lines.push('---')
@@ -237,7 +241,7 @@ export async function readFrontmatter(
       created: frontmatter.created,
       updated: frontmatter.updated,
       filepath,
-      mtime: stats.mtimeMs,
+      mtime: frontmatter.updated ?? frontmatter.created ?? stats.mtimeMs,
       pin: frontmatter.pin,
       ttl: frontmatter.ttl,
     }

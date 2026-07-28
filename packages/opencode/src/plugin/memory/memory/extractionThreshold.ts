@@ -264,51 +264,6 @@ export function markExtractionCompleted(
   }
 }
 
-/**
- * Get pending context from state
- * 
- * @param state - Current extraction threshold state
- * @returns Pending context if available, undefined otherwise
- */
-function getPendingContext(
-  state: ExtractionThresholdState
-): ExtractionPendingContext | undefined {
-  return state.pendingContext
-}
-
-/**
- * Set pending context in state
- * Stores messages and context for later extraction
- * 
- * @param state - Current extraction threshold state
- * @param context - Pending context to store
- * @returns Updated state with pending context
- */
-function setPendingContext(
-  state: ExtractionThresholdState,
-  context: ExtractionPendingContext
-): ExtractionThresholdState {
-  return {
-    ...state,
-    pendingContext: context,
-  }
-}
-
-/**
- * Clear pending context from state
- * 
- * @param state - Current extraction threshold state
- * @returns Updated state without pending context
- */
-function clearPendingContext(
-  state: ExtractionThresholdState
-): ExtractionThresholdState {
-  return {
-    ...state,
-    pendingContext: undefined,
-  }
-}
-
 // ============================================================================
 // State Manager (Closure Pattern)
 // ============================================================================

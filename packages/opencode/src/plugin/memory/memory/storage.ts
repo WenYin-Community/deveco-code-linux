@@ -104,7 +104,7 @@ export class MemoryStorage {
         updated: frontmatter.updated,
         content: body.trim(),
         filepath,
-        mtime: stats.mtimeMs,
+        mtime: frontmatter.updated ?? frontmatter.created ?? stats.mtimeMs,
         pin: frontmatter.pin,
         ttl: frontmatter.ttl,
       }
@@ -136,7 +136,10 @@ export class MemoryStorage {
     }
 
     const content = createMemoryContent(frontmatter, memory.content)
-    await fs.writeFile(filepath, content, "utf-8")
+    // Atomic write: write to temp file then rename to prevent corruption on crash
+    const tmpPath = filepath + '.tmp'
+    await fs.writeFile(tmpPath, content, "utf-8")
+    await fs.rename(tmpPath, filepath)
 
     // Update entrypoint
     await this.updateEntrypoint()
@@ -174,7 +177,9 @@ export class MemoryStorage {
     const filepath = path.join(this.memoryPath, '.pending-expiry.json')
     try {
       const content = await fs.readFile(filepath, 'utf-8')
-      return JSON.parse(content) as PendingExpiryFile
+      const parsed = JSON.parse(content)
+      if (!parsed || !Array.isArray(parsed.pendingDeletions)) return null
+      return parsed as PendingExpiryFile
     } catch {
       return null
     }
@@ -396,7 +401,18 @@ export class MemoryStorage {
       content = contentLines.slice(0, this.config.maxEntrypointLines).join("\n")
     }
     if (Buffer.byteLength(content, "utf-8") > this.config.maxEntrypointBytes) {
-      content = content.slice(0, this.config.maxEntrypointBytes)
+      // Truncate at line boundaries to avoid splitting multi-byte UTF-8 characters
+      const maxBytes = this.config.maxEntrypointBytes
+      const allLines = content.split("\n")
+      const kept: string[] = []
+      let totalBytes = 0
+      for (const line of allLines) {
+        const lineBytes = Buffer.byteLength(line + "\n", "utf-8")
+        if (totalBytes + lineBytes > maxBytes) break
+        kept.push(line)
+        totalBytes += lineBytes
+      }
+      content = kept.join("\n")
     }
 
     await fs.writeFile(entrypointPath, content + "\n", "utf-8")

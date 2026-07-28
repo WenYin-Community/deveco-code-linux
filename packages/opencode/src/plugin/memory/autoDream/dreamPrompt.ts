@@ -90,7 +90,6 @@ export const DREAM_CONSOLIDATION_PROMPT = DREAM_CONSOLIDATION_PROMPT_BASE + DREA
 
 export function buildDreamPrompt(
   sessionCount: number,
-  skillCount?: number,
   lockFilePath?: string,
   dreamStatePath?: string,
   memoryRoot?: string,
@@ -108,12 +107,6 @@ export function buildDreamPrompt(
 ## Context
 
 This consolidation runs after ${sessionCount} sessions. Prioritize recent signals and emerging patterns.
-`
-    : ""
-
-  const skillContextSection = skillEnabled && skillCount !== undefined && skillCount > 0
-    ? `
-There are ${skillCount} skills to review. Consider pruning skills that haven't been used recently or have become outdated.
 `
     : ""
 
@@ -137,12 +130,12 @@ There are ${skillCount} skills to review. Consider pruning skills that haven't b
     const ageTableRows = headers
       .filter(h => !h.pin)
       .map(h => {
-        const daysOld = h.mtime ? Math.round((now - h.mtime) / (1000 * 60 * 60 * 24)) : 0
+        const daysOld = h.mtime ? Math.round((now - h.mtime) / (1000 * 60 * 60 * 24)) : Infinity
         const ttlDays = h.ttl ?? ttlByType[h.type] ?? null
         const status = ttlDays === null ? 'OK'
           : typeof ttlDays === 'number' && daysOld > ttlDays ? 'EXPIRED'
           : 'OK'
-        return `| ${h.name} | ${h.type} | ${h.mtime ? new Date(h.mtime).toISOString().split('T')[0] : 'unknown'} | ${daysOld} | ${ttlDays === null ? '∞' : ttlDays} | ${status} |`
+        return `| ${h.name} | ${h.type} | ${h.mtime ? new Date(h.mtime).toISOString().split('T')[0] : 'unknown'} | ${daysOld === Infinity ? 'unknown' : daysOld} | ${ttlDays === null ? '∞' : ttlDays} | ${status} |`
       })
       .join('\n')
 
@@ -197,5 +190,5 @@ This marks memories as pending deletion — the user will confirm deletion in th
 `
   }
 
-  return basePrompt + contextSection + skillContextSection + pathsSection + expirySection
+  return basePrompt + contextSection + pathsSection + expirySection
 }
