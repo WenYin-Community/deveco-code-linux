@@ -64,6 +64,7 @@ for (const line of frontmatterLines) {
       slashCommand: (metadata.slashCommand as string) || undefined,
       created: metadata.created ? parseInt(metadata.created as string) : undefined,
       updated: metadata.updated ? parseInt(metadata.updated as string) : undefined,
+      source: (metadata.source as string) === 'auto' ? 'auto' as const : undefined,
     },
     content,
   }
@@ -91,6 +92,10 @@ export function generateSkillContent(metadata: SkillMetadata, content: string): 
   
   if (metadata.updated) {
     frontmatter += `updated: ${metadata.updated}\n`
+  }
+
+  if (metadata.source === 'auto') {
+    frontmatter += `source: auto\n`
   }
   
   frontmatter += `${FRONTMATTER_DELIMITER}\n\n`

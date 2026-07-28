@@ -11,6 +11,7 @@ export interface SkillMetadata {
   slashCommand?: string     // Optional: slash command alias (e.g., "dream")
   created?: number          // Creation timestamp
   updated?: number          // Update timestamp
+  source?: 'auto'           // Origin: 'auto' = created by auto-skill agent, undefined = user/builtin
 }
 
 // Full skill with content

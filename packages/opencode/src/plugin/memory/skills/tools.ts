@@ -145,6 +145,7 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
           category,
           description: `Skill: ${name}`, // Default description
           content,
+          source: 'auto',
         })
         
         return `Skill created: ${skill.category}/${skill.name}\nPath: ${skill.filepath}`
@@ -163,8 +164,9 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
         if (!existing) {
           return `Error: Skill "${category}/${name}" not found`
         }
-        
-        // Fuzzy match
+        if (existing.source !== 'auto') {
+          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill. Use a different name to create a new skill.`
+        }
         const match = fuzzyMatch(existing.content, oldString)
         if (!match.found) {
           return `Error: Could not find old_string in skill content.\nTip: Make sure the text matches exactly or has minor whitespace differences.`
@@ -195,7 +197,10 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
         if (!existing) {
           return `Error: Skill "${category}/${name}" not found`
         }
-        
+        if (existing.source !== 'auto') {
+          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill.`
+        }
+
         // Replace entire content
         const updated = await storage.write({
           ...existing,
@@ -206,10 +211,13 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
       }
       
       case 'delete': {
-        // Check if skill exists
-        const exists = await storage.exists(category, name)
-        if (!exists) {
+        // Check if skill exists and is auto-created
+        const existing = await storage.read(category, name)
+        if (!existing) {
           return `Error: Skill "${category}/${name}" not found`
+        }
+        if (existing.source !== 'auto') {
+          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be deleted by auto-skill.`
         }
         
         // Delete skill
