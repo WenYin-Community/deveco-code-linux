@@ -178,7 +178,7 @@ export class MemoryStorage {
     try {
       const content = await fs.readFile(filepath, 'utf-8')
       const parsed = JSON.parse(content)
-      if (!parsed || !Array.isArray(parsed.pendingDeletions)) return null
+      if (!parsed || !Array.isArray(parsed.pendingDeletions)) { return null }
       return parsed as PendingExpiryFile
     } catch {
       return null
@@ -408,7 +408,7 @@ export class MemoryStorage {
       let totalBytes = 0
       for (const line of allLines) {
         const lineBytes = Buffer.byteLength(line + "\n", "utf-8")
-        if (totalBytes + lineBytes > maxBytes) break
+        if (totalBytes + lineBytes > maxBytes) { break }
         kept.push(line)
         totalBytes += lineBytes
       }

@@ -289,7 +289,15 @@ export async function executeAutoDream(
 }
 
 export async function handleChatMessageTrigger(
-  input: { sessionID: string; projectID: string; memoryRoot: string; directory: string; storage?: MemoryStorage; expiryConfig?: MemoryExpiryConfig; skillEnabled?: boolean }
+  input: {
+    sessionID: string
+    projectID: string
+    memoryRoot: string
+    directory: string
+    storage?: MemoryStorage
+    expiryConfig?: MemoryExpiryConfig
+    skillEnabled?: boolean
+  }
 ): Promise<void> {
   if (!runner || !initializedClient) {
     return

@@ -40,7 +40,7 @@ export class MemoryInjection {
   async injectIndexOnly(): Promise<InjectionResult> {
     if (!this.config.enabled) {
       log.debug('injectIndexOnly: disabled')
-      return { systemPrompt: "", memoriesLoaded: 0, indexContent: "", truncated: false }
+      return { systemPrompt: '', memoriesLoaded: 0, indexContent: '', truncated: false };
     }
 
     const headers = await this.storage.list()
@@ -106,9 +106,9 @@ export class MemoryInjection {
       return {
         systemPrompt: "",
         memoriesLoaded: 0,
-        indexContent: "",
+        indexContent: '',
         truncated: false,
-      }
+      };
     }
 
     // Build system prompt with truncation marker if needed
@@ -121,9 +121,9 @@ export class MemoryInjection {
     return {
       systemPrompt,
       memoriesLoaded,
-      indexContent: index || "",
+      indexContent: index || '',
       truncated,
-    }
+    };
   }
 
   /**

@@ -235,7 +235,9 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
                     });
                 }
             }
-            catch (e) { logger.warn('[PluginInit]', 'Failed to register skill slash commands:', e instanceof Error ? e.message : String(e)); }
+            catch (e) {
+                logger.warn('[PluginInit]', 'Failed to register skill slash commands:', e instanceof Error ? e.message : String(e))
+            }
         }
         const state: PluginState = {
             storage,

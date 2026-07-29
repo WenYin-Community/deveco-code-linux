@@ -191,7 +191,7 @@ export function parseFrontmatter(content: string): {
 }
 
 function escapeFrontmatterValue(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 }
 
 function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
@@ -212,11 +212,11 @@ function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
     lines.push('ttl: ' + frontmatter.ttl)
   }
   lines.push('---')
-  return lines.join('\n')
+  return lines.join('\n');
 }
 
 export function createMemoryContent(frontmatter: MemoryFrontmatter, body: string): string {
-  return serializeFrontmatter(frontmatter) + '\n\n' + body.trim() + '\n'
+  return serializeFrontmatter(frontmatter) + '\n\n' + body.trim() + '\n';
 }
 
 export async function readFrontmatter(
@@ -246,12 +246,12 @@ export async function readFrontmatter(
       ttl: frontmatter.ttl,
     }
   } catch {
-    return null
+    return null;
   }
 }
 
 export function formatMemoryIndexEntry(header: MemoryHeader): string {
-  return '- [' + header.name + '](' + path.basename(header.filepath || '') + ') ' + header.description
+  return '- [' + header.name + '](' + path.basename(header.filepath || '') + ') ' + header.description;
 }
 
 export function formatMemoryManifest(headers: MemoryHeader[]): string {
@@ -261,12 +261,12 @@ export function formatMemoryManifest(headers: MemoryHeader[]): string {
       const time = h.mtime ? new Date(h.mtime).toISOString() : 'unknown'
       return '- [' + type + '] ' + h.name + ' (' + time + '): ' + h.description
     })
-    .join('\n')
+    .join('\n');
 }
 
 export function isMemoryFile(filepath: string): boolean {
   const basename = path.basename(filepath)
-  return basename.endsWith('.md') && basename !== ENTRYPOINT_NAME && !basename.startsWith('.')
+  return basename.endsWith('.md') && basename !== ENTRYPOINT_NAME && !basename.startsWith('.');
 }
 
 

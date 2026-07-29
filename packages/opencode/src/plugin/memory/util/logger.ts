@@ -55,7 +55,7 @@ export function initLogger(level: LogLevel): void {
  * Safe to call multiple times — only the first call opens the file.
  */
 export async function setLogDir(dir: string): Promise<void> {
-  if (logDir === dir) return
+  if (logDir === dir) { return }
   try {
     await fs.mkdir(dir, { recursive: true })
     logDir = dir
@@ -71,7 +71,7 @@ export async function setLogDir(dir: string): Promise<void> {
     // File logging is best-effort; never crash on log errors
     console.error('[Logger] Failed to open log file:', dir, e instanceof Error ? e.message : String(e))
     logDir = null
-    logFileStream = null
+    logFileStream = null;
   }
 }
 
@@ -84,7 +84,7 @@ function shouldLog(level: LogLevel): boolean {
 }
 
 function formatTimestamp(): string {
-  return new Date().toISOString()
+  return new Date().toISOString();
 }
 
 function formatMessage(level: LogLevel, tag: string | undefined, args: unknown[]): string {
@@ -92,13 +92,13 @@ function formatMessage(level: LogLevel, tag: string | undefined, args: unknown[]
   const lvl = LEVEL_LABELS[level]
   const tagStr = tag ? ` ${tag}` : ''
   const msgParts = args.map(a => {
-    if (a instanceof Error) return `${a.message}\n${a.stack || ''}`
+    if (a instanceof Error) { return `${a.message}\n${a.stack || ''}` }
     if (typeof a === 'object' && a !== null) {
       try { return JSON.stringify(a) } catch { return String(a) }
     }
     return String(a)
   })
-  return `[${ts}] [${lvl}]${tagStr} ${msgParts.join(' ')}`
+  return `[${ts}] [${lvl}]${tagStr} ${msgParts.join(' ')}`;
 }
 
 function output(level: LogLevel, formatted: string): void {
@@ -113,7 +113,7 @@ function output(level: LogLevel, formatted: string): void {
 
   // File output (best-effort, never blocks on write errors)
   if (logFileStream) {
-    logFileStream.write(formatted + '\n').catch(() => {})
+    logFileStream.write(formatted + '\n').catch(() => {});
   }
 }
 
@@ -138,18 +138,18 @@ export interface ScopedLogger {
 export function createLogger(tag: string): ScopedLogger {
   return {
     error(...args: unknown[]) {
-      if (shouldLog('error')) output('error', formatMessage('error', tag, args))
+      if (shouldLog('error')) { output('error', formatMessage('error', tag, args)) }
     },
     warn(...args: unknown[]) {
-      if (shouldLog('warn')) output('warn', formatMessage('warn', tag, args))
+      if (shouldLog('warn')) { output('warn', formatMessage('warn', tag, args)) }
     },
     info(...args: unknown[]) {
-      if (shouldLog('info')) output('info', formatMessage('info', tag, args))
+      if (shouldLog('info')) { output('info', formatMessage('info', tag, args)) }
     },
     debug(...args: unknown[]) {
-      if (shouldLog('debug')) output('debug', formatMessage('debug', tag, args))
+      if (shouldLog('debug')) { output('debug', formatMessage('debug', tag, args)) }
     },
-  }
+  };
 }
 
 // ============================================================================
@@ -158,15 +158,15 @@ export function createLogger(tag: string): ScopedLogger {
 
 export const logger = {
   error(tag: string, ...args: unknown[]): void {
-    if (shouldLog('error')) output('error', formatMessage('error', tag, args))
+    if (shouldLog('error')) { output('error', formatMessage('error', tag, args)) }
   },
   warn(tag: string, ...args: unknown[]): void {
-    if (shouldLog('warn')) output('warn', formatMessage('warn', tag, args))
+    if (shouldLog('warn')) { output('warn', formatMessage('warn', tag, args)) }
   },
   info(tag: string, ...args: unknown[]): void {
-    if (shouldLog('info')) output('info', formatMessage('info', tag, args))
+    if (shouldLog('info')) { output('info', formatMessage('info', tag, args)) }
   },
   debug(tag: string, ...args: unknown[]): void {
-    if (shouldLog('debug')) output('debug', formatMessage('debug', tag, args))
+    if (shouldLog('debug')) { output('debug', formatMessage('debug', tag, args)) }
   },
 }
