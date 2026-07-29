@@ -97,207 +97,124 @@ function fuzzyMatch(content: string, target: string): { found: boolean; index: n
 /**
  * skill-manage tool handler
  */
+
+async function handleSkillCreate(args: Record<string, unknown>, category: string, name: string): Promise<string> {
+  const content = args.content as string | undefined;
+  if (!content) {
+    return 'Error: content is required for create action';
+  }
+  const exists = await storage.exists(category, name);
+  if (exists) {
+    return `Error: Skill "${category}/${name}" already exists. Use edit or patch to update.`;
+  }
+  const skill = await storage.write({ name, category, description: `Skill: ${name}`, content, source: 'auto' });
+  return `Skill created: ${skill.category}/${skill.name}\nPath: ${skill.filepath}`;
+}
+
+async function handleSkillPatch(args: Record<string, unknown>, category: string, name: string): Promise<string> {
+  const oldString = args.old_string as string | undefined;
+  const newString = args.new_string as string | undefined;
+  if (!oldString || !newString) {
+    return 'Error: old_string and new_string are required for patch action';
+  }
+  const existing = await storage.read(category, name);
+  if (!existing) { return `Error: Skill "${category}/${name}" not found` }
+  if (existing.source !== 'auto') {
+    return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill. Use a different name to create a new skill.`;
+  }
+  const match = fuzzyMatch(existing.content, oldString);
+  if (!match.found) {
+    return 'Error: Could not find old_string in skill content.\nTip: Make sure the text matches exactly or has minor whitespace differences.';
+  }
+  const updatedContent = existing.content.slice(0, match.index) + newString + existing.content.slice(match.index + match.actual.length);
+  const updated = await storage.write({ ...existing, content: updatedContent });
+  return `Skill patched: ${updated.category}/${updated.name}\nReplaced: "${match.actual.slice(0, 50)}..." -> "${newString.slice(0, 50)}..."`;
+}
+
+async function handleSkillEdit(args: Record<string, unknown>, category: string, name: string): Promise<string> {
+  const content = args.content as string | undefined;
+  if (!content) { return 'Error: content is required for edit action' }
+  const existing = await storage.read(category, name);
+  if (!existing) { return `Error: Skill "${category}/${name}" not found` }
+  if (existing.source !== 'auto') {
+    return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill.`;
+  }
+  const updated = await storage.write({ ...existing, content });
+  return `Skill edited: ${updated.category}/${updated.name}\nContent replaced.`;
+}
+
+async function handleSkillDelete(category: string, name: string): Promise<string> {
+  const existing = await storage.read(category, name);
+  if (!existing) { return `Error: Skill "${category}/${name}" not found` }
+  if (existing.source !== 'auto') {
+    return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be deleted by auto-skill.`;
+  }
+  const deleted = await storage.delete(category, name);
+  return deleted ? `Skill deleted: ${category}/${name}` : `Error: Failed to delete skill "${category}/${name}"`;
+}
+
+async function handleSkillWriteFile(args: Record<string, unknown>, category: string, name: string): Promise<string> {
+  const filePath = args.file_path as string | undefined;
+  const content = args.content as string | undefined;
+  if (!filePath || !content) { return 'Error: file_path and content are required for write_file action' }
+  if (filePath.includes('..')) { return 'Error: file_path must be relative and cannot contain path traversal' }
+  const exists = await storage.exists(category, name);
+  if (!exists) { return `Error: Skill "${category}/${name}" not found. Create skill first.` }
+  const skillDir = getSkillDirectory(category, name);
+  const fullPath = path.join(skillDir, filePath);
+  const parentDir = path.dirname(fullPath);
+  if (parentDir !== skillDir) {
+    await fs.mkdir(parentDir, { recursive: true });
+  }
+  await fs.writeFile(fullPath, content, 'utf-8');
+  return `File written: ${category}/${name}/${filePath}`;
+}
+
+async function handleSkillRemoveFile(args: Record<string, unknown>, category: string, name: string): Promise<string> {
+  const filePath = args.file_path as string | undefined;
+  if (!filePath) { return 'Error: file_path is required for remove_file action' }
+  if (filePath.includes('..')) { return 'Error: file_path must be relative and cannot contain path traversal' }
+  const exists = await storage.exists(category, name);
+  if (!exists) { return `Error: Skill "${category}/${name}" not found` }
+  const skillDir = getSkillDirectory(category, name);
+  const fullPath = path.join(skillDir, filePath);
+  try {
+    await fs.unlink(fullPath);
+    return `File removed: ${category}/${name}/${filePath}`;
+  } catch {
+    return `Error: File "${filePath}" not found in skill "${category}/${name}"`;
+  }
+}
+
 async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
-  // Execute guard: when skill.enabled=false, only allow from /auto-skill (skill-review forked session)
   if (!skillEnabled) {
-    const ctx = _ctx as Record<string, unknown> | undefined
-    const sessionID = (ctx?.sessionID as string) || ''
+    const ctx = _ctx as Record<string, unknown> | undefined;
+    const sessionID = (ctx?.sessionID as string) || '';
     if (!isForkedSession(sessionID) || getForkSessionAgent(sessionID) !== 'skill-review') {
-      return 'Error: skill-manage is only available via /auto-skill command. Enable skills in memory-config.json to allow automatic skill management.'
+      return 'Error: skill-manage is only available via /auto-skill command. Enable skills in memory-config.json to allow automatic skill management.';
     }
   }
-
-  const action = args.action as string
-  const category = args.category as string
-  const name = args.name as string
-  
-  // Initialize storage
-  await storage.init()
-  
-  // Validate category and name
-  const catValidation = validateCategoryName(category)
-  if (!catValidation.valid) {
-    return `Error: ${catValidation.error}`
-  }
-  
-  const nameValidation = validateSkillName(name)
-  if (!nameValidation.valid) {
-    return `Error: ${nameValidation.error}`
-  }
-  
+  const action = args.action as string;
+  const category = args.category as string;
+  const name = args.name as string;
+  await storage.init();
+  const catValidation = validateCategoryName(category);
+  if (!catValidation.valid) { return `Error: ${catValidation.error}` }
+  const nameValidation = validateSkillName(name);
+  if (!nameValidation.valid) { return `Error: ${nameValidation.error}` }
   try {
     switch (action) {
-      case 'create': {
-        const content = args.content as string | undefined
-        if (!content) {
-          return 'Error: content is required for create action'
-        }
-        
-        // Check if skill already exists
-        const exists = await storage.exists(category, name)
-        if (exists) {
-          return `Error: Skill "${category}/${name}" already exists. Use edit or patch to update.`
-        }
-        
-        // Create skill
-        const skill = await storage.write({
-          name,
-          category,
-          description: `Skill: ${name}`, // Default description
-          content,
-          source: 'auto',
-        })
-        
-        return `Skill created: ${skill.category}/${skill.name}\nPath: ${skill.filepath}`
-      }
-      
-      case 'patch': {
-        const oldString = args.old_string as string | undefined
-        const newString = args.new_string as string | undefined
-        
-        if (!oldString || !newString) {
-          return 'Error: old_string and new_string are required for patch action'
-        }
-        
-        // Read existing skill
-        const existing = await storage.read(category, name)
-        if (!existing) {
-          return `Error: Skill "${category}/${name}" not found`
-        }
-        if (existing.source !== 'auto') {
-          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill. Use a different name to create a new skill.`
-        }
-        const match = fuzzyMatch(existing.content, oldString)
-        if (!match.found) {
-          return `Error: Could not find old_string in skill content.\nTip: Make sure the text matches exactly or has minor whitespace differences.`
-        }
-        
-        // Replace
-        const updatedContent = existing.content.slice(0, match.index) + 
-          newString + 
-          existing.content.slice(match.index + match.actual.length)
-        
-        // Write updated skill
-        const updated = await storage.write({
-          ...existing,
-          content: updatedContent,
-        })
-        
-        return `Skill patched: ${updated.category}/${updated.name}\nReplaced: "${match.actual.slice(0, 50)}..." -> "${newString.slice(0, 50)}..."`
-      }
-      
-      case 'edit': {
-        const content = args.content as string | undefined
-        if (!content) {
-          return 'Error: content is required for edit action'
-        }
-        
-        // Read existing skill
-        const existing = await storage.read(category, name)
-        if (!existing) {
-          return `Error: Skill "${category}/${name}" not found`
-        }
-        if (existing.source !== 'auto') {
-          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be modified by auto-skill.`
-        }
-
-        // Replace entire content
-        const updated = await storage.write({
-          ...existing,
-          content,
-        })
-        
-        return `Skill edited: ${updated.category}/${updated.name}\nContent replaced.`
-      }
-      
-      case 'delete': {
-        // Check if skill exists and is auto-created
-        const existing = await storage.read(category, name)
-        if (!existing) {
-          return `Error: Skill "${category}/${name}" not found`
-        }
-        if (existing.source !== 'auto') {
-          return `Error: Skill "${category}/${name}" is not auto-created. Only auto-created skills can be deleted by auto-skill.`
-        }
-        
-        // Delete skill
-        const deleted = await storage.delete(category, name)
-        
-        return deleted 
-          ? `Skill deleted: ${category}/${name}`
-          : `Error: Failed to delete skill "${category}/${name}"`
-      }
-      
-      case 'write_file': {
-        const filePath = args.file_path as string | undefined
-        const content = args.content as string | undefined
-        
-        if (!filePath || !content) {
-          return 'Error: file_path and content are required for write_file action'
-        }
-        
-        // Validate file path (no path traversal)
-        if (filePath.includes('..')) {
-          return 'Error: file_path must be relative and cannot contain path traversal'
-        }
-        
-        // Check skill exists
-        const exists = await storage.exists(category, name)
-        if (!exists) {
-          return `Error: Skill "${category}/${name}" not found. Create skill first.`
-        }
-        
-        // Write supporting file
-        const skillDir = getSkillDirectory(category, name)
-        const fullPath = path.join(skillDir, filePath)
-        
-        // Ensure parent directory exists if file has extension (e.g., references/file.md)
-        const parentDir = path.dirname(fullPath)
-        if (parentDir !== skillDir) {
-          await fs.mkdir(parentDir, { recursive: true })
-        }
-        
-        await fs.writeFile(fullPath, content, 'utf-8')
-        
-        return `File written: ${category}/${name}/${filePath}`
-      }
-      
-      case 'remove_file': {
-        const filePath = args.file_path as string | undefined
-        
-        if (!filePath) {
-          return 'Error: file_path is required for remove_file action'
-        }
-        
-        // Validate file path (no path traversal)
-        if (filePath.includes('..')) {
-          return 'Error: file_path must be relative and cannot contain path traversal'
-        }
-        
-        // Check skill exists
-        const exists = await storage.exists(category, name)
-        if (!exists) {
-          return `Error: Skill "${category}/${name}" not found`
-        }
-        
-        // Remove supporting file
-        const skillDir = getSkillDirectory(category, name)
-        const fullPath = path.join(skillDir, filePath)
-        
-        try {
-          await fs.unlink(fullPath)
-          return `File removed: ${category}/${name}/${filePath}`
-        } catch {
-          return `Error: File "${filePath}" not found in skill "${category}/${name}"`
-        }
-      }
-      
-      default:
-        return `Error: Unknown action "${action}"`
+      case 'create': return await handleSkillCreate(args, category, name);
+      case 'patch': return await handleSkillPatch(args, category, name);
+      case 'edit': return await handleSkillEdit(args, category, name);
+      case 'delete': return await handleSkillDelete(category, name);
+      case 'write_file': return await handleSkillWriteFile(args, category, name);
+      case 'remove_file': return await handleSkillRemoveFile(args, category, name);
+      default: return `Error: Unknown action "${action}"`;
     }
   } catch (e) {
-    log.error('handleSkillManage error:', action, e)
-    return e instanceof Error ? e.message : 'Unknown error'
+    log.error('handleSkillManage error:', action, e);
+    return e instanceof Error ? e.message : 'Unknown error';
   }
 }
 
@@ -308,6 +225,38 @@ async function handleSkillManage(args: Record<string, unknown>, _ctx: unknown): 
 const SKILL_LIST_SCHEMA = {
   category: z.string().optional()
     .describe('Filter by category (optional)'),
+}
+
+function formatSkillEntry(skill: SkillHeader): string {
+  let entry = `- **${skill.name}**\n  ${skill.description}\n`;
+  if (skill.platforms && skill.platforms.length > 0) {
+    entry += `  Platforms: ${skill.platforms.join(', ')}\n`;
+  }
+  return entry + '\n';
+}
+
+function formatSkillsByCategory(skills: SkillHeader[]): string {
+  const byCategory: Record<string, SkillHeader[]> = {};
+  for (const skill of skills) {
+    if (!byCategory[skill.category]) { byCategory[skill.category] = [] }
+    byCategory[skill.category].push(skill);
+  }
+  let output = '';
+  for (const [cat, catSkills] of Object.entries(byCategory)) {
+    output += `### ${cat} (${catSkills.length})\n\n`;
+    for (const skill of catSkills) {
+      output += formatSkillEntry(skill);
+    }
+  }
+  return output;
+}
+
+function formatSkillsFlat(skills: SkillHeader[], category: string): string {
+  let output = `### ${category}\n\n`;
+  for (const skill of skills) {
+    output += formatSkillEntry(skill);
+  }
+  return output;
 }
 
 async function handleSkillList(args: Record<string, unknown>, _ctx: unknown): Promise<string> {
@@ -337,43 +286,9 @@ async function handleSkillList(args: Record<string, unknown>, _ctx: unknown): Pr
     }
     
     // Progressive disclosure: show metadata only
-    let output = `## Skills (${skills.length} total)\n\n`
-    
-    // Group by category if not filtered
-    if (!category) {
-      const byCategory: Record<string, SkillHeader[]> = {}
-      for (const skill of skills) {
-        if (!byCategory[skill.category]) {
-          byCategory[skill.category] = []
-        }
-        byCategory[skill.category].push(skill)
-      }
-      
-      for (const [cat, catSkills] of Object.entries(byCategory)) {
-        output += `### ${cat} (${catSkills.length})\n\n`
-        for (const skill of catSkills) {
-          output += `- **${skill.name}**\n`
-          output += `  ${skill.description}\n`
-          if (skill.platforms && skill.platforms.length > 0) {
-            output += `  Platforms: ${skill.platforms.join(', ')}\n`
-          }
-          output += '\n'
-        }
-      }
-    } else {
-      // Single category listing
-      output += `### ${category}\n\n`
-      for (const skill of skills) {
-        output += `- **${skill.name}**\n`
-        output += `  ${skill.description}\n`
-        if (skill.platforms && skill.platforms.length > 0) {
-          output += `  Platforms: ${skill.platforms.join(', ')}\n`
-        }
-        output += '\n'
-      }
-    }
-    
-    output += '\n---\n\nUse `skill-view` to see full content.'
+    let output = `## Skills (${skills.length} total)\n\n`;
+    output += category ? formatSkillsFlat(skills, category) : formatSkillsByCategory(skills);
+    output += '\n---\n\nUse `skill-view` to see full content.';
     
     return output
   } catch (e) {

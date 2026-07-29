@@ -97,56 +97,62 @@ export function buildDreamPrompt(
   expiryConfig?: MemoryExpiryConfig,
   skillEnabled?: boolean,
 ): string {
-  // Use base prompt, conditionally add skill sections
-  const basePrompt = skillEnabled
+  const base = buildBasePrompt(skillEnabled);
+  const ctx = buildContextSection(sessionCount);
+  const paths = buildPathsSection(lockFilePath, dreamStatePath, memoryRoot);
+  const expiry = buildExpirySection(headers, expiryConfig ?? DEFAULT_MEMORY_EXPIRY_CONFIG, memoryRoot);
+  return base + ctx + paths + expiry;
+}
+
+function buildBasePrompt(skillEnabled?: boolean): string {
+  return skillEnabled
     ? DREAM_CONSOLIDATION_PROMPT_BASE + DREAM_SKILL_SECTIONS
-    : DREAM_CONSOLIDATION_PROMPT_BASE
+    : DREAM_CONSOLIDATION_PROMPT_BASE;
+}
 
-  const contextSection = sessionCount > 0
-    ? `
-## Context
+function buildContextSection(sessionCount: number): string {
+  if (sessionCount <= 0) { return "" }
+  return `\n## Context\n\nThis consolidation runs after ${sessionCount} sessions. Prioritize recent signals and emerging patterns.\n`;
+}
 
-This consolidation runs after ${sessionCount} sessions. Prioritize recent signals and emerging patterns.
-`
-    : ""
+function buildPathsSection(lockFilePath?: string, dreamStatePath?: string, memoryRoot?: string): string {
+  if (!lockFilePath && !dreamStatePath) { return "" }
+  return `\n## File Paths (for final steps)\n\n- Lock file path: ${lockFilePath || '(not provided - skip lock release)'}\n- Dream state file path: ${dreamStatePath || '(not provided - skip dream state write)'}\n- Memory root: ${memoryRoot || '(not provided)'}\n`;
+}
 
-  const pathsSection = (lockFilePath || dreamStatePath)
-    ? `
-## File Paths (for final steps)
+function buildExpiryAgeTable(headers: MemoryHeader[], ttlByType: Record<string, number | null>): string {
+  const now = Date.now();
+  return headers
+    .filter(h => !h.pin)
+    .map(h => {
+      const daysOld = h.mtime ? Math.round((now - h.mtime) / (1000 * 60 * 60 * 24)) : Infinity;
+      const ttlDays = h.ttl ?? ttlByType[h.type] ?? null;
+      const status = ttlDays === null ? 'OK'
+        : typeof ttlDays === 'number' && daysOld > ttlDays ? 'EXPIRED'
+        : 'OK';
+      const mtimeStr = h.mtime ? new Date(h.mtime).toISOString().split('T')[0] : 'unknown';
+      const ageStr = daysOld === Infinity ? 'unknown' : String(daysOld);
+      const ttlStr = ttlDays === null ? '∞' : String(ttlDays);
+      return `| ${h.name} | ${h.type} | ${mtimeStr} | ${ageStr} | ${ttlStr} | ${status} |`;
+    })
+    .join('\n');
+}
 
-- Lock file path: ${lockFilePath || '(not provided - skip lock release)'}
-- Dream state file path: ${dreamStatePath || '(not provided - skip dream state write)'}
-- Memory root: ${memoryRoot || '(not provided)'}
-`
-    : ""
-
-  const expiryConfigEffective = expiryConfig ?? DEFAULT_MEMORY_EXPIRY_CONFIG
-
-  let expirySection = ""
-  if (expiryConfigEffective.enabled && headers && headers.length > 0) {
-    const now = Date.now()
-    const ttlByType = expiryConfigEffective.ttlByType
-
-    const ageTableRows = headers
-      .filter(h => !h.pin)
-      .map(h => {
-        const daysOld = h.mtime ? Math.round((now - h.mtime) / (1000 * 60 * 60 * 24)) : Infinity
-        const ttlDays = h.ttl ?? ttlByType[h.type] ?? null
-        const status = ttlDays === null ? 'OK'
-          : typeof ttlDays === 'number' && daysOld > ttlDays ? 'EXPIRED'
-          : 'OK'
-        return `| ${h.name} | ${h.type} | ${h.mtime ? new Date(h.mtime).toISOString().split('T')[0] : 'unknown'} | ${daysOld === Infinity ? 'unknown' : daysOld} | ${ttlDays === null ? '∞' : ttlDays} | ${status} |`
-      })
-      .join('\n')
-
-    const ttlLabels: Record<string, string> = {
-      user: ttlByType.user === null ? 'Never expires (∞)' : `${ttlByType.user} days`,
-      feedback: `${ttlByType.feedback} days`,
-      project: `${ttlByType.project} days`,
-      reference: `${ttlByType.reference} days`,
-    }
-
-    expirySection = `
+function buildExpirySection(
+  headers: MemoryHeader[] | undefined,
+  config: MemoryExpiryConfig,
+  memoryRoot?: string,
+): string {
+  if (!config.enabled || !headers || headers.length === 0) { return "" }
+  const ttlByType = config.ttlByType;
+  const ageTableRows = buildExpiryAgeTable(headers, ttlByType);
+  const ttlLabels: Record<string, string> = {
+    user: ttlByType.user === null ? 'Never expires (∞)' : `${ttlByType.user} days`,
+    feedback: `${ttlByType.feedback} days`,
+    project: `${ttlByType.project} days`,
+    reference: `${ttlByType.reference} days`,
+  };
+  return `
 ## Phase 4 - Expiry Rules (MUST follow these quantified rules)
 
 ### Default TTL by memory type:
@@ -187,8 +193,5 @@ The file must contain this exact JSON structure:
 Only include memories whose Status is "EXPIRED" in the table above.
 Exclude memories with \`pin: true\` or custom \`ttl\` override that hasn't expired yet.
 This marks memories as pending deletion — the user will confirm deletion in their next conversation.
-`
-  }
-
-  return basePrompt + contextSection + pathsSection + expirySection
+`;
 }

@@ -119,61 +119,84 @@ type PluginConfig = Record<string, unknown> & {
     subagentHooks?: Record<string, unknown>
 }
 
-function mergeConfig(pluginConfig: PluginConfig) {
-    const legacyEnabled = pluginConfig.enabled;
-    const autoMemoryConfig = {
+function mergeAutoMemoryConfig(pc: PluginConfig): MemoryConfig {
+    const am = pc.autoMemory;
+    return {
         ...DEFAULT_MEMORY_CONFIG,
-        ...(pluginConfig.autoMemory as Record<string, unknown> | undefined),
-        enabled: pluginConfig.autoMemory?.enabled ?? legacyEnabled ?? DEFAULT_MEMORY_CONFIG.enabled,
-        maxMemoryFiles: pluginConfig.maxMemoryFiles ?? pluginConfig.autoMemory?.maxMemoryFiles ?? DEFAULT_MEMORY_CONFIG.maxMemoryFiles,
-        maxEntrypointLines: pluginConfig.maxEntrypointLines ?? pluginConfig.autoMemory?.maxEntrypointLines ?? DEFAULT_MEMORY_CONFIG.maxEntrypointLines,
-        maxEntrypointBytes: pluginConfig.maxEntrypointBytes ?? pluginConfig.autoMemory?.maxEntrypointBytes ?? DEFAULT_MEMORY_CONFIG.maxEntrypointBytes,
-        storageMode: pluginConfig.storageMode ?? pluginConfig.autoMemory?.storageMode ?? DEFAULT_MEMORY_CONFIG.storageMode,
-        customMemoryDir: pluginConfig.customMemoryDir ?? pluginConfig.autoMemory?.customMemoryDir,
-        minSessionsBeforeConsolidation: pluginConfig.minSessionsBeforeConsolidation ?? pluginConfig.autoMemory?.minSessionsBeforeConsolidation ?? DEFAULT_MEMORY_CONFIG.minSessionsBeforeConsolidation,
-        minHoursBetweenConsolidation: pluginConfig.minHoursBetweenConsolidation ?? pluginConfig.autoMemory?.minHoursBetweenConsolidation ?? DEFAULT_MEMORY_CONFIG.minHoursBetweenConsolidation,
+        ...(am as Record<string, unknown> | undefined),
+        enabled: am?.enabled ?? pc.enabled ?? DEFAULT_MEMORY_CONFIG.enabled,
+        maxMemoryFiles: pc.maxMemoryFiles ?? am?.maxMemoryFiles ?? DEFAULT_MEMORY_CONFIG.maxMemoryFiles,
+        maxEntrypointLines: pc.maxEntrypointLines ?? am?.maxEntrypointLines ?? DEFAULT_MEMORY_CONFIG.maxEntrypointLines,
+        maxEntrypointBytes: pc.maxEntrypointBytes ?? am?.maxEntrypointBytes ?? DEFAULT_MEMORY_CONFIG.maxEntrypointBytes,
+        storageMode: pc.storageMode ?? am?.storageMode ?? DEFAULT_MEMORY_CONFIG.storageMode,
+        customMemoryDir: pc.customMemoryDir ?? am?.customMemoryDir,
+        minSessionsBeforeConsolidation: pc.minSessionsBeforeConsolidation ?? am?.minSessionsBeforeConsolidation ?? DEFAULT_MEMORY_CONFIG.minSessionsBeforeConsolidation,
+        minHoursBetweenConsolidation: pc.minHoursBetweenConsolidation ?? am?.minHoursBetweenConsolidation ?? DEFAULT_MEMORY_CONFIG.minHoursBetweenConsolidation,
         truncation: {
             ...DEFAULT_TRUNCATION_CONFIG,
-            ...(pluginConfig.autoMemory?.truncation as Record<string, unknown> | undefined),
+            ...(am?.truncation as Record<string, unknown> | undefined),
         },
     } as MemoryConfig;
-    const autoDreamConfig = {
+}
+
+function mergeAutoDreamConfig(pc: PluginConfig): AutoDreamConfig {
+    return {
         ...DEFAULT_AUTO_DREAM_CONFIG,
-        ...(pluginConfig.autoDream as Record<string, unknown> | undefined),
-        enabled: pluginConfig.autoDream?.enabled ?? DEFAULT_AUTO_DREAM_CONFIG.enabled,
+        ...(pc.autoDream as Record<string, unknown> | undefined),
+        enabled: pc.autoDream?.enabled ?? DEFAULT_AUTO_DREAM_CONFIG.enabled,
     } as AutoDreamConfig;
-    const extractionConfig = {
+}
+
+function mergeExtractionConfig(pc: PluginConfig): ExtractionConfig {
+    const ex = pc.extraction;
+    return {
         ...DEFAULT_EXTRACTION_CONFIG,
-        ...(pluginConfig.extraction as Record<string, unknown> | undefined),
-        enabled: pluginConfig.extraction?.enabled ?? DEFAULT_EXTRACTION_CONFIG.enabled,
-        syncMode: pluginConfig.extraction?.syncMode ?? DEFAULT_EXTRACTION_CONFIG.syncMode,
-        syncWaitTimeoutMs: pluginConfig.extraction?.syncWaitTimeoutMs ?? DEFAULT_EXTRACTION_CONFIG.syncWaitTimeoutMs,
+        ...(ex as Record<string, unknown> | undefined),
+        enabled: ex?.enabled ?? DEFAULT_EXTRACTION_CONFIG.enabled,
+        syncMode: ex?.syncMode ?? DEFAULT_EXTRACTION_CONFIG.syncMode,
+        syncWaitTimeoutMs: ex?.syncWaitTimeoutMs ?? DEFAULT_EXTRACTION_CONFIG.syncWaitTimeoutMs,
     } as ExtractionConfig;
-const skillConfig = {
+}
+
+function mergeSkillConfig(pc: PluginConfig): SkillConfig {
+    return {
         ...DEFAULT_SKILL_CONFIG,
-        ...(pluginConfig.skills as Record<string, unknown> | undefined),
-        enabled: pluginConfig.skills?.enabled ?? DEFAULT_SKILL_CONFIG.enabled,
+        ...(pc.skills as Record<string, unknown> | undefined),
+        enabled: pc.skills?.enabled ?? DEFAULT_SKILL_CONFIG.enabled,
     } as SkillConfig;
-    const memoryRecallConfig = {
+}
+
+function mergeMemoryRecallConfig(pc: PluginConfig): MemoryRecallConfig {
+    const mr = pc.memoryRecall;
+    return {
         ...DEFAULT_MEMORY_RECALL_CONFIG,
-        ...(pluginConfig.memoryRecall as Record<string, unknown> | undefined),
-        enabled: pluginConfig.memoryRecall?.enabled ?? DEFAULT_MEMORY_RECALL_CONFIG.enabled,
-        visibleRecall: pluginConfig.memoryRecall?.visibleRecall ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleRecall,
-        visibleWrite: pluginConfig.memoryRecall?.visibleWrite ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleWrite,
-        minRelevanceScore: pluginConfig.memoryRecall?.minRelevanceScore ?? DEFAULT_MEMORY_RECALL_CONFIG.minRelevanceScore,
-        maxInjectChars: pluginConfig.memoryRecall?.maxInjectChars ?? DEFAULT_MEMORY_RECALL_CONFIG.maxInjectChars,
+        ...(mr as Record<string, unknown> | undefined),
+        enabled: mr?.enabled ?? DEFAULT_MEMORY_RECALL_CONFIG.enabled,
+        visibleRecall: mr?.visibleRecall ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleRecall,
+        visibleWrite: mr?.visibleWrite ?? DEFAULT_MEMORY_RECALL_CONFIG.visibleWrite,
+        minRelevanceScore: mr?.minRelevanceScore ?? DEFAULT_MEMORY_RECALL_CONFIG.minRelevanceScore,
+        maxInjectChars: mr?.maxInjectChars ?? DEFAULT_MEMORY_RECALL_CONFIG.maxInjectChars,
     } as MemoryRecallConfig;
-    const semanticSelectionConfig = {
+}
+
+function mergeSemanticSelectionConfig(pc: PluginConfig): SemanticSelectionConfig {
+    return {
         ...DEFAULT_SEMANTIC_SELECTION_CONFIG,
-        ...(pluginConfig.semanticSelection as Record<string, unknown> | undefined),
-        enabled: pluginConfig.semanticSelection?.enabled ?? DEFAULT_SEMANTIC_SELECTION_CONFIG.enabled,
+        ...(pc.semanticSelection as Record<string, unknown> | undefined),
+        enabled: pc.semanticSelection?.enabled ?? DEFAULT_SEMANTIC_SELECTION_CONFIG.enabled,
     } as SemanticSelectionConfig;
-    const subagentHooksConfig = {
+}
+
+function mergeSubagentHooksConfig(pc: PluginConfig) {
+    return {
         ...DEFAULT_SUBAGENT_HOOKS_CONFIG,
-        ...(pluginConfig.subagentHooks as Record<string, unknown> | undefined),
+        ...(pc.subagentHooks as Record<string, unknown> | undefined),
     };
-    const userExpiry = pluginConfig.autoMemory?.expiry as Record<string, unknown> | undefined;
-    const expiryConfig = {
+}
+
+function mergeExpiryConfig(pc: PluginConfig) {
+    const userExpiry = pc.autoMemory?.expiry as Record<string, unknown> | undefined;
+    return {
         ...DEFAULT_MEMORY_EXPIRY_CONFIG,
         ...userExpiry,
         ttlByType: {
@@ -181,15 +204,91 @@ const skillConfig = {
             ...(userExpiry?.ttlByType as Record<string, unknown> | undefined),
         },
     };
+}
+
+function mergeConfig(pluginConfig: PluginConfig) {
     return {
-        autoMemory: autoMemoryConfig,
-        autoDream: autoDreamConfig,
-        extraction: extractionConfig,
-        skills: skillConfig,
-        memoryRecall: memoryRecallConfig,
-        semanticSelection: semanticSelectionConfig,
-        subagentHooks: subagentHooksConfig,
-        expiry: expiryConfig,
+        autoMemory: mergeAutoMemoryConfig(pluginConfig),
+        autoDream: mergeAutoDreamConfig(pluginConfig),
+        extraction: mergeExtractionConfig(pluginConfig),
+        skills: mergeSkillConfig(pluginConfig),
+        memoryRecall: mergeMemoryRecallConfig(pluginConfig),
+        semanticSelection: mergeSemanticSelectionConfig(pluginConfig),
+        subagentHooks: mergeSubagentHooksConfig(pluginConfig),
+        expiry: mergeExpiryConfig(pluginConfig),
+    };
+}
+
+const SLASH_COMMAND_TARGET_MAP: Record<string, string> = {
+    'dream': 'dream-trigger',
+    'dream-force': 'dream-trigger',
+    'dream-approve': 'dream-approve',
+    'dream-reject': 'dream-reject',
+    'auto-skill': 'skill-review-trigger',
+};
+
+function resolvePluginConfigs(pluginConfig: PluginConfig) {
+    const logLevel = (pluginConfig.logLevel as LogLevel) || 'error';
+    initLogger(logLevel);
+    const configs = mergeConfig(pluginConfig);
+    setSkillEnabled(configs.skills.enabled);
+    const slashCommandsEnabled = (pluginConfig.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
+    return { logLevel, configs, slashCommandsEnabled: slashCommandsEnabled as boolean };
+}
+
+async function registerSkillSlashCommands(
+    skillStorage: SkillStorage,
+    commandRegistry: ReturnType<typeof getCommandRegistry>,
+): Promise<void> {
+    const skillsWithCommand = await skillStorage.getSkillsWithSlashCommand();
+    for (const s of skillsWithCommand) {
+        const targetTool = SLASH_COMMAND_TARGET_MAP[s.slashCommand] || 'dream-trigger';
+        commandRegistry.register({
+            name: s.slashCommand,
+            targetTool,
+            skillName: s.skillName,
+            args: targetTool === 'dream-trigger' ? ['force'] : [],
+        });
+    }
+}
+
+function createPluginState(
+    fullConfig: MemoryConfig,
+    memoryRecallConfig: MemoryRecallConfig,
+    semanticSelectionConfig: SemanticSelectionConfig,
+    client: OpencodeClient | undefined,
+    projectID: string,
+    directory: string,
+    configs: ReturnType<typeof mergeConfig>,
+    slashCommandsEnabled: boolean,
+): PluginState {
+    const storage = new MemoryStorage(projectID, directory, fullConfig);
+    const skillStorage = new SkillStorage();
+    const skillInjection = new SkillInjection(skillStorage, configs.skills);
+    const commandRegistry = getCommandRegistry();
+    return {
+        storage,
+        retrieval: new EnhancedMemoryRetrieval(storage, fullConfig, memoryRecallConfig, semanticSelectionConfig, client),
+        injection: new MemoryInjection(storage, fullConfig),
+        config: fullConfig,
+        autoDreamConfig: configs.autoDream,
+        extractionConfig: configs.extraction,
+        skillStorage,
+        skillInjection,
+        skillConfig: configs.skills,
+        skillTriggerState: DEFAULT_SKILL_TRIGGER_STATE,
+        slashCommandsEnabled,
+        commandRegistry,
+        client,
+        memoryRecallConfig,
+        semanticSelectionConfig,
+        subagentHooksConfig: configs.subagentHooks,
+        expiryConfig: configs.expiry,
+        pendingRecallMap: new Map(),
+        pendingWriteMap: new Map(),
+        recalledUserMsgIds: new Set(),
+        pendingExpiryToastShown: false,
+        memoryToolUsedThisTurn: new Set(),
     };
 }
 
@@ -200,75 +299,24 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
     if (inflight) return inflight;
 
     const initPromise = (async (): Promise<PluginState> => {
-        const logLevel = (pluginConfig.logLevel as LogLevel) || 'error';
-        initLogger(logLevel);
-        const { autoMemory: fullConfig, autoDream: autoDreamConfig, extraction: extractionConfig, skills: skillConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig, subagentHooks: subagentHooksConfig, expiry: expiryConfig } = mergeConfig(pluginConfig);
-        setSkillEnabled(skillConfig.enabled);
+        const { logLevel, configs, slashCommandsEnabled } = resolvePluginConfigs(pluginConfig);
+        const { autoMemory: fullConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig } = configs;
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
-        // Structured logging is off by default; only open the log file when a
-        // level is configured, so no memory-plugin.log is created otherwise.
         if (logLevel !== 'off') await setLogDir(storage.getMemoryPath() + '/logs');
         logger.info('[PluginInit]', 'projectID:', projectID, 'memoryPath:', storage.getMemoryPath());
         const skillStorage = new SkillStorage();
         await skillStorage.init();
-        const skillInjection = new SkillInjection(skillStorage, skillConfig);
-        const slashCommandsEnabled = (pluginConfig.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
-        const commandRegistry = getCommandRegistry();
-        const slashCommandTargetMap: Record<string, string> = {
-            'dream': 'dream-trigger',
-            'dream-force': 'dream-trigger',
-            'dream-approve': 'dream-approve',
-            'dream-reject': 'dream-reject',
-            'auto-skill': 'skill-review-trigger',
-        };
-        if (slashCommandsEnabled && skillStorage) {
+        if (slashCommandsEnabled) {
             try {
-                const skillsWithCommand = await skillStorage.getSkillsWithSlashCommand();
-                for (const s of skillsWithCommand) {
-                    const targetTool = slashCommandTargetMap[s.slashCommand] || 'dream-trigger';
-                    commandRegistry.register({
-                        name: s.slashCommand,
-                        targetTool,
-                        skillName: s.skillName,
-                        args: targetTool === 'dream-trigger' ? ['force'] : [],
-                    });
-                }
-            }
-            catch (e) {
-                logger.warn('[PluginInit]', 'Failed to register skill slash commands:', e instanceof Error ? e.message : String(e))
+                await registerSkillSlashCommands(skillStorage, getCommandRegistry());
+            } catch (e) {
+                logger.warn('[PluginInit]', 'Failed to register skill slash commands:', e instanceof Error ? e.message : String(e));
             }
         }
-        const state: PluginState = {
-            storage,
-            retrieval: new EnhancedMemoryRetrieval(storage, fullConfig, memoryRecallConfig, semanticSelectionConfig, client),
-            injection: new MemoryInjection(storage, fullConfig),
-            config: fullConfig,
-            autoDreamConfig,
-            extractionConfig,
-            skillStorage,
-            skillInjection,
-            skillConfig,
-            skillTriggerState: DEFAULT_SKILL_TRIGGER_STATE,
-            slashCommandsEnabled: slashCommandsEnabled as boolean,
-            commandRegistry,
-            client,
-            memoryRecallConfig,
-            semanticSelectionConfig,
-            subagentHooksConfig,
-            expiryConfig,
-            pendingRecallMap: new Map(),
-            pendingWriteMap: new Map(),
-            recalledUserMsgIds: new Set(),
-            pendingExpiryToastShown: false,
-            memoryToolUsedThisTurn: new Set(),
-        };
-        if (client) {
-            initAutoDream(client, storage, autoDreamConfig);
-        }
-        if (client && fullConfig.enabled) {
-            initAutoMemoryExtraction(client, storage, extractionConfig, undefined, skillStorage, skillConfig);
-        }
+        const state = createPluginState(fullConfig, memoryRecallConfig, semanticSelectionConfig, client, projectID, directory, configs, slashCommandsEnabled);
+        if (client) { initAutoDream(client, storage, configs.autoDream); }
+        if (client && fullConfig.enabled) { initAutoMemoryExtraction(client, storage, configs.extraction, undefined, skillStorage, configs.skills); }
         stateMap.set(projectID, state);
         return state;
     })();
@@ -315,6 +363,362 @@ async function loadMemoryConfigs(directory: string): Promise<PluginConfig> {
     return merged as PluginConfig
 }
 
+// ============================================================================
+// Hook Helper Functions
+// ============================================================================
+
+interface MessagesTransformOutput {
+    messages: Array<{ info?: { sessionID?: string; role?: string; id?: string }; parts: Array<Record<string, unknown>> }>
+}
+
+function handleForkedSessionPermission(
+    permission: string,
+    pattern: string,
+    output: { status: string },
+    skillEnabled: boolean,
+): void {
+    const alwaysSafe = [
+        'read', 'grep', 'glob',
+        'memory-read', 'memory-write', 'memory-search', 'memory-delete',
+        'skill-list', 'skill-view',
+        ...(skillEnabled ? ['skill-manage'] : []),
+        'external_directory',
+    ];
+    if (alwaysSafe.includes(permission)) {
+        output.status = 'allow';
+        logger.info('[PermissionAsk]', 'Auto-allowed (forked session):', permission);
+        return;
+    }
+    if (permission === 'edit') {
+        const baseName = pattern.split(/[/\\]/).pop() || '';
+        const isLockFile = LOCK_FILE_NAMES.includes(baseName as typeof LOCK_FILE_NAMES[number]);
+        output.status = isLockFile ? 'allow' : 'deny';
+        logger.info('[PermissionAsk]', isLockFile ? 'Auto-allowed edit (lock file):' : 'Denied edit (non-lock file):', pattern);
+        return;
+    }
+    output.status = 'deny';
+    logger.info('[PermissionAsk]', 'Denied (forked session):', permission);
+}
+
+function handlePermissionAsk(input: Record<string, unknown>, output: { status: string }, state: PluginState): void {
+    const sessionID = (input.sessionID as string) || '';
+    const permission = (input as unknown as Record<string, string>).permission || '';
+    const pattern = Array.isArray(input.pattern) ? (input.pattern as string[])[0] || '' : ((input.pattern as string) || '');
+    logger.info('[PermissionAsk]', 'sessionID:', sessionID, 'permission:', permission, 'pattern:', pattern);
+    if (isForkedSession(sessionID)) {
+        handleForkedSessionPermission(permission, pattern, output, state.skillConfig.enabled);
+        return;
+    }
+    if (permission === 'external_directory') {
+        const memoryRoot = state.storage.getMemoryPath().replace(/\\/g, '/');
+        const normalizedPattern = pattern.replace(/\\/g, '/');
+        if (normalizedPattern.startsWith(memoryRoot) || normalizedPattern.includes(memoryRoot)) {
+            output.status = 'allow';
+            logger.info('[PermissionAsk]', 'Auto-allowed external_directory (fallback):', pattern, 'memoryRoot:', memoryRoot);
+        }
+    }
+}
+
+async function handleExtractionCleanup(sid: string, memRoot: string, state: PluginState): Promise<void> {
+    try { await releaseExtractionLock(memRoot); }
+    catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
+    const thresholdState = getThresholdState();
+    updateThresholdState(markExtractionCompleted(thresholdState, thresholdState.pendingLastMessageUuid));
+    state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
+    logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', thresholdState.pendingLastMessageUuid || '(none)', sid);
+}
+
+async function handleDreamCleanup(sid: string, memRoot: string): Promise<void> {
+    await markDreamDone(memRoot);
+    logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);
+}
+
+async function handleSkillReviewCleanup(sid: string, memRoot: string): Promise<void> {
+    try { await releaseSkillReviewLock(getSkillReviewLockPath(memRoot)); }
+    catch (e) { logger.warn('[SessionIdle]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
+    updateThresholdState(resetExtractionSkillCounter(getThresholdState()));
+    logger.info('[SessionIdle]', 'Forked skill-review done — lock released, skill counter reset:', sid);
+}
+
+async function handleForkedSessionIdle(sid: string, state: PluginState, client: OpencodeClient): Promise<void> {
+    const agentType = getForkSessionAgent(sid);
+    const memRoot = state.storage.getMemoryPath();
+    if (agentType === 'extraction') {
+        await handleExtractionCleanup(sid, memRoot, state);
+        try { await client.session.delete({ path: { id: sid } }); }
+        catch (e) { logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e)); }
+    } else if (agentType === 'dream') {
+        await handleDreamCleanup(sid, memRoot);
+    } else if (agentType === 'skill-review') {
+        await handleSkillReviewCleanup(sid, memRoot);
+    } else {
+        logger.warn('[SessionIdle]', 'Forked session with unknown/missing agent type:', agentType || '(none)', sid);
+    }
+    unregisterForkSession(sid);
+}
+
+async function handleExtractionIdle(sid: string, state: PluginState, projectID: string, directory: string): Promise<void> {
+    const isSub = isSubagentSession(sid);
+    if (isSub && !state.subagentHooksConfig.autoMemoryExtraction) { return }
+    if (!isSub) { updateThresholdState(incrementTurnCounter(getThresholdState())) }
+    if (state.memoryToolUsedThisTurn.has(sid)) {
+        state.memoryToolUsedThisTurn.delete(sid);
+        logger.info('[SessionIdle]', 'Skipping extraction — memory tool used this turn:', sid);
+        return;
+    }
+    if (state.config.enabled) {
+        const extractionRunner = getExtractionRunner();
+        if (extractionRunner) {
+            void extractionRunner({
+                sessionID: sid, projectID, memoryRoot: state.storage.getMemoryPath(),
+                projectDirectory: directory, storage: state.storage,
+            });
+            logger.info('[SessionIdle]', 'Async extraction triggered via session.idle for:', sid);
+        }
+    }
+}
+
+async function handleSessionIdleEvent(event: { type: string; properties?: Record<string, string> }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+    if (event.type !== 'session.idle') { return }
+    const sid = event.properties?.sessionID || '';
+    if (!sid) { return }
+    if (isForkedSession(sid)) {
+        await handleForkedSessionIdle(sid, state, client);
+        return;
+    }
+    logger.info('[SessionIdle]', 'Session idle event:', sid);
+    await handleExtractionIdle(sid, state, projectID, directory);
+}
+
+function sweepLeftoverExtractionForks(client: OpencodeClient): void {
+    void (async () => {
+        try {
+            const res = await client.session.list();
+            for (const s of res.data ?? []) {
+                if (!s.title?.includes('(@extraction subagent)')) continue;
+                await client.session.delete({ path: { id: s.id } });
+            }
+        } catch (e) { logger.warn('[Sweep]', 'leftover extraction-fork sweep failed:', e instanceof Error ? e.message : String(e)); }
+    })();
+}
+
+function checkSubagentSystemPermission(subHooks: typeof DEFAULT_SUBAGENT_HOOKS_CONFIG): boolean {
+    return subHooks.memoryRecall || subHooks.skillReviewTrigger || subHooks.autoMemoryExtraction;
+}
+
+async function performSystemInjections(state: PluginState, isSubNow: boolean, output: { system: string[] }): Promise<void> {
+    try {
+        if (!isSubNow || state.subagentHooksConfig.memoryRecall) {
+            const result = state.config.truncation?.enabled !== false
+                ? await state.injection.injectIndexOnly()
+                : await state.injection.inject();
+            if (result.systemPrompt) { output.system.push(result.systemPrompt) }
+        }
+    } catch (e) { logger.error('[SystemTransform]', 'Memory injection failed:', e instanceof Error ? e.message : String(e)); }
+    if (state.skillConfig.enabled && (!isSubNow || state.subagentHooksConfig.skillReviewTrigger)) {
+        try {
+            const skillResult = await state.skillInjection.inject();
+            if (skillResult.systemPrompt) { output.system.push(skillResult.systemPrompt) }
+            output.system.push(SKILLS_GUIDANCE);
+        } catch (e) { logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e)); }
+    }
+    if (state.slashCommandsEnabled) { output.system.push(SLASH_COMMANDS_GUIDANCE) }
+}
+
+async function handleSystemTransform(sid: string, state: PluginState, client: OpencodeClient, output: { system: string[] }, projectID: string): Promise<void> {
+    if (!state.config.enabled) { return }
+    if (isForkedSession(sid)) { return }
+    if (!sweptProjects.has(projectID)) {
+        sweptProjects.add(projectID);
+        sweepLeftoverExtractionForks(client);
+    }
+    const isSub = isSubagentSession(sid);
+    if (isSub) {
+        if (!checkSubagentSystemPermission(state.subagentHooksConfig)) { return }
+    } else {
+        await detectAndRegisterSubagent(sid, client);
+        if (isSubagentSession(sid) && !checkSubagentSystemPermission(state.subagentHooksConfig)) { return }
+    }
+    await performSystemInjections(state, isSubagentSession(sid), output);
+}
+
+function extractUserQueryText(parts: Array<Record<string, unknown>>): string {
+    return parts
+        .filter((p) => p.type === 'text' && !(p as { synthetic?: boolean }).synthetic)
+        .map((p) => (p as { text?: string }).text || '')
+        .join(' ');
+}
+
+function parseAlreadyInjected(parts: Array<Record<string, unknown>>): Set<string> {
+    const injected = new Set<string>();
+    for (const part of parts) {
+        if (part.type === 'text' && (part as { synthetic?: boolean }).synthetic && part.text) {
+            const names = (part.text as string).match(/### (\S+) \(/g);
+            if (names) { names.forEach((n: string) => injected.add(n.replace('### ', '').replace(' (', ''))) }
+        }
+    }
+    return injected;
+}
+
+function buildRecallContent(memories: Array<{ name: string; type: string; content: string; filepath?: string }>, filtered: Array<{ relevance?: number }>, maxChars: number): string {
+    return memories.map((m, i) => {
+        const score = filtered[i]?.relevance ?? 'N/A';
+        const truncated = m.content.slice(0, maxChars) + (m.content.length > maxChars ? '...' : '');
+        return `### ${m.name} (${m.type}, score: ${score})\nPath: ${m.filepath || ''}\n\n${truncated}`;
+    }).join('\n\n---\n\n');
+}
+
+async function handleMessagesTransform(_input: unknown, output: MessagesTransformOutput, state: PluginState, client: OpencodeClient): Promise<void> {
+    if (!state.memoryRecallConfig.enabled) { return }
+    try {
+        const messages = output.messages;
+        if (!messages || messages.length === 0) { return }
+        const sid = (messages[0]?.info?.sessionID || messages.findLast((m) => m.info?.role === 'user')?.info?.sessionID) || 'default';
+        if (isForkedSession(sid)) { return }
+        if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { return }
+        if (sid && !isSubagentSession(sid)) {
+            await detectAndRegisterSubagent(sid, client);
+            if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { return }
+        }
+        const lastUserMsg = messages.findLast((m) => m.info?.role === 'user');
+        if (!lastUserMsg) { return }
+        const userMsgId = lastUserMsg.info?.id;
+        if (userMsgId && state.recalledUserMsgIds.has(userMsgId)) { return }
+        const userText = extractUserQueryText(lastUserMsg.parts || []);
+        if (!userText.trim()) { return }
+        logger.info('[Recall]', 'query:', userText.slice(0, 100));
+        const alreadyInjected = parseAlreadyInjected(lastUserMsg.parts || []);
+        if (alreadyInjected.size > 0) { return }
+        const relevant = await state.retrieval.findRelevant(userText, { limit: state.memoryRecallConfig.maxRecall, sessionID: sid });
+        const threshold = state.memoryRecallConfig.minRelevanceScore;
+        const filtered = relevant.filter((r) => !alreadyInjected.has(r.name) && (r.relevance ?? 0) >= threshold);
+        if (filtered.length === 0) { return }
+        logger.info('[Recall]', 'injecting', filtered.length, 'memories');
+        const memories = await state.retrieval.loadMemories(filtered);
+        const recallContent = buildRecallContent(memories, filtered, state.memoryRecallConfig.maxInjectChars);
+        lastUserMsg.parts.push({
+            type: 'text',
+            text: `<system-reminder>\nRelevant memories recalled for your question:\n\n${recallContent}\n</system-reminder>`,
+            synthetic: true,
+        });
+        if (userMsgId) {
+            state.recalledUserMsgIds.add(userMsgId);
+            if (state.recalledUserMsgIds.size > 200) {
+                const oldest = state.recalledUserMsgIds.values().next().value;
+                if (oldest) state.recalledUserMsgIds.delete(oldest);
+            }
+        }
+        if (state.memoryRecallConfig.visibleRecall && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall)) {
+            const summary = memories.map((m) => `${m.name}(${m.type})`).join(', ');
+            state.pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${summary}`);
+        }
+    } catch (e) { logger.error('[Recall]', 'messages.transform error:', e instanceof Error ? e.message : String(e)); }
+}
+
+async function handleSkillTrigger(input: { tool: string; sessionID: string }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+    if (!state.skillConfig.enabled) { return }
+    const isSub = isSubagentSession(input.sessionID);
+    if (isSub && !state.subagentHooksConfig.skillReviewTrigger) { return }
+    try {
+        if (input.tool === 'skill-manage') {
+            state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
+            try { await releaseSkillReviewLock(getSkillReviewLockPath(state.storage.getMemoryPath())); }
+            catch (e) { logger.warn('[ToolExecute]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
+        } else {
+            state.skillTriggerState = incrementSkillCounter(state.skillTriggerState);
+            if (!(await isSkillReviewInProgress(state.storage.getMemoryPath()))) {
+                const { shouldTrigger, newState } = checkSkillThreshold(state.skillTriggerState, state.skillConfig);
+                state.skillTriggerState = newState;
+                if (shouldTrigger && client) {
+                    void spawnSkillReviewAgent({
+                        sessionID: input.sessionID, projectID, directory,
+                        skillsRoot: state.skillStorage.getSkillsRoot(),
+                        memoryRoot: state.storage.getMemoryPath(),
+                        messages: [], skillConfig: state.skillConfig, client, reviewMode: 'skill-only',
+                    });
+                }
+            }
+        }
+    } catch (e) { logger.error('[ToolExecute]', 'Skill trigger check error:', e instanceof Error ? e.message : String(e)); }
+}
+
+async function handleToolExecuteAfter(input: { tool: string; sessionID: string }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+    if (isForkedSession(input.sessionID)) { return }
+    if (isSubagentSession(input.sessionID)) {
+        if (!state.subagentHooksConfig.skillReviewTrigger) { return }
+    } else {
+        await detectAndRegisterSubagent(input.sessionID, client);
+        if (isSubagentSession(input.sessionID) && !state.subagentHooksConfig.skillReviewTrigger) { return }
+    }
+    await handleSkillTrigger(input, state, client, projectID, directory);
+    if (state.skillConfig.enabled && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
+        try { processToolCallForSkill(input.tool); }
+        catch (e) { logger.error('[ToolExecute]', 'processToolCallForSkill error:', e instanceof Error ? e.message : String(e)); }
+    }
+}
+
+function sendSlashPrompt(client: OpencodeClient, sessionID: string, text: string): void {
+    void client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: 'text', text }] } })
+        .then((result) => { if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error) })
+        .catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
+}
+
+function dispatchSlashCommand(cmd: { targetTool: string }, parsed: { args: { force?: boolean } }, state: PluginState, msgInput: { sessionID: string; messages?: unknown[]; agent?: string }, projectID: string, directory: string): void {
+    if (cmd.targetTool === 'skill-review-trigger') {
+        void spawnSkillReviewAgent({
+            sessionID: msgInput.sessionID, projectID, directory,
+            skillsRoot: state.skillStorage.getSkillsRoot(), memoryRoot: state.storage.getMemoryPath(),
+            messages: (msgInput as Record<string, unknown>).messages as unknown[] || [],
+            skillConfig: state.skillConfig, client: state.client!, reviewMode: 'skill-only',
+        });
+    } else if (cmd.targetTool === 'dream-approve') {
+        sendSlashPrompt(state.client!, msgInput.sessionID, 'Please call the dream-approve tool to confirm deletion of expired memories. Do not explain, just call the tool.');
+    } else if (cmd.targetTool === 'dream-reject') {
+        sendSlashPrompt(state.client!, msgInput.sessionID, 'Please call the dream-reject tool to cancel pending expiry deletions. Do not explain, just call the tool.');
+    } else {
+        const forceArg = parsed.args.force ? ' with force=true' : '';
+        sendSlashPrompt(state.client!, msgInput.sessionID, `Please call the ${cmd.targetTool} tool${forceArg} to run memory consolidation. Do not explain, just call the tool.`);
+    }
+}
+
+function triggerAutoDream(state: PluginState, sessionID: string, projectID: string, directory: string): void {
+    if (!state.autoDreamConfig.enabled) { return }
+    if (isConsolidationInProgress(state.storage.getMemoryPath())) { return }
+    try {
+        void handleChatMessageTrigger({
+            sessionID, projectID, memoryRoot: state.storage.getMemoryPath(),
+            directory, storage: state.storage, expiryConfig: state.expiryConfig,
+            skillEnabled: state.skillConfig.enabled,
+        });
+    } catch (error) { logger.error('[AutoDream]', 'chat.message hook error:', error); }
+}
+
+async function handleChatMessageHook(input: { sessionID: string; agent?: string; messages?: unknown[] }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+    const sid = input.sessionID || '';
+    let isBg = isForkedSession(sid);
+    if (!isBg && !isSubagentSession(sid)) { await detectAndRegisterSubagent(sid, client) }
+    isBg = isBg || isSubagentSession(sid);
+    if (isBg) {
+        if (state.autoDreamConfig.enabled && state.subagentHooksConfig.autoDreamGate) { triggerAutoDream(state, sid, projectID, directory) }
+        return;
+    }
+    triggerAutoDream(state, sid, projectID, directory);
+    if (state.slashCommandsEnabled && state.client && !input.agent) {
+        try {
+            const parts = (input as unknown as { parts?: Array<{ type: string; text?: string }> }).parts || [];
+            const textPart = parts.find((p) => p.type === 'text');
+            const messageContent = textPart?.text || '';
+            if (isSlashCommand(messageContent)) {
+                const parsed = parseSlashCommand(messageContent, state.commandRegistry);
+                if (parsed.recognized) {
+                    const cmd = state.commandRegistry.lookup(parsed.command);
+                    if (cmd) { dispatchSlashCommand(cmd, parsed, state, input as unknown as { sessionID: string; messages?: unknown[]; agent?: string }, projectID, directory) }
+                }
+            }
+        } catch (e) { logger.error('[ChatMessage]', 'Slash command handling error:', e instanceof Error ? e.message : String(e)); }
+    }
+}
+
 export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOptions = {}) => {
     const rawDirectory = input.directory || 'default';
     const projectID = normalizeProjectPath(rawDirectory);
@@ -330,355 +734,27 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
         dispose: async () => {
             stateMap.delete(projectID);
         },
-'permission.ask': async (input, output) => {
-            // NOTE: This hook is ineffective for PermissionNext flow (used by session/prompt.ts).
-            // PermissionNext.ask() does NOT trigger plugin hooks — it uses its own rule evaluation.
-            // This hook only works for the legacy Permission system. Keeping it for future compatibility.
-            const sessionID = input.sessionID || '';
-            const permission = (input as unknown as Record<string, string>).permission || '';
-            const pattern = Array.isArray(input.pattern) ? input.pattern[0] || '' : (input.pattern || '');
-            logger.info('[PermissionAsk]', 'sessionID:', sessionID, 'permission:', permission, 'pattern:', pattern);
-            
-            if (isForkedSession(sessionID)) {
-                const alwaysSafe = [
-                    'read', 'grep', 'glob',
-                    'memory-read', 'memory-write', 'memory-search', 'memory-delete',
-                    'skill-list', 'skill-view',
-                    ...(state.skillConfig.enabled ? ['skill-manage'] : []),
-                    'external_directory',
-                ];
-                if (alwaysSafe.includes(permission)) {
-                    output.status = 'allow';
-                    logger.info('[PermissionAsk]', 'Auto-allowed (forked session):', permission);
-                    return;
-                }
-if (permission === 'edit') {
-                    const baseName = pattern.split(/[/\\]/).pop() || '';
-                    const isLockFile = LOCK_FILE_NAMES.includes(baseName as typeof LOCK_FILE_NAMES[number]);
-                    if (isLockFile) {
-                        output.status = 'allow';
-                        logger.info('[PermissionAsk]', 'Auto-allowed edit (lock file):', pattern);
-                    } else {
-                        output.status = 'deny';
-                        logger.info('[PermissionAsk]', 'Denied edit (non-lock file):', pattern);
-                    }
-                    return;
-                }
-                output.status = 'deny';
-                logger.info('[PermissionAsk]', 'Denied (forked session):', permission);
-                return;
-            }
-            
-            // Fallback: auto-allow external_directory for ANY session when pattern matches memoryRoot
-            // This handles cases where forked session's permission.ask uses parent sessionID
-            if (permission === 'external_directory') {
-                const memoryRoot = state.storage.getMemoryPath().replace(/\\/g, '/');
-                const normalizedPattern = pattern.replace(/\\/g, '/');
-                if (normalizedPattern.startsWith(memoryRoot) || normalizedPattern.includes(memoryRoot)) {
-                    output.status = 'allow';
-                    logger.info('[PermissionAsk]', 'Auto-allowed external_directory (fallback):', pattern, 'memoryRoot:', memoryRoot);
-                    return;
-                }
-            }
-        },
-event: async ({ event }) => {
-            if (event.type === 'session.idle') {
-                const sid = event.properties?.sessionID || '';
-                if (!sid) return;
-                if (isForkedSession(sid)) {
-                    // Forked agent finished — clean up its locks/state so they don't linger.
-                    const agentType = getForkSessionAgent(sid);
-                    const memRoot = state.storage.getMemoryPath();
-                    if (agentType === 'extraction') {
-                        try { await releaseExtractionLock(memRoot); }
-                        catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
-                        const thresholdState = getThresholdState()
-                        updateThresholdState(markExtractionCompleted(thresholdState, thresholdState.pendingLastMessageUuid));
-                        // Sync System A skill counter — combined/skill-only extraction resets
-                        // System B inside extractionRunner but System A would otherwise drift
-                        state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
-                        logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', thresholdState.pendingLastMessageUuid || '(none)', sid);
-                        // Delete the completed extraction fork so it doesn't linger as a
-                        // top-level session. Forks have no parent_id (session.fork doesn't
-                        // set one), so they'd otherwise clutter the session list; the list
-                        // query doesn't exclude archived sessions, so archiving wouldn't
-                        // hide them — delete is the memory-only way to remove them. The
-                        // extracted memories are persisted separately and survive. Only
-                        // extraction forks are removed — dream/skill-review remain visible.
-                        try { await client.session.delete({ path: { id: sid } }); }
-                        catch (e) { logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e)); }
-                    } else if (agentType === 'dream') {
-                        await markDreamDone(memRoot);
-                        logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);
-                    } else if (agentType === 'skill-review') {
-                        try { await releaseSkillReviewLock(getSkillReviewLockPath(memRoot)); }
-                        catch (e) { logger.warn('[SessionIdle]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
-                        updateThresholdState(resetExtractionSkillCounter(getThresholdState()));
-                        logger.info('[SessionIdle]', 'Forked skill-review done — lock released, skill counter reset:', sid);
-                    } else {
-                        logger.warn('[SessionIdle]', 'Forked session with unknown/missing agent type:', agentType || '(none)', sid);
-                    }
-                    unregisterForkSession(sid);
-                    return;
-                }
-                logger.info('[SessionIdle]', 'Session idle event:', sid);
-                const isSub = isSubagentSession(sid);
-                if (isSub) {
-                    if (!state.subagentHooksConfig.autoMemoryExtraction) return;
-                }
-                // Count this user turn toward the extraction throttle (subagent idles don't count).
-                if (!isSub) {
-                    updateThresholdState(incrementTurnCounter(getThresholdState()));
-                }
-                // Skip extraction if memory tools were already called explicitly this turn
-                if (state.memoryToolUsedThisTurn.has(sid)) {
-                    state.memoryToolUsedThisTurn.delete(sid);
-                    logger.info('[SessionIdle]', 'Skipping extraction — memory tool used this turn:', sid);
-                    return;
-                }
-                if (state.config.enabled) {
-                    const extractionRunner = getExtractionRunner();
-                    if (extractionRunner) {
-                        void extractionRunner({
-                            sessionID: sid,
-                            projectID: projectID,
-                            memoryRoot: state.storage.getMemoryPath(),
-                            projectDirectory: directory,
-                            storage: state.storage,
-                        });
-                        logger.info('[SessionIdle]', 'Async extraction triggered via session.idle for:', sid);
-                    }
-                }
-            }
-        },
-'experimental.chat.system.transform': async (_input, output) => {
-            if (!state.config.enabled)
-                return;
-            const sid = _input.sessionID || '';
-            if (isForkedSession(sid)) return;
-            if (!sweptProjects.has(projectID)) {
-                sweptProjects.add(projectID);
-                // Delete any extraction-fork sessions left from prior runs. The idle
-                // handler only deletes new completions; this sweep covers pre-fix /
-                // crash-before-idle stragglers so they don't linger as top-level
-                // sessions. Runs once per project after the server is serving.
-                void (async () => {
-                    try {
-                        const res = await client.session.list();
-                        for (const s of res.data ?? []) {
-                            if (!s.title?.includes('(@extraction subagent)')) continue;
-                            await client.session.delete({ path: { id: s.id } });
-                        }
-                    } catch (e) { logger.warn('[Sweep]', 'leftover extraction-fork sweep failed:', e instanceof Error ? e.message : String(e)); }
-                })();
-            }
-            const isSub = isSubagentSession(sid);
-            if (isSub) {
-                const subHooks = state.subagentHooksConfig;
-                if (!subHooks.memoryRecall && !subHooks.skillReviewTrigger && !subHooks.autoMemoryExtraction) return;
-            } else {
-                await detectAndRegisterSubagent(sid, client);
-                if (isSubagentSession(sid)) {
-                    const subHooks = state.subagentHooksConfig;
-                    if (!subHooks.memoryRecall && !subHooks.skillReviewTrigger && !subHooks.autoMemoryExtraction) return;
-                }
-            }
-            const isSubNow = isSubagentSession(sid);
- try {
-                if (!isSubNow || state.subagentHooksConfig.memoryRecall) {
-                    const result = state.config.truncation?.enabled !== false
-                        ? await state.injection.injectIndexOnly()
-                        : await state.injection.inject();
-                    if (result.systemPrompt) {
-                        output.system.push(result.systemPrompt);
-                    }
-                }
-            }
-            catch (e) { logger.error('[SystemTransform]', 'Memory injection failed:', e instanceof Error ? e.message : String(e)); }
-            if (state.skillConfig.enabled && (!isSubNow || state.subagentHooksConfig.skillReviewTrigger)) {
-                try {
-                    const skillResult = await state.skillInjection.inject();
-                    if (skillResult.systemPrompt) {
-                        output.system.push(skillResult.systemPrompt);
-                    }
-                    output.system.push(SKILLS_GUIDANCE);
-                }
-                catch (e) { logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e)); }
-            }
-            if (state.slashCommandsEnabled) {
-                output.system.push(SLASH_COMMANDS_GUIDANCE);
-            }
-        },
+        'permission.ask': async (input, output) => handlePermissionAsk(input as unknown as Record<string, unknown>, output as unknown as { status: string }, state),
+        'event': async ({ event }) => handleSessionIdleEvent(event as unknown as { type: string; properties?: Record<string, string> }, state, client, projectID, directory),
+        'experimental.chat.system.transform': async (_input, output) => handleSystemTransform(_input.sessionID || '', state, client, output as unknown as { system: string[] }, projectID),
         'experimental.session.compacting': async (_input, output) => {
-            if (!state.config.enabled)
-                return;
+            if (!state.config.enabled) return;
             const sid = _input.sessionID || '';
             if (isForkedSession(sid)) return;
             const isSub = isSubagentSession(sid);
             if (isSub) {
-                const subHooks = state.subagentHooksConfig;
-                if (!subHooks.memoryRecall) return;
+                if (!state.subagentHooksConfig.memoryRecall) return;
             } else {
                 await detectAndRegisterSubagent(sid, client);
-                if (isSubagentSession(sid)) {
-                    const subHooks = state.subagentHooksConfig;
-                    if (!subHooks.memoryRecall) return;
-                }
+                if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) return;
             }
             try {
                 const context = await state.injection.getCompactionContext();
-                if (context) {
-                    output.context.push(context);
-                }
-            }
-            catch (e) { logger.error('[Compacting]', 'Failed to get compaction context:', e instanceof Error ? e.message : String(e)); }
+                if (context) { output.context.push(context) }
+            } catch (e) { logger.error('[Compacting]', 'Failed to get compaction context:', e instanceof Error ? e.message : String(e)); }
         },
-'experimental.chat.messages.transform': async (_input, output) => {
-            if (!state.memoryRecallConfig.enabled) { logger.debug('[Recall]', 'memoryRecall disabled, skip'); return; }
-            try {
-                const messages = output.messages;
-                if (!messages || messages.length === 0) { logger.debug('[Recall]', 'no messages, skip'); return; }
-
-                const sid = (messages[0]?.info?.sessionID || messages.findLast((m) => m.info?.role === 'user')?.info?.sessionID) || 'default';
-                if (isForkedSession(sid)) { logger.debug('[Recall]', 'forked session, skip'); return; }
-                if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { logger.debug('[Recall]', 'subagent without memoryRecall hook, skip'); return; }
-                if (sid && !isSubagentSession(sid)) {
-                    await detectAndRegisterSubagent(sid, client);
-                    if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) { logger.debug('[Recall]', 'became subagent without memoryRecall hook, skip'); return; }
-                }
-
-                const lastUserMsg = messages.findLast((m) => m.info?.role === 'user');
-                if (!lastUserMsg) { logger.debug('[Recall]', 'no user message found, skip'); return; }
-
-                const userMsgId = lastUserMsg.info?.id;
-                if (userMsgId && state.recalledUserMsgIds.has(userMsgId)) {
-                    logger.info('[Recall]', 'same turn already recalled for userMsg', userMsgId, ', skip (reuse first)');
-                    return;
-                }
-
-                const userText = (lastUserMsg.parts || [])
-                    .filter((p) => p.type === 'text' && !(p as { synthetic?: boolean }).synthetic)
-                    .map((p) => (p as { text?: string }).text || '')
-                    .join(' ');
-                if (!userText.trim()) { logger.debug('[Recall]', 'empty user text, skip'); return; }
-
-                logger.info('[Recall]', 'query:', userText.slice(0, 100));
-
-const alreadyInjected = new Set<string>();
-                 for (const part of (lastUserMsg.parts || [])) {
-                     if (part.type === 'text' && (part as { synthetic?: boolean }).synthetic && part.text) {
-                         const names = part.text.match(/### (\S+) \(/g);
-                         if (names) {
-                             names.forEach((n: string) => {
-                                 const name = n.replace('### ', '').replace(' (', '');
-                                 alreadyInjected.add(name);
-                             });
-                         }
-                     }
-                 }
-                  if (alreadyInjected.size > 0) {
-                    logger.info('[Recall]', 'recall already injected for this user message, skipping findRelevant');
-                    return;
-                }
-
-                const relevant = await state.retrieval.findRelevant(userText, {
-                    limit: state.memoryRecallConfig.maxRecall,
-                    sessionID: sid,
-                });
-
-                logger.info('[Recall]', 'findRelevant returned:', relevant.length, 'memories');
-                if (relevant.length > 0) {
-                    logger.debug('[Recall]', 'raw scores:', relevant.map((r) => `${r.name}=${r.relevance?.toFixed(2)}`).join(', '));
-                }
-
-                const threshold = state.memoryRecallConfig.minRelevanceScore;
-                const filtered = relevant.filter((r) => !alreadyInjected.has(r.name) && (r.relevance ?? 0) >= threshold);
-                if (filtered.length === 0) { logger.info('[Recall]', 'no memories above threshold', threshold, ', skip'); return; }
-
-                logger.info('[Recall]', 'injecting', filtered.length, 'memories:', filtered.map((r) => `${r.name}(score:${r.relevance?.toFixed(2)})`).join(', '));
-
-                const memories = await state.retrieval.loadMemories(filtered);
-                const maxChars = state.memoryRecallConfig.maxInjectChars;
-                const recallContent = memories.map((m, i) => {
-                    const score = filtered[i]?.relevance ?? 'N/A';
-                    const truncated = m.content.slice(0, maxChars) + (m.content.length > maxChars ? '...' : '');
-                    const memPath = m.filepath || '';
-                    return `### ${m.name} (${m.type}, score: ${score})\nPath: ${memPath}\n\n${truncated}`;
-                }).join('\n\n---\n\n');
-
-                lastUserMsg.parts.push({
-                    type: 'text',
-                    text: `<system-reminder>\nRelevant memories recalled for your question:\n\n${recallContent}\n</system-reminder>`,
-                    synthetic: true,
-                } as unknown as typeof lastUserMsg.parts[number]);
-
-                if (userMsgId) {
-                    state.recalledUserMsgIds.add(userMsgId);
-                    if (state.recalledUserMsgIds.size > 200) {
-                        const oldest = state.recalledUserMsgIds.values().next().value;
-                        if (oldest) state.recalledUserMsgIds.delete(oldest);
-                    }
-                }
-
-                if (state.memoryRecallConfig.visibleRecall && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall)) {
-                    const visibleSummary = memories.map((m) =>
-                        `${m.name}(${m.type})`
-                    ).join(', ');
-                    state.pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${visibleSummary}`);
-                    logger.info('[Recall]', 'set pendingRecallMap for', sid || 'default', ':', `Recalled ${memories.length} memories: ${visibleSummary}`);
-                }
- }
-            catch (e) { logger.error('[Recall]', 'messages.transform error:', e instanceof Error ? e.message : String(e)); }
-        },
-        'tool.execute.after': async (input, output) => {
-            if (isForkedSession(input.sessionID))
-                return;
-            const sid = input.sessionID;
-            if (isSubagentSession(input.sessionID)) {
-                if (!state.subagentHooksConfig.skillReviewTrigger)
-                    return;
-            } else {
-                await detectAndRegisterSubagent(input.sessionID, client);
-                if (isSubagentSession(input.sessionID)) {
-                    if (!state.subagentHooksConfig.skillReviewTrigger)
-                        return;
-                }
-            }
-            if (state.skillConfig.enabled && (isSubagentSession(input.sessionID) ? state.subagentHooksConfig.skillReviewTrigger : true)) {
-                try {
-                    if (input.tool === 'skill-manage') {
-                        state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
-                        try { await releaseSkillReviewLock(getSkillReviewLockPath(state.storage.getMemoryPath())); } catch (e) { logger.warn('[ToolExecute]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
-                    } else {
-                        state.skillTriggerState = incrementSkillCounter(state.skillTriggerState);
-                        if (!(await isSkillReviewInProgress(state.storage.getMemoryPath()))) {
-                            const { shouldTrigger, newState } = checkSkillThreshold(state.skillTriggerState, state.skillConfig);
-                            state.skillTriggerState = newState;
-                            if (shouldTrigger && client) {
-                                void spawnSkillReviewAgent({
-                                    sessionID: input.sessionID,
-                                    projectID: projectID,
-                                    directory: directory,
-                                    skillsRoot: state.skillStorage.getSkillsRoot(),
-                                    memoryRoot: state.storage.getMemoryPath(),
-                                    messages: [],
-                                    skillConfig: state.skillConfig,
-                                    client: client,
-                                    reviewMode: 'skill-only',
-                                });
-                            }
-                        }
-                    }
-                }
-                catch (e) { logger.error('[ToolExecute]', 'Skill trigger check error:', e instanceof Error ? e.message : String(e)); }
-            }
-            if (state.skillConfig.enabled && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
-                try {
-                    processToolCallForSkill(input.tool);
-                }
-                catch (e) { logger.error('[ToolExecute]', 'processToolCallForSkill error:', e instanceof Error ? e.message : String(e)); }
-            }
-        },
+        'experimental.chat.messages.transform': async (_input, output) => handleMessagesTransform(_input, output as unknown as MessagesTransformOutput, state, client),
+        'tool.execute.after': async (input, output) => handleToolExecuteAfter(input, state, client, projectID, directory),
         'experimental.text.complete': async (input, output) => {
             const sid = input.sessionID || 'default';
             if (isForkedSession(sid)) return;
@@ -729,128 +805,7 @@ const alreadyInjected = new Set<string>();
                 output.text = prefix + output.text;
             }
         },
-'chat.message': async (input, output) => {
-            const msgInput = input;
-            const sid = msgInput.sessionID || '';
-            let isBg = isForkedSession(sid);
-            if (!isBg && !isSubagentSession(sid)) {
-                await detectAndRegisterSubagent(sid, client);
-            }
-            isBg = isBg || isSubagentSession(sid);
-            if (isBg) {
-                if (state.autoDreamConfig.enabled && state.subagentHooksConfig.autoDreamGate) {
-                    try {
-                        if (!isConsolidationInProgress(state.storage.getMemoryPath())) {
-                            void handleChatMessageTrigger({
-                                sessionID: msgInput.sessionID,
-                                projectID: projectID,
-                                memoryRoot: state.storage.getMemoryPath(),
-                                directory: directory,
-                                storage: state.storage,
-                                expiryConfig: state.expiryConfig,
-                                skillEnabled: state.skillConfig.enabled,
-                            });
-                        }
-                    }
-                    catch (error) {
-                        logger.error('[AutoDream]', 'chat.message hook error:', error);
-                    }
-                }
-                return;
-            }
-            if (state.autoDreamConfig.enabled) {
-                try {
-                    if (!isConsolidationInProgress(state.storage.getMemoryPath())) {
-                        void handleChatMessageTrigger({
-                            sessionID: msgInput.sessionID,
-                            projectID: projectID,
-                            memoryRoot: state.storage.getMemoryPath(),
-                            directory: directory,
-                            storage: state.storage,
-                            expiryConfig: state.expiryConfig,
-                            skillEnabled: state.skillConfig.enabled,
-                        });
-                    }
-                }
-                catch (error) {
-                    logger.error('[AutoDream]', 'chat.message hook error:', error);
-                }
-            }
-            if (state.slashCommandsEnabled && state.client) {
-                try {
-                    if (!msgInput.agent) {
-                        const outputObj = output;
-                        const parts = outputObj.parts || [];
-                        let messageContent = '';
-                        for (const part of parts) {
-                            if (part.type === 'text') {
-                                messageContent = part.text || '';
-                                break;
-                            }
-                        }
-                        if (isSlashCommand(messageContent)) {
-                            const parsed = parseSlashCommand(messageContent, state.commandRegistry);
-                            if (parsed.recognized) {
-                                const cmd = state.commandRegistry.lookup(parsed.command);
-                                if (cmd && state.client) {
-                                    if (cmd.targetTool === 'skill-review-trigger') {
-                                        void spawnSkillReviewAgent({
-                                            sessionID: msgInput.sessionID,
-                                            projectID: projectID,
-                                            directory: directory,
-                                            skillsRoot: state.skillStorage.getSkillsRoot(),
-                                            memoryRoot: state.storage.getMemoryPath(),
-                                            messages: (msgInput as Record<string, unknown>).messages as unknown[] || [],
-                                            skillConfig: state.skillConfig,
-                                            client: state.client,
-                                            reviewMode: 'skill-only',
-                                        });
-                                    }
-                                    else if (cmd.targetTool === 'dream-approve') {
-                                        void state.client.session.prompt({
-                                            path: { id: msgInput.sessionID },
-                                            body: {
-                                                parts: [{ type: 'text', text: 'Please call the dream-approve tool to confirm deletion of expired memories. Do not explain, just call the tool.' }],
-                                            },
-                                        }).then((result) => {
-                                            if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
-                                        }).catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
-                                    }
-                                    else if (cmd.targetTool === 'dream-reject') {
-                                        void state.client.session.prompt({
-                                            path: { id: msgInput.sessionID },
-                                            body: {
-                                                parts: [{ type: 'text', text: 'Please call the dream-reject tool to cancel pending expiry deletions. Do not explain, just call the tool.' }],
-                                            },
-                                        }).then((result) => {
-                                            if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
-                                        }).catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
-                                    }
-                                    else {
-                                        const forceArg = parsed.args.force ? ' with force=true' : '';
-                                        const promptText = `Please call the ${cmd.targetTool} tool${forceArg} to run memory consolidation. Do not explain, just call the tool.`;
-                                        void state.client.session.prompt({
-                                            path: { id: msgInput.sessionID },
-                                            body: {
-                                                parts: [{ type: 'text', text: promptText }],
-                                            },
-                                        }).then((result) => {
-                                            if (result.error) {
-                                                logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
-                                            }
-                                        }).catch((err) => {
-                                            logger.error('[SlashCommand]', 'Prompt error:', err);
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (e) { logger.error('[ChatMessage]', 'Slash command handling error:', e instanceof Error ? e.message : String(e)); }
-            }
-            
-},
+'chat.message': async (input, output) => handleChatMessageHook(input as unknown as { sessionID: string; agent?: string; messages?: unknown[] }, state, client, projectID, directory),
         tool: {
             'memory-read': {
                 description: 'Read project memories. (Auto-Memory feature)',

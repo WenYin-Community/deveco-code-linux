@@ -162,129 +162,122 @@ export async function checkAllGates(
   }
 }
 
+async function beginDreamConsolidation(
+  context: AutoDreamContext,
+  lockStaleMs: number,
+): Promise<{ lockPath: string; priorMtime: number } | { error: string }> {
+  const lockPath = getLockFilePath(context.memoryRoot);
+  const priorMtime = await tryAcquireConsolidationLock(context.memoryRoot, context.sessionID, lockStaleMs);
+  if (priorMtime === null) {
+    return { error: 'Failed to acquire lock (another consolidation may be running)' };
+  }
+  consolidationInProgress.set(context.memoryRoot, true);
+  try {
+    await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() });
+    return { lockPath, priorMtime };
+  } catch (e) {
+    consolidationInProgress.delete(context.memoryRoot);
+    await rollbackConsolidationLock(lockPath, priorMtime);
+    return { error: `Failed to update dream state: ${e instanceof Error ? e.message : 'Unknown error'}` };
+  }
+}
+
+async function cleanupDreamFailure(lockPath: string, priorMtime: number, memoryRoot: string): Promise<void> {
+  consolidationInProgress.delete(memoryRoot);
+  await rollbackConsolidationLock(lockPath, priorMtime);
+}
+
+async function sendDreamPrompt(
+  forkInfo: ForkedSessionInfo,
+  prompt: string,
+  lockPath: string,
+  priorMtime: number,
+  memoryRoot: string,
+): Promise<{ success: boolean; error?: string }> {
+  const promptResult = await initializedClient!.session.promptAsync({
+    path: { id: forkInfo.sessionID },
+    body: {
+      parts: [{ type: 'text', text: prompt }],
+      agent: 'build',
+      ...(forkInfo.model ? { model: forkInfo.model } : {}),
+    },
+  });
+  if (promptResult.error) {
+    await cleanupDreamFailure(lockPath, priorMtime, memoryRoot);
+    return { success: false, error: `Prompt failed: ${promptResult.error}` };
+  }
+  consolidationInProgress.delete(memoryRoot);
+  logger.info('[AutoDream]', 'Dream agent launched (fire-and-forget)');
+  return { success: true };
+}
+
 export async function executeAutoDream(
   context: AutoDreamContext
 ): Promise<AutoDreamResult> {
-  const result: AutoDreamResult = {
-    success: false,
-    error: undefined
-  }
-  
-  const dreamStorage = context.storage || initializedStorage
+  const result: AutoDreamResult = { success: false, error: undefined };
+  const dreamStorage = context.storage || initializedStorage;
 
   if (!initializedClient || !dreamStorage) {
-    result.error = 'AutoDream not initialized'
-    return result
+    result.error = 'AutoDream not initialized';
+    return result;
   }
-  
   if (!isGateOpen(initializedConfig)) {
-    result.error = 'AutoDream is disabled'
-    return result
+    result.error = 'AutoDream is disabled';
+    return result;
   }
-  
   if (isConsolidationInProgress(context.memoryRoot)) {
-    result.error = 'Consolidation already in progress'
-    return result
+    result.error = 'Consolidation already in progress';
+    return result;
   }
-
   if (!context.skipGateCheck) {
-    const gates = await checkAllGates(
-      context.memoryRoot,
-      initializedConfig
-    )
-    
-    result.gateStatus = {
-      timeGate: gates.timeGate,
-      sessionGate: gates.sessionGate
-    }
-    
+    const gates = await checkAllGates(context.memoryRoot, initializedConfig);
+    result.gateStatus = { timeGate: gates.timeGate, sessionGate: gates.sessionGate };
     if (!gates.allPassed) {
-      result.error = `Gates not passed: time=${gates.timeGate}, session=${gates.sessionGate}`
-      return result
+      result.error = `Gates not passed: time=${gates.timeGate}, session=${gates.sessionGate}`;
+      return result;
     }
   }
-  
-  const lockPath = getLockFilePath(context.memoryRoot)
-  const priorMtime = await tryAcquireConsolidationLock(
-    context.memoryRoot,
-    context.sessionID,
-    initializedConfig.lockStaleMs
-  )
-  
-  if (priorMtime === null) {
-    result.error = 'Failed to acquire lock (another consolidation may be running)'
-    return result
-  }
-  
-  consolidationInProgress.set(context.memoryRoot, true)
 
-  try {
-    await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() })
-  } catch (e) {
-    result.error = `Failed to update dream state: ${e instanceof Error ? e.message : 'Unknown error'}`
-    consolidationInProgress.delete(context.memoryRoot)
-    await rollbackConsolidationLock(lockPath, priorMtime)
-    return result
+  const begin = await beginDreamConsolidation(context, initializedConfig.lockStaleMs);
+  if ('error' in begin) {
+    result.error = begin.error;
+    return result;
   }
+  const { lockPath, priorMtime } = begin;
 
   try {
     const forkInfo = await createForkedChildSession(
-      initializedClient,
-      context.sessionID,
-      'dream',
-      context.directory,
-    )
-
+      initializedClient, context.sessionID, 'dream', context.directory,
+    );
     if (!forkInfo) {
-      result.error = 'Session create failed'
-      consolidationInProgress.delete(context.memoryRoot)
-      await rollbackConsolidationLock(lockPath, priorMtime)
-      return result
+      await cleanupDreamFailure(lockPath, priorMtime, context.memoryRoot);
+      result.error = 'Session create failed';
+      return result;
     }
+    logger.info('[AutoDream]', 'Created child session:', forkInfo.sessionID);
 
-    const childSessionID = forkInfo.sessionID
-    logger.info('[AutoDream]', 'Created child session:', childSessionID)
+    const dreamPermRules = getDreamPermissionRules(context.memoryRoot, context.skillEnabled);
+    await setSessionPermissions(initializedClient!, forkInfo.sessionID, dreamPermRules);
 
-    const dreamPermRules = getDreamPermissionRules(context.memoryRoot, context.skillEnabled)
-    const dreamPermResult = await setSessionPermissions(initializedClient!, childSessionID, dreamPermRules)
-    if (!dreamPermResult) {
-      logger.warn('[AutoDream]', 'Permission setup failed, agent may get stuck on tool approvals')
+    const state = await readDreamState(context.memoryRoot);
+    const headers = context.storage ? await context.storage.list() : [];
+    const prompt = buildDreamPrompt(
+      state.sessionCount, lockPath,
+      `${context.memoryRoot}/.auto-dream-state.json`,
+      context.memoryRoot, headers, context.expiryConfig, context.skillEnabled,
+    );
+
+    const sendResult = await sendDreamPrompt(forkInfo, prompt, lockPath, priorMtime, context.memoryRoot);
+    if (!sendResult.success) {
+      result.error = sendResult.error;
+      return result;
     }
-
-    const state = await readDreamState(context.memoryRoot)
-    const lockFilePath = getLockFilePath(context.memoryRoot)
-    const dreamStatePath = `${context.memoryRoot}/.auto-dream-state.json`
-    const headers = context.storage ? await context.storage.list() : []
-    const expiryConfig = context.expiryConfig
-    const prompt = buildDreamPrompt(state.sessionCount, lockFilePath, dreamStatePath, context.memoryRoot, headers, expiryConfig, context.skillEnabled)
-
-    const promptResult = await initializedClient.session.promptAsync({
-      path: { id: childSessionID },
-      body: {
-        parts: [{ type: 'text', text: prompt }],
-        agent: 'build',
-        ...(forkInfo.model ? { model: forkInfo.model } : {}),
-      }
-    })
-
-    if (promptResult.error) {
-      result.error = `Prompt failed: ${promptResult.error}`
-      consolidationInProgress.delete(context.memoryRoot)
-      await rollbackConsolidationLock(lockPath, priorMtime)
-      return result
-    }
-
-    result.success = true
-    consolidationInProgress.delete(context.memoryRoot)
-
-    logger.info('[AutoDream]', 'Dream agent launched (fire-and-forget)')
-    return result
-
+    result.success = true;
+    return result;
   } catch (error) {
-    result.error = error instanceof Error ? error.message : 'Unknown error'
-    consolidationInProgress.delete(context.memoryRoot)
-    await rollbackConsolidationLock(lockPath, priorMtime)
-    return result
+    result.error = error instanceof Error ? error.message : 'Unknown error';
+    await cleanupDreamFailure(lockPath, priorMtime, context.memoryRoot);
+    return result;
   }
 }
 

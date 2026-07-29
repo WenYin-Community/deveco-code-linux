@@ -137,57 +137,62 @@ export function memoryNameToFilename(name: string): string {
   return sanitized + '.md'
 }
 
+function parseFrontmatterValue(rawValue: string): string | number | boolean {
+  let value: string | number | boolean = rawValue;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = (value as string).slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (/^-?\d+(\.\d+)?$/.test(value as string)) {
+    value = Number(value);
+  }
+  if (value === 'true' || value === 'True') { return true }
+  if (value === 'false' || value === 'False') { return false }
+  return value;
+}
+
+function parseFrontmatterLine(line: string): { key: string; value: string | number | boolean } | null {
+  const colonIndex = line.indexOf(':');
+  if (colonIndex === -1) { return null }
+  const key = line.slice(0, colonIndex).trim();
+  const rawValue = line.slice(colonIndex + 1).trim();
+  return { key, value: parseFrontmatterValue(rawValue) };
+}
+
+function buildParsedFrontmatter(
+  parsed: Record<string, string | number | boolean>,
+): MemoryFrontmatter | null {
+  if (!parsed.name || !parsed.description || !parsed.type) { return null }
+  return {
+    name: parsed.name as string,
+    description: parsed.description as string,
+    type: parsed.type as MemoryType,
+    created: parsed.created as number | undefined,
+    updated: parsed.updated as number | undefined,
+    pin: parsed.pin as boolean | undefined,
+    ttl: parsed.ttl as number | undefined,
+  };
+}
+
 export function parseFrontmatter(content: string): {
   frontmatter: MemoryFrontmatter | null
   body: string
 } {
-  const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/
-  const match = content.match(frontmatterRegex)
-
+  const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/;
+  const match = content.match(frontmatterRegex);
   if (!match) {
-    return { frontmatter: null, body: content }
+    return { frontmatter: null, body: content };
   }
-
-  const [, frontmatterStr, body] = match
-  const frontmatter: Record<string, string | number | boolean> = {}
-
+  const [, frontmatterStr, body] = match;
+  const parsed: Record<string, string | number | boolean> = {};
   for (const line of frontmatterStr.split('\n')) {
-    const colonIndex = line.indexOf(':')
-    if (colonIndex === -1) continue
-
-    const key = line.slice(0, colonIndex).trim()
-    let value: string | number | boolean = line.slice(colonIndex + 1).trim()
-
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = (value as string).slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-    }
-
-    if (/^-?\d+(\.\d+)?$/.test(value as string)) {
-      value = Number(value)
-    }
-
-    if (value === 'true' || value === 'True') { value = true }
-    if (value === 'false' || value === 'False') { value = false }
-
-    frontmatter[key] = value
+    const result = parseFrontmatterLine(line);
+    if (result) { parsed[result.key] = result.value }
   }
-
-  if (!frontmatter.name || !frontmatter.description || !frontmatter.type) {
-    return { frontmatter: null, body: content }
+  const frontmatter = buildParsedFrontmatter(parsed);
+  if (!frontmatter) {
+    return { frontmatter: null, body: content };
   }
-
-  return {
-      frontmatter: {
-        name: frontmatter.name as string,
-        description: frontmatter.description as string,
-        type: frontmatter.type as MemoryType,
-        created: frontmatter.created as number | undefined,
-        updated: frontmatter.updated as number | undefined,
-        pin: frontmatter.pin as boolean | undefined,
-        ttl: frontmatter.ttl as number | undefined,
-      },
-    body,
-  }
+  return { frontmatter, body };
 }
 
 function escapeFrontmatterValue(value: string): string {

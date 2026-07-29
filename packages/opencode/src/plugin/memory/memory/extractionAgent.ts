@@ -33,6 +33,13 @@ export interface ExtractionAgentResult {
   method: "fire_and_forget" | "fork_failed" | "prompt_failed"
 }
 
+function buildExtractionPrompt(basePrompt: string, reviewMode?: string): string {
+  if (reviewMode === 'combined' || reviewMode === 'skill-only') {
+    return `${basePrompt}\n\n${SKILL_CREATION_GUIDANCE}\n\n${SKILL_UPDATE_GUIDANCE}`;
+  }
+  return basePrompt;
+}
+
 export async function runExtractionAgent(
   context: ExtractionAgentContext
 ): Promise<ExtractionAgentResult> {
@@ -69,10 +76,7 @@ export async function runExtractionAgent(
       logger.warn('[ExtractionAgent]', 'Permission setup failed, agent may get stuck on tool approvals')
     }
 
-    let fullPrompt = context.prompt
-    if (context.reviewMode === 'combined' || context.reviewMode === 'skill-only') {
-      fullPrompt += `\n\n${SKILL_CREATION_GUIDANCE}\n\n${SKILL_UPDATE_GUIDANCE}`
-    }
+    const fullPrompt = buildExtractionPrompt(context.prompt, context.reviewMode)
 
     const promptResult = await context.client.session.promptAsync({
       path: { id: childSessionID },

@@ -57,22 +57,22 @@ export function initLogger(level: LogLevel): void {
 export async function setLogDir(dir: string): Promise<void> {
   if (logDir === dir) { return }
   try {
-    await fs.mkdir(dir, { recursive: true })
-    logDir = dir
-    // Close old file handle before opening new one
-    if (logFileStream) {
-      try { await logFileStream.close() } catch { /* best-effort */ }
-    }
-    const logFilePath = path.join(dir, 'memory-plugin.log')
-    logFileStream = await fs.open(logFilePath, 'a')
-    // Write a startup marker so we can distinguish new sessions in the log
-    await logFileStream.write(`\n--- session start ${new Date().toISOString()} ---\n`)
+    await fs.mkdir(dir, { recursive: true });
+    await closeLogStream();
+    logDir = dir;
+    const logFilePath = path.join(dir, 'memory-plugin.log');
+    logFileStream = await fs.open(logFilePath, 'a');
+    await logFileStream.write(`\n--- session start ${new Date().toISOString()} ---\n`);
   } catch (e) {
-    // File logging is best-effort; never crash on log errors
-    console.error('[Logger] Failed to open log file:', dir, e instanceof Error ? e.message : String(e))
-    logDir = null
+    console.error('[Logger] Failed to open log file:', dir, e instanceof Error ? e.message : String(e));
+    logDir = null;
     logFileStream = null;
   }
+}
+
+async function closeLogStream(): Promise<void> {
+  if (!logFileStream) { return }
+  try { await logFileStream.close(); } catch { /* best-effort */ }
 }
 
 // ============================================================================
@@ -87,31 +87,25 @@ function formatTimestamp(): string {
   return new Date().toISOString();
 }
 
+function formatArg(a: unknown): string {
+  if (a instanceof Error) { return `${a.message}\n${a.stack || ''}` }
+  if (typeof a === 'object' && a !== null) {
+    try { return JSON.stringify(a) } catch { return String(a) }
+  }
+  return String(a)
+}
+
 function formatMessage(level: LogLevel, tag: string | undefined, args: unknown[]): string {
-  const ts = formatTimestamp()
-  const lvl = LEVEL_LABELS[level]
-  const tagStr = tag ? ` ${tag}` : ''
-  const msgParts = args.map(a => {
-    if (a instanceof Error) { return `${a.message}\n${a.stack || ''}` }
-    if (typeof a === 'object' && a !== null) {
-      try { return JSON.stringify(a) } catch { return String(a) }
-    }
-    return String(a)
-  })
-  return `[${ts}] [${lvl}]${tagStr} ${msgParts.join(' ')}`;
+  const ts = formatTimestamp();
+  const lvl = LEVEL_LABELS[level];
+  const tagStr = tag ? ` ${tag}` : '';
+  return `[${ts}] [${lvl}]${tagStr} ${args.map(formatArg).join(' ')}`;
 }
 
 function output(level: LogLevel, formatted: string): void {
-  // Console output
-  if (level === 'error') {
-    console.error(formatted)
-  } else if (level === 'warn') {
-    console.warn(formatted)
-  } else {
-    console.log(formatted)
-  }
-
-  // File output (best-effort, never blocks on write errors)
+  if (level === 'error') { console.error(formatted) }
+  else if (level === 'warn') { console.warn(formatted) }
+  else { console.log(formatted) }
   if (logFileStream) {
     logFileStream.write(formatted + '\n').catch(() => {});
   }
@@ -128,6 +122,12 @@ export interface ScopedLogger {
   debug: (...args: unknown[]) => void
 }
 
+function makeLogMethod(level: LogLevel, tag: string): (...args: unknown[]) => void {
+  return (...args: unknown[]) => {
+    if (shouldLog(level)) { output(level, formatMessage(level, tag, args)) }
+  }
+}
+
 /**
  * Create a scoped logger that auto-prepends a tag to every message.
  *
@@ -137,18 +137,10 @@ export interface ScopedLogger {
  */
 export function createLogger(tag: string): ScopedLogger {
   return {
-    error(...args: unknown[]) {
-      if (shouldLog('error')) { output('error', formatMessage('error', tag, args)) }
-    },
-    warn(...args: unknown[]) {
-      if (shouldLog('warn')) { output('warn', formatMessage('warn', tag, args)) }
-    },
-    info(...args: unknown[]) {
-      if (shouldLog('info')) { output('info', formatMessage('info', tag, args)) }
-    },
-    debug(...args: unknown[]) {
-      if (shouldLog('debug')) { output('debug', formatMessage('debug', tag, args)) }
-    },
+    error: makeLogMethod('error', tag),
+    warn: makeLogMethod('warn', tag),
+    info: makeLogMethod('info', tag),
+    debug: makeLogMethod('debug', tag),
   };
 }
 
@@ -156,17 +148,15 @@ export function createLogger(tag: string): ScopedLogger {
 // Legacy Logger Object (backward-compatible)
 // ============================================================================
 
+function makeLegacyLogMethod(level: LogLevel): (tag: string, ...args: unknown[]) => void {
+  return (tag: string, ...args: unknown[]) => {
+    if (shouldLog(level)) { output(level, formatMessage(level, tag, args)) }
+  }
+}
+
 export const logger = {
-  error(tag: string, ...args: unknown[]): void {
-    if (shouldLog('error')) { output('error', formatMessage('error', tag, args)) }
-  },
-  warn(tag: string, ...args: unknown[]): void {
-    if (shouldLog('warn')) { output('warn', formatMessage('warn', tag, args)) }
-  },
-  info(tag: string, ...args: unknown[]): void {
-    if (shouldLog('info')) { output('info', formatMessage('info', tag, args)) }
-  },
-  debug(tag: string, ...args: unknown[]): void {
-    if (shouldLog('debug')) { output('debug', formatMessage('debug', tag, args)) }
-  },
+  error: makeLegacyLogMethod('error'),
+  warn: makeLegacyLogMethod('warn'),
+  info: makeLegacyLogMethod('info'),
+  debug: makeLegacyLogMethod('debug'),
 }
