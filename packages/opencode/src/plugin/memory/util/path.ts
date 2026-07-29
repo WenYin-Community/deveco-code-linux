@@ -80,52 +80,56 @@ export async function ensureMemoryDir(memoryPath: string): Promise<void> {
   await fs.mkdir(logsDir, { recursive: true })
 }
 
+function isMemoryMdFile(f: string): boolean {
+  return f.endsWith('.md') && f !== ENTRYPOINT_NAME && !f.startsWith('.');
+}
+
+async function hasMemoryFiles(dirPath: string): Promise<boolean> {
+  try {
+    const content = await fs.readdir(dirPath);
+    return content.some(isMemoryMdFile);
+  } catch {
+    return false;
+  }
+}
+
+async function moveFiles(srcDir: string, destDir: string, files: string[]): Promise<void> {
+  for (const file of files) {
+    await fs.rename(path.join(srcDir, file), path.join(destDir, file));
+  }
+}
+
+async function removeLegacyDir(legacyPath: string): Promise<void> {
+  const legacyMemoryMd = path.join(legacyPath, ENTRYPOINT_NAME);
+  try { await fs.unlink(legacyMemoryMd) } catch {}
+  try { await fs.rm(legacyPath, { recursive: true }) } catch {}
+}
+
 export async function migrateLegacyMemoryDir(
   normalizedMemoryPath: string,
   rawDirectory: string,
 ): Promise<boolean> {
-  const globalDir = getGlobalDataDir()
-  const legacySlug = computeLegacyHash(rawDirectory)
-  const legacyPath = path.join(globalDir, MEMORY_DIR_NAME, legacySlug)
-  log.debug('migrateLegacyMemoryDir: legacy:', legacyPath, 'new:', normalizedMemoryPath)
+  const globalDir = getGlobalDataDir();
+  const legacySlug = computeLegacyHash(rawDirectory);
+  const legacyPath = path.join(globalDir, MEMORY_DIR_NAME, legacySlug);
+  log.debug('migrateLegacyMemoryDir: legacy:', legacyPath, 'new:', normalizedMemoryPath);
+
+  try { await fs.access(legacyPath) } catch { return false }
 
   try {
-    await fs.access(legacyPath)
-  } catch {
-    log.debug('migrateLegacyMemoryDir: no legacy dir found, skip')
-    return false
-  }
+    if (!(await hasMemoryFiles(legacyPath))) { return false }
+    if (await hasMemoryFiles(normalizedMemoryPath)) { return false }
 
-  try {
-    const legacyContent = await fs.readdir(legacyPath)
-    const hasMemories = legacyContent.some(f => f.endsWith('.md') && f !== ENTRYPOINT_NAME && !f.startsWith('.'))
-    if (!hasMemories) {
-      return false
-    }
+    const legacyContent = await fs.readdir(legacyPath);
+    const files = legacyContent.filter(f => !f.startsWith('.') && f !== 'logs');
+    await moveFiles(legacyPath, normalizedMemoryPath, files);
+    await removeLegacyDir(legacyPath);
 
-    const newContent = await fs.readdir(normalizedMemoryPath).catch(() => [] as string[])
-    const newHasMemories = newContent.some(f => f.endsWith('.md') && f !== ENTRYPOINT_NAME && !f.startsWith('.'))
-
-    if (newHasMemories) {
-      return false
-    }
-
-    const files = legacyContent.filter(f => !f.startsWith('.') && f !== 'logs')
-    for (const file of files) {
-      const src = path.join(legacyPath, file)
-      const dest = path.join(normalizedMemoryPath, file)
-      await fs.rename(src, dest)
-    }
-
-    const legacyMemoryMd = path.join(legacyPath, ENTRYPOINT_NAME)
-    try { await fs.unlink(legacyMemoryMd) } catch {}
-    try { await fs.rm(legacyPath, { recursive: true }) } catch {}
-
-    log.info('migrateLegacyMemoryDir: migrated successfully')
-    return true
+    log.info('migrateLegacyMemoryDir: migrated successfully');
+    return true;
   } catch (e) {
-    log.warn('migrateLegacyMemoryDir: migration failed:', e instanceof Error ? e.message : String(e))
-    return false
+    log.warn('migrateLegacyMemoryDir: migration failed:', e instanceof Error ? e.message : String(e));
+    return false;
   }
 }
 
@@ -214,7 +218,7 @@ function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
     lines.push('pin: true')
   }
   if (frontmatter.ttl !== undefined) {
-    lines.push('ttl: ' + frontmatter.ttl)
+    lines.push('ttl: ' + frontmatter.ttl);
   }
   lines.push('---');
   return lines.join('\n');
@@ -237,7 +241,7 @@ export async function readFrontmatter(
       return null
     }
 
-    const stats = await fs.stat(filepath)
+    const stats = await fs.stat(filepath);
 
     return {
       name: frontmatter.name,
@@ -263,7 +267,7 @@ export function formatMemoryManifest(headers: MemoryHeader[]): string {
   return headers
     .map((h) => {
       const type = h.type.toUpperCase()
-      const time = h.mtime ? new Date(h.mtime).toISOString() : 'unknown'
+      const time = h.mtime ? new Date(h.mtime).toISOString() : 'unknown';
       return '- [' + type + '] ' + h.name + ' (' + time + '): ' + h.description;
     })
     .join('\n');

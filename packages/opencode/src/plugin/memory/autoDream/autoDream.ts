@@ -211,43 +211,23 @@ async function sendDreamPrompt(
   return { success: true };
 }
 
-export async function executeAutoDream(
-  context: AutoDreamContext
+function validateDreamPreconditions(context: AutoDreamContext): string | null {
+  const dreamStorage = context.storage || initializedStorage;
+  if (!initializedClient || !dreamStorage) { return 'AutoDream not initialized' }
+  if (!isGateOpen(initializedConfig)) { return 'AutoDream is disabled' }
+  if (isConsolidationInProgress(context.memoryRoot)) { return 'Consolidation already in progress' }
+  return null;
+}
+
+async function launchDreamSession(
+  context: AutoDreamContext,
+  lockPath: string,
+  priorMtime: number,
 ): Promise<AutoDreamResult> {
   const result: AutoDreamResult = { success: false, error: undefined };
-  const dreamStorage = context.storage || initializedStorage;
-
-  if (!initializedClient || !dreamStorage) {
-    result.error = 'AutoDream not initialized';
-    return result;
-  }
-  if (!isGateOpen(initializedConfig)) {
-    result.error = 'AutoDream is disabled';
-    return result;
-  }
-  if (isConsolidationInProgress(context.memoryRoot)) {
-    result.error = 'Consolidation already in progress';
-    return result;
-  }
-  if (!context.skipGateCheck) {
-    const gates = await checkAllGates(context.memoryRoot, initializedConfig);
-    result.gateStatus = { timeGate: gates.timeGate, sessionGate: gates.sessionGate };
-    if (!gates.allPassed) {
-      result.error = `Gates not passed: time=${gates.timeGate}, session=${gates.sessionGate}`;
-      return result;
-    }
-  }
-
-  const begin = await beginDreamConsolidation(context, initializedConfig.lockStaleMs);
-  if ('error' in begin) {
-    result.error = begin.error;
-    return result;
-  }
-  const { lockPath, priorMtime } = begin;
-
   try {
     const forkInfo = await createForkedChildSession(
-      initializedClient, context.sessionID, 'dream', context.directory,
+      initializedClient!, context.sessionID, 'dream', context.directory,
     );
     if (!forkInfo) {
       await cleanupDreamFailure(lockPath, priorMtime, context.memoryRoot);
@@ -279,6 +259,29 @@ export async function executeAutoDream(
     await cleanupDreamFailure(lockPath, priorMtime, context.memoryRoot);
     return result;
   }
+}
+
+export async function executeAutoDream(
+  context: AutoDreamContext
+): Promise<AutoDreamResult> {
+  const precondError = validateDreamPreconditions(context);
+  if (precondError) { return { success: false, error: precondError } }
+
+  if (!context.skipGateCheck) {
+    const gates = await checkAllGates(context.memoryRoot, initializedConfig);
+    if (!gates.allPassed) {
+      return {
+        success: false,
+        error: `Gates not passed: time=${gates.timeGate}, session=${gates.sessionGate}`,
+        gateStatus: { timeGate: gates.timeGate, sessionGate: gates.sessionGate },
+      };
+    }
+  }
+
+  const begin = await beginDreamConsolidation(context, initializedConfig.lockStaleMs);
+  if ('error' in begin) { return { success: false, error: begin.error } }
+
+  return launchDreamSession(context, begin.lockPath, begin.priorMtime);
 }
 
 export async function handleChatMessageTrigger(

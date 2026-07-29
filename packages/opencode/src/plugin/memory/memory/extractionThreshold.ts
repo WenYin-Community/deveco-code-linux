@@ -93,74 +93,46 @@ interface AutoMemoryThresholdCheckResult {
  * @param skillConfig - Skill configuration (optional)
  * @returns Threshold check result with decision and reason
  */
+function buildThresholdResult(
+  state: ExtractionThresholdState,
+  shouldTrigger: boolean,
+  reason: string,
+  messageCount: number,
+  skillThresholdMet: boolean,
+): AutoMemoryThresholdCheckResult {
+  return {
+    shouldTrigger,
+    reason,
+    messageCount,
+    turnsSinceLastExtraction: state.turnsSinceLastExtraction,
+    inProgress: state.inProgress,
+    skill_iters_since_review: state.skill_iters_since_review,
+    skillThresholdMet,
+  };
+}
+
 export function shouldTriggerExtraction(
   state: ExtractionThresholdState,
   config: ExtractionConfig = DEFAULT_EXTRACTION_CONFIG,
   newMessageCount: number,
   skillConfig: SkillConfig = DEFAULT_SKILL_CONFIG
 ): AutoMemoryThresholdCheckResult {
-  const skillThresholdMet = state.skill_iters_since_review >= skillConfig.skillReviewInterval
+  const skillThresholdMet = state.skill_iters_since_review >= skillConfig.skillReviewInterval;
+  const build = (trigger: boolean, reason: string) =>
+    buildThresholdResult(state, trigger, reason, newMessageCount, skillThresholdMet);
 
-  if (!config.enabled) {
-    return {
-      shouldTrigger: false,
-      reason: "extraction_disabled",
-      messageCount: newMessageCount,
-      turnsSinceLastExtraction: state.turnsSinceLastExtraction,
-      inProgress: state.inProgress,
-      skill_iters_since_review: state.skill_iters_since_review,
-      skillThresholdMet: skillThresholdMet,
-    }
-  }
-
-  if (state.inProgress) {
-    return {
-      shouldTrigger: false,
-      reason: "extraction_in_progress",
-      messageCount: newMessageCount,
-      turnsSinceLastExtraction: state.turnsSinceLastExtraction,
-      inProgress: true,
-      skill_iters_since_review: state.skill_iters_since_review,
-      skillThresholdMet: skillThresholdMet,
-    }
-  }
-
+  if (!config.enabled) { return build(false, "extraction_disabled") }
+  if (state.inProgress) { return build(false, "extraction_in_progress") }
   if (newMessageCount < config.minMessages) {
-    log.debug('shouldTriggerExtraction: minMessages not met:', newMessageCount, '<', config.minMessages)
-    return {
-      shouldTrigger: false,
-      reason: "min_messages_not_met",
-      messageCount: newMessageCount,
-      turnsSinceLastExtraction: state.turnsSinceLastExtraction,
-      inProgress: false,
-      skill_iters_since_review: state.skill_iters_since_review,
-      skillThresholdMet: skillThresholdMet,
-    }
+    log.debug('shouldTriggerExtraction: minMessages not met:', newMessageCount, '<', config.minMessages);
+    return build(false, "min_messages_not_met");
   }
-
   if (state.turnsSinceLastExtraction < config.throttle) {
-    log.debug('shouldTriggerExtraction: throttle not met:', state.turnsSinceLastExtraction, '<', config.throttle)
-    return {
-      shouldTrigger: false,
-      reason: "throttle_not_met",
-      messageCount: newMessageCount,
-      turnsSinceLastExtraction: state.turnsSinceLastExtraction,
-      inProgress: false,
-      skill_iters_since_review: state.skill_iters_since_review,
-      skillThresholdMet: skillThresholdMet,
-    }
+    log.debug('shouldTriggerExtraction: throttle not met:', state.turnsSinceLastExtraction, '<', config.throttle);
+    return build(false, "throttle_not_met");
   }
-
-  log.debug('shouldTriggerExtraction: TRIGGERED — msgs:', newMessageCount, 'turns:', state.turnsSinceLastExtraction)
-  return {
-    shouldTrigger: true,
-    reason: "threshold_met",
-    messageCount: newMessageCount,
-    turnsSinceLastExtraction: state.turnsSinceLastExtraction,
-    inProgress: false,
-    skill_iters_since_review: state.skill_iters_since_review,
-    skillThresholdMet: skillThresholdMet,
-  }
+  log.debug('shouldTriggerExtraction: TRIGGERED — msgs:', newMessageCount, 'turns:', state.turnsSinceLastExtraction);
+  return build(true, "threshold_met");
 }
 
 /**
