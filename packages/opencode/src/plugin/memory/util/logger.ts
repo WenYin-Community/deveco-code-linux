@@ -72,7 +72,9 @@ export async function setLogDir(dir: string): Promise<void> {
 
 async function closeLogStream(): Promise<void> {
   if (!logFileStream) { return }
-  try { await logFileStream.close(); } catch { /* best-effort */ }
+  try {
+    await logFileStream.close();
+  } catch { /* best-effort */ }
 }
 
 // ============================================================================
@@ -92,7 +94,7 @@ function formatArg(a: unknown): string {
   if (typeof a === 'object' && a !== null) {
     try { return JSON.stringify(a) } catch { return String(a) }
   }
-  return String(a)
+  return String(a);
 }
 
 function formatMessage(level: LogLevel, tag: string | undefined, args: unknown[]): string {
@@ -125,7 +127,7 @@ export interface ScopedLogger {
 function makeLogMethod(level: LogLevel, tag: string): (...args: unknown[]) => void {
   return (...args: unknown[]) => {
     if (shouldLog(level)) { output(level, formatMessage(level, tag, args)) }
-  }
+  };
 }
 
 /**
@@ -151,7 +153,7 @@ export function createLogger(tag: string): ScopedLogger {
 function makeLegacyLogMethod(level: LogLevel): (tag: string, ...args: unknown[]) => void {
   return (tag: string, ...args: unknown[]) => {
     if (shouldLog(level)) { output(level, formatMessage(level, tag, args)) }
-  }
+  };
 }
 
 export const logger = {

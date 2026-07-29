@@ -130,7 +130,9 @@ function mergeAutoMemoryConfig(pc: PluginConfig): MemoryConfig {
         maxEntrypointBytes: pc.maxEntrypointBytes ?? am?.maxEntrypointBytes ?? DEFAULT_MEMORY_CONFIG.maxEntrypointBytes,
         storageMode: pc.storageMode ?? am?.storageMode ?? DEFAULT_MEMORY_CONFIG.storageMode,
         customMemoryDir: pc.customMemoryDir ?? am?.customMemoryDir,
-        minSessionsBeforeConsolidation: pc.minSessionsBeforeConsolidation ?? am?.minSessionsBeforeConsolidation ?? DEFAULT_MEMORY_CONFIG.minSessionsBeforeConsolidation,
+        minSessionsBeforeConsolidation: pc.minSessionsBeforeConsolidation
+            ?? am?.minSessionsBeforeConsolidation
+            ?? DEFAULT_MEMORY_CONFIG.minSessionsBeforeConsolidation,
         minHoursBetweenConsolidation: pc.minHoursBetweenConsolidation ?? am?.minHoursBetweenConsolidation ?? DEFAULT_MEMORY_CONFIG.minHoursBetweenConsolidation,
         truncation: {
             ...DEFAULT_TRUNCATION_CONFIG,
@@ -316,7 +318,9 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
         }
         const state = createPluginState(fullConfig, memoryRecallConfig, semanticSelectionConfig, client, projectID, directory, configs, slashCommandsEnabled);
         if (client) { initAutoDream(client, storage, configs.autoDream); }
-        if (client && fullConfig.enabled) { initAutoMemoryExtraction(client, storage, configs.extraction, undefined, skillStorage, configs.skills); }
+        if (client && fullConfig.enabled) {
+            initAutoMemoryExtraction(client, storage, configs.extraction, undefined, skillStorage, configs.skills);
+        }
         stateMap.set(projectID, state);
         return state;
     })();
@@ -421,7 +425,9 @@ function handlePermissionAsk(input: Record<string, unknown>, output: { status: s
 
 async function handleExtractionCleanup(sid: string, memRoot: string, state: PluginState): Promise<void> {
     try { await releaseExtractionLock(memRoot); }
-    catch (e) { logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e)); }
+    catch (e) {
+        logger.warn('[SessionIdle]', 'extraction lock release failed:', e instanceof Error ? e.message : String(e));
+    }
     const thresholdState = getThresholdState();
     updateThresholdState(markExtractionCompleted(thresholdState, thresholdState.pendingLastMessageUuid));
     state.skillTriggerState = resetSkillCounter(state.skillTriggerState);
@@ -435,7 +441,9 @@ async function handleDreamCleanup(sid: string, memRoot: string): Promise<void> {
 
 async function handleSkillReviewCleanup(sid: string, memRoot: string): Promise<void> {
     try { await releaseSkillReviewLock(getSkillReviewLockPath(memRoot)); }
-    catch (e) { logger.warn('[SessionIdle]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e)); }
+    catch (e) {
+        logger.warn('[SessionIdle]', 'skill-review lock release failed:', e instanceof Error ? e.message : String(e));
+    }
     updateThresholdState(resetExtractionSkillCounter(getThresholdState()));
     logger.info('[SessionIdle]', 'Forked skill-review done — lock released, skill counter reset:', sid);
 }
@@ -446,7 +454,9 @@ async function handleForkedSessionIdle(sid: string, state: PluginState, client: 
     if (agentType === 'extraction') {
         await handleExtractionCleanup(sid, memRoot, state);
         try { await client.session.delete({ path: { id: sid } }); }
-        catch (e) { logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e)); }
+        catch (e) {
+            logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e));
+        }
     } else if (agentType === 'dream') {
         await handleDreamCleanup(sid, memRoot);
     } else if (agentType === 'skill-review') {
@@ -478,7 +488,13 @@ async function handleExtractionIdle(sid: string, state: PluginState, projectID: 
     }
 }
 
-async function handleSessionIdleEvent(event: { type: string; properties?: Record<string, string> }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+async function handleSessionIdleEvent(
+    event: { type: string; properties?: Record<string, string> },
+    state: PluginState,
+    client: OpencodeClient,
+    projectID: string,
+    directory: string,
+): Promise<void> {
     if (event.type !== 'session.idle') { return }
     const sid = event.properties?.sessionID || '';
     if (!sid) { return }
@@ -495,10 +511,12 @@ function sweepLeftoverExtractionForks(client: OpencodeClient): void {
         try {
             const res = await client.session.list();
             for (const s of res.data ?? []) {
-                if (!s.title?.includes('(@extraction subagent)')) continue;
+                if (!s.title?.includes('(@extraction subagent)')) { continue }
                 await client.session.delete({ path: { id: s.id } });
             }
-        } catch (e) { logger.warn('[Sweep]', 'leftover extraction-fork sweep failed:', e instanceof Error ? e.message : String(e)); }
+        } catch (e) {
+            logger.warn('[Sweep]', 'leftover extraction-fork sweep failed:', e instanceof Error ? e.message : String(e));
+        }
     })();
 }
 
@@ -520,7 +538,9 @@ async function performSystemInjections(state: PluginState, isSubNow: boolean, ou
             const skillResult = await state.skillInjection.inject();
             if (skillResult.systemPrompt) { output.system.push(skillResult.systemPrompt) }
             output.system.push(SKILLS_GUIDANCE);
-        } catch (e) { logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e)); }
+        } catch (e) {
+            logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e));
+        }
     }
     if (state.slashCommandsEnabled) { output.system.push(SLASH_COMMANDS_GUIDANCE) }
 }
@@ -560,7 +580,11 @@ function parseAlreadyInjected(parts: Array<Record<string, unknown>>): Set<string
     return injected;
 }
 
-function buildRecallContent(memories: Array<{ name: string; type: string; content: string; filepath?: string }>, filtered: Array<{ relevance?: number }>, maxChars: number): string {
+function buildRecallContent(
+    memories: Array<{ name: string; type: string; content: string; filepath?: string }>,
+    filtered: Array<{ relevance?: number }>,
+    maxChars: number,
+): string {
     return memories.map((m, i) => {
         const score = filtered[i]?.relevance ?? 'N/A';
         const truncated = m.content.slice(0, maxChars) + (m.content.length > maxChars ? '...' : '');
@@ -605,17 +629,25 @@ async function handleMessagesTransform(_input: unknown, output: MessagesTransfor
             state.recalledUserMsgIds.add(userMsgId);
             if (state.recalledUserMsgIds.size > 200) {
                 const oldest = state.recalledUserMsgIds.values().next().value;
-                if (oldest) state.recalledUserMsgIds.delete(oldest);
+                if (oldest) { state.recalledUserMsgIds.delete(oldest) }
             }
         }
         if (state.memoryRecallConfig.visibleRecall && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall)) {
             const summary = memories.map((m) => `${m.name}(${m.type})`).join(', ');
             state.pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${summary}`);
         }
-    } catch (e) { logger.error('[Recall]', 'messages.transform error:', e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+        logger.error('[Recall]', 'messages.transform error:', e instanceof Error ? e.message : String(e));
+    }
 }
 
-async function handleSkillTrigger(input: { tool: string; sessionID: string }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+async function handleSkillTrigger(
+    input: { tool: string; sessionID: string },
+    state: PluginState,
+    client: OpencodeClient,
+    projectID: string,
+    directory: string,
+): Promise<void> {
     if (!state.skillConfig.enabled) { return }
     const isSub = isSubagentSession(input.sessionID);
     if (isSub && !state.subagentHooksConfig.skillReviewTrigger) { return }
@@ -639,10 +671,18 @@ async function handleSkillTrigger(input: { tool: string; sessionID: string }, st
                 }
             }
         }
-    } catch (e) { logger.error('[ToolExecute]', 'Skill trigger check error:', e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+        logger.error('[ToolExecute]', 'Skill trigger check error:', e instanceof Error ? e.message : String(e));
+    }
 }
 
-async function handleToolExecuteAfter(input: { tool: string; sessionID: string }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
+async function handleToolExecuteAfter(
+    input: { tool: string; sessionID: string },
+    state: PluginState,
+    client: OpencodeClient,
+    projectID: string,
+    directory: string,
+): Promise<void> {
     if (isForkedSession(input.sessionID)) { return }
     if (isSubagentSession(input.sessionID)) {
         if (!state.subagentHooksConfig.skillReviewTrigger) { return }
@@ -653,17 +693,30 @@ async function handleToolExecuteAfter(input: { tool: string; sessionID: string }
     await handleSkillTrigger(input, state, client, projectID, directory);
     if (state.skillConfig.enabled && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
         try { processToolCallForSkill(input.tool); }
-        catch (e) { logger.error('[ToolExecute]', 'processToolCallForSkill error:', e instanceof Error ? e.message : String(e)); }
+        catch (e) {
+            logger.error('[ToolExecute]', 'processToolCallForSkill error:', e instanceof Error ? e.message : String(e));
+        }
     }
 }
 
 function sendSlashPrompt(client: OpencodeClient, sessionID: string, text: string): void {
     void client.session.prompt({ path: { id: sessionID }, body: { parts: [{ type: 'text', text }] } })
-        .then((result) => { if (result.error) logger.error('[SlashCommand]', 'Failed to send prompt:', result.error) })
+        .then((result) => {
+            if (result.error) {
+                logger.error('[SlashCommand]', 'Failed to send prompt:', result.error);
+            }
+        })
         .catch((err) => logger.error('[SlashCommand]', 'Prompt error:', err));
 }
 
-function dispatchSlashCommand(cmd: { targetTool: string }, parsed: { args: { force?: boolean } }, state: PluginState, msgInput: { sessionID: string; messages?: unknown[]; agent?: string }, projectID: string, directory: string): void {
+function dispatchSlashCommand(
+    cmd: { targetTool: string },
+    parsed: { args: { force?: boolean } },
+    state: PluginState,
+    msgInput: { sessionID: string; messages?: unknown[]; agent?: string },
+    projectID: string,
+    directory: string,
+): void {
     if (cmd.targetTool === 'skill-review-trigger') {
         void spawnSkillReviewAgent({
             sessionID: msgInput.sessionID, projectID, directory,
@@ -690,7 +743,9 @@ function triggerAutoDream(state: PluginState, sessionID: string, projectID: stri
             directory, storage: state.storage, expiryConfig: state.expiryConfig,
             skillEnabled: state.skillConfig.enabled,
         });
-    } catch (error) { logger.error('[AutoDream]', 'chat.message hook error:', error); }
+    } catch (error) {
+        logger.error('[AutoDream]', 'chat.message hook error:', error);
+    }
 }
 
 async function handleChatMessageHook(input: { sessionID: string; agent?: string; messages?: unknown[] }, state: PluginState, client: OpencodeClient, projectID: string, directory: string): Promise<void> {
@@ -712,10 +767,18 @@ async function handleChatMessageHook(input: { sessionID: string; agent?: string;
                 const parsed = parseSlashCommand(messageContent, state.commandRegistry);
                 if (parsed.recognized) {
                     const cmd = state.commandRegistry.lookup(parsed.command);
-                    if (cmd) { dispatchSlashCommand(cmd, parsed, state, input as unknown as { sessionID: string; messages?: unknown[]; agent?: string }, projectID, directory) }
+                    if (cmd) {
+                        dispatchSlashCommand(
+                            cmd, parsed, state,
+                            input as unknown as { sessionID: string; messages?: unknown[]; agent?: string },
+                            projectID, directory,
+                        );
+                    }
                 }
             }
-        } catch (e) { logger.error('[ChatMessage]', 'Slash command handling error:', e instanceof Error ? e.message : String(e)); }
+        } catch (e) {
+            logger.error('[ChatMessage]', 'Slash command handling error:', e instanceof Error ? e.message : String(e));
+        }
     }
 }
 

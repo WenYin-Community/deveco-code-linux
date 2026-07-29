@@ -216,7 +216,7 @@ function serializeFrontmatter(frontmatter: MemoryFrontmatter): string {
   if (frontmatter.ttl !== undefined) {
     lines.push('ttl: ' + frontmatter.ttl)
   }
-  lines.push('---')
+  lines.push('---');
   return lines.join('\n');
 }
 
@@ -249,7 +249,7 @@ export async function readFrontmatter(
       mtime: frontmatter.updated ?? frontmatter.created ?? stats.mtimeMs,
       pin: frontmatter.pin,
       ttl: frontmatter.ttl,
-    }
+    };
   } catch {
     return null;
   }
@@ -264,13 +264,13 @@ export function formatMemoryManifest(headers: MemoryHeader[]): string {
     .map((h) => {
       const type = h.type.toUpperCase()
       const time = h.mtime ? new Date(h.mtime).toISOString() : 'unknown'
-      return '- [' + type + '] ' + h.name + ' (' + time + '): ' + h.description
+      return '- [' + type + '] ' + h.name + ' (' + time + '): ' + h.description;
     })
     .join('\n');
 }
 
 export function isMemoryFile(filepath: string): boolean {
-  const basename = path.basename(filepath)
+  const basename = path.basename(filepath);
   return basename.endsWith('.md') && basename !== ENTRYPOINT_NAME && !basename.startsWith('.');
 }
 

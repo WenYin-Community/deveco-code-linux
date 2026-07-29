@@ -39,7 +39,7 @@ export class MemoryInjection {
   */
   async injectIndexOnly(): Promise<InjectionResult> {
     if (!this.config.enabled) {
-      log.debug('injectIndexOnly: disabled')
+      log.debug('injectIndexOnly: disabled');
       return { systemPrompt: '', memoriesLoaded: 0, indexContent: '', truncated: false };
     }
 
@@ -90,7 +90,7 @@ export class MemoryInjection {
     // Check if memory is enabled
     if (!this.config.enabled) {
       return {
-        systemPrompt: "",
+        systemPrompt: '',
         memoriesLoaded: 0,
         indexContent: "",
         truncated: false,
@@ -102,9 +102,9 @@ export class MemoryInjection {
 
     // If no memories, return empty
     if (!index && !content) {
-      log.debug('inject: no memories found')
+      log.debug('inject: no memories found');
       return {
-        systemPrompt: "",
+        systemPrompt: '',
         memoriesLoaded: 0,
         indexContent: '',
         truncated: false,
@@ -116,7 +116,7 @@ export class MemoryInjection {
 
     // Count memories loaded
     const memoriesLoaded = count
-    log.info('inject:', memoriesLoaded, 'memories loaded, truncated:', truncated)
+    log.info('inject:', memoriesLoaded, 'memories loaded, truncated:', truncated);
 
     return {
       systemPrompt,

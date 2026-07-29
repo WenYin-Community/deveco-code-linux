@@ -111,12 +111,12 @@ function buildBasePrompt(skillEnabled?: boolean): string {
 }
 
 function buildContextSection(sessionCount: number): string {
-  if (sessionCount <= 0) { return "" }
+  if (sessionCount <= 0) { return '' }
   return `\n## Context\n\nThis consolidation runs after ${sessionCount} sessions. Prioritize recent signals and emerging patterns.\n`;
 }
 
 function buildPathsSection(lockFilePath?: string, dreamStatePath?: string, memoryRoot?: string): string {
-  if (!lockFilePath && !dreamStatePath) { return "" }
+  if (!lockFilePath && !dreamStatePath) { return '' }
   return `\n## File Paths (for final steps)\n\n- Lock file path: ${lockFilePath || '(not provided - skip lock release)'}\n- Dream state file path: ${dreamStatePath || '(not provided - skip dream state write)'}\n- Memory root: ${memoryRoot || '(not provided)'}\n`;
 }
 
@@ -143,7 +143,7 @@ function buildExpirySection(
   config: MemoryExpiryConfig,
   memoryRoot?: string,
 ): string {
-  if (!config.enabled || !headers || headers.length === 0) { return "" }
+  if (!config.enabled || !headers || headers.length === 0) { return '' }
   const ttlByType = config.ttlByType;
   const ageTableRows = buildExpiryAgeTable(headers, ttlByType);
   const ttlLabels: Record<string, string> = {
