@@ -141,19 +141,6 @@ export function memoryNameToFilename(name: string): string {
   return sanitized + '.md'
 }
 
-function parseFrontmatterValue(rawValue: string): string | number | boolean {
-  let value: string | number | boolean = rawValue;
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    value = (value as string).slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-  }
-  if (/^-?\d+(\.\d+)?$/.test(value as string)) {
-    value = Number(value);
-  }
-  if (value === 'true' || value === 'True') { return true }
-  if (value === 'false' || value === 'False') { return false }
-  return value;
-}
-
 function parseFrontmatterLine(line: string): { key: string; value: string | number | boolean } | null {
   const colonIndex = line.indexOf(':');
   if (colonIndex === -1) { return null }
@@ -276,6 +263,19 @@ export function formatMemoryManifest(headers: MemoryHeader[]): string {
 export function isMemoryFile(filepath: string): boolean {
   const basename = path.basename(filepath);
   return basename.endsWith('.md') && basename !== ENTRYPOINT_NAME && !basename.startsWith('.');
+}
+
+function parseFrontmatterValue(rawValue: string): string | number | boolean {
+  let value: string | number | boolean = rawValue;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = (value as string).slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  if (/^-?\d+(\.\d+)?$/.test(value as string)) {
+    value = Number(value);
+  }
+  if (value === 'true' || value === 'True') { return true }
+  if (value === 'false' || value === 'False') { return false }
+  return value;
 }
 
 
