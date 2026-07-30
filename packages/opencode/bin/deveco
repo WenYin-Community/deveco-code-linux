@@ -70,7 +70,14 @@ let arch = archMap[os.arch()]
 if (!arch) {
   arch = os.arch()
 }
-const base = "@deveco/deveco-code-" + platform + "-" + arch
+let mainPkg = {}
+try {
+  mainPkg = JSON.parse(fs.readFileSync(path.join(scriptDir, "..", "package.json"), "utf8"))
+} catch {
+  // dev mode or missing package.json
+}
+const scope = mainPkg.name && mainPkg.name.includes("/") ? mainPkg.name.split("/")[0] : "@deveco"
+const base = scope + "/deveco-code-" + platform + "-" + arch
 const binary = platform === "windows" ? "deveco.exe" : "deveco"
 
 function supportsAvx2() {

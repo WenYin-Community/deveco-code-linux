@@ -8,6 +8,8 @@ import path from "path"
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
+const scope = process.env.DEVECO_SCOPE || "deveco"
+
 async function published(name: string, version: string) {
   return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
 }
@@ -67,7 +69,7 @@ await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
 await Bun.file(`./dist/${pkg.name}/package.json`).write(
   JSON.stringify(
     {
-      name: "@deveco/deveco-code",
+      name: `@${scope}/deveco-code`,
       bin: {
         [pkg.name]: `./bin/${pkg.name}.exe`,
       },
@@ -96,4 +98,4 @@ const tasks = Object.entries(binaries).map(async ([name, { version, dir }]) => {
   await publish(`./dist/${dir}`, name, version)
 })
 await Promise.all(tasks)
-await publish(`./dist/${pkg.name}`, "@deveco/deveco-code", version)
+await publish(`./dist/${pkg.name}`, `@${scope}/deveco-code`, version)

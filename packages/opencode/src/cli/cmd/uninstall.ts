@@ -8,6 +8,7 @@ import path from "path"
 import os from "os"
 import { Filesystem } from "@/util/filesystem"
 import { Process } from "@/util/process"
+import { InstallationPackage } from "@opencode-ai/core/installation/version"
 
 interface UninstallArgs {
   keepConfig: boolean
@@ -129,9 +130,9 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
 
   if (method !== "curl" && method !== "irm" && method !== "unknown") {
     const cmds: Record<string, string> = {
-      npm: "npm uninstall -g @deveco/deveco-code",
-      pnpm: "pnpm uninstall -g @deveco/deveco-code",
-      bun: "bun remove -g @deveco/deveco-code",
+      npm: `npm uninstall -g ${InstallationPackage}`,
+      pnpm: `pnpm uninstall -g ${InstallationPackage}`,
+      bun: `bun remove -g ${InstallationPackage}`,
     }
     prompts.log.info(`  ✓ Package: ${cmds[method] || method}`)
   }
@@ -208,9 +209,9 @@ async function uninstallPackage(method: Installation.Method, spinner: ReturnType
   }
 
   const cmds: Record<string, string[]> = {
-    npm: ['npm', 'uninstall', '-g', '@deveco/deveco-code'],
-    pnpm: ['pnpm', 'uninstall', '-g', '@deveco/deveco-code'],
-    bun: ['bun', 'remove', '-g', '@deveco/deveco-code'],
+    npm: ['npm', 'uninstall', '-g', InstallationPackage],
+    pnpm: ['pnpm', 'uninstall', '-g', InstallationPackage],
+    bun: ['bun', 'remove', '-g', InstallationPackage],
   }
 
   const cmd = cmds[method]

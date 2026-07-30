@@ -25,6 +25,7 @@ const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 const skipAgreementFlag = process.argv.includes("--skip-agreement")
+const scope = process.env.DEVECO_SCOPE || "deveco"
 
 // Load migrations from migration directories
 const migrationDirs = (
@@ -316,6 +317,7 @@ for (const item of targets) {
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEVECO_WORKER_PATH: workerPath,
       DEVECO_CHANNEL: `'${Script.channel}'`,
+      DEVECO_SCOPE: `'${scope}'`,
       DEVECO_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       DEVECO_DEFAULT_SKILLS: JSON.stringify(defaultSkillsData),
       DEVECO_DEFAULT_SPEC_RESOURCES: JSON.stringify(defaultSpecData),
@@ -394,7 +396,7 @@ for (const item of targets) {
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
-        name: `@deveco/deveco-code-${item.os === "win32" ? "windows" : item.os}-${item.arch}${item.avx2 === false ? "-baseline" : ""}`,
+        name: `@${scope}/deveco-code-${item.os === "win32" ? "windows" : item.os}-${item.arch}${item.avx2 === false ? "-baseline" : ""}`,
         version: Script.version,
         preferUnplugged: true,
         os: [item.os],

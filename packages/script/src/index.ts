@@ -22,6 +22,7 @@ const env = {
   DEVECO_BUMP: process.env["DEVECO_BUMP"],
   DEVECO_VERSION: process.env["DEVECO_VERSION"],
   DEVECO_RELEASE: process.env["DEVECO_RELEASE"],
+  DEVECO_SCOPE: process.env["DEVECO_SCOPE"],
 }
 const CHANNEL = await (async () => {
   if (env.DEVECO_CHANNEL) return env.DEVECO_CHANNEL
@@ -34,7 +35,7 @@ const IS_PREVIEW = CHANNEL !== "latest"
 const VERSION = await (async () => {
   if (env.DEVECO_VERSION) return env.DEVECO_VERSION
   if (IS_PREVIEW) return `0.0.0-${CHANNEL}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`
-  const version = await fetch("https://registry.npmjs.org/@deveco%2fdeveco-code/latest")
+  const version = await fetch(`https://registry.npmjs.org/@${env.DEVECO_SCOPE || "deveco"}%2fdeveco-code/latest`)
     .then((res) => {
       if (!res.ok) throw new Error(res.statusText)
       return res.json()

@@ -17,6 +17,7 @@ import fs from "fs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const cliDir = path.resolve(__dirname, "..")
+const scope = process.env.DEVECO_SCOPE || "deveco"
 
 console.log("=== Release ===")
 console.log(`version: ${Script.version}`)
@@ -28,7 +29,7 @@ console.log(">>> [1/2] Building CLI binary ...")
 const buildArgs = process.argv.slice(2)
 await $`bun run script/build.ts ${buildArgs}`
   .cwd(cliDir)
-  .env({ ...process.env, DEVECO_VERSION: Script.version, DEVECO_CHANNEL: Script.channel })
+  .env({ ...process.env, DEVECO_VERSION: Script.version, DEVECO_CHANNEL: Script.channel, DEVECO_SCOPE: scope })
 console.log("✔ CLI build done")
 console.log()
 
@@ -69,7 +70,7 @@ await $`cp ../../CHANGELOG.md ./dist/${pkg.name}/CHANGELOG.md`
 await Bun.file(`./dist/${pkg.name}/package.json`).write(
   JSON.stringify(
     {
-      name: "@deveco/deveco-code",
+      name: `@${scope}/deveco-code`,
       bin: {
         [pkg.name]: `./bin/${pkg.name}`,
       },
@@ -104,10 +105,10 @@ const tasks = Object.entries(binaries).map(async ([name, { dir }]) => {
 await Promise.all(tasks)
 
 await $`cd ./dist/${pkg.name} && bun pm pack && npm publish *.tgz --access public --tag ${Script.channel}`
-console.log(`  ✔ @deveco/deveco-code@${Script.version}`)
+console.log(`  ✔ @${scope}/deveco-code@${Script.version}`)
 
 // ─── Step 3: Sync npmmirror ──────────────────────────────────────────
-const moduleName = "@deveco/deveco-code"
+const moduleName = `@${scope}/deveco-code`
 const hasCnpm = (await $`which cnpm`.nothrow()).exitCode === 0
 if (hasCnpm) {
   console.log(`\n>>> Syncing npmmirror via cnpm ...`)
@@ -119,5 +120,5 @@ if (hasCnpm) {
 
 console.log()
 console.log("=== Release complete ===")
-console.log(`  @deveco/deveco-code@${Script.version}`)
+console.log(`  @${scope}/deveco-code@${Script.version}`)
 console.log(`  ${Object.keys(binaries).map((n) => `${n}@${Script.version}`).join("\n  ")}`)

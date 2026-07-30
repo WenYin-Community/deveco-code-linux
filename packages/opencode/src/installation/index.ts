@@ -11,7 +11,7 @@ import path from "path"
 import { EventV2 } from "@opencode-ai/core/event"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
-import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
+import { InstallationChannel, InstallationVersion, InstallationPackage, InstallationScope } from "@opencode-ai/core/installation/version"
 import { NpmConfig } from "@opencode-ai/core/npm-config"
 
 export type Method = "curl" | "irm" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
@@ -239,7 +239,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         for (const check of checks) {
           const output = yield* check.command()
-          const installedName = "@deveco/deveco-code"
+          const installedName = InstallationPackage
           if (output.includes(installedName)) {
             return check.name
           }
@@ -268,7 +268,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         const response = yield* httpOk.execute(
           HttpClientRequest.get(
-            `${yield* NpmConfig.registry(process.cwd())}/@deveco%2fdeveco-code/${InstallationChannel}`,
+            `${yield* NpmConfig.registry(process.cwd())}/@${InstallationScope}%2fdeveco-code/${InstallationChannel}`,
           ).pipe(HttpClientRequest.acceptJson),
         )
         const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
@@ -278,13 +278,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
         switch (m) {
           case "npm":
-            upgradeResult = yield* run(["npm", "install", "-g", `@deveco/deveco-code@${target}`])
+            upgradeResult = yield* run(["npm", "install", "-g", `${InstallationPackage}@${target}`])
             break
           case "pnpm":
-            upgradeResult = yield* run(["pnpm", "install", "-g", `@deveco/deveco-code@${target}`])
+            upgradeResult = yield* run(["pnpm", "install", "-g", `${InstallationPackage}@${target}`])
             break
           case "bun":
-            upgradeResult = yield* run(["bun", "install", "-g", `@deveco/deveco-code@${target}`])
+            upgradeResult = yield* run(["bun", "install", "-g", `${InstallationPackage}@${target}`])
             break
           case "curl":
             upgradeResult = yield* upgradeCurl(target)
