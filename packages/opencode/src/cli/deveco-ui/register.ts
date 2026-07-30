@@ -45,7 +45,7 @@ function pluralize(count: number, singular: string, plural: string): string {
 
 export function registerDevEcoTuiExtensions(
   options: {
-    onAnalyticsMagpieEnabledChange?: (enabled: boolean) => void | Promise<void>
+    onToolImprovementEnabledChange?: (enabled: boolean) => void | Promise<void>
   } = {},
 ): void {
   registerDevEcoExtensions({
@@ -53,7 +53,7 @@ export function registerDevEcoTuiExtensions(
     readLocalAuthError,
     openComplainPage,
     pluralize,
-    privacyDialog: () => DialogPrivacy({ onAnalyticsMagpieEnabledChange: options.onAnalyticsMagpieEnabledChange }),
+    privacyDialog: () => DialogPrivacy({ onToolImprovementEnabledChange: options.onToolImprovementEnabledChange }),
     collectDialog: DialogCollect,
     consumeCrashInfo: detectCrashedFlag,
   })

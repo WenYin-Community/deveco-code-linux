@@ -6,9 +6,7 @@ import { useKV } from "@opencode-ai/tui/context/kv"
 import { AGREEMENT_DEFAULTS } from "@/cli/deveco-legal"
 import { ANALYTICS_ENABLED_KEY, TOOL_IMPROVEMENT_ENABLED_KEY } from "@/cli/deveco-privacy-settings"
 
-export const ANALYTICS_MAGPIE_ENABLED_KEY = "analytics_magpie_enabled"
-
-export function toggleAnalyticsMagpieEnabled(input: {
+export function toggleToolImprovementEnabled(input: {
   current: boolean
   set(enabled: boolean): void
   onChange?: (enabled: boolean) => void | Promise<void>
@@ -24,13 +22,12 @@ export function toggleAnalyticsMagpieEnabled(input: {
 }
 
 export function DialogPrivacy(
-  props: { onAnalyticsMagpieEnabledChange?: (enabled: boolean) => void | Promise<void> } = {},
+  props: { onToolImprovementEnabledChange?: (enabled: boolean) => void | Promise<void> } = {},
 ) {
   const dialog = useDialog()
   const kv = useKV()
 
   const analyticsEnabled = () => kv.get("analytics_enabled", true)
-  const analyticsMagpieEnabled = () => kv.get(ANALYTICS_MAGPIE_ENABLED_KEY, true)
   const crashUploadEnabled = () => kv.get("crash_upload_enabled", true)
   const toolImprovementEnabled = () => kv.get(TOOL_IMPROVEMENT_ENABLED_KEY, true)
 
@@ -64,37 +61,21 @@ export function DialogPrivacy(
       },
     },
     {
-      title: analyticsMagpieEnabled() ? "Disable Analytics Magpie" : "Enable Analytics Magpie",
-      description: analyticsMagpieEnabled()
-        ? "Turn off usage data collection for Magpie"
-        : "Turn on usage data collection for Magpie",
-      value: "toggle-analytics-magpie",
+      title: toolImprovementEnabled() ? "Disable Improvement" : "Enable Improvement",
+      description: toolImprovementEnabled() ? "Stop sharing prompts and replies" : "Share prompts and replies",
+      value: "toggle-tool-improvement",
       onSelect: () => {
-        toggleAnalyticsMagpieEnabled({
-          current: analyticsMagpieEnabled(),
-          set: (enabled) => kv.set(ANALYTICS_MAGPIE_ENABLED_KEY, enabled),
-          onChange: props.onAnalyticsMagpieEnabledChange,
+        toggleToolImprovementEnabled({
+          current: toolImprovementEnabled(),
+          set: (enabled) => kv.set(TOOL_IMPROVEMENT_ENABLED_KEY, enabled),
+          onChange: props.onToolImprovementEnabledChange,
         })
         dialog.clear()
       },
     },
     {
-      title: toolImprovementEnabled() ? "Disable Improvement" : "Enable Improvement",
-      description: toolImprovementEnabled()
-        ? "Stop sharing prompts and replies"
-        : "Share prompts and replies",
-      value: "toggle-tool-improvement",
-      onSelect: () => {
-        const current = toolImprovementEnabled()
-        kv.set(TOOL_IMPROVEMENT_ENABLED_KEY, !current)
-        dialog.clear()
-      },
-    },
-    {
       title: crashUploadEnabled() ? "Disable Crash Detect" : "Enable Crash Detect",
-      description: crashUploadEnabled()
-        ? "Turn off automatic log collection"
-        : "Turn on automatic log collection",
+      description: crashUploadEnabled() ? "Turn off automatic log collection" : "Turn on automatic log collection",
       value: "toggle-crash-upload",
       onSelect: () => {
         const current = crashUploadEnabled()

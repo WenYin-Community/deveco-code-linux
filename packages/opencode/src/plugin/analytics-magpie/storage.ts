@@ -4,8 +4,8 @@ import os from "os"
 import path from "path"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
+import { readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
 import { LocalCrypto } from "@/security/local-crypto"
-import { Filesystem } from "@/util/filesystem"
 import { MAGPIE_ANALYTICS_ACTION } from "./types"
 import type {
   AnalyticsEvent,
@@ -458,13 +458,7 @@ export async function getOrCreatePathRedactionSalt(): Promise<string> {
 }
 
 export async function getAnalyticsMagpieEnabled(): Promise<boolean> {
-  const file = path.join(Global.Path.state, "kv.json")
-  try {
-    const kv = await Flock.withLock(`tui-kv:${file}`, () => Filesystem.readJson<Record<string, unknown>>(file))
-    return typeof kv.analytics_magpie_enabled === "boolean" ? kv.analytics_magpie_enabled : true
-  } catch {
-    return true
-  }
+  return readToolImprovementEnabled()
 }
 
 export function getOsArch(): string {

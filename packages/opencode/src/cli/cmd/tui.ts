@@ -59,7 +59,7 @@ function createEventSource(client: RpcClient): EventSource {
 async function registerDevEcoTuiExtensionsForClient(client: RpcClient): Promise<void> {
   const { registerDevEcoTuiExtensions } = await import("@/cli/deveco-ui/register")
   registerDevEcoTuiExtensions({
-    onAnalyticsMagpieEnabledChange: async (enabled) => {
+    onToolImprovementEnabledChange: async (enabled) => {
       await client.call("setAnalyticsMagpieEnabled", { enabled }).catch(() => {})
     },
   })
