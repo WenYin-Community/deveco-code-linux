@@ -447,6 +447,13 @@ export const layer = Layer.effect(
                 })
               }
               ctx.toolcalls[value.id] = { ...toolCall.call, raw: toolCall.call.raw + value.text }
+              yield* session.updatePartDelta({
+                sessionID: toolCall.call.sessionID,
+                messageID: toolCall.call.messageID,
+                partID: toolCall.call.partID,
+                field: "raw",
+                delta: value.text,
+              })
             }
             return
 

@@ -82,6 +82,7 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
+import { countStreamedEditChars, countStreamedChars } from "../../util/count-streamed-edit-chars"
 import { DEVECO_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { useI18n } from "../../i18n"
@@ -2009,7 +2010,7 @@ function InlineTool(props: {
   iconColor?: RGBA
   color?: RGBA
   complete: unknown
-  pending: string
+  pending: JSX.Element | string
   failure?: string
   spinner?: boolean
   separate?: boolean
@@ -2092,7 +2093,7 @@ export function InlineToolRow(props: {
   error?: string
   errorExpanded?: boolean
   complete: unknown
-  pending: string
+  pending: JSX.Element | string
   failure?: string
   spinner?: boolean
   separate?: boolean
@@ -2124,13 +2125,12 @@ export function InlineToolRow(props: {
         <Match when={true}>
           <Show
             fallback={
-              <text
-                paddingLeft={3}
-                fg={props.color}
-                attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
-              >
-                ~ {props.pending}
-              </text>
+              <box paddingLeft={3} flexDirection="row">
+                <text fg={props.color} attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}>~ </text>
+                {typeof props.pending === "string"
+                  ? <text fg={props.color} attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}>{props.pending}</text>
+                  : props.pending}
+              </box>
             }
             when={props.complete || props.failed}
           >
@@ -2277,6 +2277,18 @@ function Write(props: ToolProps) {
     return stringValue(props.input.content) ?? ""
   })
 
+  const pendingText = createMemo(() => {
+    if (props.part.state.status !== "pending") return t("tool.preparing_write")
+    const raw = props.part.state.raw as string | undefined
+    if (!raw) return t("tool.preparing_write")
+    const added = countStreamedChars(raw, "content")
+    if (added === 0) return t("tool.preparing_write")
+    return <>
+      <text fg={theme.text}>{t("tool.preparing_write")} </text>
+      <text fg={theme.diffHighlightAdded}>+{added}</text>
+    </>
+  })
+
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
@@ -2296,7 +2308,7 @@ function Write(props: ToolProps) {
       <Match when={true}>
         <InlineTool
           icon="←"
-          pending={t("tool.preparing_write")}
+          pending={pendingText()}
           complete={stringValue(props.input.filePath)}
           part={props.part}
         >
@@ -2523,6 +2535,20 @@ function Edit(props: ToolProps) {
 
   const diffContent = createMemo(() => stringValue(props.metadata.diff) ?? "")
 
+  const pendingText = createMemo(() => {
+    if (props.part.state.status !== "pending") return t("tool.preparing_edit")
+    const raw = props.part.state.raw as string | undefined
+    if (!raw) return t("tool.preparing_edit")
+    const { added, removed } = countStreamedEditChars(raw)
+    if (added === 0 && removed === 0) return t("tool.preparing_edit")
+    return <>
+      <text fg={theme.text}>{t("tool.preparing_edit")} </text>
+      <text fg={theme.diffHighlightAdded}>+{added}</text>
+      <text fg={theme.text}> </text>
+      <text fg={theme.diffHighlightRemoved}>-{removed}</text>
+    </>
+  })
+
   return (
     <Switch>
       <Match when={stringValue(props.metadata.diff) !== undefined}>
@@ -2552,7 +2578,7 @@ function Edit(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending={t("tool.preparing_edit")} complete={stringValue(props.input.filePath)} part={props.part}>
+        <InlineTool icon="←" pending={pendingText()} complete={stringValue(props.input.filePath)} part={props.part}>
           Edit {pathFormatter.format(stringValue(props.input.filePath))} {input({ replaceAll: props.input.replaceAll })}
         </InlineTool>
       </Match>
