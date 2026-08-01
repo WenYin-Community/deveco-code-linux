@@ -1,0 +1,160 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "发布版本号 (e.g. 0.1.4)"
+        required: true
+        type: string
+      channel:
+        description: "npm dist-tag (latest, td, beta)"
+        required: false
+        default: "td"
+        type: string
+      scope:
+        description: "npm scope (deveco, deveco-test)"
+        required: false
+        default: "deveco-test"
+        type: string
+
+permissions:
+  repository: read
+
+concurrency:
+  max: 1
+  exceed-action: QUEUE
+
+jobs:
+  release:
+    name: manual-build-and-publish
+    runs-on: ubuntu-latest
+    env:
+      DEVECO_SCOPE: ${{ inputs.scope }}
+      DEVECO_CHANNEL: ${{ inputs.channel }}
+      GITCODE_OWNER: openharmony-sig
+      GITCODE_REPO: deveco-code
+    steps:
+      - name: 检出代码
+        uses: checkout
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Node.js
+        uses: setup-node
+        with:
+          node-version: 22
+
+      - name: 安装 Bun
+        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.3.14
+
+      - name: 配置 npm 认证
+        run: |
+          echo "@${DEVECO_SCOPE}:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+
+      - name: 设置版本
+        run: |
+          VERSION="${{ inputs.version }}"
+          VERSION="${VERSION#v}"
+          echo "DEVECO_VERSION=${VERSION}" >> "$ATOMGIT_ENV"
+          echo "DEVECO_BRANCH=$ATOMGIT_REF_NAME" >> "$ATOMGIT_ENV"
+
+          echo "## 版本信息" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 版本 | \`$VERSION\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 分支 | \`$ATOMGIT_REF_NAME\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Channel | \`$DEVECO_CHANNEL\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Scope | \`@$DEVECO_SCOPE\` |" >> "$ATOMGIT_STEP_SUMMARY"
+
+      - name: 准备构建环境
+        run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install
+
+      - name: 构建 CLI 二进制
+        run: |
+          cd packages/opencode && bun run script/build.ts
+          echo "## 构建" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "✅ CLI 二进制构建完成" >> "$ATOMGIT_STEP_SUMMARY"
+
+      - name: 组装并发布到 npm
+        run: |
+          cd packages/opencode && bun run script/publish.ts
+          echo "## npm 发布" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 包名 | 链接 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+          for pkgjson in dist/deveco-*/package.json; do
+            name=$(jq -r '.name' "$pkgjson")
+            echo "| \`$name\` | [npm](https://www.npmjs.com/package/$name) |" >> "$ATOMGIT_STEP_SUMMARY"
+          done
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: 飞书通知
+        run: |
+          TAG="v${DEVECO_VERSION}"
+          NPM_URL="https://www.npmjs.com/package/@${DEVECO_SCOPE}/deveco-code"
+          RELEASE_URL="https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases/${TAG}"
+          BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+
+          PACKAGES=""
+          for pkgjson in packages/opencode/dist/deveco-*/package.json; do
+            name=$(jq -r '.name' "$pkgjson")
+            [ -n "$PACKAGES" ] && PACKAGES="${PACKAGES}"$'\n'
+            PACKAGES="${PACKAGES}• [${name}@${DEVECO_VERSION}](https://www.npmjs.com/package/${name})"
+          done
+
+          PAYLOAD=$(jq -n \
+            --arg tag "$TAG" \
+            --arg channel "$DEVECO_CHANNEL" \
+            --arg scope "$DEVECO_SCOPE" \
+            --arg packages "$PACKAGES" \
+            --arg npm_url "$NPM_URL" \
+            --arg release_url "$RELEASE_URL" \
+            --arg branch "$DEVECO_BRANCH" \
+            --arg build_time "$BUILD_TIME" \
+            '{
+              msg_type: "interactive",
+              card: {
+                header: {
+                  title: {tag: "plain_text", content: "✅ DevEco Code \($tag) 发布完成"},
+                  template: "green"
+                },
+                elements: [
+                  {tag: "div", text: {tag: "lark_md", content: "**版本**: \($tag)\n**Channel**: \($channel)\n**Scope**: @\($scope)\n**分支**: \($branch)\n**出包时间**: \($build_time)\n**安装**: npm i -g @\($scope)/deveco-code@\($channel)"}},
+                  {tag: "hr"},
+                  {tag: "div", text: {tag: "lark_md", content: "**npm 包列表**:\n\($packages)"}},
+                  {tag: "hr"},
+                  {tag: "div", text: {tag: "lark_md", content: "**GitCode Release**: [\($tag)](\($release_url))"}},
+                  {tag: "action", actions: [
+                    {tag: "button", text: {tag: "plain_text", content: "📦 npm"}, url: $npm_url, type: "primary"},
+                    {tag: "button", text: {tag: "plain_text", content: "🚀 GitCode"}, url: $release_url, type: "default"}
+                  ]}
+                ]
+              }
+            }')
+
+          WEBHOOK="${{ secrets.FEISHU_WEBHOOK }}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "FEISHU_WEBHOOK not set, skipping notification"
+            exit 0
+          fi
+          curl -sS -X POST -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK"
+
+          echo "## 飞书通知" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 出包时间 | $BUILD_TIME |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 状态 | ✅ 已发送 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "### 安装命令" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo '```bash' >> "$ATOMGIT_STEP_SUMMARY"
+          echo "npm i -g @$DEVECO_SCOPE/deveco-code@$DEVECO_CHANNEL" >> "$ATOMGIT_STEP_SUMMARY"
+          echo '```' >> "$ATOMGIT_STEP_SUMMARY"

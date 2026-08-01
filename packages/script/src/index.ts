@@ -49,14 +49,6 @@ const VERSION = await (async () => {
 })()
 
 const bot = ["actions-user", "deveco", "deveco-agent[bot]"]
-const teamPath = path.resolve(import.meta.dir, "../../../.github/TEAM_MEMBERS")
-const team = [
-  ...(await Bun.file(teamPath)
-    .text()
-    .then((x) => x.split(/\r?\n/).map((x) => x.trim()))
-    .then((x) => x.filter((x) => x && !x.startsWith("#")))),
-  ...bot,
-]
 
 export const Script = {
   get channel() {
@@ -72,7 +64,7 @@ export const Script = {
     return !!env.DEVECO_RELEASE
   },
   get team() {
-    return team
+    return bot
   },
 }
 console.log(`deveco script`, JSON.stringify(Script, null, 2))
