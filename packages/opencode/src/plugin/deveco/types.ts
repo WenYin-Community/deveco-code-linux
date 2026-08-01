@@ -19,6 +19,8 @@ export interface LoginResult {
   unsupportedRegion?: boolean
 }
 
+export type AccountRegionStatus = "supported" | "unsupported" | "unverified"
+
 export interface TokenCheckResponse {
   status: boolean
   userInfo?: {

@@ -2,7 +2,8 @@ import { logWarn } from "./log"
 import { loginService } from "./login-service"
 import { tokenStorage } from "./token-storage"
 import { loadAccessTokenFromDisk, loadIsRealNameFromDisk, saveAuthToDisk } from "./storage"
-import type { DevEcoSession, LoginResult } from "./types"
+import type { AccountRegionStatus, DevEcoSession, LoginResult } from "./types"
+import { MAINLAND_CHINA_ONLY_MESSAGE, regionPolicy } from "./region-policy"
 
 export class DevEcoAuth {
   async isLoggedIn(): Promise<boolean> {
@@ -36,18 +37,32 @@ export class DevEcoAuth {
             countryCode: "",
             language: "",
             isRealName: loadIsRealNameFromDisk() ?? false,
-            ...(() => { const now = Date.now(); return { createdAt: now, expiresAt: now + 30 * 24 * 60 * 60 * 1000 } })(),
+            ...(() => {
+              const now = Date.now()
+              return { createdAt: now, expiresAt: now + 30 * 24 * 60 * 60 * 1000 }
+            })(),
           }
         }
       } catch (err) {
         // ignore parse errors — session may not be available from disk token
-        logWarn("failed to parse jwtToken when restoring session from disk", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
+        logWarn("failed to parse jwtToken when restoring session from disk", {
+          service: "deveco",
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
     return null
   }
 
   async login(): Promise<LoginResult> {
+    const region = await regionPolicy.checkAccess()
+    if (!region.allowed) {
+      return {
+        success: false,
+        unsupportedRegion: true,
+        error: MAINLAND_CHINA_ONLY_MESSAGE,
+      }
+    }
     return loginService.login()
   }
 
@@ -57,6 +72,12 @@ export class DevEcoAuth {
 
   async logout(): Promise<void> {
     return loginService.logout()
+  }
+
+  async checkAccountRegion(): Promise<AccountRegionStatus> {
+    const jwtToken = this.getUserInfo()?.jwtToken ?? (await tokenStorage.loadToken())
+    if (!jwtToken) return "unverified"
+    return loginService.checkAccountRegion(jwtToken)
   }
 
   /**
@@ -99,7 +120,7 @@ export class DevEcoAuth {
     try {
       const parsed = loginService.parseJwt(jwtToken)
       if (parsed.exp && Date.now() >= parsed.exp * 1000) {
-        logWarn('refreshToken skipped: JWT token has expired, user needs to re-login', { service: 'deveco' })
+        logWarn("refreshToken skipped: JWT token has expired, user needs to re-login", { service: "deveco" })
         return null
       }
     } catch {
@@ -169,7 +190,10 @@ export class DevEcoAuth {
       const parsed = loginService.parseJwt(jwtToken)
       return parsed.userId || null
     } catch (err) {
-      logWarn("failed to parse jwtToken for userId", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
+      logWarn("failed to parse jwtToken for userId", {
+        service: "deveco",
+        error: err instanceof Error ? err.message : String(err),
+      })
       return null
     }
   }

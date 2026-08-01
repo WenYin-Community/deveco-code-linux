@@ -21,6 +21,7 @@ import { validateSession } from "../tui/validate-session"
 import { findDevEcoHomes, isDevEcoHome, loadSavedDevEcoHome, resolveDevEcoHome, saveDevEcoHome } from "@/tool/lib/env"
 import { trustPrompt } from "@/cli/trust"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
+import { ensureMainlandChinaCliAccess } from "@/cli/deveco-region"
 
 declare global {
   const DEVECO_WORKER_PATH: string
@@ -297,6 +298,8 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
+    if (!(await ensureMainlandChinaCliAccess())) return
+
     await ensureDevEcoHomeForTuiStartup()
 
     // Show workspace trust prompt before booting the TUI.

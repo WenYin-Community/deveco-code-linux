@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test"
-import { resolvePluginProviders } from "../../src/cli/cmd/providers"
+import { formatAuthorizationFailure, resolvePluginProviders } from "../../src/cli/cmd/providers"
 import type { Hooks } from "@opencode-ai/plugin"
 
 function hookWithAuth(provider: string): Hooks {
@@ -116,5 +116,17 @@ describe("resolvePluginProviders", () => {
       providerNames: {},
     })
     expect(result).toEqual([])
+  })
+})
+
+describe("formatAuthorizationFailure", () => {
+  test("includes the provider failure reason when available", () => {
+    expect(formatAuthorizationFailure({ error: "DevEco Code is currently only available in Mainland China." })).toBe(
+      "Failed to authorize: DevEco Code is currently only available in Mainland China.",
+    )
+  })
+
+  test("keeps the generic failure message when no reason is available", () => {
+    expect(formatAuthorizationFailure({})).toBe("Failed to authorize")
   })
 })

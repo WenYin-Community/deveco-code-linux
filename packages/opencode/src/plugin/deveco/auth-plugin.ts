@@ -12,6 +12,7 @@ import { devecoAuth } from "./auth"
 import { sessionChatIdMap } from "./session"
 import { ensureValidToken } from "./token-refresh"
 import { ACCESS_TOKEN_EXPIRES_MS, PROVIDER_ID } from "./types"
+import { MAINLAND_CHINA_ONLY_MESSAGE, regionPolicy } from "./region-policy"
 
 export { TOOL_IMPROVEMENT_HEADER }
 
@@ -35,6 +36,17 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
+            if (isHuaweiInferenceRequest(requestInput)) {
+              const region = await regionPolicy.checkAccess()
+              if (!region.allowed) {
+                return new Response(JSON.stringify({ error: MAINLAND_CHINA_ONLY_MESSAGE }), {
+                  status: 451,
+                  statusText: "Unavailable For Legal Reasons",
+                  headers: { "Content-Type": "application/json" },
+                })
+              }
+            }
+
             if (init?.headers) {
               if (init.headers instanceof Headers) {
                 init.headers.delete("authorization")
@@ -124,9 +136,9 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
                 }
               } catch {
                 logError("Failed to rewrite URL for non-streaming request", {
-                    service: "deveco",
-                    requestInput: String(requestInput),
-                  })
+                  service: "deveco",
+                  requestInput: String(requestInput),
+                })
               }
             }
 
@@ -159,7 +171,7 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
                   if (result.unsupportedRegion) {
                     return {
                       type: "failed" as const,
-                      error: "Sorry, only China site accounts are currently supported",
+                      error: result.error ?? "DevEco Code currently only supports China-region accounts.",
                     }
                   }
                   return { type: "failed" as const }

@@ -6,8 +6,9 @@ import { httpClient } from "./http-client"
 import { LocalAuthServer } from "./local-auth-server"
 import { tokenStorage } from "./token-storage"
 import { saveAuthToDisk } from "./storage"
-import type { JwtPayload, LoginConfig, LoginResult, TokenCheckResponse, UserInfo } from "./types"
+import type { AccountRegionStatus, JwtPayload, LoginConfig, LoginResult, TokenCheckResponse, UserInfo } from "./types"
 import { DEFAULT_CONFIG } from "./types"
+import { CHINA_ACCOUNT_ONLY_MESSAGE } from "./region-policy"
 
 export class LoginService {
   private config: LoginConfig
@@ -70,7 +71,7 @@ export class LoginService {
         return {
           success: false,
           unsupportedRegion: true,
-          error: "Sorry, only China site accounts are currently supported",
+          error: CHINA_ACCOUNT_ONLY_MESSAGE,
         }
       }
       logError("login failed", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
@@ -188,6 +189,8 @@ export class LoginService {
       throw new Error("Invalid jwtToken: missing userInfo")
     }
 
+    this.requireChinaAccount(tokenInfo)
+
     const JwtPayload = this.parseJwt(jwtToken)
 
     const userInfo: UserInfo = {
@@ -196,7 +199,7 @@ export class LoginService {
       accessToken: tokenInfo.userInfo.accessToken,
       refreshToken: tokenInfo.userInfo.refreshToken ?? "",
       jwtToken: jwtToken,
-      countryCode: "CN",
+      countryCode: tokenInfo.userInfo.nationalCode.trim().toUpperCase(),
       language: "zh_CN",
       isRealName: String(tokenInfo.userInfo.realName) === "true",
     }
@@ -221,8 +224,16 @@ export class LoginService {
     try {
       return httpClient.parseJson(response)
     } catch (err) {
-      throw new Error(`Invalid response from auth server during token check: ${err instanceof Error ? err.message : String(err)}`)
+      throw new Error(
+        `Invalid response from auth server during token check: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
+  }
+
+  public async checkAccountRegion(jwtToken: string): Promise<AccountRegionStatus> {
+    const tokenInfo = await this.checkJwtToken(jwtToken).catch(() => null)
+    if (!tokenInfo?.status || !tokenInfo.userInfo) return "unverified"
+    return tokenInfo.userInfo.nationalCode?.trim().toUpperCase() === "CN" ? "supported" : "unsupported"
   }
 
   public parseJwt(token: string): JwtPayload {
@@ -250,7 +261,9 @@ export class LoginService {
    * @param jwtToken 当前的 jwtToken
    * @returns 新的 accessToken 和 refreshToken，如果失败返回 null
    */
-  async refreshToken(jwtToken: string): Promise<{ accessToken: string; refreshToken: string; isRealName: boolean } | null> {
+  async refreshToken(
+    jwtToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string; isRealName: boolean } | null> {
     const url = `${this.config.baseUrl}/${this.config.jwtTokenCheckUrl}`
     try {
       const headers: Record<string, string> = {
@@ -276,6 +289,8 @@ export class LoginService {
         return null
       }
 
+      this.requireChinaAccount(result)
+
       return {
         accessToken: result.userInfo.accessToken,
         refreshToken: result.userInfo.refreshToken ?? "",
@@ -291,7 +306,10 @@ export class LoginService {
    * Reconstruct userInfo from a refresh response and the existing JWT.
    * Used on cold start when no userInfo is in memory but a token refresh succeeded.
    */
-  setUserInfoFromTokens(tokens: { accessToken: string; refreshToken: string; isRealName: boolean }, jwtToken: string): void {
+  setUserInfoFromTokens(
+    tokens: { accessToken: string; refreshToken: string; isRealName: boolean },
+    jwtToken: string,
+  ): void {
     const parsed = this.parseJwt(jwtToken)
     this.userInfo = {
       userId: parsed.userId,
@@ -312,6 +330,7 @@ export class LoginService {
   async checkRealName(jwtToken: string): Promise<boolean | null> {
     const tokenInfo = await this.checkJwtToken(jwtToken).catch(() => null)
     if (!tokenInfo?.status || !tokenInfo.userInfo) return null
+    this.requireChinaAccount(tokenInfo)
     return String(tokenInfo.userInfo.realName) === "true"
   }
 
@@ -319,16 +338,24 @@ export class LoginService {
    * Check real-name verification status and return fresh tokens from the API response.
    * @throws when the network request fails, the server returns a non-200 response, or the response is incomplete
    */
-  async checkRealNameWithToken(jwtToken: string): Promise<{ verified: boolean; accessToken: string; refreshToken: string }> {
+  async checkRealNameWithToken(
+    jwtToken: string,
+  ): Promise<{ verified: boolean; accessToken: string; refreshToken: string }> {
     const tokenInfo = await this.checkJwtToken(jwtToken)
     if (!tokenInfo?.status || !tokenInfo.userInfo || !tokenInfo.userInfo.accessToken) {
-      throw new Error('Server returned an incomplete response. Please try again later.')
+      throw new Error("Server returned an incomplete response. Please try again later.")
     }
+    this.requireChinaAccount(tokenInfo)
     return {
       verified: String(tokenInfo.userInfo.realName) === "true",
       accessToken: tokenInfo.userInfo.accessToken,
       refreshToken: tokenInfo.userInfo.refreshToken ?? "",
     }
+  }
+
+  private requireChinaAccount(tokenInfo: TokenCheckResponse): void {
+    if (tokenInfo.userInfo?.nationalCode?.trim().toUpperCase() === "CN") return
+    throw new UnsupportedRegionError("Unsupported account region")
   }
 }
 

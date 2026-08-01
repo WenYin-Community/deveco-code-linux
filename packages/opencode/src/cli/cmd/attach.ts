@@ -3,6 +3,7 @@ import { UI } from "@/cli/ui"
 import { errorMessage } from "@opencode-ai/tui/util/error"
 import { validateSession } from "../tui/validate-session"
 import { ServerAuth } from "@/server/auth"
+import { ensureMainlandChinaCliAccess } from "@/cli/deveco-region"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -43,6 +44,8 @@ export const AttachCommand = cmd({
         describe: "basic auth username (defaults to DEVECO_SERVER_USERNAME or 'deveco')",
       }),
   handler: async (args) => {
+    if (!(await ensureMainlandChinaCliAccess())) return
+
     const { TuiConfig } = await import("@/config/tui")
     if (args.fork && !args.continue && !args.session) {
       UI.error("--fork requires --continue or --session")

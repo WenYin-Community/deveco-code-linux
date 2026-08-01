@@ -9,3 +9,10 @@ export { ensureValidToken, __resetTokenRefreshState } from "./token-refresh"
 export { sessionChatIdMap } from "./session"
 export { ACCESS_TOKEN_EXPIRES_MS, PROVIDER_ID } from "./types"
 export type { DevEcoSession, LoginResult, UserInfo } from "./types"
+export {
+  regionPolicy,
+  MAINLAND_CHINA_ONLY_MESSAGE,
+  CHINA_ACCOUNT_ONLY_MESSAGE,
+  ACCOUNT_REGION_UNVERIFIED_MESSAGE,
+} from "./region-policy"
+export type { RegionAccessResult } from "./region-policy"

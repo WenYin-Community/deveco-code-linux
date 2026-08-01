@@ -41,6 +41,9 @@ const cliTry = <Value>(message: string, fn: () => PromiseLike<Value>) =>
     catch: (error) => new CliError({ message: message + errorMessage(error) }),
   })
 
+export const formatAuthorizationFailure = (result: { error?: string }) =>
+  result.error ? `Failed to authorize: ${result.error}` : "Failed to authorize"
+
 const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
   plugin: { auth: PluginAuth },
   provider: string,
@@ -112,7 +115,7 @@ const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
       yield* spinner.start("Waiting for authorization...")
       const result = yield* cliTry("Failed to authorize: ", () => authorize.callback())
       if (result.type === "failed") {
-        yield* spinner.stop("Failed to authorize", 1)
+        yield* spinner.stop(formatAuthorizationFailure(result), 1)
       }
       if (result.type === "success") {
         const saveProvider = result.provider ?? provider
@@ -145,7 +148,7 @@ const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
       const authorizationCode = yield* promptValue(code)
       const result = yield* cliTry("Failed to authorize: ", () => authorize.callback(authorizationCode))
       if (result.type === "failed") {
-        yield* Prompt.log.error("Failed to authorize")
+        yield* Prompt.log.error(formatAuthorizationFailure(result))
       }
       if (result.type === "success") {
         const saveProvider = result.provider ?? provider
@@ -195,7 +198,7 @@ const handlePluginAuth = Effect.fn("Cli.providers.pluginAuth")(function* (
 
     const result = yield* cliTry("Failed to authorize: ", () => authorizeApi(inputs))
     if (result.type === "failed") {
-      yield* Prompt.log.error("Failed to authorize")
+      yield* Prompt.log.error(formatAuthorizationFailure(result))
     }
     if (result.type === "success") {
       const saveProvider = result.provider ?? provider

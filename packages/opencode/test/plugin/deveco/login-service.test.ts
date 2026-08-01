@@ -93,11 +93,15 @@ beforeEach(() => {
   mockSaveAuthToDisk = mock(async () => {})
   mockOpenLoginPageShouldFail = false
   localAuthServerStartSpy.mockReset().mockImplementation(() => mockServerInstance.start())
-  localAuthServerWaitForCallbackSpy.mockReset().mockImplementation((timeout: number) => mockServerInstance.waitForCallback(timeout))
+  localAuthServerWaitForCallbackSpy
+    .mockReset()
+    .mockImplementation((timeout: number) => mockServerInstance.waitForCallback(timeout))
   localAuthServerStopSpy.mockReset().mockImplementation(() => mockServerInstance.stop())
   localAuthServerCancelSpy.mockReset().mockImplementation(() => mockServerInstance.cancel())
   localAuthServerGetPortSpy.mockReset().mockImplementation(() => mockServerInstance.getPort())
-  saveAuthToDiskSpy.mockReset().mockImplementation((key: string, info: Record<string, unknown> | null) => mockSaveAuthToDisk(key, info))
+  saveAuthToDiskSpy
+    .mockReset()
+    .mockImplementation((key: string, info: Record<string, unknown> | null) => mockSaveAuthToDisk(key, info))
   appRuntimeRunPromiseSpy.mockReset().mockResolvedValue(undefined)
   openLoginPageSpy.mockReset().mockImplementation(() => {
     if (mockOpenLoginPageShouldFail) return Promise.reject(new Error("Failed to open login page"))
@@ -205,7 +209,9 @@ describe("LoginService.logout", () => {
 
   test("should not throw when saveAuthToDisk fails", async () => {
     tokenStorage.clearToken = mock(() => Promise.resolve())
-    mockSaveAuthToDisk = mock(async () => { throw new Error("disk write failed") })
+    mockSaveAuthToDisk = mock(async () => {
+      throw new Error("disk write failed")
+    })
 
     const service = new LoginService()
     await service.logout()
@@ -248,6 +254,37 @@ describe("LoginService.login", () => {
     expect(service.getUserInfo()!.userId).toBe("user-123")
   })
 
+  test("should reject a non-China account country", async () => {
+    mockServerInstance = makeServer()
+    mockHttpClientForLogin(defaultJwt, {
+      ...defaultTokenCheck,
+      userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "DE" },
+    })
+    const saveToken = mock(() => Promise.resolve())
+    tokenStorage.saveToken = saveToken
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.unsupportedRegion).toBe(true)
+    expect(result.error).toBe("DevEco Code currently only supports China-region accounts.")
+    expect(saveToken).not.toHaveBeenCalled()
+  })
+
+  test("should reject a missing account country", async () => {
+    mockServerInstance = makeServer()
+    mockHttpClientForLogin(defaultJwt, {
+      ...defaultTokenCheck,
+      userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "" },
+    })
+    tokenStorage.saveToken = mock(() => Promise.resolve())
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.unsupportedRegion).toBe(true)
+  })
+
   test("should return cancelled result when LoginCancelledError is thrown", async () => {
     const stopSpy = mock(() => Promise.resolve())
     mockServerInstance = makeServer({
@@ -276,7 +313,7 @@ describe("LoginService.login", () => {
 
     expect(result.success).toBe(false)
     expect(result.unsupportedRegion).toBe(true)
-    expect(result.error).toBe("Sorry, only China site accounts are currently supported")
+    expect(result.error).toBe("DevEco Code currently only supports China-region accounts.")
     expect(stopSpy.mock.calls.length).toBe(1)
   })
 
@@ -373,6 +410,26 @@ describe("LoginService.login", () => {
   })
 })
 
+describe("LoginService.checkAccountRegion", () => {
+  test("returns supported only for a CN nationalCode", async () => {
+    mockHttpClientForLogin(defaultJwt, defaultTokenCheck)
+    expect(await new LoginService().checkAccountRegion(defaultJwt)).toBe("supported")
+  })
+
+  test("returns unsupported for a non-CN nationalCode", async () => {
+    mockHttpClientForLogin(defaultJwt, {
+      ...defaultTokenCheck,
+      userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "FR" },
+    })
+    expect(await new LoginService().checkAccountRegion(defaultJwt)).toBe("unsupported")
+  })
+
+  test("returns unverified when the token check fails", async () => {
+    httpClient.get = mock(() => Promise.reject(new Error("offline")))
+    expect(await new LoginService().checkAccountRegion(defaultJwt)).toBe("unverified")
+  })
+})
+
 describe("LoginService.refreshToken", () => {
   test("should return new tokens on successful refresh", async () => {
     const tokenCheck: TokenCheckResponse = {
@@ -384,11 +441,13 @@ describe("LoginService.refreshToken", () => {
         realName: "false",
       },
     }
-    httpClient.get = mock(() => Promise.resolve({
-      statusCode: 200,
-      data: JSON.stringify(tokenCheck),
-      headers: {},
-    } as HttpResponse))
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 200,
+        data: JSON.stringify(tokenCheck),
+        headers: {},
+      } as HttpResponse),
+    )
     httpClient.parseJson = mock(() => tokenCheck)
 
     const service = new LoginService()
@@ -400,11 +459,13 @@ describe("LoginService.refreshToken", () => {
   })
 
   test("should return null when HTTP response status is not 200", async () => {
-    httpClient.get = mock(() => Promise.resolve({
-      statusCode: 403,
-      data: "",
-      headers: {},
-    } as HttpResponse))
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 403,
+        data: "",
+        headers: {},
+      } as HttpResponse),
+    )
 
     const service = new LoginService()
     expect(await service.refreshToken("some.jwt.token")).toBe(null)
@@ -412,11 +473,13 @@ describe("LoginService.refreshToken", () => {
 
   test("should return null when response has status false", async () => {
     const invalidResponse: TokenCheckResponse = { status: false }
-    httpClient.get = mock(() => Promise.resolve({
-      statusCode: 200,
-      data: JSON.stringify(invalidResponse),
-      headers: {},
-    } as HttpResponse))
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 200,
+        data: JSON.stringify(invalidResponse),
+        headers: {},
+      } as HttpResponse),
+    )
     httpClient.parseJson = mock(() => invalidResponse)
 
     const service = new LoginService()
@@ -425,11 +488,13 @@ describe("LoginService.refreshToken", () => {
 
   test("should return null when response has status true but no userInfo", async () => {
     const noUserInfo: TokenCheckResponse = { status: true }
-    httpClient.get = mock(() => Promise.resolve({
-      statusCode: 200,
-      data: JSON.stringify(noUserInfo),
-      headers: {},
-    } as HttpResponse))
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 200,
+        data: JSON.stringify(noUserInfo),
+        headers: {},
+      } as HttpResponse),
+    )
     httpClient.parseJson = mock(() => noUserInfo)
 
     const service = new LoginService()
@@ -452,11 +517,13 @@ describe("LoginService.refreshToken", () => {
         realName: "false",
       },
     }
-    httpClient.get = mock(() => Promise.resolve({
-      statusCode: 200,
-      data: JSON.stringify(response),
-      headers: {},
-    } as HttpResponse))
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 200,
+        data: JSON.stringify(response),
+        headers: {},
+      } as HttpResponse),
+    )
     httpClient.parseJson = mock(() => response)
 
     const service = new LoginService()

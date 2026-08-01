@@ -6,6 +6,7 @@ import { GlobalBus } from "@/bus/global"
 import { AppRuntime } from "@/effect/app-runtime"
 import { devecoAuth } from "@/plugin/deveco/auth"
 import { sessionChatIdMap } from "@/plugin/deveco/session"
+import { regionPolicy } from "@/plugin/deveco/region-policy"
 
 // 真实 @/auth 导出 OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"，与测试断言一致，无需 mock。
 // 真实 @opencode-ai/core/global 模块副作用（创建数据目录）安全，auth-plugin 本身不消费其值。
@@ -37,6 +38,7 @@ const devecAuthRefreshTokenSpy = spyOn(devecoAuth, "refreshToken")
 const globalBusEmitSpy = spyOn(GlobalBus, "emit")
 const appRuntimeRunPromiseSpy = spyOn(AppRuntime, "runPromise")
 const ensureValidTokenSpy = spyOn(tokenRefresh, "ensureValidToken")
+const regionCheckSpy = spyOn(regionPolicy, "checkAccess")
 
 const sampleUserInfo: UserInfo = {
   userId: "user-123",
@@ -72,6 +74,7 @@ beforeEach(() => {
   }) as typeof GlobalBus.emit)
   appRuntimeRunPromiseSpy.mockReset().mockResolvedValue(undefined)
   ensureValidTokenSpy.mockReset().mockResolvedValue(null)
+  regionCheckSpy.mockReset().mockResolvedValue({ allowed: true })
   originalGlobalFetch = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     capturedFetchCall = { input, init }
@@ -89,6 +92,7 @@ afterAll(() => {
   devecAuthLoginSpy.mockRestore()
   devecAuthRefreshTokenSpy.mockRestore()
   ensureValidTokenSpy.mockRestore()
+  regionCheckSpy.mockRestore()
   readToolImprovementEnabledSpy.mockRestore()
 })
 
@@ -238,6 +242,21 @@ describe("fetch tool improvement consent header", () => {
       body: JSON.stringify({ stream: true }),
     })
     expect((capturedFetchCall!.init!.headers as Headers).get("X-DevEco-Improvement-Enabled")).toBe("false")
+  })
+})
+
+describe("fetch region restriction", () => {
+  test("returns 451 before calling Huawei inference with a non-China timezone", async () => {
+    regionCheckSpy.mockResolvedValue({ allowed: false, reason: "timezone" })
+    const fetchFn = await getFetchFn(() => Promise.resolve(validOauthAuth))
+
+    const response = await fetchFn("https://cn.devecostudio.huawei.com/sse/codeGenie/maas/v2/chat/completions", {
+      body: JSON.stringify({ stream: true }),
+    })
+
+    expect(response.status).toBe(451)
+    expect(await response.json()).toEqual({ error: "DevEco Code is currently only available in Mainland China." })
+    expect(capturedFetchCall).toBeNull()
   })
 })
 
@@ -472,7 +491,7 @@ describe("authorize callback", () => {
     const callback = await getAuthorizeCallback()
     const result = await callback()
     expect(result.type).toBe("failed")
-    expect((result as AuthCallbackResult & { type: "failed"; error: string }).error).toContain("China site")
+    expect((result as AuthCallbackResult & { type: "failed"; error: string }).error).toContain("China-region")
   })
 
   test("should return failed without error when login fails without unsupportedRegion", async () => {
