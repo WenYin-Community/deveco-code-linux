@@ -8,10 +8,6 @@ on:
 permissions:
   repository: read
 
-concurrency:
-  max: 1
-  exceed-action: QUEUE
-
 jobs:
   release:
     name: build-and-publish
