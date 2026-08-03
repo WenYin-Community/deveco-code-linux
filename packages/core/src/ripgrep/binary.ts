@@ -8,6 +8,7 @@ import { LayerNode } from "../effect/layer-node"
 import { httpClient } from "../effect/layer-node-platform"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
+import { resolveVendorDir } from "../installation/vendor-path"
 import { PS_ENCODING_PREAMBLE } from "../shell"
 import { which } from "../util/which"
 
@@ -96,8 +97,7 @@ export namespace RipgrepBinary {
             if (system && (yield* fs.isFile(system).pipe(Effect.orDie))) return system
 
             // Check bundled vendor binary (relative to compiled binary location)
-            const binDir = path.dirname(process.execPath)
-            const vendorRg = path.join(binDir, "..", "vendor", "ripgrep", process.platform === "win32" ? "rg.exe" : "rg")
+            const vendorRg = path.join(resolveVendorDir(), "ripgrep", process.platform === "win32" ? "rg.exe" : "rg")
             if (yield* fs.isFile(vendorRg).pipe(Effect.orDie)) return vendorRg
 
             const target = path.join(Global.Path.bin, `rg${process.platform === "win32" ? ".exe" : ""}`)

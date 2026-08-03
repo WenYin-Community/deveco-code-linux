@@ -8,6 +8,7 @@ import { errorMessage } from "@/util/error"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "@opencode-ai/core/process"
 import path from "path"
+import os from "os"
 import { EventV2 } from "@opencode-ai/core/event"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import semver from "semver"
@@ -217,7 +218,16 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
       }),
       method: Effect.fn("Installation.method")(function* () {
-        if (process.execPath.includes(path.join(".deveco", "bin"))) {
+        const versionsPath = path.join(".local", "share", "deveco", "versions")
+        const localBin = path.join(os.homedir(), ".local", "bin")
+        // Windows drive letter case may differ (C:\ vs c:\), normalize to lowercase.
+        const norm = (s: string) => process.platform === "win32" ? s.toLowerCase() : s
+        const execPath = norm(process.execPath)
+        if (
+          execPath.includes(norm(versionsPath)) ||
+          execPath.startsWith(norm(localBin + path.sep)) ||
+          execPath === norm(localBin)
+        ) {
           if (process.platform === "win32") return "irm" as Method
           return "curl" as Method
         }

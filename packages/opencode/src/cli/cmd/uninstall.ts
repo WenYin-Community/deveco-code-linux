@@ -97,7 +97,8 @@ async function collectRemovalTargets(args: UninstallArgs, method: Installation.M
   ]
 
   const shellConfig = method === "curl" || method === "irm" ? await getShellConfigFile() : null
-  const binary = method === "curl" || method === "irm" ? process.execPath : null
+  const binName = process.platform === "win32" ? "deveco.exe" : "deveco"
+  const binary = method === "curl" || method === "irm" ? path.join(os.homedir(), ".local", "bin", binName) : null
 
   return { directories, shellConfig, binary }
 }
@@ -121,7 +122,14 @@ async function showRemovalSummary(targets: RemovalTargets, method: Installation.
   }
 
   if (targets.binary) {
-    prompts.log.info(`  ✓ Binary: ${shortenPath(targets.binary)}`)
+    const exists = await fs.access(targets.binary).then(() => true).catch(() => false)
+    if (exists) {
+      const lstat = await fs.lstat(targets.binary).catch(() => null)
+      const detail = lstat?.isSymbolicLink()
+        ? `→ ${shortenPath(await fs.readlink(targets.binary))}`
+        : lstat ? formatSize(lstat.size) : ""
+      prompts.log.info(`  ✓ Binary: ${shortenPath(targets.binary)} ${UI.Style.TEXT_DIM}(${detail})`)
+    }
   }
 
   if (targets.shellConfig) {
@@ -229,29 +237,20 @@ async function uninstallPackage(method: Installation.Method, spinner: ReturnType
   }
 }
 
-// curl: don't auto-delete binary — show manual rm commands (safety: binary may be running)
+// curl/irm: the versioned binary is already removed with the Data directory.
+// Show manual commands for the symlink in ~/.local/bin.
 export function showBinaryRemovalInstructions(method: Installation.Method, targets: RemovalTargets) {
   if ((method !== "curl" && method !== "irm") || !targets.binary) {
     return
   }
 
   UI.empty()
-  prompts.log.message('To finish removing the binary, run:')
+  prompts.log.message('To finish removing the binary symlink, run:')
   if (process.platform === 'win32') {
     prompts.log.info(`  Remove-Item "${targets.binary}" -Force`)
-    const installDir = path.dirname(path.dirname(targets.binary))
-    if (installDir.includes('.deveco')) {
-      prompts.log.info(`  Remove-Item "${installDir}" -Recurse -Force`)
-    }
-    // Windows PATH is managed via the registry, not shell config files — prompt user to remove the entry manually
-    const binDir = path.dirname(targets.binary)
-    prompts.log.info(`  # Remove "${binDir}" from user PATH via System Settings or PowerShell`)
+    prompts.log.info(`  # Remove "${path.dirname(targets.binary)}" from user PATH via System Settings or PowerShell`)
   } else {
     prompts.log.info(`  rm "${targets.binary}"`)
-    const installDir = path.dirname(path.dirname(targets.binary))
-    if (installDir.includes('.deveco')) {
-      prompts.log.info(`  rmdir "${installDir}" 2>/dev/null`)
-    }
   }
 }
 
@@ -294,7 +293,7 @@ async function getShellConfigFile(): Promise<string | null> {
     if (!exists) continue
 
     const content = await Filesystem.readText(file).catch(() => "")
-    if (content.includes("# deveco") || content.includes(".deveco/bin")) {
+    if (content.includes("# deveco")) {
       return file
     }
   }
@@ -306,11 +305,12 @@ async function cleanShellConfig(file: string) {
   const content = await Filesystem.readText(file)
   const lines = content.split("\n")
 
+  // Remove "# deveco" marker and the PATH line immediately following it
+  let skipNext = false
   const filtered = lines.filter((line) => {
+    if (skipNext) { skipNext = false; return false }
     const trimmed = line.trim()
-    if (trimmed === "# deveco") return false
-    if (trimmed.startsWith("export PATH=") && trimmed.includes(".deveco/bin")) return false
-    if (trimmed.startsWith("fish_add_path") && trimmed.includes(".deveco")) return false
+    if (trimmed === "# deveco") { skipNext = true; return false }
     return true
   })
 

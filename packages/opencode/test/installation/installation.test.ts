@@ -1,4 +1,5 @@
 import path from "path"
+import os from "os"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
@@ -218,7 +219,7 @@ describe("installation", () => {
     )
 
     testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
-      "does not false-positive curl when execPath is not a .deveco/bin path",
+      "does not false-positive curl when execPath is not a versioned install path",
       () =>
         Effect.gen(function* () {
           const method = yield* Installation.use.method()
@@ -227,16 +228,14 @@ describe("installation", () => {
     )
 
     testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
-      "detects curl when execPath contains .deveco/bin",
+      "detects curl when execPath contains .local/share/deveco/versions",
       () =>
         Effect.gen(function* () {
           const original = process.execPath
           const originalPlatform = process.platform
           try {
             Object.defineProperty(process, "execPath", {
-              // Use path.join so the separator matches what path.join(".deveco","bin")
-              // produces on the current platform (backslash on win32, forward on POSIX).
-              value: path.join("/home/testuser", ".deveco", "bin", "deveco"),
+              value: path.join("/home/testuser", ".local", "share", "deveco", "versions", "0.2.0", "bin", "deveco"),
               configurable: true,
             })
             Object.defineProperty(process, "platform", { value: "linux", configurable: true })
@@ -250,22 +249,85 @@ describe("installation", () => {
     )
 
     testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
-      "detects irm when execPath is a Windows .deveco\\bin path",
+      "detects curl when execPath contains .local/bin",
       () =>
         Effect.gen(function* () {
           const original = process.execPath
           const originalPlatform = process.platform
           try {
-            // Use path.join to build a platform-correct mock path so the
-            // separator matches what path.join(".deveco","bin") produces on
-            // the current platform (backslash on win32, forward slash on POSIX).
             Object.defineProperty(process, "execPath", {
-              value: path.join("C:", "Users", "testuser", ".deveco", "bin", "deveco.exe"),
+              value: path.join(os.homedir(), ".local", "bin", "deveco"),
+              configurable: true,
+            })
+            Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+            const method = yield* Installation.use.method()
+            expect(method).toBe("curl")
+          } finally {
+            Object.defineProperty(process, "execPath", { value: original, configurable: true })
+            Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true })
+          }
+        }),
+    )
+
+    testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
+      "detects irm when execPath is a Windows versioned path",
+      () =>
+        Effect.gen(function* () {
+          const original = process.execPath
+          const originalPlatform = process.platform
+          try {
+            Object.defineProperty(process, "execPath", {
+              value: path.join("C:", "Users", "testuser", ".local", "share", "deveco", "versions", "0.2.0", "bin", "deveco.exe"),
               configurable: true,
             })
             Object.defineProperty(process, "platform", { value: "win32", configurable: true })
             const method = yield* Installation.use.method()
             expect(method).toBe("irm")
+          } finally {
+            Object.defineProperty(process, "execPath", { value: original, configurable: true })
+            Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true })
+          }
+        }),
+    )
+
+    testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
+      "detects irm on Windows when drive letter case differs (c: vs C:)",
+      () =>
+        Effect.gen(function* () {
+          const original = process.execPath
+          const originalPlatform = process.platform
+          try {
+            // Use os.homedir() but force a different case to simulate Windows
+            // drive letter mismatch (C:\Users vs c:\users).
+            const homeLower = os.homedir().toLowerCase()
+            Object.defineProperty(process, "execPath", {
+              value: homeLower + "/.local/bin/deveco.exe",
+              configurable: true,
+            })
+            Object.defineProperty(process, "platform", { value: "win32", configurable: true })
+            const method = yield* Installation.use.method()
+            expect(method).toBe("irm")
+          } finally {
+            Object.defineProperty(process, "execPath", { value: original, configurable: true })
+            Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true })
+          }
+        }),
+    )
+
+    testEffect(testLayer(() => jsonResponse({}), () => "")).effect(
+      "does not detect curl when execPath contains .local/bin but is not in home directory",
+      () =>
+        Effect.gen(function* () {
+          const original = process.execPath
+          const originalPlatform = process.platform
+          try {
+            Object.defineProperty(process, "execPath", {
+              value: path.join("/opt", "vendor", ".local", "bin", "other-tool"),
+              configurable: true,
+            })
+            Object.defineProperty(process, "platform", { value: "linux", configurable: true })
+            const method = yield* Installation.use.method()
+            expect(method).toBe("unknown")
           } finally {
             Object.defineProperty(process, "execPath", { value: original, configurable: true })
             Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true })

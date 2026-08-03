@@ -28,6 +28,8 @@ target
 .direnv/
 .sisyphus/
 
+.playwright-mcp/
+
 # Local dev files
 .harness/
 .specs/

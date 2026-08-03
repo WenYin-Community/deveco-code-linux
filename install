@@ -36,6 +36,7 @@ fi
 # ─── Global cleanup trap ────────────────────────────────────────────────────
 cleanup() {
     rm -rf "${TMPDIR:-/tmp}/deveco_install_$$"
+    rm -rf "$VERSIONS_DIR"/.staging.*.$$ 2>/dev/null || true
     printf '\033[?25h' 2>/dev/null
 }
 trap cleanup EXIT
@@ -101,8 +102,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-INSTALL_DIR=$HOME/.deveco/bin
-mkdir -p "$INSTALL_DIR"
+# ─── Versioned install directories ──────────────────────────────────────────
+BIN_DIR="$HOME/.local/bin"
+BIN_LINK="$BIN_DIR/$APP"
+VERSIONS_DIR="$HOME/.local/share/deveco/versions"
+VERSION_RETENTION_COUNT=2
+mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
@@ -215,9 +220,8 @@ print_message() {
 }
 
 check_version() {
-    if command -v deveco >/dev/null 2>&1; then
-        ## Check the installed version
-        installed_version=$(deveco --version 2>/dev/null || echo "")
+    if [ -L "$BIN_LINK" ] && [ -x "$BIN_LINK" ]; then
+        installed_version=$("$BIN_LINK" --version 2>/dev/null || echo "")
 
         if [[ "$installed_version" != "$specific_version" ]]; then
             print_message info "${MUTED}Installed version: ${NC}$installed_version."
@@ -318,22 +322,70 @@ download_with_progress() {
     return $ret
 }
 
+# ─── Versioned install helpers ────────────────────────────────────────────────
+update_symlink() {
+    local version_dir="$1"
+    local tmp_link="$BIN_DIR/.$APP.$$"
+    ln -sf "$version_dir/bin/$APP" "$tmp_link"
+    mv -Tf "$tmp_link" "$BIN_LINK" 2>/dev/null ||
+    mv -hf "$tmp_link" "$BIN_LINK" 2>/dev/null ||
+    { rm -f "$BIN_LINK"; mv -f "$tmp_link" "$BIN_LINK"; }
+}
+
+cleanup_old_versions() {
+    local current_target
+    current_target=$(readlink "$BIN_LINK" 2>/dev/null | sed "s|/bin/$APP\$||")
+    local versions=()
+    while IFS= read -r dir; do
+        versions+=("$dir")
+    done < <(find "$VERSIONS_DIR" -mindepth 1 -maxdepth 1 -type d \
+        -not -name '.*' 2>/dev/null | sort -V)
+
+    local count=${#versions[@]}
+    [ "$count" -le "$VERSION_RETENTION_COUNT" ] && return
+
+    local to_delete=$((count - VERSION_RETENTION_COUNT))
+    local deleted=0
+    for dir in "${versions[@]}"; do
+        [ "$deleted" -ge "$to_delete" ] && break
+        # Protect the version the current symlink points to
+        [ "$dir" = "$current_target" ] && continue
+        rm -rf "$dir"
+        deleted=$((deleted + 1))
+    done
+}
+
 download_and_install() {
     print_message info "\n${MUTED}Installing ${NC}deveco ${MUTED}version: ${NC}$specific_version"
+    local version_dir="$VERSIONS_DIR/$specific_version"
+    local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
     local tmp_dir="${TMPDIR:-/tmp}/deveco_install_$$"
-    mkdir -p "$tmp_dir"
+
+    # Skip download if this version is already fully installed
+    if [ -x "$version_dir/bin/$APP" ]; then
+        local existing_ver
+        existing_ver=$("$version_dir/bin/$APP" --version 2>/dev/null || echo "")
+        if [ "$existing_ver" = "$specific_version" ]; then
+            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping download"
+            update_symlink "$version_dir"
+            cleanup_old_versions
+            return
+        fi
+    fi
+
+    mkdir -p "$stage_dir/bin" "$tmp_dir"
 
     if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
         curl -f -# -L -o "$tmp_dir/$filename" "$url"
     fi
 
     if [ ! -f "$tmp_dir/$filename" ] || [ ! -s "$tmp_dir/$filename" ]; then
-        rm -rf "$tmp_dir"
+        rm -rf "$tmp_dir" "$stage_dir"
         die "Download failed — file is empty or missing" "Check your network, or download manually from https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
     fi
 
     if ! unzip -q "$tmp_dir/$filename" -d "$tmp_dir" 2>/dev/null; then
-        rm -rf "$tmp_dir"
+        rm -rf "$tmp_dir" "$stage_dir"
         die "Failed to extract archive — file may be corrupted" "Try running the install command again, or download the zip manually"
     fi
 
@@ -343,42 +395,53 @@ download_and_install() {
         binary_src=$(find "$tmp_dir" -name "$APP" -type f -print -quit)
     fi
     if [ -z "$binary_src" ] || [ ! -f "$binary_src" ]; then
-        rm -rf "$tmp_dir"
+        rm -rf "$tmp_dir" "$stage_dir"
         die "Binary '$APP' not found in the archive" "The package may be corrupted — try downloading again"
     fi
 
-    mv "$binary_src" "$INSTALL_DIR"
-    chmod 755 "${INSTALL_DIR}/$APP"
+    # Place binary into staging version directory
+    mv "$binary_src" "$stage_dir/bin/$APP"
+    chmod 755 "$stage_dir/bin/$APP"
 
-    # Copy vendor directory if present (ripgrep, mcp-bridge, etc.)
+    # Copy vendor directory into staging (ripgrep, mcp-bridge, etc.)
     local vendor_src
     vendor_src=$(find "$tmp_dir" -type d -name vendor -print -quit)
     if [ -n "$vendor_src" ]; then
-        mkdir -p "${INSTALL_DIR}/../vendor"
-        cp -r "$vendor_src"/* "${INSTALL_DIR}/../vendor/" 2>/dev/null || true
+        cp -r "$vendor_src" "$stage_dir/vendor"
     fi
 
-    # Copy CHANGELOG.md to install root (needed by /release-notes)
+    # Copy CHANGELOG.md into staging (needed by /release-notes)
     local changelog_src
     changelog_src=$(find "$tmp_dir" -maxdepth 2 -name "CHANGELOG.md" -not -path "*/bin/*" -not -path "*/vendor/*" -print -quit)
     if [ -n "$changelog_src" ]; then
-        cp "$changelog_src" "${INSTALL_DIR}/../CHANGELOG.md"
+        cp "$changelog_src" "$stage_dir/CHANGELOG.md"
     fi
+
+    # Atomic switch: staging → version directory
+    if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
+    mv "$stage_dir" "$version_dir"
 
     # Post-install smoke test
-    if ! "${INSTALL_DIR}/${APP}" --version >/dev/null 2>&1; then
-        rm -f "${INSTALL_DIR}/${APP}"
+    if ! "$version_dir/bin/$APP" --version >/dev/null 2>&1; then
+        rm -rf "$version_dir"
         rm -rf "$tmp_dir"
-        die "Installation verification failed" "${INSTALL_DIR}/${APP} could not run — platform may be incompatible"
+        die "Installation verification failed" "$version_dir/bin/$APP could not run — platform may be incompatible"
     fi
 
+    # Update symlink and clean up old versions
+    update_symlink "$version_dir"
+    cleanup_old_versions
     rm -rf "$tmp_dir"
 }
 
 install_from_binary() {
     print_message info "\n${MUTED}Installing ${NC}deveco ${MUTED}from: ${NC}$binary_path"
-    cp "$binary_path" "${INSTALL_DIR}/$APP"
-    chmod 755 "${INSTALL_DIR}/$APP"
+    local version_dir="$VERSIONS_DIR/local"
+    mkdir -p "$version_dir/bin"
+    cp "$binary_path" "$version_dir/bin/$APP"
+    chmod 755 "$version_dir/bin/$APP"
+    update_symlink "$version_dir"
+    cleanup_old_versions
 }
 
 if [ -n "$binary_path" ]; then
@@ -444,36 +507,36 @@ if [[ "$no_modify_path" != "true" ]]; then
 
     if [[ -z $config_file ]]; then
         warn "No shell config file found for $current_shell" "Please add the following to your shell config manually:"
-        print_message info "  export PATH=$INSTALL_DIR:\$PATH"
-    elif [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+        print_message info "  export PATH=$BIN_DIR:\$PATH"
+    elif [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         case $current_shell in
             fish)
-                add_to_path "$config_file" "fish_add_path $INSTALL_DIR"
+                add_to_path "$config_file" "fish_add_path $BIN_DIR"
             ;;
             zsh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+                add_to_path "$config_file" "export PATH=$BIN_DIR:\$PATH"
             ;;
             bash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+                add_to_path "$config_file" "export PATH=$BIN_DIR:\$PATH"
             ;;
             ash)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+                add_to_path "$config_file" "export PATH=$BIN_DIR:\$PATH"
             ;;
             sh)
-                add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+                add_to_path "$config_file" "export PATH=$BIN_DIR:\$PATH"
             ;;
             *)
-                export PATH=$INSTALL_DIR:$PATH
+                export PATH=$BIN_DIR:$PATH
                 warn "Unrecognized shell — please add PATH manually"
-                print_message info "  export PATH=$INSTALL_DIR:\$PATH"
+                print_message info "  export PATH=$BIN_DIR:\$PATH"
             ;;
         esac
     fi
 fi
 
 if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
-    echo "$INSTALL_DIR" >> $GITHUB_PATH
-    print_message info "Added $INSTALL_DIR to \$GITHUB_PATH"
+    echo "$BIN_DIR" >> $GITHUB_PATH
+    print_message info "Added $BIN_DIR to \$GITHUB_PATH"
 fi
 
 echo -e ""

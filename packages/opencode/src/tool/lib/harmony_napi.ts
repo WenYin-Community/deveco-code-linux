@@ -17,6 +17,7 @@ import fs from "fs"
 import { createRequire } from "node:module"
 import os from "node:os"
 import path from "path"
+import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
 import { findDevEcoHome } from "./env"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import { devecoAuth, ACCESS_TOKEN_EXPIRES_MS } from "@/plugin/deveco"
@@ -24,7 +25,7 @@ import { devecoAuth, ACCESS_TOKEN_EXPIRES_MS } from "@/plugin/deveco"
 function addon() {
   const execDir = path.dirname(process.execPath)
   // 1. vendor directory (npm / production mode)
-  const vendorMarker = path.join(execDir, "..", "vendor", "mcp-bridge-native", "package.json")
+  const vendorMarker = path.join(resolveVendorDir(), "mcp-bridge-native", "package.json")
   if (fs.existsSync(vendorMarker)) {
     const r = createRequire(vendorMarker)
     return r("./napi_bridge.node") as typeof import("@deveco-codegenie/mcp-bridge")

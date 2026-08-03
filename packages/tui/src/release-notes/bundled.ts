@@ -1,5 +1,6 @@
 import path from "path"
 import { fileURLToPath } from "url"
+import { resolveInstallRoot } from "@opencode-ai/core/installation/vendor-path"
 import { type ReleaseMeta, compareTags, normalizeVersion, parseSemver } from "./shared"
 
 const HEADER_RE = /^## (v?\d\S+)(?:\s+\((\d{4}-\d{2}-\d{2})\))?/
@@ -40,8 +41,7 @@ export function parseSections(raw: string): ParsedSection[] {
 }
 
 async function resolveChangelogPath(): Promise<string | null> {
-  const execDir = path.dirname(process.execPath)
-  const prodPath = path.join(execDir, "..", "CHANGELOG.md")
+  const prodPath = path.join(resolveInstallRoot(), "CHANGELOG.md")
   if (await Bun.file(prodPath).exists()) return prodPath
 
   const thisDir = path.dirname(fileURLToPath(import.meta.url))

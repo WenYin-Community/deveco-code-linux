@@ -12,7 +12,6 @@
 param(
     [string]$Version = "",
     [switch]$Baseline,
-    [string]$InstallDir = "$env:USERPROFILE\.deveco",
     [string]$Binary = "",
     [switch]$NoModifyPath,
     [switch]$Help
@@ -31,6 +30,10 @@ $gitcodeRepo = if ($env:GITCODE_REPO) { $env:GITCODE_REPO } else { "deveco-code"
 $Repo = "$gitcodeOwner/$gitcodeRepo"
 $GitCodeApi = "https://gitcode.com/api/v5/repos/$Repo"
 $AppName = "deveco"
+$VersionsDir = Join-Path $env:USERPROFILE ".local\share\deveco\versions"
+$BinDir = Join-Path $env:USERPROFILE ".local\bin"
+$BinPath = Join-Path $BinDir "$AppName.exe"
+$VersionRetentionCount = 2
 
 function Show-Help {
     Write-Host "DevEco Code Windows Installer"
@@ -41,7 +44,6 @@ function Show-Help {
     Write-Host "  -Version <version>   Install a specific version (e.g., 0.1.4)"
     Write-Host "  -Baseline            Force baseline variant (no AVX2)"
     Write-Host "  -Binary <path>       Install from a local binary instead of downloading"
-    Write-Host "  -InstallDir <path>   Install directory (default: `$env:USERPROFILE\.deveco)"
     Write-Host "  -NoModifyPath        Don't modify user PATH"
     Write-Host "  -Help                Show this help message"
     Write-Host ""
@@ -86,14 +88,9 @@ function Test-Avx2 {
 # M1: Check if the target version is already installed; exit 0 if so
 function Test-InstalledVersion {
     param([string]$TargetVersion)
-    $cmd = Get-Command deveco -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        $binPath = Join-Path $InstallDir "bin\$AppName.exe"
-        if (Test-Path $binPath) { $cmd = $binPath }
-    }
-    if (-not $cmd) { return }
+    if (-not (Test-Path $BinPath)) { return }
     try {
-        $installed = (& $cmd --version 2>$null) -join "`n"
+        $installed = (& $BinPath --version 2>$null) -join "`n"
     } catch {
         return
     }
@@ -104,6 +101,27 @@ function Test-InstalledVersion {
         exit 0
     }
     Write-Host "Installed version: $installed." -ForegroundColor Cyan
+}
+
+function Cleanup-OldVersions {
+    $dirs = Get-ChildItem -Path $VersionsDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '.*' -and $_.Name -match '^\d' } |
+        Sort-Object { [version]($_.Name -replace '-.*$','') } -ErrorAction SilentlyContinue
+    if (-not $dirs -or $dirs.Count -le $VersionRetentionCount) { return }
+    # NOTE: Use 2>$null (not 2>&1 |) to avoid $LASTEXITCODE reset in PS 5.1
+    # and to exclude stderr noise (e.g. "Bun v1.3.14") that confuses the regex.
+    $currentVersion = $null
+    if (Test-Path $BinPath) {
+        try {
+            $lines = @(& $BinPath --version 2>$null)
+            if ($lines[0] -match '(\d+\.\d+\.\d+)') { $currentVersion = $Matches[1] }
+        } catch {}
+    }
+    $toDelete = $dirs | Where-Object { $_.Name -ne $currentVersion } |
+        Select-Object -First ($dirs.Count - $VersionRetentionCount)
+    foreach ($dir in $toDelete) {
+        Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($Help) {
@@ -166,20 +184,26 @@ if ($Binary) {
     Test-InstalledVersion $tag
 }
 
-# 全局 try/finally: 确保异常或 Ctrl+C 时清理 $tempFile 和 $tempDir
+# 全局 try/finally: 确保异常或 Ctrl+C 时清理 $tempFile 和 $stageDir
 try {
-    # --- Create install dir structure ---
-    $binDir = Join-Path $InstallDir "bin"
-    if (-not (Test-Path $binDir)) {
-        New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    # --- Create versioned install directories ---
+    if (-not (Test-Path $VersionsDir)) {
+        New-Item -ItemType Directory -Path $VersionsDir -Force | Out-Null
     }
-    $devecoPath = Join-Path $binDir "$AppName.exe"
+    if (-not (Test-Path $BinDir)) {
+        New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+    }
 
     if ($Binary) {
-        # --- M3: Binary install — copy local binary, skip download/extract ---
+        # --- Binary install — copy local binary to versioned dir ---
         Write-Host "Installing deveco from: $Binary" -ForegroundColor Cyan
-        if (Test-Path $devecoPath) { Remove-Item $devecoPath -Force }
-        Copy-Item -Path $Binary -Destination $devecoPath -Force
+        $versionDir = Join-Path $VersionsDir "local"
+        $versionBinDir = Join-Path $versionDir "bin"
+        if (-not (Test-Path $versionBinDir)) {
+            New-Item -ItemType Directory -Path $versionBinDir -Force | Out-Null
+        }
+        $versionBin = Join-Path $versionBinDir "$AppName.exe"
+        Copy-Item -Path $Binary -Destination $versionBin -Force
     } else {
         # --- Determine baseline vs AVX2 ---
         $useBaseline = $Baseline
@@ -220,103 +244,122 @@ try {
             exit 1
         }
 
-        # --- Extract to temp dir (not install dir — we search for files) ---
-        $tempDir = Join-Path $env:TEMP "deveco_install_$PID"
-        if (Test-Path $tempDir) { Remove-Item $tempDir -Recurse -Force }
-        New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+        # --- Extract to staging directory ---
+        $stageDir = Join-Path $VersionsDir ".staging.$tag.$PID"
+        $stageBinDir = Join-Path $stageDir "bin"
+        if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $stageBinDir -Force | Out-Null
 
         Write-Host "Extracting..." -ForegroundColor Cyan
         try {
-            Expand-Archive -Path $tempFile -DestinationPath $tempDir -Force -ErrorAction Stop
+            Expand-Archive -Path $tempFile -DestinationPath $stageDir -Force -ErrorAction Stop
         } catch {
             Write-Error "Extraction failed: $_"
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             exit 1
         } finally {
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
         }
 
-        # --- Find binary: check .exe first on Windows (L2) ---
-        $binarySrc = Join-Path $tempDir "$AppName.exe"
+        # --- Find binary and move to staging/bin/ ---
+        $binarySrc = Join-Path $stageDir "$AppName.exe"
         if (-not (Test-Path $binarySrc)) {
-            $binarySrc = Join-Path $tempDir $AppName
+            $binarySrc = Join-Path $stageDir $AppName
         }
         if (-not (Test-Path $binarySrc)) {
-            $found = Get-ChildItem -Path $tempDir -Filter "$AppName.exe" -Recurse -File | Select-Object -First 1
+            $found = Get-ChildItem -Path $stageDir -Filter "$AppName.exe" -Recurse -File | Select-Object -First 1
             if (-not $found) {
-                $found = Get-ChildItem -Path $tempDir -Filter $AppName -Recurse -File | Select-Object -First 1
+                $found = Get-ChildItem -Path $stageDir -Filter $AppName -Recurse -File | Select-Object -First 1
             }
             if ($found) { $binarySrc = $found.FullName }
         }
         if (-not (Test-Path $binarySrc)) {
-            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Binary '$AppName' not found in archive"
             Write-Host "The package may be corrupted — try downloading again" -ForegroundColor Yellow
             exit 1
         }
 
-        # --- Move binary to bin dir, normalize name to deveco.exe ---
-        if (Test-Path $devecoPath) { Remove-Item $devecoPath -Force }
-        Move-Item -Path $binarySrc -Destination $devecoPath -Force
-
-        # --- Copy vendor directory (ripgrep, mcp-bridge) — L4: file-by-file copy (aligned with bash cp -r || true) ---
-        $vendorSrc = (Get-ChildItem -Path $tempDir -Filter "vendor" -Recurse -Directory | Select-Object -First 1)
-        if ($vendorSrc) {
-            $vendorDest = Join-Path $InstallDir "vendor"
-            if (-not (Test-Path $vendorDest)) {
-                New-Item -ItemType Directory -Path $vendorDest -Force | Out-Null
-            }
-
-            # 逐文件覆盖，锁定的文件跳过，不影响其他文件
-            Get-ChildItem -Path $vendorSrc.FullName -Recurse -File | ForEach-Object {
-                $relativePath = $_.FullName.Substring($vendorSrc.FullName.Length)
-                $destFile = Join-Path $vendorDest $relativePath
-                $destDir = Split-Path $destFile -Parent
-                if (-not (Test-Path $destDir)) {
-                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                }
-                try {
-                    Copy-Item -Path $_.FullName -Destination $destFile -Force -ErrorAction Stop
-                } catch {
-                    Write-Host "  Skipped (in use): $relativePath" -ForegroundColor Yellow
-                }
-            }
-            Write-Host "Copied vendor directory" -ForegroundColor Green
+        # Move binary into staging/bin/ (normalize name to deveco.exe)
+        $stageBin = Join-Path $stageBinDir "$AppName.exe"
+        if ($binarySrc -ne $stageBin) {
+            Move-Item -Path $binarySrc -Destination $stageBin -Force
         }
 
-        # --- Copy CHANGELOG.md (for /release-notes feature) ---
-        $changelog = Get-ChildItem -Path $tempDir -Filter "CHANGELOG.md" -Recurse -File |
-            Where-Object { $_.FullName -notmatch '\\bin\\' -and $_.FullName -notmatch '\\vendor\\' } |
-            Select-Object -First 1
-        if ($changelog) {
-            Copy-Item -Path $changelog.FullName -Destination (Join-Path $InstallDir "CHANGELOG.md") -Force
-            Write-Host "Copied CHANGELOG.md" -ForegroundColor Green
+        # Fallback: search for vendor/ and CHANGELOG.md if not at stageDir root
+        if (-not (Test-Path (Join-Path $stageDir "vendor"))) {
+            $vendorFound = Get-ChildItem -Path $stageDir -Directory -Filter "vendor" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($vendorFound) {
+                Move-Item -Path $vendorFound.FullName -Destination (Join-Path $stageDir "vendor") -Force
+            }
+        }
+        if (-not (Test-Path (Join-Path $stageDir "CHANGELOG.md"))) {
+            $changelog = Get-ChildItem -Path $stageDir -File -Filter "CHANGELOG.md" -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '\\bin\\' -and $_.FullName -notmatch '\\vendor\\' } |
+                Select-Object -First 1
+            if ($changelog) {
+                Copy-Item -Path $changelog.FullName -Destination (Join-Path $stageDir "CHANGELOG.md") -Force
+            }
         }
 
-        # Clean up temp dir
-        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+        # --- Atomic switch: staging → version directory ---
+        $versionDir = Join-Path $VersionsDir $tag
+        if (Test-Path $versionDir) { Remove-Item $versionDir -Recurse -Force }
+        Move-Item -Path $stageDir -Destination $versionDir
 
-    # --- Post-install smoke test (download mode only; -Binary skips per bash parity) ---
-    if (-not $Binary) {
-        # 改用退出码判断,更严谨(原写法对 NativeCommand 的 2>&1 可能产生 ErrorRecord 影响判断)
-        & $devecoPath --version 2>&1 | Out-Null
+        $versionBin = Join-Path $versionDir "bin\$AppName.exe"
+
+        # --- Post-install smoke test ---
+        # NOTE: Avoid 2>&1 | Out-Null which resets $LASTEXITCODE to 0 in PS 5.1
+        & $versionBin --version 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Remove-Item $devecoPath -Force -ErrorAction SilentlyContinue
+            Remove-Item $versionDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Installation verification failed — deveco could not run"
             Write-Host "Platform may be incompatible" -ForegroundColor Yellow
             exit 1
         }
     }
 
-    # --- Add to user PATH (deduplicated, case-insensitive) — M2: -NoModifyPath ---
+    # --- Windows rename-then-copy + rollback (aligned with Claude Code) ---
+    if (Test-Path $BinPath) {
+        $oldName = "$BinPath.old.$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+        $oldLeaf = Split-Path $oldName -Leaf
+        Rename-Item -Path $BinPath -NewName $oldLeaf
+        try {
+            Copy-Item -Path $versionBin -Destination $BinPath -Force
+            # SHA-256 verification after copy
+            $expected = (Get-FileHash -Path $versionBin -Algorithm SHA256).Hash
+            $actual = (Get-FileHash -Path $BinPath -Algorithm SHA256).Hash
+            if ($expected -ne $actual) {
+                throw "SHA-256 verification failed after copy"
+            }
+            Remove-Item -Path $oldName -Force -ErrorAction SilentlyContinue
+        } catch {
+            # Rollback: restore the old binary
+            if (Test-Path $oldName) {
+                if (Test-Path $BinPath) { Remove-Item $BinPath -Force -ErrorAction SilentlyContinue }
+                Rename-Item -Path $oldName -NewName "$AppName.exe"
+            }
+            throw
+        }
+    } else {
+        Copy-Item -Path $versionBin -Destination $BinPath -Force
+    }
+
+    # --- Clean up stale .old.* files from previous installs ---
+    Get-ChildItem -Path $BinDir -Filter "$AppName.exe.old.*" -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
+    # --- Clean up old versions (keep $VersionRetentionCount) ---
+    Cleanup-OldVersions
+
+    # --- Add to user PATH (deduplicated, case-insensitive) ---
     if ($NoModifyPath) {
         Write-Host "Skipping PATH modification (-NoModifyPath)" -ForegroundColor Yellow
     } else {
-        $pathEntry = $binDir
+        $pathEntry = $BinDir
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        # null 守卫: 防止新用户账户 PATH 为 null 时调用 TrimEnd 崩溃
         if (-not $currentPath) { $currentPath = "" }
         $pathEntries = $currentPath -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
         $alreadyInPath = $pathEntries | Where-Object { $_ -ieq $pathEntry }
@@ -324,7 +367,6 @@ try {
         if ($alreadyInPath) {
             Write-Host "PATH already contains $pathEntry" -ForegroundColor Green
         } else {
-            # L3: guard against empty PATH producing leading semicolon
             if ($currentPath) {
                 $newPath = $currentPath.TrimEnd(";") + ";$pathEntry"
             } else {
@@ -337,7 +379,7 @@ try {
     }
 
     # --- Success ---
-    # For -Binary mode, skip --version (binary may lack vendor/ deps); use known tag instead
+    $devecoPath = $BinPath
     if ($Binary) {
         $versionOutput = $tag
     } else {
@@ -366,5 +408,5 @@ try {
 } finally {
     # 全局清理: 确保异常或 Ctrl+C 时清理临时文件
     if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
-    if ($tempDir -and (Test-Path $tempDir)) { Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($stageDir -and (Test-Path $stageDir)) { Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue }
 }

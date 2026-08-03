@@ -390,14 +390,11 @@ for (const item of targets) {
   await $`rm -rf ./dist/${name}/bin/tui`
 
   await fs.promises.copyFile(
-    path.join(dir, "README.md"),
-    path.join(dir, "dist", name, "bin", "README.md"),
-  )
-
-  await fs.promises.copyFile(
     path.join(dir, "..", "..", "CHANGELOG.md"),
     path.join(dir, "dist", name, "CHANGELOG.md"),
   )
+
+  await $`cp ${path.join(dir, "../../README.md")} dist/${name}/README.md`
 
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
@@ -410,6 +407,7 @@ for (const item of targets) {
           "bin/**/*",
           "vendor/**/*",
           "CHANGELOG.md",
+          "README.md",
         ],
       },
       null,

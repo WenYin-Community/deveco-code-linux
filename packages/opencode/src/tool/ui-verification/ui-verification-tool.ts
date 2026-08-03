@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js"
+import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import { ACCESS_TOKEN_EXPIRES_MS, devecoAuth } from "@/plugin/deveco"
 import { Session } from "@/session/session"
@@ -419,7 +420,7 @@ function uiVerificationLogDir(): string {
 
 function resolveUiVerificationScript(): string {
   const execDir = path.dirname(process.execPath)
-  const vendor = path.join(execDir, "..", "vendor", "ui-verification-mcp", "uiVerification.mjs")
+  const vendor = path.join(resolveVendorDir(), "ui-verification-mcp", "uiVerification.mjs")
   if (fs.existsSync(vendor)) {
     return vendor;
   }
