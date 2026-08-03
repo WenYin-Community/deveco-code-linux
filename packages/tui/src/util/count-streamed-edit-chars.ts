@@ -15,5 +15,8 @@ export function countStreamedChars(raw: string, key: string): number {
 
 function countChars(value: string | undefined): number {
   if (!value) return 0
-  return value.length
+  return value
+    .replace(/\\u[0-9a-fA-F]{4}/g, "0")
+    .replace(/\\./g, "0")
+    .length
 }
