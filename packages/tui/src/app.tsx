@@ -286,12 +286,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                 <ToastProvider>
                                   <RouteProvider
                                     initialRoute={
-                                      input.args.continue
-                                        ? {
-                                            type: "session",
-                                            sessionID: "dummy",
-                                          }
-                                        : undefined
+                                      // Don't use a "dummy" sessionID for --continue: it causes the
+                                      // <Show keyed> to mount a Session with key="dummy", then immediately
+                                      // destroy and re-mount it when the real sessionID arrives. This rapid
+                                      // Yoga node remove→insert can race and trigger
+                                      // "Child already has a owner, it must be removed first" in Yoga WASM.
+                                      // Instead, start at home and let the sync/bootstrap navigate to the
+                                      // correct session once data is loaded.
+                                      undefined
                                     }
                                   >
                                     <TuiConfigProvider config={input.config}>
