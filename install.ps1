@@ -383,7 +383,11 @@ try {
     if ($Binary) {
         $versionOutput = $tag
     } else {
-        $versionOutput = & $devecoPath --version 2>&1
+        try {
+            $versionOutput = & $devecoPath --version 2>&1
+        } catch {
+            $versionOutput = $tag
+        }
     }
     Write-Host ""
     Write-Host "▃▃▃▃  ▃▃▃▃ ▃   ▃ ▃▃▃▃  ▃▃▃   ▃▃▃     ▃▃▃   ▃▃▃  ▃▃▃▃  ▃▃▃▃" -ForegroundColor Green
