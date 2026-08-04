@@ -204,25 +204,23 @@ function filterBlacklist(models: ModelsMap, blacklist: string[]): ModelsDev.Prov
 
 // ============ Public API ============
 
-export async function getDevecoProviderConfig(accessToken: string): Promise<ModelsDev.Provider> {
+export async function getDevecoProviderConfig(accessToken: string): Promise<ModelsDev.Provider | null> {
   if (cachedConfig) return cachedConfig
-
-  const defaultBlacklist = DEVECO_DEFAULTS.taskDefaultModelMap.blacklist?.split(",") ?? []
 
   try {
     const { models, taskDefaultModelMap } = await fetchModelsFromAPI(accessToken)
 
     if (!models || Object.keys(models).length === 0) {
-      await log(Effect.logWarning("API returned empty models, using defaults", { service: "deveco-models" }))
-      return filterBlacklist(DEVECO_DEFAULTS.provider.models, defaultBlacklist)
+      await log(Effect.logWarning("API returned empty models, no fallback provided", { service: "deveco-models" }))
+      return null
     }
 
     cachedConfig = filterBlacklist(models, taskDefaultModelMap?.blacklist?.split(",") ?? [])
     cachedTaskDefaultModelMap = taskDefaultModelMap ?? DEVECO_DEFAULTS.taskDefaultModelMap
     return cachedConfig
   } catch (err) {
-    await log(Effect.logWarning("Failed to fetch models, using defaults", { service: "deveco-models", error: String(err) }))
-    return filterBlacklist(DEVECO_DEFAULTS.provider.models, defaultBlacklist)
+    await log(Effect.logWarning("Failed to fetch models, no fallback provided", { service: "deveco-models", error: String(err) }))
+    return null
   }
 }
 

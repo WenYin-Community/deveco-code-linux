@@ -151,47 +151,43 @@ describe("getDevecoProviderConfig", () => {
     globalThis.fetch = originalFetch
   })
 
-  test("falls back to defaults filtered by blacklist on HTTP error", async () => {
+  test("returns null on HTTP error", async () => {
     const mod = await loadFresh()
     globalThis.fetch = mockFetch(async () => new Response("error", { status: 500 }))
     const result = await mod.getDevecoProviderConfig("token")
-    expect(result.id).toBe(DEVECO_PROVIDER_ID)
-    expect(Object.keys(result.models)).not.toContain("Qwen2.5-VL-72B")
-    expect(result.models["glm-5"]).toBeDefined()
+    expect(result).toBeNull()
   })
 
-  test("falls back to defaults filtered by blacklist on empty API models", async () => {
+  test("returns null on empty API models", async () => {
     const mod = await loadFresh()
     globalThis.fetch = mockFetch(async () =>
       Response.json({ code: 200, body: { version: 1, inner_models: [] } })
     )
     const result = await mod.getDevecoProviderConfig("token")
-    expect(Object.keys(result.models)).not.toContain("Qwen2.5-VL-72B")
-    expect(result.models["glm-5"]).toBeDefined()
+    expect(result).toBeNull()
   })
 
-  test("falls back to defaults on non-200 code in response body", async () => {
+  test("returns null on non-200 code in response body", async () => {
     const mod = await loadFresh()
     globalThis.fetch = mockFetch(async () =>
       Response.json({ code: 403, body: { version: 1, inner_models: [] } })
     )
     const result = await mod.getDevecoProviderConfig("token")
-    expect(Object.keys(result.models)).not.toContain("Qwen2.5-VL-72B")
+    expect(result).toBeNull()
   })
 
-  test("falls back to defaults on network error (fetch throws)", async () => {
+  test("returns null on network error (fetch throws)", async () => {
     const mod = await loadFresh()
     globalThis.fetch = mockFetch(async () => { throw new Error("ECONNREFUSED") })
     const result = await mod.getDevecoProviderConfig("token")
-    expect(result.id).toBe(DEVECO_PROVIDER_ID)
-    expect(result.models["glm-5"]).toBeDefined()
+    expect(result).toBeNull()
   })
 
-  test("falls back to defaults on malformed JSON that fails schema validation", async () => {
+  test("returns null on malformed JSON that fails schema validation", async () => {
     const mod = await loadFresh()
     globalThis.fetch = mockFetch(async () => Response.json({ unexpected: "shape" }))
     const result = await mod.getDevecoProviderConfig("token")
-    expect(result.models["glm-5"]).toBeDefined()
+    expect(result).toBeNull()
   })
 
   test("fallback does not cache — subsequent call still fetches", async () => {
@@ -227,31 +223,32 @@ describe("getDevecoProviderConfig", () => {
     globalThis.fetch = mockFetch(async () => Response.json(apiResponse))
 
     const result = await mod.getDevecoProviderConfig("test-token")
+    expect(result).not.toBeNull()
 
-    expect(result.id).toBe(DEVECO_PROVIDER_ID)
-    expect(result.models["reasoning-model"]!.reasoning).toBe(true)
-    expect(result.models["reasoning-model"]!.tool_call).toBe(true)
-    expect(result.models["reasoning-model"]!.limit.context).toBe(200000)
-    expect(result.models["reasoning-model"]!.limit.output).toBe(8000)
-    expect(result.models["reasoning-model"]!.modalities!.input).toEqual(["text"])
+    expect(result!.id).toBe(DEVECO_PROVIDER_ID)
+    expect(result!.models["reasoning-model"]!.reasoning).toBe(true)
+    expect(result!.models["reasoning-model"]!.tool_call).toBe(true)
+    expect(result!.models["reasoning-model"]!.limit.context).toBe(200000)
+    expect(result!.models["reasoning-model"]!.limit.output).toBe(8000)
+    expect(result!.models["reasoning-model"]!.modalities!.input).toEqual(["text"])
 
-    expect(result.models["basic-model"]!.reasoning).toBe(false)
-    expect(result.models["basic-model"]!.tool_call).toBe(false)
-    expect(result.models["basic-model"]!.limit.output).toBe(2048)
+    expect(result!.models["basic-model"]!.reasoning).toBe(false)
+    expect(result!.models["basic-model"]!.tool_call).toBe(false)
+    expect(result!.models["basic-model"]!.limit.output).toBe(2048)
 
-    expect(result.models["no-thinking-no-tool"]!.reasoning).toBe(false)
-    expect(result.models["no-thinking-no-tool"]!.tool_call).toBe(false)
-    expect(result.models["no-thinking-no-tool"]!.limit.context).toBe(8192)
-    expect(result.models["no-thinking-no-tool"]!.limit.output).toBe(8192)
+    expect(result!.models["no-thinking-no-tool"]!.reasoning).toBe(false)
+    expect(result!.models["no-thinking-no-tool"]!.tool_call).toBe(false)
+    expect(result!.models["no-thinking-no-tool"]!.limit.context).toBe(8192)
+    expect(result!.models["no-thinking-no-tool"]!.limit.output).toBe(8192)
 
-    expect(result.models["bad-output-model"]!.limit.output).toBe(8192)
+    expect(result!.models["bad-output-model"]!.limit.output).toBe(8192)
 
-    expect(result.models["vl-model"]!.modalities!.input).toEqual(["text", "image"])
-    expect(result.models["vl-model"]!.limit.context).toBe(32768)
+    expect(result!.models["vl-model"]!.modalities!.input).toEqual(["text", "image"])
+    expect(result!.models["vl-model"]!.limit.context).toBe(32768)
 
-    expect(result.models["empty-mods-model"]!.modalities!.input).toEqual(["text"])
+    expect(result!.models["empty-mods-model"]!.modalities!.input).toEqual(["text"])
 
-    expect(Object.keys(result.models)).not.toContain("blacklisted-model")
+    expect(Object.keys(result!.models)).not.toContain("blacklisted-model")
   })
 
   test("uses empty blacklist when API has no taskDefaultModelMap (no models filtered)", async () => {
@@ -264,8 +261,9 @@ describe("getDevecoProviderConfig", () => {
     })
     globalThis.fetch = mockFetch(async () => Response.json(apiResponse))
     const result = await mod.getDevecoProviderConfig("token")
-    expect(result.models["model-a"]).toBeDefined()
-    expect(result.models["Qwen2.5-VL-72B"]).toBeDefined()
+    expect(result).not.toBeNull()
+    expect(result!.models["model-a"]).toBeDefined()
+    expect(result!.models["Qwen2.5-VL-72B"]).toBeDefined()
   })
 
   test("extracts taskDefaultModelMap from non-first group", async () => {
@@ -285,7 +283,8 @@ describe("getDevecoProviderConfig", () => {
     })
     globalThis.fetch = mockFetch(async () => Response.json(apiResponse))
     const result = await mod.getDevecoProviderConfig("token")
-    expect(result.models["model-x"]).toBeDefined()
+    expect(result).not.toBeNull()
+    expect(result!.models["model-x"]).toBeDefined()
     const map = mod.getTaskDefaultModelMap()
     expect(map.small_model).toBe("model-x")
   })

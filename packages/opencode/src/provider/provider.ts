@@ -1365,7 +1365,9 @@ export const layer = Layer.effect(
           if (accessToken) {
             const { getDevecoProviderConfig } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
             const config = yield* Effect.promise(() => getDevecoProviderConfig(accessToken))
-            configProviders.push(["deveco", config as unknown as Partial<Info>])
+            if (config) {
+              configProviders.push(["deveco", config as unknown as Partial<Info>])
+            }
           }
         }
 
