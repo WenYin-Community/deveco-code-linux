@@ -532,4 +532,27 @@ describe("LoginService.refreshToken", () => {
     expect(result!.accessToken).toBe("access-only")
     expect(result!.refreshToken).toBe("")
   })
+
+  test("should throw UnsupportedRegionError when nationalCode is not CN", async () => {
+    const nonChinaResponse: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        nationalCode: "US",
+        realName: "true",
+      },
+    }
+    httpClient.get = mock(() =>
+      Promise.resolve({
+        statusCode: 200,
+        data: JSON.stringify(nonChinaResponse),
+        headers: {},
+      } as HttpResponse),
+    )
+    httpClient.parseJson = mock(() => nonChinaResponse)
+
+    const service = new LoginService()
+    expect(() => service.refreshToken("some.jwt.token")).toThrow(UnsupportedRegionError)
+  })
 })

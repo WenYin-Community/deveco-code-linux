@@ -16,3 +16,4 @@ export {
   ACCOUNT_REGION_UNVERIFIED_MESSAGE,
 } from "./region-policy"
 export type { RegionAccessResult } from "./region-policy"
+export { UnsupportedRegionError } from "./errors"

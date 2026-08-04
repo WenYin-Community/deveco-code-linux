@@ -42,7 +42,7 @@ import { HomeSessionDestinationProvider } from "@opencode-ai/tui/routes/home/ses
 import { Toast, useToast } from "@opencode-ai/tui/ui/toast"
 import type { SyncObject } from "@opencode-ai/tui/deveco-extensions"
 import { agreementService, AgreementStatus } from "@/cli/deveco-agreement"
-import { devecoAuth, hasDevecoOAuthEntry, ensureValidToken, loadIsRealNameFromDisk } from "@/plugin/deveco"
+import { devecoAuth, hasDevecoOAuthEntry, ensureValidToken, loadIsRealNameFromDisk, UnsupportedRegionError, CHINA_ACCOUNT_ONLY_MESSAGE } from "@/plugin/deveco"
 import { hasConfiguredDevEcoHome } from "@/tool/lib/env"
 import { getPrivacyAcceptedKey, type AgreementConfig } from "@/cli/deveco-legal"
 import { DevEcoOnboarding } from "./onboarding"
@@ -80,6 +80,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   const [authCheckDone, setAuthCheckDone] = createSignal(false)
   let devecoChecked = false
   const [devecoRealName, setDevecoRealName] = createSignal(false)
+  const [devecoInitialAuthError, setDevecoInitialAuthError] = createSignal<string | undefined>(undefined)
 
   const bodySlotHeight = createMemo(() => homeBodySlotRows(dimensions().height))
 
@@ -207,6 +208,11 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     }
 
     } catch (err) {
+      if (err instanceof UnsupportedRegionError) {
+        logError("runDevecoCheck blocked: unsupported account region", { service: "deveco" })
+        setDevecoInitialAuthError(CHINA_ACCOUNT_ONLY_MESSAGE)
+        return finishCheck(false)
+      }
       // Any unhandled error must not
       // leave the UI stuck on "Checking login status…".  Fall back to the entry
       // screen so the user can at least re-login or exit.
@@ -371,6 +377,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
                   initialStep={devecoInitialStep()}
                   sessionExpired={devecoSessionExpired()}
                   initialRealName={devecoRealName()}
+                  initialAuthError={devecoInitialAuthError()}
                 />
               </Show>
             </box>

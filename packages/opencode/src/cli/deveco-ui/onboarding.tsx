@@ -255,7 +255,7 @@ async function runProviderOAuth(
   }
 }
 
-export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean }) {
+export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean; initialAuthError?: string }) {
   const { theme } = useTheme();
   const sync = useSync();
   const exit = useExit();
@@ -283,7 +283,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const [realnameIndex, setRealnameIndex] = createSignal(0);
   const [realnameRechecking, setRealnameRechecking] = createSignal(false);
   const [realnameRecheckError, setRealnameRecheckError] = createSignal<string | null>(null);
-  const [authMessage, setAuthMessage] = createSignal<string | null>(null);
+  const [authMessage, setAuthMessage] = createSignal<string | null>(props.initialAuthError ?? null);
   const [authBusy, setAuthBusy] = createSignal(false);
   const [providerIndex, setProviderIndex] = createSignal(0);
   let authAborted = false;

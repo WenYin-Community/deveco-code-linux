@@ -297,6 +297,7 @@ export class LoginService {
         isRealName: String(result.userInfo.realName) === "true",
       }
     } catch (err) {
+      if (err instanceof UnsupportedRegionError) throw err
       logError(`refreshToken error: ${err}`, { service: "deveco", url })
       return null
     }
@@ -355,6 +356,10 @@ export class LoginService {
 
   private requireChinaAccount(tokenInfo: TokenCheckResponse): void {
     if (tokenInfo.userInfo?.nationalCode?.trim().toUpperCase() === "CN") return
+    logError("unsupported account region", {
+      service: "deveco",
+      nationalCode: tokenInfo.userInfo?.nationalCode ?? "",
+    })
     throw new UnsupportedRegionError("Unsupported account region")
   }
 }
