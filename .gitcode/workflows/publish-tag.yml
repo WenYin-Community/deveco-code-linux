@@ -91,6 +91,29 @@ jobs:
           REPO="${GITCODE_REPO}"
           TOKEN="${{ secrets.RELEASE_TOKEN }}"
 
+          # 从 CHANGELOG.md 提取当前版本的 changelog
+          CHANGELOG_FILE="../../CHANGELOG.md"
+          RELEASE_BODY=""
+          if [ -f "$CHANGELOG_FILE" ]; then
+            # 提取当前版本 section（从 ## vX.Y.Z 到下一个 ## 或文件末尾，去掉版本标题行本身）
+            RELEASE_BODY=$(sed -n "/^## ${TAG} /,/^## v/{ /^## ${TAG} /d; /^## v/d; p; }" "$CHANGELOG_FILE" | sed '/^$/N;/^\n$/d')
+          fi
+
+          # 如果提取失败，使用 fallback
+          if [ -z "$RELEASE_BODY" ]; then
+            RELEASE_BODY="DevEco Code ${TAG}"
+          fi
+
+          # 追加安装提示
+          RELEASE_BODY="${RELEASE_BODY}
+
+---
+
+如需下载使用，请执行：\`npm install -g @${DEVECO_SCOPE}/deveco-code\`"
+
+          # 将 body 转为 JSON 安全格式
+          BODY_JSON=$(printf '%s' "$RELEASE_BODY" | jq -Rs .)
+
           # 创建 zip 归档
           for dir in dist/deveco-*/; do
             [ -d "$dir" ] || continue
@@ -110,7 +133,7 @@ jobs:
             RELEASE_INFO=$(curl -sS -X POST \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"body\":\"DevEco Code $TAG\",\"prerelease\":$([ "$DEVECO_CHANNEL" != "latest" ] && echo true || echo false),\"target_commitish\":\"develop\"}" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"Release $TAG\",\"body\":${BODY_JSON},\"prerelease\":$([ "$DEVECO_CHANNEL" != "latest" ] && echo true || echo false),\"release_status\":\"latest\",\"target_commitish\":\"develop\"}" \
               "$API/repos/$OWNER/$REPO/releases")
             RELEASE_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name // empty')
             if [ -z "$RELEASE_TAG" ]; then
@@ -119,7 +142,7 @@ jobs:
             fi
             echo "Created release $TAG"
           else
-            echo "Release $TAG already exists"
+            echo "Release $TAG already exists, skipping creation (GitCode API does not support release updates)"
           fi
 
           # 上传归档到 GitCode Release
