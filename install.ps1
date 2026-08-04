@@ -1,4 +1,4 @@
-﻿# DevEco Code Windows Binary Installer
+# DevEco Code Windows Binary Installer
 # Downloads pre-built deveco binary from GitCode Releases
 #
 # Usage:
