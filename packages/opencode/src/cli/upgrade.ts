@@ -125,12 +125,13 @@ async function runUpgradeWithInterrupt(method: Installation.Method, target: stri
 
     let progress = 0
     const timer = setInterval(() => {
-      progress = Math.min(95, progress + Math.random() * 8 + 2)
+      const increment = Math.max(0.3, (10 - progress * 0.08) * (Math.random() * 0.4 + 0.6))
+      progress = Math.min(92, progress + increment)
       const pct = Math.round(progress)
       const stageIdx = stageForPct(pct)
       const stage = STAGES[stageIdx]()
       spinner.message(`${renderBar(pct, false)} ${pct}%  ${stageText(stageIdx, false, stage)}`)
-    }, 200)
+    }, 300)
 
     const err = await Installation.upgrade(method, target).catch((e: unknown) => e)
 
