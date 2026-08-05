@@ -348,12 +348,8 @@ export default new Hono<{ Bindings: Env }>()
 
       return c.json({ token: installationAuth.token })
     } catch (e: any) {
-      let error = e
-      if (e instanceof Error) {
-        error = e.message
-      }
-
-      return c.json({ error }, { status: 401 })
+      console.error("GitHub app token generation failed:", e)
+      return c.json({ error: "Authorization failed" }, { status: 401 })
     }
   })
   /**

@@ -164,7 +164,12 @@ export function registerIpcHandlers(deps: Deps) {
   )
 
   ipcMain.on("open-link", (_event: IpcMainEvent, url: string) => {
-    void shell.openExternal(url)
+    const parsed = URL.parse(url)
+    if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+      console.warn(`Blocked open-link request with unsafe protocol: ${url}`)
+      return
+    }
+    void shell.openExternal(parsed.href)
   })
 
   ipcMain.handle("open-path", async (_event: IpcMainInvokeEvent, path: string, app?: string) => {

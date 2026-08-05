@@ -253,5 +253,8 @@ function claim(token: string) {
 
 const successPage =
   "<!doctype html><title>DevEco Code</title><h1>授权成功</h1><p>您可以关闭此窗口。</p>"
+const escapeHTML = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;")
+
 const errorPage = (message: string) =>
-  `<!doctype html><title>DevEco Code</title><h1>授权失败</h1><p>${message.replace(/[&<>"']/g, "")}</p>`
+  `<!doctype html><title>DevEco Code</title><h1>授权失败</h1><p>${escapeHTML(message)}</p>`
