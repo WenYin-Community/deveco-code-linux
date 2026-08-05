@@ -164,10 +164,6 @@ export const Terminal = (props: TerminalProps) => {
   const directory = sdk().directory
   const client = sdk().client
   const url = sdk().url
-  const auth = server.current?.http
-  const username = auth?.username ?? "opencode"
-  const password = auth?.password ?? ""
-  const sameOrigin = new URL(url, location.href).origin === location.origin
   let container!: HTMLDivElement
   const [local, others] = splitProps(props, ["pty", "class", "classList", "autoFocus", "onConnect", "onConnectError"])
   const id = local.pty.id
@@ -537,10 +533,6 @@ export const Terminal = (props: TerminalProps) => {
             directory,
             cursor: seek,
             ticket,
-            sameOrigin,
-            username,
-            password,
-            authToken: server.current?.type === "http" ? server.current.authToken : false,
           }),
         )
         socket.binaryType = "arraybuffer"

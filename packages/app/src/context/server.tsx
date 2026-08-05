@@ -157,7 +157,6 @@ export namespace ServerConnection {
   export type Http = {
     type: "http"
     http: HttpBase
-    authToken?: boolean
   } & Base
 
   export type Sidecar = {
@@ -255,7 +254,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     function add(input: ServerConnection.Http) {
       const url_ = normalizeServerUrl(input.http.url)
       if (!url_) return
-      const conn: ServerConnection.Http = { ...input, authToken: undefined, http: { ...input.http, url: url_ } }
+      const conn: ServerConnection.Http = { ...input, http: { ...input.http, url: url_ } }
       return batch(() => {
         const existing = store.list.findIndex((x) => url(x) === url_)
         if (existing !== -1) {

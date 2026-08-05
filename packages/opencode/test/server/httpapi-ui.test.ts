@@ -375,20 +375,6 @@ describe("HttpApi UI fallback", () => {
     }),
   )
 
-  it.live("accepts auth token for the web UI", () =>
-    Effect.gen(function* () {
-      const response = yield* uiApp({
-        password: "secret",
-        username: "opencode",
-        disableEmbeddedWebUi: true,
-        client: httpClient(new Response("<html>opencode</html>", { headers: { "content-type": "text/html" } })),
-      }).request(`/?auth_token=${btoa("opencode:secret")}`)
-
-      expect(response.status).toBe(200)
-      expect(yield* responseText(response)).toBe("<html>opencode</html>")
-    }),
-  )
-
   it.live("accepts basic auth for the web UI", () =>
     Effect.gen(function* () {
       const response = yield* uiApp({
