@@ -12,6 +12,8 @@
     "trusted": "工作区已受信任。"
   },
   "upgrade": {
+    "checking": "正在检查更新...",
+    "check_done": "已是最新版本",
     "intro": "升级",
     "update_available": "发现新版本: {current} → {latest}",
     "upgrade_now": "现在升级？",

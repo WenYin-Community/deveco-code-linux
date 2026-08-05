@@ -78,6 +78,8 @@ export async function checkAndUpgrade() {
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   const method = await Installation.method()
   if (Flag.DEVECO_DISABLE_AUTOUPDATE || config.autoupdate === false) return
+  const spinner = prompts.spinner()
+  spinner.start(t("upgrade.checking"))
   const latest = await Installation.latest(method).catch(() => undefined)
 
   const decision = decideUpgrade({
@@ -88,7 +90,11 @@ export async function checkAndUpgrade() {
     method,
   })
 
-  if (decision === "skip") return
+  if (decision === "skip") {
+    spinner.stop(t("upgrade.check_done"))
+    return
+  }
+  spinner.stop("", 0)
 
   prompts.intro(t("upgrade.intro"))
   prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: latest! }))

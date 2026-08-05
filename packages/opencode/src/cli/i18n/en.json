@@ -12,6 +12,8 @@
     "trusted": "Workspace trusted."
   },
   "upgrade": {
+    "checking": "Checking for updates...",
+    "check_done": "Up to date",
     "intro": "Upgrade",
     "update_available": "Update available: {current} → {latest}",
     "upgrade_now": "Upgrade now?",
