@@ -121,7 +121,12 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       accessToken = validToken
     } else if (!accessToken) {
       return finishCheck(await devecoAuth.isJwtExpired() === true)
-    } else if (await devecoAuth.isJwtExpired() === true) {
+    } else {
+      // ensureValidToken() returned null but we have a cached access token.
+      // This means a refresh was attempted and the server rejected the jwtToken.
+      // Regardless of local exp, treat as session expired — the server no longer
+      // trusts this token. Continuing would fall through to the real-name check
+      // which also uses the same invalid jwtToken, creating a dead-end loop.
       return finishCheck(true)
     }
 
