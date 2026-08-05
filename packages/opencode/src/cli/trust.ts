@@ -1,70 +1,11 @@
 import os from "os"
 import path from "path"
-import fs from "fs"
 import * as prompts from "@clack/prompts"
 import { isTrusted, saveTrust } from "./trust/cache"
-import { Global } from "@opencode-ai/core/global"
+import { t } from "./i18n"
 
 const WARNING = "\x1b[38;2;150;108;30m"
 const RESET = "\x1b[0m"
-
-// ── CLI i18n ────────────────────────────────────────────────
-// Detects locale from the TUI KV store (user's explicit language
-// preference via Ctrl+P). Falls back to English when no preference
-// is set — the trust prompt runs before the TUI boots, so it
-// cannot reuse TUI's i18next instance directly, and macOS locale
-// env vars (LANG etc.) often don't reflect the actual display
-// language.
-
-const DICT: Record<string, Record<string, string>> = {
-  en: {
-    intro: "Accessing workspace:",
-    question:
-      "Safety Check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
-    explanation: "Once trusted, DevEco Code will be able to read, edit, and execute files in this directory.",
-    option_yes: "Yes, I trust this folder",
-    option_no: "No, exit",
-    option_no_home: "No, exit (Recommended)",
-    option_yes_home: "Yes, I trust this folder (session only)",
-    home_badge: "(Home directory)",
-    declined: "Workspace not trusted. Exiting.",
-    trusted: "Workspace trusted.",
-  },
-  zh: {
-    intro: "访问工作区：",
-    question:
-      "安全确认：这是您创建的项目或您信任的项目吗？（如您自己的代码、知名开源项目或团队项目）。如果不是，请先查看此目录中的内容。",
-    explanation: "信任后，DevEco Code 将能读取、修改和运行此目录中的文件。",
-    option_yes: "是的，我信任此目录",
-    option_no: "否，退出",
-    option_no_home: "否，退出（推荐）",
-    option_yes_home: "是的，我信任此目录（只信任本次）",
-    home_badge: "(主目录)",
-    declined: "工作区未受信任，退出。",
-    trusted: "工作区已受信任。",
-  },
-}
-
-function readKVLanguage(): "en" | "zh" | undefined {
-  try {
-    const kvPath = path.join(Global.Path.state, "kv.json")
-    const content = fs.readFileSync(kvPath, "utf-8")
-    const kv = JSON.parse(content) as Record<string, unknown>
-    const lang = kv.language
-    if (lang === "zh") return "zh"
-    if (lang === "en") return "en"
-  } catch {}
-}
-
-function detectCliLocale(): "en" | "zh" {
-  return readKVLanguage() ?? "en"
-}
-
-const locale = detectCliLocale()
-const dict = DICT[locale] ?? DICT.en
-function t(key: string): string {
-  return dict[key] ?? DICT.en[key] ?? key
-}
 
 // ── Trust prompt ─────────────────────────────────────────────
 
@@ -126,32 +67,32 @@ export async function trustPrompt(directory: string): Promise<boolean> {
     return true
   }
 
-  prompts.intro(`${WARNING}${t("intro")}${RESET}`)
-  const homeBadge = isHome ? ` ${t("home_badge")}` : ""
+  prompts.intro(`${WARNING}${t("trust.intro")}${RESET}`)
+  const homeBadge = isHome ? ` ${t("trust.home_badge")}` : ""
   prompts.log.message(`\x1b[1m${directory}\x1b[22m${homeBadge}`)
-  prompts.log.message(t("question"))
-  prompts.log.message(t("explanation"))
+  prompts.log.message(t("trust.question"))
+  prompts.log.message(t("trust.explanation"))
 
   const result = await prompts.select({
     message: "",
     options: isHome
       ? [
-          { value: "no", label: t("option_no_home") },
-          { value: "yes", label: t("option_yes_home") },
+          { value: "no", label: t("trust.option_no_home") },
+          { value: "yes", label: t("trust.option_yes_home") },
         ]
       : [
-          { value: "yes", label: t("option_yes") },
-          { value: "no", label: t("option_no") },
+          { value: "yes", label: t("trust.option_yes") },
+          { value: "no", label: t("trust.option_no") },
         ],
     initialValue: isHome ? "no" : "yes",
   })
 
   if (prompts.isCancel(result) || result !== "yes") {
-    prompts.log.warn(t("declined"))
+    prompts.log.warn(t("trust.declined"))
     return false
   }
 
   await saveTrust(directory)
-  prompts.log.success(t("trusted"))
+  prompts.log.success(t("trust.trusted"))
   return true
 }

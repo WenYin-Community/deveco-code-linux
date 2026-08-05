@@ -1,0 +1,33 @@
+{
+  "trust": {
+    "intro": "访问工作区：",
+    "question": "安全确认：这是您创建的项目或您信任的项目吗？（如您自己的代码、知名开源项目或团队项目）。如果不是，请先查看此目录中的内容。",
+    "explanation": "信任后，DevEco Code 将能读取、修改和运行此目录中的文件。",
+    "option_yes": "是的，我信任此目录",
+    "option_no": "否，退出",
+    "option_no_home": "否，退出（推荐）",
+    "option_yes_home": "是的，我信任此目录（只信任本次）",
+    "home_badge": "(主目录)",
+    "declined": "工作区未受信任，退出。",
+    "trusted": "工作区已受信任。"
+  },
+  "upgrade": {
+    "intro": "升级",
+    "update_available": "发现新版本: {current} → {latest}",
+    "upgrade_now": "现在升级？",
+    "skipping": "跳过升级",
+    "installing_via": "正在通过 {method} 安装...",
+    "stage_resolving": "解析依赖包",
+    "stage_downloading": "下载依赖包",
+    "stage_installing": "安装中",
+    "stage_linking": "链接二进制文件",
+    "complete": "完成",
+    "failed": "失败",
+    "upgrade_failed": "升级失败",
+    "interrupted": "升级被中断。继续？",
+    "cancelled": "已取消",
+    "done": "完成",
+    "upgraded_to": "已升级到 {target}",
+    "restart": "请重新运行 deveco 以使用新版本"
+  }
+}

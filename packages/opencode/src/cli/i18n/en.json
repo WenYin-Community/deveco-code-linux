@@ -1,0 +1,33 @@
+{
+  "trust": {
+    "intro": "Accessing workspace:",
+    "question": "Safety Check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "explanation": "Once trusted, DevEco Code will be able to read, edit, and execute files in this directory.",
+    "option_yes": "Yes, I trust this folder",
+    "option_no": "No, exit",
+    "option_no_home": "No, exit (Recommended)",
+    "option_yes_home": "Yes, I trust this folder (session only)",
+    "home_badge": "(Home directory)",
+    "declined": "Workspace not trusted. Exiting.",
+    "trusted": "Workspace trusted."
+  },
+  "upgrade": {
+    "intro": "Upgrade",
+    "update_available": "Update available: {current} → {latest}",
+    "upgrade_now": "Upgrade now?",
+    "skipping": "Skipping upgrade",
+    "installing_via": "Installing via {method}...",
+    "stage_resolving": "Resolving packages",
+    "stage_downloading": "Downloading packages",
+    "stage_installing": "Installing",
+    "stage_linking": "Linking binaries",
+    "complete": "Complete",
+    "failed": "Failed",
+    "upgrade_failed": "Upgrade failed",
+    "interrupted": "Upgrade was interrupted. Continue?",
+    "cancelled": "Cancelled",
+    "done": "Done",
+    "upgraded_to": "Upgraded to {target}",
+    "restart": "Please run deveco again to use the new version"
+  }
+}
