@@ -216,10 +216,24 @@ export namespace Billing {
     )
   })
 
+  const safeUrl = z
+    .string()
+    .url()
+    .refine((value) => {
+      const parsed = new URL(value)
+      const allowed =
+        Resource.App.stage === "production"
+          ? ["opencode.ai"]
+          : ["opencode.ai", "localhost", "127.0.0.1"]
+      return allowed.some(
+        (d) => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`),
+      )
+    }, "URL must be on an allowed domain")
+
   export const generateCheckoutUrl = fn(
     z.object({
-      successUrl: z.string(),
-      cancelUrl: z.string(),
+      successUrl: safeUrl,
+      cancelUrl: safeUrl,
       amount: z.number().optional(),
     }),
     async (input) => {
@@ -298,8 +312,8 @@ export namespace Billing {
 
   export const generateLiteCheckoutUrl = fn(
     z.object({
-      successUrl: z.string(),
-      cancelUrl: z.string(),
+      successUrl: safeUrl,
+      cancelUrl: safeUrl,
       method: z.enum(["alipay", "upi"]).optional(),
     }),
     async (input) => {
@@ -434,7 +448,7 @@ export namespace Billing {
 
   export const generateSessionUrl = fn(
     z.object({
-      returnUrl: z.string(),
+      returnUrl: safeUrl,
     }),
     async (input) => {
       const { returnUrl } = input
