@@ -13,6 +13,7 @@ import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/
 import { expect } from "bun:test"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
+import { symlink } from "node:fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
@@ -62,7 +63,7 @@ import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Entry } from "@opencode-ai/core/filesystem/schema"
 import { RelativePath } from "@opencode-ai/core/schema"
 import { Format } from "../../src/format"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { AccountTest } from "../fake/account"
 import { NpmTest } from "../fake/npm"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
@@ -2098,6 +2099,104 @@ noLLMServer.instance(
     }),
   { config: cfg },
   30_000,
+)
+
+noLLMServer.instance(
+  "rejects a direct file attachment outside the instance roots",
+  () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, "secret.txt")
+      yield* writeText(secret, "outside secret")
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const exit = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "file", mime: "text/plain", url: pathToFileURL(secret).href, filename: "secret.txt" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("outside the allowed roots")
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "does not resolve an external path extracted from a prompt template",
+  () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, "secret.txt")
+      yield* writeText(secret, "outside secret")
+      const prompt = yield* SessionPrompt.Service
+
+      const parts = yield* prompt.resolvePromptParts(`read @${secret}`)
+
+      expect(parts.some((part) => part.type === "file")).toBe(false)
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "rejects a file attachment that escapes through a symlink",
+  () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, "secret.txt")
+      const linked = path.join(directory, "linked-secret.txt")
+      yield* writeText(secret, "outside secret")
+      yield* Effect.promise(() => symlink(secret, linked))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const exit = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "file", mime: "text/plain", url: pathToFileURL(linked).href, filename: "secret.txt" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("outside the allowed roots")
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "allows an external attachment covered by an explicit external_directory rule",
+  () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      const secret = path.join(outside, "secret.txt")
+      yield* writeText(secret, "allowed external content")
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        permission: [{ permission: "external_directory", pattern: path.join(outside, "*"), action: "allow" }],
+      })
+
+      const message = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "file", mime: "text/plain", url: pathToFileURL(secret).href, filename: "secret.txt" }],
+      })
+
+      expect(
+        message.parts.some((part) => part.type === "text" && part.text.includes("allowed external content")),
+      ).toBe(true)
+    }),
+  { config: cfg },
 )
 
 // Missing file handling

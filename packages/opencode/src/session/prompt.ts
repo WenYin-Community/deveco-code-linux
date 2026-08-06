@@ -140,6 +140,54 @@ export const layer = Layer.effect(
       yield* state.cancel(sessionID)
     })
 
+    const canonicalPath = Effect.fn("SessionPrompt.canonicalPath")(function* (input: string) {
+      const parts: string[] = []
+      let current = path.resolve(input)
+      while (true) {
+        const real = yield* fsys.realPath(current).pipe(
+          Effect.map(Option.some),
+          Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(Option.none())),
+          Effect.orDie,
+        )
+        if (Option.isSome(real)) return path.resolve(real.value, ...parts.reverse())
+        const parent = path.dirname(current)
+        if (parent === current) return path.resolve(input)
+        parts.push(path.basename(current))
+        current = parent
+      }
+    })
+
+    const resolveInternalPath = Effect.fn("SessionPrompt.resolveInternalPath")(function* (filepath: string) {
+      const ctx = yield* InstanceState.context
+      const target = yield* canonicalPath(filepath)
+      const roots = yield* Effect.forEach(
+        [ctx.directory, ...(ctx.worktree === path.parse(ctx.worktree).root ? [] : [ctx.worktree])],
+        canonicalPath,
+      )
+      return roots.some((root) => FSUtil.contains(root, target)) ? target : undefined
+    })
+
+    const externalDirectoryPattern = (filepath: string) => {
+      const pattern = path.join(path.dirname(filepath), "*")
+      if (process.platform === "win32") return FSUtil.normalizePathPattern(pattern)
+      return pattern.replaceAll("\\", "/")
+    }
+
+    const resolveAttachmentPath = Effect.fn("SessionPrompt.resolveAttachmentPath")(function* (
+      filepath: string,
+      rulesets: PermissionV1.Ruleset[],
+    ) {
+      const internal = yield* resolveInternalPath(filepath)
+      if (internal) return internal
+
+      const canonical = yield* canonicalPath(filepath)
+      const allowed = [filepath, canonical].some(
+        (target) => Permission.evaluate("external_directory", externalDirectoryPattern(target), ...rulesets).action === "allow",
+      )
+      if (allowed) return canonical
+      return yield* Effect.die(new Error(`File attachment path is outside the allowed roots: ${filepath}`))
+    })
+
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
       const ctx = yield* InstanceState.context
       const parts: Types.DeepMutable<PromptInput["parts"]> = [{ type: "text", text: template }]
@@ -153,9 +201,16 @@ export const layer = Layer.effect(
           if (seen.has(name)) return
           seen.add(name)
 
-          const filepath = name.startsWith("~/")
+          const candidate = name.startsWith("~/")
             ? path.join(os.homedir(), name.slice(2))
             : path.resolve(ctx.worktree, name)
+
+          const filepath = yield* resolveInternalPath(candidate)
+          if (!filepath) {
+            const found = yield* agents.get(name)
+            if (found) parts.push({ type: "agent", name: found.name })
+            return
+          }
 
           const info = yield* fsys.stat(filepath).pipe(Effect.option)
           if (Option.isNone(info)) {
@@ -650,6 +705,7 @@ export const layer = Layer.effect(
         yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
+      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
 
       const current = yield* db
         .select({ agent: SessionTable.agent, model: SessionTable.model })
@@ -797,7 +853,10 @@ export const layer = Layer.effect(
               break
             case "file:": {
               yield* Effect.logInfo("file", { mime: part.mime })
-              const filepath = fileURLToPath(part.url)
+              const filepath = yield* resolveAttachmentPath(fileURLToPath(part.url), [
+                ag.permission,
+                session.permission ?? [],
+              ])
               const mime = (yield* fsys.isDir(filepath)) ? "application/x-directory" : part.mime
 
               const { read } = yield* registry.named()
