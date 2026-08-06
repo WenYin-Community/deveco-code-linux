@@ -82,6 +82,10 @@ export const rpc = {
     process.off("unhandledRejection", onUnhandledRejection)
     process.off("uncaughtException", onUncaughtException)
   },
+  async checkUpgradeBackground() {
+    const { checkUpgradeBackground } = await import("@/cli/upgrade")
+    await checkUpgradeBackground()
+  },
 }
 
 Rpc.listen(rpc)

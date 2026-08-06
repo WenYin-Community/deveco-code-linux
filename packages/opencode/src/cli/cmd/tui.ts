@@ -22,7 +22,7 @@ import { findDevEcoHomes, isDevEcoHome, loadSavedDevEcoHome, resolveDevEcoHome, 
 import { trustPrompt } from "@/cli/trust"
 import { win32InstallCtrlCGuard } from "@opencode-ai/tui/terminal-win32"
 import { ensureMainlandChinaCliAccess } from "@/cli/deveco-region"
-import { checkAndUpgrade } from "@/cli/upgrade"
+import { checkPendingUpgrade } from "@/cli/upgrade"
 
 declare global {
   const DEVECO_WORKER_PATH: string
@@ -245,6 +245,10 @@ async function launchTui(args: TuiThreadArgs, directory: string): Promise<void> 
     const transport = await createTuiTransport(runtime.client, args)
     if (!(await validateTuiSession(transport, runtime.cwd, args.session))) return
 
+    setTimeout(() => {
+      runtime.client.call("checkUpgradeBackground", undefined).catch(() => {})
+    }, 2000).unref?.()
+
     try {
       await runTuiApp(runtime.client, runtime.cwd, transport, args, prompt, config)
     } finally {
@@ -295,7 +299,7 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
-    await checkAndUpgrade()
+    await checkPendingUpgrade()
 
     if (!(await ensureMainlandChinaCliAccess())) return
 

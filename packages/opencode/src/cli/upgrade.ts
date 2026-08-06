@@ -6,6 +6,12 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import * as prompts from "@clack/prompts"
 import { errorMessage } from "@/util/error"
 import { t } from "@/cli/i18n"
+import path from "path"
+import fs from "fs"
+import { Global } from "@opencode-ai/core/global"
+import { Flock } from "@opencode-ai/core/util/flock"
+import { Filesystem } from "@/util/filesystem"
+import { GlobalBus } from "@/bus/global"
 
 export type UpgradeDecision = "skip" | "upgrade" | "notify"
 
@@ -22,6 +28,48 @@ export function decideUpgrade(input: DecideInput): UpgradeDecision {
   if (input.isLatest) return "skip"
   if (input.alwaysNotify || input.autoupdate === "notify") return "notify"
   return "upgrade"
+}
+
+export type UpgradeState = {
+  pendingVersion?: string
+  checkedAt: number
+}
+
+const FRESH_MS = 24 * 60 * 60 * 1000
+
+export function isStateFresh(state: UpgradeState): boolean {
+  return Date.now() - state.checkedAt < FRESH_MS
+}
+
+function readUpgradeState(): UpgradeState | undefined {
+  try {
+    const kvPath = path.join(Global.Path.state, "kv.json")
+    const content = fs.readFileSync(kvPath, "utf-8")
+    const kv = JSON.parse(content) as Record<string, unknown>
+    const upgrade = kv.upgrade
+    if (typeof upgrade === "object" && upgrade !== null) return upgrade as UpgradeState
+  } catch {}
+}
+
+async function writeUpgradeState(state: UpgradeState) {
+  const file = path.join(Global.Path.state, "kv.json")
+  await Flock.withLock(`tui-kv:${file}`, async () => {
+    const kv = await Filesystem.readJson<Record<string, unknown>>(file).catch(() => ({} as Record<string, unknown>))
+    kv.upgrade = state
+    const temp = `${file}.${process.pid}.tmp`
+    await Bun.write(temp, JSON.stringify(kv, null, 2))
+    await fs.promises.rename(temp, file)
+  })
+}
+
+function readKVSkippedVersion(): string | undefined {
+  try {
+    const kvPath = path.join(Global.Path.state, "kv.json")
+    const content = fs.readFileSync(kvPath, "utf-8")
+    const kv = JSON.parse(content) as Record<string, unknown>
+    const skipped = kv.skipped_version
+    if (typeof skipped === "string") return skipped
+  } catch {}
 }
 
 const BAR_WIDTH = 28
@@ -73,31 +121,30 @@ function stageForPct(pct: number) {
   return Math.min(STAGES.length - 1, Math.floor(pct / 25))
 }
 
-export async function checkAndUpgrade() {
+export async function checkPendingUpgrade() {
   if (Installation.isLocal()) return
+  const state = readUpgradeState()
+  if (!state || !isStateFresh(state)) return
+  if (!state.pendingVersion) return
+  if (InstallationVersion === state.pendingVersion) return
+
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   const method = await Installation.method()
-  if (Flag.DEVECO_DISABLE_AUTOUPDATE || config.autoupdate === false) return
-  const spinner = prompts.spinner()
-  spinner.start(t("upgrade.checking"))
-  const latest = await Installation.latest(method).catch(() => undefined)
+  const skipped = readKVSkippedVersion()
+  if (skipped && state.pendingVersion === skipped) return
 
   const decision = decideUpgrade({
     autoupdate: config.autoupdate,
     disabled: Flag.DEVECO_DISABLE_AUTOUPDATE,
     alwaysNotify: Flag.DEVECO_ALWAYS_NOTIFY_UPDATE,
-    isLatest: !latest || InstallationVersion === latest,
+    isLatest: false,
     method,
   })
 
-  if (decision === "skip") {
-    spinner.stop(t("upgrade.check_done"))
-    return
-  }
-  spinner.stop("", 0)
+  if (decision === "skip") return
 
   prompts.intro(t("upgrade.intro"))
-  prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: latest! }))
+  prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: state.pendingVersion }))
 
   if (decision === "notify") {
     const confirm = await prompts.confirm({
@@ -111,7 +158,44 @@ export async function checkAndUpgrade() {
   }
 
   const isUnknown = method === "unknown"
-  await runUpgradeWithInterrupt(isUnknown ? "npm" : method, isUnknown ? "latest" : latest!)
+  await runUpgradeWithInterrupt(isUnknown ? "npm" : method, isUnknown ? "latest" : state.pendingVersion)
+}
+
+export async function checkUpgradeBackground() {
+  if (Installation.isLocal()) return
+  if (Flag.DEVECO_DISABLE_AUTOUPDATE) return
+  const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
+  const method = await Installation.method()
+  const latest = await Installation.latest(method).catch(() => undefined)
+
+  if (!latest) return
+
+  const now = Date.now()
+
+  if (InstallationVersion === latest) {
+    await writeUpgradeState({ checkedAt: now })
+    return
+  }
+
+  await writeUpgradeState({ pendingVersion: latest, checkedAt: now })
+
+  const decision = decideUpgrade({
+    autoupdate: config.autoupdate,
+    disabled: Flag.DEVECO_DISABLE_AUTOUPDATE,
+    alwaysNotify: Flag.DEVECO_ALWAYS_NOTIFY_UPDATE,
+    isLatest: false,
+    method,
+  })
+
+  if (decision === "notify") {
+    GlobalBus.emit("event", {
+      directory: "global",
+      payload: {
+        type: Installation.Event.UpdateAvailable.type,
+        properties: { version: latest },
+      },
+    })
+  }
 }
 
 async function runUpgradeWithInterrupt(method: Installation.Method, target: string) {

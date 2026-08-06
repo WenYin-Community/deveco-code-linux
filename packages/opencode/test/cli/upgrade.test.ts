@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { checkAndUpgrade, decideUpgrade } from "../../src/cli/upgrade"
+import { checkPendingUpgrade, checkUpgradeBackground, decideUpgrade, isStateFresh } from "../../src/cli/upgrade"
+import type { UpgradeState } from "../../src/cli/upgrade"
 import type { Method } from "../../src/installation"
 
 describe("decideUpgrade", () => {
@@ -47,8 +48,37 @@ describe("decideUpgrade", () => {
   })
 })
 
-describe("checkAndUpgrade", () => {
+describe("isStateFresh", () => {
+  const fresh: UpgradeState = { checkedAt: Date.now() }
+  const stale: UpgradeState = { checkedAt: Date.now() - 25 * 60 * 60 * 1000 }
+
+  test("returns true when checkedAt is within 24 hours", () => {
+    expect(isStateFresh(fresh)).toBe(true)
+  })
+
+  test("returns false when checkedAt is older than 24 hours", () => {
+    expect(isStateFresh(stale)).toBe(false)
+  })
+
+  test("returns true at exactly 24 hours minus 1ms", () => {
+    const state: UpgradeState = { checkedAt: Date.now() - (24 * 60 * 60 * 1000 - 1) }
+    expect(isStateFresh(state)).toBe(true)
+  })
+
+  test("returns false at exactly 24 hours", () => {
+    const state: UpgradeState = { checkedAt: Date.now() - 24 * 60 * 60 * 1000 }
+    expect(isStateFresh(state)).toBe(false)
+  })
+})
+
+describe("checkPendingUpgrade", () => {
   test("is an async function", () => {
-    expect(typeof checkAndUpgrade).toBe("function")
+    expect(typeof checkPendingUpgrade).toBe("function")
+  })
+})
+
+describe("checkUpgradeBackground", () => {
+  test("is an async function", () => {
+    expect(typeof checkUpgradeBackground).toBe("function")
   })
 })

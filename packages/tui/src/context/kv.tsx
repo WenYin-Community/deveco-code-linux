@@ -55,9 +55,14 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
       },
       set(key: string, value: any) {
         setStore(key, value)
-        const snapshot = structuredClone(unwrap(store))
         write = write
-          .then(() => Flock.withLock(lock, () => writeJsonAtomic(file, snapshot)))
+          .then(() =>
+            Flock.withLock(lock, async () => {
+              const fresh = await readJson<Record<string, unknown>>(file).catch(() => ({}) as Record<string, unknown>)
+              fresh[key] = value
+              await writeJsonAtomic(file, fresh)
+            }),
+          )
           .catch((error) => {
             console.error("Failed to write KV state", { error })
           })
