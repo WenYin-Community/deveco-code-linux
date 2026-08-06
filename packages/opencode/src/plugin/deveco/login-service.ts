@@ -21,11 +21,11 @@ export class LoginService {
 
   public async login(): Promise<LoginResult> {
     try {
-      const clientSecret = this.generateClientSecret()
+      const loginState = this.generateLoginState()
 
       this.server = new LocalAuthServer(
         this.config.defaultPort,
-        clientSecret,
+        loginState,
         this.config.baseUrl,
         this.config.successRedirectUrl,
         this.config.failedRedirectUrl,
@@ -39,7 +39,7 @@ export class LoginService {
       // promise handlers are installed — otherwise ?. silently drops it.
       const callbackPromise = this.server.waitForCallback(this.config.timeout)
 
-      await this.openLoginPage(this.server.getPort(), clientSecret)
+      await this.openLoginPage(this.server.getPort(), loginState)
 
       const callbackData = await callbackPromise
 
@@ -116,12 +116,16 @@ export class LoginService {
     logInfo("logout succeeded", { service: "deveco" })
   }
 
-  private generateClientSecret(): string {
+  // Generates a one-time CSRF nonce (OAuth `state`).
+  // Renamed from `generateClientSecret` to avoid confusion with OAuth client credentials.
+  private generateLoginState(): string {
     return crypto.randomUUID().replace(/-/g, "")
   }
 
-  private async openLoginPage(port: number, clientSecret: string): Promise<void> {
-    const loginUrl = `${this.config.baseUrl}/${this.config.authUrl}?port=${port}&appid=${this.config.appId}&code=${clientSecret}`
+  private async openLoginPage(port: number, loginState: string): Promise<void> {
+    // `code` is the OAuth state parameter echoed back on /callback redirect.
+    // Value is a CSRF nonce, not an OAuth client_secret — renamed from `clientSecret`.
+    const loginUrl = `${this.config.baseUrl}/${this.config.authUrl}?port=${port}&appid=${this.config.appId}&code=${loginState}`
     const safeUrl = loginUrl.replace(/code=[^&]*/g, "code=***")
 
     // Allowlist the canonicalized href: `new URL` leaves `$`/backtick, which

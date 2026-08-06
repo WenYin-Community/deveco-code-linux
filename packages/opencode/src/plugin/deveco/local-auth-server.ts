@@ -7,7 +7,9 @@ import type { CallbackData } from "./types"
 export class LocalAuthServer {
   private server: http.Server | null = null
   private port: number
-  private clientSecret: string
+  // Per-session CSRF nonce (OAuth `state`), echoed back on /callback redirect.
+  // Renamed from `clientSecret` to avoid confusion with OAuth client credentials.
+  private loginState: string
   private callbackPath: string = "/callback"
   private resolveCallback: ((value: CallbackData) => void) | null = null
   private rejectCallback: ((reason: Error) => void) | null = null
@@ -15,13 +17,13 @@ export class LocalAuthServer {
 
   constructor(
     port: number,
-    clientSecret: string,
+    loginState: string,
     private baseUrl: string,
     private successRedirectUrl: string,
     private failedRedirectUrl: string,
   ) {
     this.port = port
-    this.clientSecret = clientSecret
+    this.loginState = loginState
   }
 
   public async start(): Promise<number> {
@@ -168,7 +170,7 @@ export class LocalAuthServer {
       const siteId = params.get("siteId")
       const quit = params.get("quit")
 
-      if (!code || code !== this.clientSecret) {
+      if (!code || code !== this.loginState) {
         logWarn("login callback: code mismatch or missing, ignoring", { service: "deveco", hasCode: !!code })
         return
       }

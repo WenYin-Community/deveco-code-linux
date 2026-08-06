@@ -24,7 +24,7 @@ const localAuthServerGetPortSpy = spyOn(localAuthServer.LocalAuthServer.prototyp
 const saveAuthToDiskSpy = spyOn(storage, "saveAuthToDisk")
 const appRuntimeRunPromiseSpy = spyOn(AppRuntime, "runPromise")
 const { LoginService } = await import("@/plugin/deveco/login-service")
-type OpenLoginPage = (port: number, clientSecret: string) => Promise<void>
+type OpenLoginPage = (port: number, loginState: string) => Promise<void>
 const openLoginPageSpy = spyOn(
   LoginService.prototype as unknown as Record<"openLoginPage", OpenLoginPage>,
   "openLoginPage",
