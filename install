@@ -25,12 +25,10 @@ warn() {
     [ -n "${2:-}" ] && echo -e "${MUTED}  -> $2${NC}" >&2
 }
 
+
 # ─── Dependency checks ───────────────────────────────────────────────────────
 if ! command -v curl >/dev/null 2>&1; then
     die "'curl' is required but not installed"
-fi
-if ! command -v jq >/dev/null 2>&1; then
-    die "'jq' is required but not installed" "macOS: brew install jq  |  Ubuntu: sudo apt install jq"
 fi
 
 # ─── Global cleanup trap ────────────────────────────────────────────────────
@@ -178,23 +176,27 @@ else
     fi
 
     if [ -z "$requested_version" ]; then
-        # Fetch latest version from GitCode tags API
-        tags_json=$(curl -sS "${GITCODE_API}/tags?per_page=100" 2>/dev/null) || {
+        # Fetch latest stable release from GitCode releases API (mirrors GitHub /releases/latest).
+        # Parse tag_name and prerelease with sed/grep (no jq dependency, matches upstream opencode).
+        # Use here-string to avoid macOS `echo` stripping unescaped control chars in the body.
+        release_json=$(curl -sS "${GITCODE_API}/releases/latest" 2>/dev/null) || {
             die "Failed to fetch version info from GitCode" "Check your network, or visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
         }
-        specific_version=$(echo "$tags_json" | jq -r '.[].name' 2>/dev/null \
-            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sed 's/^v//' \
-            | sort -t. -k1,1nr -k2,2nr -k3,3nr \
-            | head -1 || true)
+        specific_version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$release_json" | head -1 | sed 's/^v//')
+        if grep -q '"prerelease"[[:space:]]*:[[:space:]]*true' <<< "$release_json"; then is_prerelease="true"; else is_prerelease="false"; fi
 
         if [[ -z "$specific_version" ]]; then
-            die "No valid version tags found on GitCode" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions"
+            die "No release found on GitCode" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions"
         fi
+        if [[ "$is_prerelease" == "true" ]]; then
+            die "Latest GitCode release is marked as prerelease" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions"
+        fi
+        echo -e "${ORANGE}Latest version: ${NC}$specific_version"
     else
         # Strip leading 'v' if present
         requested_version="${requested_version#v}"
         specific_version=$requested_version
+        echo -e "${MUTED}Using specified version: ${NC}$specific_version"
 
         # Verify the release exists
         http_status=$(curl -sS -o /dev/null -w "%{http_code}" "${GITCODE_API}/releases/v${requested_version}" 2>/dev/null || echo "000")
@@ -205,28 +207,14 @@ else
     url="${GITCODE_API}/releases/v${specific_version}/attach_files/${filename}/download"
 fi
 
-print_message() {
-    local level=$1
-    local message=$2
-    local color=""
-
-    case $level in
-        info) color="${NC}" ;;
-        warning) color="${NC}" ;;
-        error) color="${RED}" ;;
-    esac
-
-    echo -e "${color}${message}${NC}"
-}
-
 check_version() {
     if [ -L "$BIN_LINK" ] && [ -x "$BIN_LINK" ]; then
         installed_version=$("$BIN_LINK" --version 2>/dev/null || echo "")
 
         if [[ "$installed_version" != "$specific_version" ]]; then
-            print_message info "${MUTED}Installed version: ${NC}$installed_version."
+            echo -e "${MUTED}Installed version: ${NC}$installed_version."
         else
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping"
+            echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping"
             exit 0
         fi
     fi
@@ -243,23 +231,90 @@ unbuffered_sed() {
     fi
 }
 
+_last_pct_int=-1   # last rendered integer percent (used for 1%-granularity throttle)
+
+# ─── Upgrade-style gradient progress bar ───
+# Width 28, 6-stop gradient (pink→purple→blue→cyan→mint→green), ━ / ─ box-drawing chars.
+# Falls back to 16-color when the terminal does not advertise truecolor.
+BAR_WIDTH=28
+GRADIENT_STOPS=("255 100 200" "200 100 255" "100 150 255" " 50 200 255" " 80 255 180" "100 255 100")
+
+gradient_color() {
+    local pos=$1
+    local n=$((${#GRADIENT_STOPS[@]} - 1))
+    local idx i t c1 c2 r g b
+    idx=$(awk -v p="$pos" -v n="$n" 'BEGIN { v=p*n; if (v>n-0.001) v=n-0.001; print v }')
+    i=${idx%.*}
+    t=$(awk -v idx="$idx" -v i="$i" 'BEGIN { print idx-i }')
+    c1=(${GRADIENT_STOPS[$i]})
+    c2=(${GRADIENT_STOPS[$((i+1))]})
+    r=$(awk -v t="$t" -v a="${c1[0]}" -v b="${c2[0]}" 'BEGIN { printf "%d", a+(b-a)*t+0.5 }')
+    g=$(awk -v t="$t" -v a="${c1[1]}" -v b="${c2[1]}" 'BEGIN { printf "%d", a+(b-a)*t+0.5 }')
+    b=$(awk -v t="$t" -v a="${c1[2]}" -v b="${c2[2]}" 'BEGIN { printf "%d", a+(b-a)*t+0.5 }')
+    printf '\033[38;2;%d;%d;%dm' "$r" "$g" "$b"
+}
+
+supports_truecolor() {
+    case "${COLORTERM:-}${TERM:-}" in
+        *truecolor*|*24bit*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+render_upgrade_bar() {
+    local pct=$1
+    local filled
+    filled=$(awk -v w="$BAR_WIDTH" -v p="$pct" 'BEGIN { f=int(w*p/100+0.5); if (f>w) f=w; print f }')
+    local bar="" pos i
+    local use_truecolor=false
+    supports_truecolor && use_truecolor=true
+    for ((i=0; i<filled; i++)); do
+        if (( filled > 1 )); then
+            pos=$(awk -v i="$i" -v w="$BAR_WIDTH" 'BEGIN { printf "%.4f", i/(w-1) }')
+        else
+            pos=0
+        fi
+        if $use_truecolor; then
+            bar+="$(gradient_color "$pos")━"
+        else
+            # 16-color fallback: hand-tuned for AI palette (pink → purple → blue → cyan → green)
+            local c
+            case $(( i * 5 / BAR_WIDTH )) in
+                0) c='\033[95m' ;;  # bright magenta (pink stop)
+                1) c='\033[35m' ;;  # magenta (purple stop)
+                2) c='\033[34m' ;;  # blue (blue stop)
+                3) c='\033[36m' ;;  # cyan (cyan/mint stops)
+                *) c='\033[32m' ;;  # green (green stop)
+            esac
+            bar+="${c}━"
+        fi
+    done
+    bar+='\033[90m'
+    local empties
+    printf -v empties '%*s' $((BAR_WIDTH - filled)) ''
+    bar+="${empties// /─}\033[0m"
+    echo -ne "$bar"
+}
+
 print_progress() {
     local bytes="$1"
     local length="$2"
     [ "$length" -gt 0 ] || return 0
 
-    local width=50
     local percent=$(( bytes * 100 / length ))
     [ "$percent" -gt 100 ] && percent=100
-    local on=$(( percent * width / 100 ))
-    local off=$(( width - on ))
 
-    local filled=$(printf "%*s" "$on" "")
-    filled=${filled// /■}
-    local empty=$(printf "%*s" "$off" "")
-    empty=${empty// /･}
-
-    printf "\r${ORANGE}%s%s %3d%%${NC}" "$filled" "$empty" "$percent" >&4
+    # Throttle: render at most once per 1% increment, but always render 100%
+    # (date +%s throttle was too coarse on fast downloads — skipped mid states)
+    if (( percent < 100 )); then
+        if (( percent == _last_pct_int )); then
+            return
+        fi
+        _last_pct_int=$percent
+    fi
+    local bar
+    bar=$(render_upgrade_bar "$percent")
+    printf "\r%s %3d%%" "$bar" "$percent" >&4
 }
 
 download_with_progress() {
@@ -314,6 +369,7 @@ download_with_progress() {
                 fi
             fi
         done
+
     }
 
     wait $curl_pid
@@ -356,7 +412,7 @@ cleanup_old_versions() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}deveco ${MUTED}version: ${NC}$specific_version"
+    echo -e "\n${MUTED}Installing ${NC}deveco ${MUTED}version: ${NC}$specific_version"
     local version_dir="$VERSIONS_DIR/$specific_version"
     local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
     local tmp_dir="${TMPDIR:-/tmp}/deveco_install_$$"
@@ -366,7 +422,7 @@ download_and_install() {
         local existing_ver
         existing_ver=$("$version_dir/bin/$APP" --version 2>/dev/null || echo "")
         if [ "$existing_ver" = "$specific_version" ]; then
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping download"
+            echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping download"
             update_symlink "$version_dir"
             cleanup_old_versions
             return
@@ -435,7 +491,7 @@ download_and_install() {
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}deveco ${MUTED}from: ${NC}$binary_path"
+    echo -e "\n${MUTED}Installing ${NC}deveco ${MUTED}from: ${NC}$binary_path"
     local version_dir="$VERSIONS_DIR/local"
     mkdir -p "$version_dir/bin"
     cp "$binary_path" "$version_dir/bin/$APP"
@@ -457,15 +513,15 @@ add_to_path() {
     local command=$2
 
     if grep -Fxq "$command" "$config_file"; then
-        print_message info "${MUTED}PATH already configured in ${NC}$config_file${MUTED}, skipping${NC}"
+        echo -e "${MUTED}PATH already configured in ${NC}$config_file${MUTED}, skipping${NC}"
     elif [[ -w $config_file ]]; then
         echo -e "\n# deveco" >> "$config_file"
         echo "$command" >> "$config_file"
-        print_message info "${GREEN}[OK]${NC} Added deveco to \$PATH ($config_file)"
+        echo -e "${GREEN}Added $BIN_DIR to user PATH ($config_file)${NC}"
         _path_modified=true
     else
         warn "Cannot write to $config_file — please add PATH manually"
-        print_message info "  $command"
+        echo -e "  $command"
     fi
 }
 
@@ -507,7 +563,7 @@ if [[ "$no_modify_path" != "true" ]]; then
 
     if [[ -z $config_file ]]; then
         warn "No shell config file found for $current_shell" "Please add the following to your shell config manually:"
-        print_message info "  export PATH=$BIN_DIR:\$PATH"
+        echo -e "  export PATH=$BIN_DIR:\$PATH"
     elif [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         case $current_shell in
             fish)
@@ -528,15 +584,12 @@ if [[ "$no_modify_path" != "true" ]]; then
             *)
                 export PATH=$BIN_DIR:$PATH
                 warn "Unrecognized shell — please add PATH manually"
-                print_message info "  export PATH=$BIN_DIR:\$PATH"
+                echo -e "  export PATH=$BIN_DIR:\$PATH"
             ;;
         esac
     fi
-fi
-
-if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
-    echo "$BIN_DIR" >> $GITHUB_PATH
-    print_message info "Added $BIN_DIR to \$GITHUB_PATH"
+else
+    echo -e "${MUTED}Skipping PATH modification (--no-modify-path)${NC}"
 fi
 
 echo -e ""
@@ -551,18 +604,17 @@ if [ "$specific_version" = "local" ]; then
 else
     echo -e "${MUTED}v$specific_version installed.${NC}"
 fi
-echo -e ""
 
-# Source hint if PATH was just modified
+# PATH hint — only when PATH was actually modified
 if [ "$_path_modified" = true ]; then
-    echo -e "${MUTED}To activate PATH, run:${NC}"
+    echo -e "${ORANGE}Note: Open a new terminal for PATH changes to take effect.${NC}"
     echo -e ""
+    echo -e "${MUTED}To activate PATH in this shell, run:${NC}"
     echo -e "  ${GREEN}source $config_file${NC}"
-    echo -e ""
-    echo -e "${MUTED}(or open a new terminal)${NC}"
     echo -e ""
 fi
 
+echo -e ""
 echo -e "${MUTED}Get started:${NC}"
 echo -e ""
 echo -e "cd <project>  ${MUTED}# Open your project directory${NC}"

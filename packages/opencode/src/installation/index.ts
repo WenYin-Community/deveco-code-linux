@@ -82,8 +82,10 @@ const GITCODE_API = `https://gitcode.com/api/v5/repos/${GITCODE_OWNER}/${GITCODE
 const INSTALL_SCRIPT_URL = `https://raw.gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/raw/develop/install`
 const INSTALL_PS1_URL = `https://raw.gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/raw/develop/install.ps1`
 
-const GitCodeTag = Schema.Struct({ name: Schema.String })
-const GitCodeTags = Schema.Array(GitCodeTag)
+const GitCodeRelease = Schema.Struct({
+  tag_name: Schema.String,
+  prerelease: Schema.Boolean,
+})
 
 export interface Interface {
   readonly info: () => Effect.Effect<Info>
@@ -262,18 +264,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         if (detectedMethod === "curl" || detectedMethod === "irm") {
           const response = yield* httpOk.execute(
-            HttpClientRequest.get(`${GITCODE_API}/tags?per_page=100`).pipe(HttpClientRequest.acceptJson),
+            HttpClientRequest.get(`${GITCODE_API}/releases/latest`).pipe(HttpClientRequest.acceptJson),
           )
-          const tags = yield* HttpClientResponse.schemaBodyJson(GitCodeTags)(response)
-          const versionTags = tags
-            .map((t) => t.name)
-            .filter((n) => /^v?\d+\.\d+\.\d+$/.test(n))
-            .map((n) => n.replace(/^v/, ""))
-            .sort((a, b) => semver.rcompare(a, b))
-          if (!versionTags.length) {
-            return yield* Effect.fail(new Error("No version tags found on GitCode"))
+          const release = yield* HttpClientResponse.schemaBodyJson(GitCodeRelease)(response)
+          if (release.prerelease) {
+            return yield* Effect.fail(new Error("Latest GitCode release is marked as prerelease"))
           }
-          return versionTags[0]
+          return release.tag_name.replace(/^v/, "")
         }
 
         const response = yield* httpOk.execute(

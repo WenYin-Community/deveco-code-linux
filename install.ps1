@@ -19,11 +19,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# TLS 1.2 配置(PS 5.1 默认 TLS 1.0/1.1,GitCode HTTPS 需要 TLS 1.2)
+# TLS 1.2 config (PS 5.1 defaults to TLS 1.0/1.1; GitCode HTTPS requires TLS 1.2)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# 防止 PowerShell 5.1 的 Invoke-WebRequest 进度条显著拖慢大文件下载
+# Prevent Invoke-WebRequest progress bar from significantly slowing down large file downloads in PS 5.1
 $ProgressPreference = 'SilentlyContinue'
+
+# Ensure console outputs Unicode characters correctly (progress bar uses ━/─); does not affect ASCII text
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# ANSI color codes for the gradient progress bar and muted text.
+# Use [char]27 instead of `e — the latter only works in PS 7+, not in Windows default PS 5.1
+$esc = [char]27
+$ansiOrange = "${esc}[38;5;214m"
+$ansiReset  = "${esc}[0m"
 
 $gitcodeOwner = if ($env:GITCODE_OWNER) { $env:GITCODE_OWNER } else { "openharmony-sig" }
 $gitcodeRepo = if ($env:GITCODE_REPO) { $env:GITCODE_REPO } else { "deveco-code" }
@@ -58,19 +67,152 @@ function Show-Help {
     Write-Host "  & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Binary C:\path\to\deveco.exe"
 }
 
+# Progress bar constants — 6-stop gradient (pink→purple→blue→cyan→mint→green), ━ / ─ box-drawing chars.
+# Width 28, falls back to a hand-tuned 16-color mapping on Windows conhost / PowerShell 5.1.
+# Throttle: render at most once per 1% increment, 100% always renders.
+$ProgressBarWidth  = 28
+$ProgressFillChar  = [char]0x2501   # ━ BOX DRAWINGS HEAVY HORIZONTAL
+$ProgressEmptyChar = [char]0x2500   # ─ BOX DRAWINGS LIGHT HORIZONTAL
+$ProgressLastPctInt = -1           # last rendered integer percent (1%-granularity throttle)
+
+$ProgressGradientStops = @(
+    @(255, 100, 200),  # pink-500
+    @(200, 100, 255),  # purple-500
+    @(100, 150, 255),  # blue-500
+    @( 50, 200, 255),  # cyan-500
+    @( 80, 255, 180),  # mint-500
+    @(100, 255, 100)   # green-500
+)
+
+# Truecolor (24-bit) capability detection. Native support on Windows Terminal,
+# PowerShell 7+ in a truecolor xterm, and ConEmu/Cmder with ANSI enabled.
+$ProgressTrueColor = $false
+if ($env:WT_SESSION)                                    { $ProgressTrueColor = $true }
+elseif ($env:TERM -match 'truecolor|24bit')             { $ProgressTrueColor = $true }
+elseif ($env:ConEmuANSI -eq 'ON')                       { $ProgressTrueColor = $true }
+
+# Returns an ANSI escape for the cell at $Pos (0..1) along the gradient.
+# Hand-tuned 16-color mapping for the AI palette avoids the RGB-nearest-neighbor
+# pitfall where pink (236,72,153) is mis-bucketed as bright red (255,85,85).
+function Get-ProgressGradientColor {
+    param([double]$Pos, [bool]$TrueColor)
+    $n = $ProgressGradientStops.Count - 1
+    $idx = [Math]::Min($Pos * $n, $n - 0.001)
+    $i = [int][Math]::Floor($idx)
+    $t = $idx - $i
+    $c1 = $ProgressGradientStops[$i]
+    $c2 = $ProgressGradientStops[[Math]::Min($i + 1, $n)]
+    $r = [int][Math]::Round($c1[0] + ($c2[0] - $c1[0]) * $t)
+    $g = [int][Math]::Round($c1[1] + ($c2[1] - $c1[1]) * $t)
+    $b = [int][Math]::Round($c1[2] + ($c2[2] - $c1[2]) * $t)
+    if ($TrueColor) {
+        return "${esc}[38;2;${r};${g};${b}m"
+    }
+    switch ([Math]::Min([int][Math]::Floor($Pos * 5), 4)) {
+        0 { return "${esc}[95m" }   # bright magenta (pink stop)
+        1 { return "${esc}[35m" }   # magenta (purple stop)
+        2 { return "${esc}[34m" }   # blue (blue stop)
+        3 { return "${esc}[36m" }   # cyan (cyan / mint stops)
+        4 { return "${esc}[32m" }   # green (green stop)
+        default { return "${esc}[95m" }
+    }
+}
+
+# Renders the full bar (filled + empty) at $Percent completion.
+function Format-UpgradeBar {
+    param([double]$Percent, [bool]$TrueColor)
+    $filled = [int][Math]::Round($ProgressBarWidth * $Percent / 100)
+    if ($filled -gt $ProgressBarWidth) { $filled = $ProgressBarWidth }
+    $sb = [System.Text.StringBuilder]::new()
+    for ($i = 0; $i -lt $filled; $i++) {
+        $pos = if ($filled -gt 1) { $i / ($ProgressBarWidth - 1) } else { 0.0 }
+        [void]$sb.Append((Get-ProgressGradientColor -Pos $pos -TrueColor $TrueColor))
+        [void]$sb.Append($ProgressFillChar)
+    }
+    [void]$sb.Append("${esc}[90m")
+    [void]$sb.Append([string]::new($ProgressEmptyChar, $ProgressBarWidth - $filled))
+    [void]$sb.Append("${esc}[0m")
+    return $sb.ToString()
+}
+
+# Streams bytes from $InputStream to $OutputStream, rendering the progress bar
+# at most once per 1% increment (and 100% always after the stream ends).
+# Caller is responsible for disposing both streams.
+function Copy-StreamWithProgress {
+    param(
+        [System.IO.Stream]$InputStream,
+        [System.IO.Stream]$OutputStream,
+        [long]$TotalBytes
+    )
+    $buffer = New-Object byte[] 65536
+    $totalRead = 0
+    while (($bytesRead = $InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        $OutputStream.Write($buffer, 0, $bytesRead)
+        $totalRead += $bytesRead
+        if ($TotalBytes -gt 0) {
+            $percent = [int][math]::Floor($totalRead * 100 / $TotalBytes)
+            if ($percent -gt 100) { $percent = 100 }
+            # 1%-granularity throttle: skip when same integer percent already rendered
+            if ($percent -lt 100 -and $percent -eq $ProgressLastPctInt) { continue }
+            $ProgressLastPctInt = $percent
+            $bar = Format-UpgradeBar -Percent $percent -TrueColor $ProgressTrueColor
+            $pctText = "{0,3}" -f $percent
+            Write-Host "`r${bar} ${pctText}%" -NoNewline
+        }
+    }
+    if ($TotalBytes -gt 0) {
+        $bar = Format-UpgradeBar -Percent 100 -TrueColor $ProgressTrueColor
+        Write-Host "`r${bar} 100%"
+    } else {
+        Write-Host ""
+    }
+}
+
+# NOTE: This function uses Task.Result for synchronous waiting, which can deadlock in
+# PowerShell ISE (STA apartment). For interactive installation, always run from
+# powershell.exe (MTA) or pwsh. See https://github.com/openharmony-sig/deveco-code/issues
+# for the full install pattern.
 function Download-WithProgress {
     param([string]$Url, [string]$Output)
-    # Try BITS first — native progress bar, doesn't slow downloads
+    # Try BITS first — native, fast, no visible progress in PS console
     if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
         try {
             Start-BitsTransfer -Source $Url -Destination $Output -ErrorAction Stop
             return
         } catch {
-            Write-Host "BITS transfer failed, falling back to Invoke-WebRequest" -ForegroundColor Yellow
+            Write-Host "BITS transfer failed ($($_.Exception.Message)), falling back to streaming download" -ForegroundColor DarkGray
         }
     }
-    # Fallback: Invoke-WebRequest (progress disabled for PS 5.1 speed)
-    Invoke-WebRequest -Uri $Url -OutFile $Output -UseBasicParsing
+    # Fallback: streaming download with progress bar (PowerShell 5.1 Invoke-WebRequest progress is too slow)
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(10)
+    $totalBytes = 0
+    try {
+        $response = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+        try {
+            $response.EnsureSuccessStatusCode()
+            # Normalize Content-Length: treat $null and -1 ("unknown" from chunked encoding) as 0
+            $contentLength = $response.Content.Headers.ContentLength
+            if ($contentLength -and $contentLength -gt 0) { $totalBytes = $contentLength }
+            # Safe .Result: ResponseHeadersRead guarantees stream is available at this point
+            $inputStream = $response.Content.ReadAsStreamAsync().Result
+            try {
+                $fileStream = [System.IO.File]::Create($Output)
+                try {
+                    Copy-StreamWithProgress -InputStream $inputStream -OutputStream $fileStream -TotalBytes $totalBytes
+                } finally {
+                    $fileStream.Dispose()
+                }
+            } finally {
+                # Explicit dispose is defensive; $response.Dispose() below would also dispose this
+                $inputStream.Dispose()
+            }
+        } finally {
+            $response.Dispose()
+        }
+    } finally {
+        $client.Dispose()
+    }
 }
 
 # L1: Use PID-suffixed class name to avoid same-session type conflicts
@@ -97,10 +239,10 @@ function Test-InstalledVersion {
     $installed = $installed.Trim()
     if (-not $installed) { return }
     if ($installed -eq $TargetVersion) {
-        Write-Host "Version $TargetVersion already installed, skipping" -ForegroundColor Cyan
+        Write-Host "Version $TargetVersion already installed, skipping" -ForegroundColor DarkGray
         exit 0
     }
-    Write-Host "Installed version: $installed." -ForegroundColor Cyan
+    Write-Host "Installed version: $installed." -ForegroundColor DarkGray
 }
 
 function Cleanup-OldVersions {
@@ -133,12 +275,12 @@ if ($Help) {
 if ($Binary) {
     if (-not (Test-Path $Binary)) {
         Write-Error "Binary not found: $Binary"
-        Write-Host "Please check the path and try again" -ForegroundColor Yellow
+        Write-Host "Please check the path and try again" -ForegroundColor DarkGray
         exit 1
     }
     $tag = "local"
 } else {
-    # 版本优先级: -Version 参数 > $env:VERSION 环境变量 > 自动探测最新
+    # Version priority: -Version param > $env:VERSION env var > auto-detect latest
     $tag = if (-not [string]::IsNullOrWhiteSpace($Version)) {
         $Version -replace '^v', ''
     } elseif (-not [string]::IsNullOrWhiteSpace($env:VERSION)) {
@@ -148,26 +290,31 @@ if ($Binary) {
     }
 
     if ([string]::IsNullOrWhiteSpace($tag)) {
-        Write-Host "Fetching latest version from GitCode..." -ForegroundColor Cyan
         try {
-            $tagsUrl = "$GitCodeApi/tags?per_page=100"
-            $tagsResponse = Invoke-RestMethod -Uri $tagsUrl -Method Get -ErrorAction Stop
-            $tag = $tagsResponse.name |
-                Where-Object { $_ -match '^v?\d+\.\d+\.\d+$' } |
-                ForEach-Object { $_ -replace '^v', '' } |
-                Sort-Object { [version]$_ } -Descending |
-                Select-Object -First 1
-            if ([string]::IsNullOrWhiteSpace($tag)) {
-                throw "No valid version tags found"
+            # Fetch latest stable release from GitCode releases API (mirrors GitHub /releases/latest).
+            # Pull the response as raw text and extract tag_name / prerelease with regex
+            # (no Invoke-RestMethod JSON parsing, matches upstream opencode's installer).
+            $releaseUrl = "$GitCodeApi/releases/latest"
+            $releaseJson = (Invoke-WebRequest -Uri $releaseUrl -Method Get -UseBasicParsing -ErrorAction Stop).Content
+            if ($releaseJson -match '"tag_name"\s*:\s*"v?([^"]+)"') {
+                $tag = ($Matches[1] -replace '^v', '')
             }
-            Write-Host "Latest version: $tag" -ForegroundColor Green
+            $isPrerelease = $releaseJson -match '"prerelease"\s*:\s*true'
+            if ([string]::IsNullOrWhiteSpace($tag)) {
+                throw "No release found"
+            }
+            if ($isPrerelease) {
+                throw "Latest GitCode release is marked as prerelease"
+            }
+            Write-Host "Latest version: " -ForegroundColor Green -NoNewline
+            Write-Host $tag
         } catch {
             Write-Error "Failed to fetch version info from GitCode: $_"
-            Write-Host "Hint: Use -Version 0.1.4 to specify a version manually." -ForegroundColor Yellow
+            Write-Host "Hint: Use -Version 0.1.4 to specify a version manually." -ForegroundColor DarkGray
             exit 1
         }
     } else {
-        Write-Host "Using specified version: $tag" -ForegroundColor Cyan
+        Write-Host "Using specified version: $tag" -ForegroundColor DarkGray
         # Verify the release exists
         $releaseUrl = "$GitCodeApi/releases/v$tag"
         try {
@@ -175,7 +322,7 @@ if ($Binary) {
             if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
         } catch {
             Write-Error "Release v$tag not found: $_"
-            Write-Host "Available releases: https://gitcode.com/$Repo/releases" -ForegroundColor Yellow
+            Write-Host "Available releases: https://gitcode.com/$Repo/releases" -ForegroundColor DarkGray
             exit 1
         }
     }
@@ -184,7 +331,9 @@ if ($Binary) {
     Test-InstalledVersion $tag
 }
 
-# 全局 try/finally: 确保异常或 Ctrl+C 时清理 $tempFile 和 $stageDir
+# Global try/finally: ensure temp file and staging dir are cleaned up on exception or Ctrl+C
+$tempFile = $null
+$stageDir = $null
 try {
     # --- Create versioned install directories ---
     if (-not (Test-Path $VersionsDir)) {
@@ -196,7 +345,8 @@ try {
 
     if ($Binary) {
         # --- Binary install — copy local binary to versioned dir ---
-        Write-Host "Installing deveco from: $Binary" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "Installing deveco from: $Binary" -ForegroundColor DarkGray
         $versionDir = Join-Path $VersionsDir "local"
         $versionBinDir = Join-Path $versionDir "bin"
         if (-not (Test-Path $versionBinDir)) {
@@ -205,14 +355,17 @@ try {
         $versionBin = Join-Path $versionBinDir "$AppName.exe"
         Copy-Item -Path $Binary -Destination $versionBin -Force
     } else {
+        Write-Host ""
+        Write-Host "Installing deveco version: $tag" -ForegroundColor DarkGray
+
         # --- Determine baseline vs AVX2 ---
         $useBaseline = $Baseline
         if (-not $useBaseline) {
             $useBaseline = -not (Test-Avx2)
             if ($useBaseline) {
-                Write-Host "AVX2 not detected — using baseline variant." -ForegroundColor Yellow
+                Write-Host "AVX2 not detected — using baseline variant." -ForegroundColor DarkGray
             } else {
-                Write-Host "AVX2 detected — using standard variant." -ForegroundColor Green
+                Write-Host "AVX2 detected — using standard variant." -ForegroundColor DarkGray
             }
         }
 
@@ -225,13 +378,12 @@ try {
         $downloadUrl = "$GitCodeApi/releases/v$tag/attach_files/$assetName/download"
 
         # --- Download to temp file ---
-        Write-Host "Downloading: $downloadUrl" -ForegroundColor Cyan
-        $tempFile = [System.IO.Path]::GetTempFileName() + ".zip"
+        $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + ".zip")
         try {
             Download-WithProgress -Url $downloadUrl -Output $tempFile
         } catch {
             Write-Error "Download failed: $_"
-            Write-Host "Try downloading manually: $downloadUrl" -ForegroundColor Yellow
+            Write-Host "Try downloading manually: $downloadUrl" -ForegroundColor DarkGray
             if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
             exit 1
         }
@@ -240,7 +392,7 @@ try {
         if (-not (Test-Path $tempFile) -or (Get-Item $tempFile).Length -eq 0) {
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             Write-Error "Download failed — file is empty or missing"
-            Write-Host "Check your network, or download manually from $downloadUrl" -ForegroundColor Yellow
+            Write-Host "Check your network, or download manually from $downloadUrl" -ForegroundColor DarkGray
             exit 1
         }
 
@@ -250,7 +402,6 @@ try {
         if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
         New-Item -ItemType Directory -Path $stageBinDir -Force | Out-Null
 
-        Write-Host "Extracting..." -ForegroundColor Cyan
         try {
             Expand-Archive -Path $tempFile -DestinationPath $stageDir -Force -ErrorAction Stop
         } catch {
@@ -277,7 +428,7 @@ try {
         if (-not (Test-Path $binarySrc)) {
             Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Binary '$AppName' not found in archive"
-            Write-Host "The package may be corrupted — try downloading again" -ForegroundColor Yellow
+            Write-Host "The package may be corrupted — try downloading again" -ForegroundColor DarkGray
             exit 1
         }
 
@@ -316,7 +467,7 @@ try {
         if ($LASTEXITCODE -ne 0) {
             Remove-Item $versionDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Installation verification failed — deveco could not run"
-            Write-Host "Platform may be incompatible" -ForegroundColor Yellow
+            Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
             exit 1
         }
     }
@@ -355,8 +506,9 @@ try {
     Cleanup-OldVersions
 
     # --- Add to user PATH (deduplicated, case-insensitive) ---
+    $pathModified = $false
     if ($NoModifyPath) {
-        Write-Host "Skipping PATH modification (-NoModifyPath)" -ForegroundColor Yellow
+        Write-Host "Skipping PATH modification (-NoModifyPath)" -ForegroundColor DarkGray
     } else {
         $pathEntry = $BinDir
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -365,7 +517,7 @@ try {
         $alreadyInPath = $pathEntries | Where-Object { $_ -ieq $pathEntry }
 
         if ($alreadyInPath) {
-            Write-Host "PATH already contains $pathEntry" -ForegroundColor Green
+            Write-Host "PATH already contains $pathEntry" -ForegroundColor DarkGray
         } else {
             if ($currentPath) {
                 $newPath = $currentPath.TrimEnd(";") + ";$pathEntry"
@@ -375,42 +527,39 @@ try {
             [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
             $env:Path += ";$pathEntry"
             Write-Host "Added $pathEntry to user PATH" -ForegroundColor Green
+            $pathModified = $true
         }
     }
 
     # --- Success ---
-    $devecoPath = $BinPath
-    if ($Binary) {
-        $versionOutput = $tag
-    } else {
-        try {
-            $versionOutput = & $devecoPath --version 2>&1
-        } catch {
-            $versionOutput = $tag
-        }
-    }
     Write-Host ""
-    Write-Host "▃▃▃▃  ▃▃▃▃ ▃   ▃ ▃▃▃▃  ▃▃▃   ▃▃▃     ▃▃▃   ▃▃▃  ▃▃▃▃  ▃▃▃▃" -ForegroundColor Green
-    Write-Host "▃   ▃ ▃    ▃   ▃ ▃    ▃   ▃ ▃   ▃   ▃   ▃ ▃   ▃ ▃   ▃ ▃   " -ForegroundColor Green
-    Write-Host "▄   ▄ ▄▄▄▄ ▄   ▄ ▄▄▄▄ ▄     ▄   ▄   ▄     ▄   ▄ ▄   ▄ ▄▄▄▄" -ForegroundColor Green
-    Write-Host "▅   ▅ ▅    ▅   ▅ ▅    ▅   ▅ ▅   ▅   ▅   ▅ ▅   ▅ ▅   ▅ ▅   " -ForegroundColor Green
-    Write-Host "▆▆▆▆  ▆▆▆▆  ▆▆▆  ▆▆▆▆  ▆▆▆   ▆▆▆     ▆▆▆   ▆▆▆  ▆▆▆▆  ▆▆▆▆" -ForegroundColor Green
+    Write-Host "▃▃▃▃  ▃▃▃▃ ▃   ▃ ▃▃▃▃  ▃▃▃   ▃▃▃     ▃▃▃   ▃▃▃  ▃▃▃▃  ▃▃▃▃"
+    Write-Host "▃   ▃ ▃    ▃   ▃ ▃    ▃   ▃ ▃   ▃   ▃   ▃ ▃   ▃ ▃   ▃ ▃   "
+    Write-Host "▄   ▄ ▄▄▄▄ ▄   ▄ ▄▄▄▄ ▄     ▄   ▄   ▄     ▄   ▄ ▄   ▄ ▄▄▄▄"
+    Write-Host "▅   ▅ ▅    ▅   ▅ ▅    ▅   ▅ ▅   ▅   ▅   ▅ ▅   ▅ ▅   ▅ ▅   "
+    Write-Host "▆▆▆▆  ▆▆▆▆  ▆▆▆  ▆▆▆▆  ▆▆▆   ▆▆▆     ▆▆▆   ▆▆▆  ▆▆▆▆  ▆▆▆▆"
     Write-Host ""
     if ($tag -eq "local") {
-        Write-Host "Local binary installed." -ForegroundColor Green
+        Write-Host "Local binary installed." -ForegroundColor DarkGray
     } else {
-        Write-Host "DevEco Code v$tag installed successfully!" -ForegroundColor Green
+        Write-Host "v$tag installed." -ForegroundColor DarkGray
     }
-    Write-Host "  Version:  $versionOutput" -ForegroundColor White
-    Write-Host "  Location: $devecoPath" -ForegroundColor White
-    Write-Host "  Note: Open a new terminal for PATH changes to take effect." -ForegroundColor Yellow
+
+    if ($pathModified) {
+        Write-Host "${ansiOrange}Note: Open a new terminal for PATH changes to take effect.${ansiReset}"
+        Write-Host ""
+    }
+
     Write-Host ""
-    Write-Host "Get started:" -ForegroundColor Cyan
-    Write-Host "  cd <project>  # Open your project directory" -ForegroundColor White
-    Write-Host "  deveco        # Launch DevEco Code" -ForegroundColor White
+    Write-Host "Get started:" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "cd <project>  " -NoNewline
+    Write-Host "# Open your project directory" -ForegroundColor DarkGray
+    Write-Host "deveco        " -NoNewline
+    Write-Host "# Launch DevEco Code" -ForegroundColor DarkGray
     Write-Host ""
 } finally {
-    # 全局清理: 确保异常或 Ctrl+C 时清理临时文件
+    # Global cleanup: ensure temp files are removed on exception or Ctrl+C
     if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
     if ($stageDir -and (Test-Path $stageDir)) { Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue }
 }

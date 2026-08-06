@@ -130,52 +130,46 @@ describe("installation", () => {
         expect(latestUrl).toContain(`/${InstallationChannel}`)
       }),
     )
-    let tagsUrl = ""
+    let curlReleaseUrl = ""
     testEffect(testLayer((request) => {
-      tagsUrl = request.url
-      if (request.url.includes("/tags")) {
-        return jsonResponse([
-          { name: "v0.1.3" },
-          { name: "v0.1.2" },
-          { name: "v0.1.1" },
-          { name: "v0.1.0" },
-          { name: "some-non-version-tag" },
-        ])
+      curlReleaseUrl = request.url
+      if (request.url.includes("/releases/latest")) {
+        return jsonResponse({
+          tag_name: "v0.1.3",
+          prerelease: false,
+        })
       }
       return jsonResponse({ version: "1.2.3" })
-    })).effect("reads the latest version from GitCode tags API for curl installs", () =>
+    })).effect("reads the latest version from GitCode releases/latest API for curl installs", () =>
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("curl")
         expect(result).toBe("0.1.3")
-        expect(tagsUrl).toContain("gitcode.com/api/v5/repos")
-        expect(tagsUrl).toContain("openharmony-sig/deveco-code")
-        expect(tagsUrl).toContain("/tags")
+        expect(curlReleaseUrl).toContain("gitcode.com/api/v5/repos")
+        expect(curlReleaseUrl).toContain("openharmony-sig/deveco-code")
+        expect(curlReleaseUrl).toContain("/releases/latest")
       }),
     )
 
-    let irmTagsUrl = ""
+    let irmReleaseUrl = ""
     testEffect(testLayer((request) => {
-      irmTagsUrl = request.url
-      if (request.url.includes("/tags")) {
-        return jsonResponse([
-          { name: "v0.1.3" },
-          { name: "v0.1.2" },
-          { name: "v0.1.1" },
-          { name: "v0.1.0" },
-          { name: "some-non-version-tag" },
-        ])
+      irmReleaseUrl = request.url
+      if (request.url.includes("/releases/latest")) {
+        return jsonResponse({
+          tag_name: "v0.1.3",
+          prerelease: false,
+        })
       }
       return jsonResponse({ version: "1.2.3" })
-    })).effect("reads the latest version from GitCode tags API for irm installs", () =>
+    })).effect("reads the latest version from GitCode releases/latest API for irm installs", () =>
       Effect.gen(function* () {
         const result = yield* Installation.use.latest("irm")
         expect(result).toBe("0.1.3")
-        expect(irmTagsUrl).toContain("/tags")
+        expect(irmReleaseUrl).toContain("/releases/latest")
       }),
     )
 
-    testEffect(testLayer(() => jsonResponse([{ name: "release-candidate" }, { name: "nightly" }]))).effect(
-      "fails when GitCode has no semver version tags for curl installs",
+    testEffect(testLayer(() => jsonResponse({ tag_name: "v0.2.0-rc.1", prerelease: true }))).effect(
+      "fails when GitCode latest release is marked as prerelease",
       () =>
         Effect.gen(function* () {
           const exit = yield* Installation.use.latest("curl").pipe(Effect.exit)
