@@ -30,7 +30,7 @@ async function test() {
   console.log("Events (reversed):", events.toReversed())
 
   for (const event of events.toReversed()) {
-    const data = await Storage.read(event)
+    const data = await Storage.read(event, Share.Data.array())
     console.log("Event data (reversed order):", event, data)
   }
 

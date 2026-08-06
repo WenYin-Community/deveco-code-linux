@@ -1,5 +1,6 @@
 import { AwsClient } from "aws4fetch"
 import { lazy } from "@opencode-ai/core/util/lazy"
+import z from "zod"
 
 export namespace Storage {
   export interface Adapter {
@@ -94,10 +95,26 @@ export namespace Storage {
     return key.join("/") + ".json"
   }
 
-  export async function read<T>(key: string[]) {
-    const result = await adapter().read(resolve(key))
-    if (!result) return undefined
-    return JSON.parse(result) as T
+  export class InvalidDataError extends Error {
+    constructor(path: string, cause: unknown) {
+      super(`Invalid storage data: ${path}`, { cause })
+      this.name = "Storage.InvalidDataError"
+    }
+  }
+
+  export function decode<T extends z.ZodType>(path: string, value: string, schema: T) {
+    try {
+      return schema.parse(JSON.parse(value))
+    } catch (cause) {
+      throw new InvalidDataError(path, cause)
+    }
+  }
+
+  export async function read<T extends z.ZodType>(key: string[], schema: T) {
+    const path = resolve(key)
+    const result = await adapter().read(path)
+    if (result === undefined) return undefined
+    return decode(path, result, schema)
   }
 
   export function write<T>(key: string[], value: T) {
@@ -119,9 +136,9 @@ export namespace Storage {
     return result.map((x) => x.replace(/\.json$/, "").split("/"))
   }
 
-  export async function update<T>(key: string[], fn: (draft: T) => void) {
-    const val = await read<T>(key)
-    if (!val) throw new Error("Not found")
+  export async function update<T extends z.ZodType>(key: string[], schema: T, fn: (draft: z.infer<T>) => void) {
+    const val = await read(key, schema)
+    if (val === undefined) throw new Error("Not found")
     fn(val)
     await write(key, val)
     return val

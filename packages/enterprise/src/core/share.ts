@@ -16,37 +16,36 @@ export namespace Share {
   export type Info = z.infer<typeof Info>
 
   export const Data = z.discriminatedUnion("type", [
-    z.object({
+    z.looseObject({
       type: z.literal("session"),
-      data: z.custom<Session>(),
+      data: z.looseObject({ id: z.string() }).and(z.custom<Session>()),
     }),
-    z.object({
+    z.looseObject({
       type: z.literal("message"),
-      data: z.custom<Message>(),
+      data: z.looseObject({ id: z.string(), sessionID: z.string() }).and(z.custom<Message>()),
     }),
-    z.object({
+    z.looseObject({
       type: z.literal("part"),
-      data: z.custom<Part>(),
+      data: z
+        .looseObject({ id: z.string(), sessionID: z.string(), messageID: z.string(), type: z.string() })
+        .and(z.custom<Part>()),
     }),
-    z.object({
+    z.looseObject({
       type: z.literal("session_diff"),
-      data: z.custom<SnapshotFileDiff[]>(),
+      data: z.looseObject({ additions: z.number(), deletions: z.number() }).and(z.custom<SnapshotFileDiff>()).array(),
     }),
-    z.object({
+    z.looseObject({
       type: z.literal("model"),
-      data: z.custom<Model[]>(),
+      data: z.looseObject({ id: z.string(), providerID: z.string() }).and(z.custom<Model>()).array(),
     }),
   ])
   export type Data = z.infer<typeof Data>
 
-  type Snapshot = {
-    data: Data[]
-  }
+  export const Snapshot = z.looseObject({ data: Data.array() })
+  export type Snapshot = z.infer<typeof Snapshot>
 
-  type Compaction = {
-    event?: string
-    data: Data[]
-  }
+  const Compaction = z.looseObject({ event: z.string().optional(), data: Data.array() })
+  type Compaction = z.infer<typeof Compaction>
 
   function key(item: Data) {
     switch (item.type) {
@@ -76,7 +75,7 @@ export namespace Share {
   }
 
   async function readSnapshot(shareID: string) {
-    return (await Storage.read<Snapshot>(["share_snapshot", shareID]))?.data
+    return (await Storage.read(["share_snapshot", shareID], Snapshot))?.data
   }
 
   async function writeSnapshot(shareID: string, data: Data[]) {
@@ -84,7 +83,7 @@ export namespace Share {
   }
 
   async function legacy(shareID: string) {
-    const compaction: Compaction = (await Storage.read<Compaction>(["share_compaction", shareID])) ?? {
+    const compaction: Compaction = (await Storage.read(["share_compaction", shareID], Compaction)) ?? {
       data: [],
       event: undefined,
     }
@@ -99,7 +98,7 @@ export namespace Share {
 
     const next = merge(
       compaction.data,
-      await Promise.all(list.map(async (event) => await Storage.read<Data[]>(event))).then((x) =>
+      await Promise.all(list.map(async (event) => await Storage.read(event, Data.array()))).then((x) =>
         x.flatMap((item) => item ?? []),
       ),
     )
@@ -128,7 +127,7 @@ export namespace Share {
   })
 
   export async function get(id: string) {
-    return Storage.read<Info>(["share", id])
+    return Storage.read(["share", id], Info)
   }
 
   export const remove = fn(Info.pick({ id: true, secret: true }), async (body) => {
