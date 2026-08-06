@@ -220,7 +220,13 @@ export namespace Billing {
     .string()
     .url()
     .refine((value) => {
-      const parsed = new URL(value)
+      let parsed: URL
+      try {
+        parsed = new URL(value)
+      } catch {
+        return false
+      }
+      if (parsed.username || parsed.password) return false
       const allowed =
         Resource.App.stage === "production"
           ? ["opencode.ai"]
