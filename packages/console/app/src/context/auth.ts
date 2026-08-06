@@ -31,8 +31,9 @@ export function useAuthSession() {
     name: "auth",
     maxAge: 60 * 60 * 24 * 365,
     cookie: {
-      secure: false,
+      secure: import.meta.env.PROD,
       httpOnly: true,
+      sameSite: "lax",
     },
   })
 }
