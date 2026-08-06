@@ -356,11 +356,58 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   };
 }
 
+// Allowlist of inherited env vars passed to the ui-verification-mcp child process.
+// The child only needs PATH/system vars to spawn hdc/node, DEVECO_HOME/DEVECO_PATH
+// to locate DevEco Studio, the RC_* legacy fallbacks it reads, and its UI_VERIFY_*
+// config flags. Secrets such as DEVECO_API_KEY or third-party provider keys must NOT
+// leak through. Windows env vars are case-insensitive, so matching is upper-cased.
+const ENV_ALLOWLIST = new Set(
+  [
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "ComSpec",
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_MESSAGES",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SHELL",
+    "USER",
+    "LOGNAME",
+    "NODE_OPTIONS",
+    "DEVECO_HOME",
+    "DEVECO_PATH",
+    "RC_HDC_PATH",
+    "RC_API_KEY",
+    "RC_BASE_URL",
+    "RC_MODEL_NAME",
+  ].map((k) => k.toUpperCase()),
+);
+
+const ENV_PREFIX_ALLOWLIST = ["UI_VERIFY_"];
+
+function isEnvAllowed(name: string): boolean {
+  const upper = name.toUpperCase();
+  if (ENV_PREFIX_ALLOWLIST.some((p) => upper.startsWith(p))) {
+    return true;
+  }
+  return ENV_ALLOWLIST.has(upper);
+}
+
 function processEnv(omit: string[] = []): Record<string, string> {
-  const omitted = new Set(omit)
+  const omitted = new Set(omit);
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined && !omitted.has(entry[0]),
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined && !omitted.has(entry[0]) && isEnvAllowed(entry[0]),
     ),
   );
 }
