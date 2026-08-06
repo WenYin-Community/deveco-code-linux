@@ -3,6 +3,7 @@ import { loginService } from "./login-service"
 import { tokenStorage } from "./token-storage"
 import { loadAccessTokenFromDisk, loadIsRealNameFromDisk, saveAuthToDisk } from "./storage"
 import type { AccountRegionStatus, DevEcoSession, LoginResult } from "./types"
+import { ACCESS_TOKEN_EXPIRES_MS } from "./types"
 import { MAINLAND_CHINA_ONLY_MESSAGE, regionPolicy } from "./region-policy"
 
 export class DevEcoAuth {
@@ -148,17 +149,34 @@ export class DevEcoAuth {
 
   /**
    * Check real-name verification status via API.
+   * Uses checkRealNameWithToken internally so that refreshed tokens from the
+   * server are persisted — refresh=true may rotate tokens on the server, so
+   * we must save the new tokens to avoid invalidating the local credentials.
    * Persists the result to auth.json when verified (one-way: false → true).
    * @returns true if verified, false if not, null if no token or check failed
    */
   async checkRealName(): Promise<boolean | null> {
     const jwtToken = await tokenStorage.loadToken()
     if (!jwtToken) return null
-    const result = await loginService.checkRealName(jwtToken)
-    if (result === true) {
-      await saveAuthToDisk("deveco", { isRealName: true })
+    try {
+      const result = await loginService.checkRealNameWithToken(jwtToken)
+      if (result.verified) {
+        await saveAuthToDisk("deveco", {
+          type: "oauth",
+          access: result.accessToken,
+          refresh: result.refreshToken,
+          expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
+          isRealName: true,
+        })
+      }
+      return result.verified
+    } catch (err) {
+      logWarn("checkRealName failed", {
+        service: "deveco",
+        error: err instanceof Error ? err.message : String(err),
+      })
+      return null
     }
-    return result
   }
 
   /**

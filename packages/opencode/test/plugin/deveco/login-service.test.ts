@@ -556,3 +556,115 @@ describe("LoginService.refreshToken", () => {
     expect(() => service.refreshToken("some.jwt.token")).toThrow(UnsupportedRegionError)
   })
 })
+
+describe("LoginService.checkRealNameWithToken", () => {
+  test("should return verified=true with tokens when server reports realName as 'true'", async () => {
+    const tokenCheck: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "fresh-access",
+        refreshToken: "fresh-refresh",
+        nationalCode: "CN",
+        realName: "true",
+      },
+    }
+    httpClient.get = mock(() =>
+      Promise.resolve({ statusCode: 200, data: JSON.stringify(tokenCheck), headers: {} } as HttpResponse),
+    )
+    httpClient.parseJson = mock(() => tokenCheck)
+
+    const service = new LoginService()
+    const result = await service.checkRealNameWithToken("some.jwt.token")
+
+    expect(result.verified).toBe(true)
+    expect(result.accessToken).toBe("fresh-access")
+    expect(result.refreshToken).toBe("fresh-refresh")
+  })
+
+  test("should return verified=false when server reports realName as 'false'", async () => {
+    const tokenCheck: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "fresh-access",
+        refreshToken: "fresh-refresh",
+        nationalCode: "CN",
+        realName: "false",
+      },
+    }
+    httpClient.get = mock(() =>
+      Promise.resolve({ statusCode: 200, data: JSON.stringify(tokenCheck), headers: {} } as HttpResponse),
+    )
+    httpClient.parseJson = mock(() => tokenCheck)
+
+    const service = new LoginService()
+    const result = await service.checkRealNameWithToken("some.jwt.token")
+
+    expect(result.verified).toBe(false)
+    expect(result.accessToken).toBe("fresh-access")
+  })
+
+  test("should throw when response is incomplete (missing accessToken)", async () => {
+    const tokenCheck: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "",
+        nationalCode: "CN",
+        realName: "true",
+      },
+    }
+    httpClient.get = mock(() =>
+      Promise.resolve({ statusCode: 200, data: JSON.stringify(tokenCheck), headers: {} } as HttpResponse),
+    )
+    httpClient.parseJson = mock(() => tokenCheck)
+
+    const service = new LoginService()
+    expect(() => service.checkRealNameWithToken("some.jwt.token")).toThrow("incomplete")
+  })
+
+  test("should send refresh=true header to get latest real-name status from server", async () => {
+    const tokenCheck: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "fresh-access",
+        refreshToken: "fresh-refresh",
+        nationalCode: "CN",
+        realName: "true",
+      },
+    }
+    let capturedConfig: { headers?: Record<string, string> } | undefined
+    const getSpy = mock((url: string, config?: { headers?: Record<string, string> }) => {
+      capturedConfig = config
+      return Promise.resolve({ statusCode: 200, data: JSON.stringify(tokenCheck), headers: {} } as HttpResponse)
+    })
+    httpClient.get = getSpy
+    httpClient.parseJson = mock(() => tokenCheck)
+
+    const service = new LoginService()
+    await service.checkRealNameWithToken("some.jwt.token")
+
+    expect(getSpy).toHaveBeenCalled()
+    expect(capturedConfig?.headers).toEqual(
+      expect.objectContaining({ refresh: "true" }),
+    )
+  })
+
+  test("should default refreshToken to empty string when missing", async () => {
+    const tokenCheck: TokenCheckResponse = {
+      status: true,
+      userInfo: {
+        accessToken: "fresh-access",
+        nationalCode: "CN",
+        realName: "true",
+      },
+    }
+    httpClient.get = mock(() =>
+      Promise.resolve({ statusCode: 200, data: JSON.stringify(tokenCheck), headers: {} } as HttpResponse),
+    )
+    httpClient.parseJson = mock(() => tokenCheck)
+
+    const service = new LoginService()
+    const result = await service.checkRealNameWithToken("some.jwt.token")
+
+    expect(result.refreshToken).toBe("")
+  })
+})

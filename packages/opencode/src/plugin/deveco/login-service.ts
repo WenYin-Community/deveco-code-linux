@@ -211,9 +211,9 @@ export class LoginService {
     return userInfo
   }
 
-  private async checkJwtToken(jwtToken: string): Promise<TokenCheckResponse> {
+  private async checkJwtToken(jwtToken: string, refresh = false): Promise<TokenCheckResponse> {
     const headers = {
-      refresh: "false",
+      refresh: refresh ? "true" : "false",
       jwtToken: jwtToken,
     }
 
@@ -329,24 +329,17 @@ export class LoginService {
   }
 
   /**
-   * Check whether the user has completed real-name verification.
-   * @returns true if verified, false if not, null if check failed
-   */
-  async checkRealName(jwtToken: string): Promise<boolean | null> {
-    const tokenInfo = await this.checkJwtToken(jwtToken).catch(() => null)
-    if (!tokenInfo?.status || !tokenInfo.userInfo) return null
-    this.requireChinaAccount(tokenInfo)
-    return String(tokenInfo.userInfo.realName) === "true"
-  }
-
-  /**
    * Check real-name verification status and return fresh tokens from the API response.
    * @throws when the network request fails, the server returns a non-200 response, or the response is incomplete
    */
   async checkRealNameWithToken(
     jwtToken: string,
   ): Promise<{ verified: boolean; accessToken: string; refreshToken: string }> {
-    const tokenInfo = await this.checkJwtToken(jwtToken)
+    // Use refresh=true so the server re-queries the account service for the
+    // latest real-name status. With refresh=false the server returns the
+    // userInfo cached at JWT issuance time, which still shows realName=false
+    // even after the user completes real-name authentication in the browser.
+    const tokenInfo = await this.checkJwtToken(jwtToken, true)
     if (!tokenInfo?.status || !tokenInfo.userInfo || !tokenInfo.userInfo.accessToken) {
       throw new Error("Server returned an incomplete response. Please try again later.")
     }
