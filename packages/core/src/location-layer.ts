@@ -37,6 +37,7 @@ import { BuiltInTools } from "./tool/builtins"
 import { Image } from "./image"
 import { ToolRegistry } from "./tool/registry"
 import { ApplicationTools } from "./tool/application-tools"
+import { Ssrf } from "./util/ssrf"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
 import { SessionStore } from "./session/store"
@@ -95,6 +96,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(todos),
       Layer.provide(questions),
       Layer.provide(image),
+      Layer.provide(Ssrf.GuardLive),
     )
     const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
     const runner = SessionRunnerLLM.defaultLayer.pipe(

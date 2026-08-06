@@ -6,6 +6,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
 import { PermissionV2 } from "../permission"
+import { Ssrf } from "../util/ssrf"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -129,6 +130,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const http = yield* HttpClient.HttpClient
     const permission = yield* PermissionV2.Service
+    const guard = yield* Ssrf.Guard
 
     yield* tools
       .register({
@@ -144,10 +146,12 @@ export const layer = Layer.effectDiscard(
                 catch: (error) => error,
               })
 
+              yield* guard.assertSafeUrl(input.url)
+
               yield* permission.assert({
                 action: name,
                 resources: [input.url],
-                save: ["*"],
+                save: [new URL(input.url).origin + "/*"],
                 metadata: input,
                 sessionID: context.sessionID,
                 agent: context.agent,

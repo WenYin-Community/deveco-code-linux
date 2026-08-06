@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { Ssrf } from "@opencode-ai/core/util/ssrf"
 import { Parser } from "htmlparser2"
 import * as Tool from "./tool"
 import TurndownService from "turndown"
@@ -25,6 +26,7 @@ export const WebFetchTool = Tool.define(
   "webfetch",
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient
+    const guard = yield* Ssrf.Guard
     const httpOk = HttpClient.filterStatusOk(http)
 
     return {
@@ -36,10 +38,12 @@ export const WebFetchTool = Tool.define(
             throw new Error("URL must start with http:// or https://")
           }
 
+          yield* guard.assertSafeUrl(params.url)
+
           yield* ctx.ask({
             permission: "webfetch",
             patterns: [params.url],
-            always: ["*"],
+            always: [new URL(params.url).origin + "/*"],
             metadata: {
               url: params.url,
               format: params.format,
@@ -152,7 +156,7 @@ export const WebFetchTool = Tool.define(
           }
         }).pipe(Effect.orDie),
     }
-  }),
+  }).pipe(Effect.provide(Ssrf.GuardLive)),
 )
 
 function extractTextFromHTML(html: string) {

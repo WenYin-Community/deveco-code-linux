@@ -4,6 +4,7 @@ import * as TestClock from "effect/testing/TestClock"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { PermissionV2 } from "@opencode-ai/core/permission"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { Ssrf } from "@opencode-ai/core/util/ssrf"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { WebFetchTool } from "@opencode-ai/core/tool/webfetch"
 import { testEffect } from "./lib/effect"
@@ -36,12 +37,18 @@ const permission = Layer.succeed(
   }),
 )
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
-const webfetch = WebFetchTool.layer.pipe(Layer.provide(registry), Layer.provide(permission), Layer.provide(http))
+const webfetch = WebFetchTool.layer.pipe(
+  Layer.provide(registry),
+  Layer.provide(permission),
+  Layer.provide(http),
+  Layer.provide(Ssrf.GuardTest),
+)
 const it = testEffect(Layer.mergeAll(registry, permission, http, webfetch))
 const fetchWebfetch = WebFetchTool.layer.pipe(
   Layer.provide(registry),
   Layer.provide(permission),
   Layer.provide(FetchHttpClient.layer),
+  Layer.provide(Ssrf.GuardTest),
 )
 const live = testEffect(Layer.mergeAll(registry, permission, FetchHttpClient.layer, fetchWebfetch))
 
@@ -88,7 +95,13 @@ describe("WebFetchTool registration", () => {
         },
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text", timeout: 4 } },
+        {
+          sessionID,
+          action: "webfetch",
+          resources: [url],
+          save: [new URL(url).origin + "/*"],
+          metadata: { url, format: "text", timeout: 4 },
+        },
       ])
       expect(requests).toMatchObject([{ url, headers: { accept: expect.stringContaining("text/plain;q=1.0") } }])
     }),
@@ -105,7 +118,13 @@ describe("WebFetchTool registration", () => {
         value: "hello",
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+        {
+          sessionID,
+          action: "webfetch",
+          resources: [url],
+          save: [new URL(url).origin + "/*"],
+          metadata: { url, format: "text" },
+        },
       ])
       expect(requests.map((request) => request.url)).toEqual([url])
     }),
@@ -133,7 +152,13 @@ describe("WebFetchTool registration", () => {
             value: "redirected",
           })
           expect(assertions).toMatchObject([
-            { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+            {
+              sessionID,
+              action: "webfetch",
+              resources: [url],
+              save: [new URL(url).origin + "/*"],
+              metadata: { url, format: "text" },
+            },
           ])
         }),
       (server) => Effect.promise(() => server.stop(true)),
@@ -256,4 +281,34 @@ describe("WebFetchTool registration", () => {
       expect(yield* Fiber.join(fiber)).toEqual({ type: "error", value: "Unable to fetch https://1.1.1.1/slow" })
     }),
   )
+})
+
+describe("SsrfGuard", () => {
+  test("blocks cloud metadata and private IPv4 ranges", () => {
+    expect(Ssrf.isBlockedIp("169.254.169.254")).toBe(true)
+    expect(Ssrf.isBlockedIp("127.0.0.1")).toBe(true)
+    expect(Ssrf.isBlockedIp("10.0.0.1")).toBe(true)
+    expect(Ssrf.isBlockedIp("192.168.1.1")).toBe(true)
+    expect(Ssrf.isBlockedIp("172.16.0.1")).toBe(true)
+    expect(Ssrf.isBlockedIp("100.100.100.200")).toBe(true)
+  })
+
+  test("allows public IPv4 addresses", () => {
+    expect(Ssrf.isBlockedIp("8.8.8.8")).toBe(false)
+    expect(Ssrf.isBlockedIp("1.1.1.1")).toBe(false)
+  })
+
+  test("blocks loopback and link-local IPv6", () => {
+    expect(Ssrf.isBlockedIp("::1")).toBe(true)
+    expect(Ssrf.isBlockedIp("fe80::1")).toBe(true)
+  })
+
+  test("blocks IPv4-mapped IPv6 by checking the embedded IPv4", () => {
+    expect(Ssrf.isBlockedIp("::ffff:127.0.0.1")).toBe(true)
+  })
+
+  test("blocks the metadata hostname case-insensitively", () => {
+    expect(Ssrf.isBlockedHostname("METADATA")).toBe(true)
+    expect(Ssrf.isBlockedHostname("example.com")).toBe(false)
+  })
 })
