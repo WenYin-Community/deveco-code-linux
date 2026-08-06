@@ -229,7 +229,7 @@ describe("WebSearchTool registration", () => {
     }),
   )
 
-  it.effect("keeps an Exa credential in the transport URL and out of model output", () =>
+  it.effect("sends the Exa credential via x-api-key header and keeps it out of model output", () =>
     Effect.gen(function* () {
       requests.length = 0
       assertions.length = 0
@@ -243,7 +243,8 @@ describe("WebSearchTool registration", () => {
         call: { type: "tool-call", id: "call-exa-key", name: "websearch", input: { query: "effect schema" } },
       })
 
-      expect(requests[0]?.url).toBe(`${WebSearchTool.EXA_URL}?exaApiKey=exa+secret`)
+      expect(requests[0]?.url).toBe(WebSearchTool.EXA_URL)
+      expect(requests[0]?.headers).toMatchObject({ "x-api-key": "exa secret" })
       expect(JSON.stringify(settled)).not.toContain("exa secret")
     }),
   )

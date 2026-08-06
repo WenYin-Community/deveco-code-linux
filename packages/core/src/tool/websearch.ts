@@ -136,12 +136,12 @@ const McpRequest = <F extends Schema.Struct.Fields>(args: Schema.Struct<F>) =>
     params: Schema.Struct({ name: Schema.String, arguments: args }),
   })
 
-const exaUrl = (apiKey: string | undefined) => {
-  if (!apiKey) return EXA_URL
-  const url = new URL(EXA_URL)
-  url.searchParams.set("exaApiKey", apiKey)
-  return url.toString()
-}
+// Exa's API key travels in the `x-api-key` header rather than the URL query
+// string, matching Exa's recommended auth priority and avoiding leakage
+// through client traces, proxy logs, and crash dumps. See
+// https://github.com/exa-labs/exa-mcp-server/issues/334.
+const exaHeaders = (apiKey: string | undefined): Record<string, string> =>
+  apiKey ? { 'x-api-key': apiKey } : {};
 
 const callMcp = <F extends Schema.Struct.Fields>(
   http: HttpClient.HttpClient,
@@ -210,13 +210,13 @@ export const layer = Layer.effectDiscard(
 
               const text =
                 provider === "exa"
-                  ? yield* callMcp(http, exaUrl(config.exaApiKey), "web_search_exa", ExaArgs, {
+                  ? yield* callMcp(http, EXA_URL, "web_search_exa", ExaArgs, {
                       query: input.query,
                       type: input.type || "auto",
                       numResults: input.numResults || 8,
                       livecrawl: input.livecrawl || "fallback",
                       contextMaxCharacters: input.contextMaxCharacters,
-                    })
+                    }, exaHeaders(config.exaApiKey))
                   : yield* callMcp(
                       http,
                       PARALLEL_URL,

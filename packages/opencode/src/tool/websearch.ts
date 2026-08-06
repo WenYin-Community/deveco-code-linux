@@ -57,6 +57,10 @@ function parallelAuthHeaders() {
   return { ...headers, Authorization: `Bearer ${process.env.PARALLEL_API_KEY}` }
 }
 
+function exaAuthHeaders(): Record<string, string> {
+  return process.env.EXA_API_KEY ? { 'x-api-key': process.env.EXA_API_KEY } : {};
+}
+
 function callProvider(
   http: HttpClient.HttpClient,
   provider: WebSearchProvider,
@@ -93,6 +97,7 @@ function callProvider(
       contextMaxCharacters: params.contextMaxCharacters,
     },
     "25 seconds",
+    exaAuthHeaders(),
   )
 }
 

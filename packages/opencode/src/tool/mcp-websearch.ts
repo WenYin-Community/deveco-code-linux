@@ -1,9 +1,10 @@
 import { Duration, Effect, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 
-export const EXA_URL = process.env.EXA_API_KEY
-  ? `https://mcp.exa.ai/mcp?exaApiKey=${encodeURIComponent(process.env.EXA_API_KEY)}`
-  : "https://mcp.exa.ai/mcp"
+// Exa's API key is delivered via the `x-api-key` header at the call site.
+// Putting it in the URL query string leaks through client traces, proxy logs,
+// and crash dumps — see https://github.com/exa-labs/exa-mcp-server/issues/334.
+export const EXA_URL = "https://mcp.exa.ai/mcp"
 export const PARALLEL_URL = "https://search.parallel.ai/mcp"
 
 const McpResult = Schema.Struct({
