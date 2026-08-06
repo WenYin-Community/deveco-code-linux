@@ -3,6 +3,7 @@ import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { LocalCrypto } from "@/security/local-crypto"
 import { ACCESS_TOKEN_EXPIRES_MS, devecoAuth, saveAuthToDisk } from "../deveco"
+import { getAnalyticsDeviceId } from "./device-id"
 import {
   ackPendingEvents,
   clearPendingEvents,
@@ -187,7 +188,12 @@ export class AnalyticsUploader {
       }
       const response = await fetch(this.config.endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json", authorization: authToken },
+        headers: {
+          "Content-Type": "application/json",
+          authorization: authToken,
+          sender: "deveco-code",
+          deviceid: await getAnalyticsDeviceId(),
+        },
         body: JSON.stringify(batch.map((pending) => toHuaweiTracePayload(pending))),
         signal: controller.signal,
       })
