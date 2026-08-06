@@ -27,6 +27,15 @@ function splitFullName(fullName: string) {
   return { firstName: parts[0], lastName: parts.slice(1).join(" ") }
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function subscribe(email: string, fullName: string) {
   const name = splitFullName(fullName)
   const fields: Record<string, string> = {}
@@ -77,13 +86,29 @@ export async function POST(event: APIEvent) {
       return Response.json({ error: dict["enterprise.form.error.invalidEmailFormat"] }, { status: 400 })
     }
 
-    const emailContent = `
-${body.message}<br><br>
---<br>
-${body.name}<br>
-${body.role}<br>
-${body.company ? `${body.company}<br>` : ""}${body.email}<br>
-${body.phone ? `${body.phone}<br>` : ""}`.trim()
+    const textContent = [
+      body.message,
+      "--",
+      body.name,
+      body.role,
+      [body.company, body.email].filter(Boolean).join("\n"),
+      body.phone,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const htmlContent = [
+      escapeHtml(body.message),
+      '--',
+      escapeHtml(body.name),
+      escapeHtml(body.role),
+      body.company ? escapeHtml(body.company) : null,
+      escapeHtml(body.email),
+      body.phone ? escapeHtml(body.phone) : null,
+    ]
+      .filter(Boolean)
+      .map((line) => `<div>${line}</div>`)
+      .join('');
 
     const [lead, mail, octopus] = await Promise.all([
       createLead({
@@ -100,7 +125,8 @@ ${body.phone ? `${body.phone}<br>` : ""}`.trim()
       AWS.sendEmail({
         to: "contact@anoma.ly",
         subject: `Enterprise Inquiry from ${body.name}`,
-        body: emailContent,
+        text: textContent,
+        html: htmlContent,
         replyTo: body.email,
       }).then(
         () => true,

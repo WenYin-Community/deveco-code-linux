@@ -142,7 +142,7 @@ export namespace User {
         await AWS.sendEmail({
           to: email,
           subject: `You've been invited to join the ${emailInfo.workspaceName} workspace on OpenCode`,
-          body: render(
+          html: render(
             // @ts-ignore
             InviteEmail({
               inviter: emailInfo.inviterEmail,

@@ -21,10 +21,14 @@ export namespace AWS {
     z.object({
       to: z.string(),
       subject: z.string(),
-      body: z.string(),
+      text: z.string().optional(),
+      html: z.string().optional(),
       replyTo: z.string().optional(),
     }),
     async (input) => {
+      if (!input.text && !input.html) {
+        throw new Error("sendEmail requires at least one of text or html")
+      }
       const res = await createClient().fetch("https://email.us-east-1.amazonaws.com/v2/email/outbound-emails", {
         method: "POST",
         headers: {
@@ -44,14 +48,18 @@ export namespace AWS {
                 Data: input.subject,
               },
               Body: {
-                Text: {
-                  Charset: "UTF-8",
-                  Data: input.body,
-                },
-                Html: {
-                  Charset: "UTF-8",
-                  Data: input.body,
-                },
+                ...(input.text && {
+                  Text: {
+                    Charset: "UTF-8",
+                    Data: input.text,
+                  },
+                }),
+                ...(input.html && {
+                  Html: {
+                    Charset: "UTF-8",
+                    Data: input.html,
+                  },
+                }),
               },
             },
           },
