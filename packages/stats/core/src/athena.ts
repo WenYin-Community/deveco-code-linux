@@ -13,6 +13,7 @@ const ATHENA_MAX_POLL_ATTEMPTS = 60
 const ATHENA_PAGE_SIZE = 1000
 
 export type AthenaData = Record<string, string>
+export type AthenaQuery = { query: string; parameters: string[] }
 
 export class AthenaQueryError extends Schema.TaggedErrorClass<AthenaQueryError>()("AthenaQueryError", {
   message: Schema.String,
@@ -30,7 +31,7 @@ export class AthenaQueryTimeoutError extends Schema.TaggedErrorClass<AthenaQuery
 
 export declare namespace Athena {
   export interface Service {
-    readonly query: (query: string) => Effect.Effect<AthenaData[], AthenaQueryError | AthenaQueryTimeoutError>
+    readonly query: (query: AthenaQuery) => Effect.Effect<AthenaData[], AthenaQueryError | AthenaQueryTimeoutError>
   }
 }
 
@@ -40,12 +41,13 @@ export class Athena extends Context.Service<Athena, Athena.Service>()("@opencode
     Effect.sync(() => {
       const client = new AwsAthenaClient({ region: Resource.InferenceEvent.region })
 
-      const query = Effect.fn("Athena.query")(function* (query: string) {
+      const query = Effect.fn("Athena.query")(function* (query: AthenaQuery) {
         const started = yield* Effect.tryPromise({
           try: () =>
             client.send(
               new StartQueryExecutionCommand({
-                QueryString: query,
+                QueryString: query.query,
+                ExecutionParameters: query.parameters,
                 WorkGroup: Resource.InferenceEvent.workgroup,
                 QueryExecutionContext: {
                   Catalog: Resource.InferenceEvent.catalog,

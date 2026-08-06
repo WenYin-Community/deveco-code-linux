@@ -1,5 +1,5 @@
 import { Resource } from "sst/resource"
-import type { AthenaData } from "../athena"
+import type { AthenaData, AthenaQuery } from "../athena"
 import type { GeoStatAggregate } from "./geo"
 import type { ModelStatAggregate } from "./model"
 import {
@@ -14,9 +14,7 @@ import { normalizeCountry, normalizeTier, type StatBaseAggregate } from "./stat"
 
 export type StatDimension = "model" | "provider" | "geo" | "geo_model"
 
-export function buildStatsQuery(periodStart: Date, periodEnd: Date, dimension: StatDimension) {
-  const periodStartValue = sqlString(periodStart.toISOString())
-  const periodEndValue = sqlString(periodEnd.toISOString())
+export function buildStatsQuery(periodStart: Date, periodEnd: Date, dimension: StatDimension): AthenaQuery {
   const sourceTable = [Resource.InferenceEvent.catalog, Resource.InferenceEvent.database, Resource.InferenceEvent.table]
     .map(sqlIdentifier)
     .join(".")
@@ -32,10 +30,12 @@ export function buildStatsQuery(periodStart: Date, periodEnd: Date, dimension: S
         select: "provider, model, country, COALESCE(MAX(NULLIF(continent, '')), '') AS continent",
         groupBy: "provider, model, country",
       }
-    return {
-      select: "'all' AS provider, 'all' AS model, country, COALESCE(MAX(NULLIF(continent, '')), '') AS continent",
-      groupBy: "country",
-    }
+    if (dimension === "geo")
+      return {
+        select: "'all' AS provider, 'all' AS model, country, COALESCE(MAX(NULLIF(continent, '')), '') AS continent",
+        groupBy: "country",
+      }
+    throw new Error(`Invalid stat dimension: ${dimension}`)
   })()
   const aggregateColumns = `
     COUNT(DISTINCT session) AS sessions,
@@ -60,7 +60,8 @@ export function buildStatsQuery(periodStart: Date, periodEnd: Date, dimension: S
     SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS error_count,
     COUNT(*) AS sample_count`
 
-  return `
+  return {
+    query: `
 WITH normalized AS (
   SELECT
     from_iso8601_timestamp(event_timestamp) AS event_time,
@@ -95,8 +96,8 @@ WITH normalized AS (
   WHERE event_type = 'completions'
     AND model IS NOT NULL
     AND model <> ''
-    AND event_timestamp >= ${periodStartValue}
-    AND event_timestamp < ${periodEndValue}
+    AND event_timestamp >= ?
+    AND event_timestamp < ?
 ), filtered AS (
   SELECT
     event_time,
@@ -141,7 +142,7 @@ WITH normalized AS (
 SELECT
   'week' AS grain,
   week_key AS period_key,
-  ${sqlString(Resource.StatsSyncConfig.dataset)} AS dataset,
+  ? AS dataset,
   tier,
   ${dimensionSql.select},
   ${aggregateColumns}
@@ -151,14 +152,21 @@ UNION ALL
 SELECT
   'day' AS grain,
   day_key AS period_key,
-  ${sqlString(Resource.StatsSyncConfig.dataset)} AS dataset,
+  ? AS dataset,
   tier,
   ${dimensionSql.select},
   ${aggregateColumns}
 FROM daily
 GROUP BY day_key, tier, ${dimensionSql.groupBy}
 ORDER BY grain, period_key, total_tokens DESC
-`
+`,
+    parameters: [
+      sqlString(periodStart.toISOString()),
+      sqlString(periodEnd.toISOString()),
+      sqlString(Resource.StatsSyncConfig.dataset),
+      sqlString(Resource.StatsSyncConfig.dataset),
+    ],
+  }
 }
 
 export function toModelAggregate(data: AthenaData): ModelStatAggregate[] {
@@ -244,6 +252,7 @@ function number(data: AthenaData, key: string) {
 }
 
 function sqlIdentifier(value: string) {
+  if (!value || value.length > 255 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error("Invalid SQL identifier")
   return `"${value.replace(/"/g, '""')}"`
 }
 

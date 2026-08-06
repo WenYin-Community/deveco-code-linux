@@ -1,8 +1,36 @@
 import { describe, expect, test } from "bun:test"
-import { toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
+import { buildStatsQuery, toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
 import { modelAuthor, normalizeInferenceModel, statModel, statProvider } from "./model-normalization"
 
+process.env.SST_RESOURCE_InferenceEvent = JSON.stringify({
+  catalog: "catalog",
+  database: "inference",
+  table: 'event"; DROP TABLE secret; --',
+})
+process.env.SST_RESOURCE_StatsSyncConfig = JSON.stringify({ dataset: "zen' OR 1=1 --" })
+
 describe("inference stat normalization", () => {
+  test("parameterizes runtime values and quotes identifiers", () => {
+    const query = buildStatsQuery(new Date("2026-05-20T00:00:00.000Z"), new Date("2026-05-21T00:00:00.000Z"), "model")
+
+    expect(query.query).toContain('FROM "catalog"."inference"."event""; DROP TABLE secret; --"')
+    expect(query.query).toContain("event_timestamp >= ?")
+    expect(query.query).not.toContain("2026-05-20")
+    expect(query.query).not.toContain("zen' OR 1=1 --")
+    expect(query.parameters).toEqual([
+      "'2026-05-20T00:00:00.000Z'",
+      "'2026-05-21T00:00:00.000Z'",
+      "'zen'' OR 1=1 --'",
+      "'zen'' OR 1=1 --'",
+    ])
+  })
+
+  test("rejects unknown dimensions at runtime", () => {
+    expect(() =>
+      buildStatsQuery(new Date("2026-05-20T00:00:00.000Z"), new Date("2026-05-21T00:00:00.000Z"), "invalid" as never),
+    ).toThrow("Invalid stat dimension")
+  })
+
   test("normalizes model suffixes used by router/provider variants", () => {
     expect(normalizeInferenceModel("deepseek-v4-flash-free")).toBe("deepseek-v4-flash")
     expect(normalizeInferenceModel("deepseek-v4-flash:global")).toBe("deepseek-v4-flash")

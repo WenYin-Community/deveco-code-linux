@@ -19,6 +19,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { testEffect } from "./lib/effect"
+import { eq } from "drizzle-orm"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -153,6 +154,28 @@ describe("SessionV2.list", () => {
       yield* session.create({ location })
 
       expect(yield* session.list({ search: "nonexistent" })).toEqual([])
+    }),
+  )
+
+  it.effect("treats LIKE wildcard characters as literal search text", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const percent = yield* session.create({ location })
+      const underscore = yield* session.create({ location })
+      const escape = yield* session.create({ location })
+      const plain = yield* session.create({ location })
+
+      yield* Effect.all([
+        db.update(SessionTable).set({ title: "Progress 100%" }).where(eq(SessionTable.id, percent.id)).run(),
+        db.update(SessionTable).set({ title: "release_candidate" }).where(eq(SessionTable.id, underscore.id)).run(),
+        db.update(SessionTable).set({ title: "Important! session" }).where(eq(SessionTable.id, escape.id)).run(),
+        db.update(SessionTable).set({ title: "Progress 100 percent" }).where(eq(SessionTable.id, plain.id)).run(),
+      ]).pipe(Effect.orDie)
+
+      expect((yield* session.list({ search: "%" })).map((item) => item.id)).toEqual([percent.id])
+      expect((yield* session.list({ search: "_" })).map((item) => item.id)).toEqual([underscore.id])
+      expect((yield* session.list({ search: "!" })).map((item) => item.id)).toEqual([escape.id])
     }),
   )
 
