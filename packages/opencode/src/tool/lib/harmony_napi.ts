@@ -22,7 +22,7 @@ import { findDevEcoHome } from "./env"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import { devecoAuth, ACCESS_TOKEN_EXPIRES_MS } from "@/plugin/deveco"
 
-function addon() {
+function addon(): typeof import("@deveco-codegenie/mcp-bridge") | null {
   const execDir = path.dirname(process.execPath)
   // 1. vendor directory (npm / production mode)
   const vendorMarker = path.join(resolveVendorDir(), "mcp-bridge-native", "package.json")
@@ -37,7 +37,11 @@ function addon() {
     return r("./napi_bridge.node") as typeof import("@deveco-codegenie/mcp-bridge")
   }
   // 3. node_modules (dev mode)
-  return createRequire(import.meta.url)("@deveco-codegenie/mcp-bridge")
+  try {
+    return createRequire(import.meta.url)("@deveco-codegenie/mcp-bridge")
+  } catch {
+    return null
+  }
 }
 
 const bridge = addon()
@@ -128,6 +132,9 @@ export async function resolveUIVerifyParams(worktree: string) {
 }
 
 async function runInit(worktree: string) {
+  if (!bridge) {
+    throw new Error("mcp-bridge native module not available on this platform")
+  }
   const devecoHome = await findDevEcoHome()
   if (!devecoHome) {
     throw new Error("DevEco Studio not found. Please set DEVECO_HOME to your DevEco installation directory.")
@@ -163,13 +170,13 @@ export async function callHarmonyNapiTool(params: {
   args: Record<string, unknown>
 }): Promise<unknown> {
   await ensureInitialized(params.worktree)
-  const resultJson = await bridge.callTool(params.toolName, JSON.stringify(params.args))
+  const resultJson = await bridge!.callTool(params.toolName, JSON.stringify(params.args))
   return JSON.parse(resultJson as string)
 }
 
 export async function listTools(worktree: string): Promise<unknown> {
   await ensureInitialized(worktree)
-  return JSON.parse(bridge.listTools())
+  return JSON.parse(bridge!.listTools())
 }
 
 export async function callTool(

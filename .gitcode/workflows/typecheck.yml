@@ -6,9 +6,9 @@ on:
       - open
       - reopen
       - update
-    branches: [develop]
+    branches: ["**"]
   push:
-    branches: [develop]
+    branches: ["**"]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,7 @@ stages:
             uses: checkout
             with:
               fetch-depth: 0
+              ref: ${{ atomgit.sha }}
           - name: 设置 Node.js
             uses: setup-node
             with:
