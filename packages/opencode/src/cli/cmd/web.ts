@@ -37,10 +37,18 @@ export const WebCommand = effectCmd({
   // ambient project InstanceContext needed at startup.
   instance: false,
   handler: Effect.fn("Cli.web")(function* (args) {
+    const opts = yield* resolveNetworkOptions(args)
     if (!Flag.DEVECO_SERVER_PASSWORD) {
+      const isLocalhost = opts.hostname === "127.0.0.1" || opts.hostname === "localhost" || opts.hostname === "::1"
+      if (!isLocalhost) {
+        yield* Effect.die(
+          new Error(
+            "Server is binding to a non-localhost address without DEVECO_SERVER_PASSWORD. Set DEVECO_SERVER_PASSWORD or bind to 127.0.0.1.",
+          ),
+        )
+      }
       UI.println(UI.Style.TEXT_WARNING_BOLD + "!  DEVECO_SERVER_PASSWORD is not set; server is unsecured.")
     }
-    const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))
     UI.empty()
     UI.println(UI.logo("  "))

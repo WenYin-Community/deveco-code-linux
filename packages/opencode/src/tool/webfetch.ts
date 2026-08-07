@@ -34,8 +34,14 @@ export const WebFetchTool = Tool.define(
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
-          if (!params.url.startsWith("http://") && !params.url.startsWith("https://")) {
-            throw new Error("URL must start with http:// or https://")
+          if (!params.url.startsWith('http://') && !params.url.startsWith('https://')) {
+            throw new Error('URL must start with http:// or https://')
+          }
+          // Block known cloud metadata endpoints to prevent SSRF credential leakage
+          const parsedUrl = new URL(params.url)
+          const hostname = parsedUrl.hostname.toLowerCase()
+          if (hostname === '169.254.169.254' || hostname === 'instance-data' || hostname === 'metadata.google.internal' || /^169\.254\./.test(hostname)) {
+            throw new Error('URL must not point to a cloud metadata endpoint')
           }
 
           yield* guard.assertSafeUrl(params.url)

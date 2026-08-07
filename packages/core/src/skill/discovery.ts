@@ -1,7 +1,7 @@
 export * as SkillDiscovery from "./discovery"
 
 import path from "path"
-import { Context, Effect, Layer, Schedule, Schema } from "effect"
+import { Context, Effect, Layer, Schedule, Schema, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
@@ -9,6 +9,7 @@ import { AbsolutePath } from "../schema"
 
 const skillConcurrency = 4
 const fileConcurrency = 8
+const MAX_SKILL_FILE_BYTES = 50 * 1024 * 1024
 
 function isSafeSegment(value: string) {
   return (
@@ -83,7 +84,27 @@ export const layer = Layer.effect(
       if (yield* fs.exists(destination).pipe(Effect.orDie)) return
       yield* HttpClientRequest.get(url).pipe(
         http.execute,
-        Effect.flatMap((response) => response.arrayBuffer),
+        Effect.flatMap((response) => {
+          const contentLength = response.headers["content-length"]
+          if (contentLength && Number.parseInt(contentLength, 10) > MAX_SKILL_FILE_BYTES) {
+            return Effect.fail(new Error(`Skill file too large: ${url}`))
+          }
+          return Effect.gen(function* () {
+            const chunks: Uint8Array[] = []
+            let size = 0
+            yield* Stream.runForEach(response.stream, (chunk: Uint8Array) =>
+              Effect.gen(function* () {
+                size += chunk.byteLength
+                if (size > MAX_SKILL_FILE_BYTES) {
+                  return yield* Effect.fail(new Error(`Skill file too large: ${url}`))
+                }
+                chunks.push(chunk)
+                return undefined
+              }),
+            )
+            return Buffer.concat(chunks, size)
+          })
+        }),
         Effect.flatMap((body) => fs.writeWithDirs(destination, new Uint8Array(body))),
         Effect.catch((error) => Effect.logError("failed to download skill file", { url, error })),
       )

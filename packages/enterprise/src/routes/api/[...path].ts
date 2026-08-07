@@ -52,6 +52,14 @@ app
     async (c) => {
       const body = c.req.valid("json")
       const share = await Share.create({ sessionID: body.sessionID })
+      const configuredBaseURL = process.env.DEVECO_SHARE_BASE_URL
+      if (configuredBaseURL) {
+        return c.json({
+          id: share.id,
+          secret: share.secret,
+          url: `${configuredBaseURL.replace(/\/$/, "")}/share/${share.id}`,
+        })
+      }
       const protocol = c.req.header("x-forwarded-proto") ?? c.req.header("x-forwarded-protocol") ?? "https"
       const host = c.req.header("x-forwarded-host") ?? c.req.header("host")
       return c.json({

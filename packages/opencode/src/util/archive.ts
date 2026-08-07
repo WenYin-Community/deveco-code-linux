@@ -7,7 +7,9 @@ export async function extractZip(zipPath: string, destDir: string) {
     const winZipPath = path.resolve(zipPath)
     const winDestDir = path.resolve(destDir)
     // $global:ProgressPreference suppresses PowerShell's blue progress bar popup
-    const cmd = `${PS_ENCODING_PREAMBLE}$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -Path '${winZipPath}' -DestinationPath '${winDestDir}' -Force`
+    // Escape single quotes in paths (PowerShell single-quote string escape: ' -> '')
+    // Use -LiteralPath to prevent wildcard expansion, matching ripgrep/binary.ts pattern
+    const cmd = `${PS_ENCODING_PREAMBLE}$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -LiteralPath '${winZipPath.replaceAll("'", "''")}' -DestinationPath '${winDestDir.replaceAll("'", "''")}' -Force`
     await Process.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd])
     return
   }

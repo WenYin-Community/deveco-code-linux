@@ -79,8 +79,16 @@ const isCloudflareChallenge = (error: unknown) => {
 const request = (url: string, format: Format, userAgent = browserUserAgent) =>
   HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(headers(format, userAgent)))
 
+// Block known cloud metadata endpoints to prevent SSRF credential leakage.
+// These are the primary SSRF targets — returning instance credentials to any unauthenticated caller.
+const METADATA_HOSTS = new Set(['169.254.169.254', 'instance-data', 'metadata.google.internal']);
+const METADATA_IP = /^169\.254\./;
+
 const assertHttpUrl = (url: URL) => {
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("URL must use http:// or https://")
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('URL must use http:// or https://')
+  const hostname = url.hostname.toLowerCase()
+  if (METADATA_HOSTS.has(hostname) || METADATA_IP.test(hostname))
+    throw new Error('URL must not point to a cloud metadata endpoint')
 }
 
 const execute = (http: HttpClient.HttpClient, url: string, format: Format, userAgent = browserUserAgent) =>

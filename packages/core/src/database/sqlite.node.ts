@@ -143,6 +143,12 @@ const nativeLayer = (config: Config) =>
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
       if (config.disableWAL !== true && config.readonly !== true) native.exec("PRAGMA journal_mode = WAL;")
+      if (process.platform !== "win32" && config.readonly !== true) {
+        yield* Effect.tryPromise({
+          try: () => import("node:fs/promises").then((fs) => fs.chmod(config.filename, 0o600)),
+          catch: () => new Error("chmod failed"),
+        }).pipe(Effect.ignore)
+      }
       return native
     }),
   )
