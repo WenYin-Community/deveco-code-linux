@@ -41,6 +41,7 @@ This document is the case map for live end-to-end tests. These tests may use the
 | `UPGRADE_COMMAND`                  | upgrade命令验证                        | `cli`    | `P1`     | 无                                                          | `cases/upgrade-command.case.ts`                  |
 | `AUTH_LIST_PROVIDERS`              | 列出已认证的AI服务供应商               | `cli`    | `P1`     | `huawei-auth`                                               | `cases/auth-list-providers.case.ts`              |
 | `AUTH_LOGOUT`                      | 登出认证服务                           | `cli`    | `P1`     | 无                                                          | `cases/auth-logout.case.ts`                      |
+| `AUTH_LOGIN_WELLKNOWN`             | Well-known 登录风险确认                | `cli`    | `P1`     | 无                                                          | `cases/auth-login-wellknown.case.ts`             |
 | `MODELS_LIST`                      | 列出可用模型                           | `cli`    | `P1`     | `huawei-auth`                                               | `cases/models-list.case.ts`                      |
 | `AGENT_LIST`                       | 列出所有agent                          | `cli`    | `P1`     | —                                                           | `cases/agent-list.case.ts`                       |
 | `AGENT_CREATE`                     | 创建 agent 配置                        | `llm`    | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/agent-create.case.ts`                     |
@@ -1080,6 +1081,32 @@ Expected result:
 Cleanup:
 
 执行结束后删除临时根目录；不读取、删除或修改真实用户登录状态或凭据。
+
+## AUTH_LOGIN_WELLKNOWN
+
+Purpose:
+
+验证 `deveco auth login <url>` 在访问三方服务器前显示风险提示并要求用户确认；拒绝时不发送请求或写入凭据，确认后可完成 Well-known 登录、凭据持久化和远程配置鉴权。
+
+Steps:
+
+1. 创建隔离临时根目录并启动本地 HTTP fixture 服务。
+2. 执行 `deveco auth login <url>` 并输入 `n` 拒绝风险确认。
+3. 验证输出包含服务器地址、风险提示和 `Cancelled`，且服务器未收到请求、凭据文件未创建。
+4. 再次执行相同命令并输入 `y` 确认风险。
+5. 验证登录成功、Well-known 凭据已持久化，并通过 `auth list` 回读。
+6. 移除 fixture token 环境变量后加载配置，验证远程配置请求使用持久化 token。
+
+Expected result:
+
+1. 拒绝确认时命令退出码为 0，不发送网络请求、不执行认证命令、不创建凭据文件。
+2. 确认后的登录、凭据列表和配置加载均成功退出。
+3. 远程配置请求携带由持久化 token 生成的正确 Authorization header。
+4. token 不出现在命令输出、报告详情或 artifacts 中。
+
+Cleanup:
+
+执行结束后停止本地 fixture 服务并删除临时根目录；不读取或修改真实用户登录状态或凭据。
 
 ## SESSION_LIST
 

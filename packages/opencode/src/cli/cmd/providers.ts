@@ -337,6 +337,15 @@ export const ProvidersLoginCommand = effectCmd({
     yield* Prompt.intro("Add credential")
     if (args.url) {
       const url = args.url.replace(/\/+$/, "")
+      yield* Prompt.log.info(`Server: ${url}`)
+      yield* Prompt.log.warn(
+        "This third-party server may return commands that run on your device with your current user permissions. Only continue if you trust this server.",
+      )
+      const confirmed = yield* Prompt.confirm({ message: "Continue?", initialValue: false })
+      if (!(yield* promptValue(confirmed))) {
+        yield* Prompt.outro("Cancelled")
+        return
+      }
       const wellknown = (yield* cliTry(`Failed to load auth provider metadata from ${url}: `, () =>
         fetch(`${url}/.well-known/opencode`).then((x) => x.json()),
       )) as {
@@ -417,10 +426,11 @@ export const ProvidersLoginCommand = effectCmd({
       map((x) => ({
         label: x.name,
         value: x.id,
-        hint: (x as { _hint?: string })._hint
-          ?? {
-              openai: "ChatGPT Plus/Pro or API key",
-            }[x.id],
+        hint:
+          (x as { _hint?: string })._hint ??
+          {
+            openai: "ChatGPT Plus/Pro or API key",
+          }[x.id],
       })),
     )
 

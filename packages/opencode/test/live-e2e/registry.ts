@@ -51,6 +51,7 @@ import skillArkuiOverlayStack from "./cases/skill-arkui-overlay-stack.case"
 import skillArkuiImageTextMix from "./cases/skill-arkui-image-text-mix.case"
 import skillArkuiVerticalList from "./cases/skill-arkui-vertical-list.case"
 import skillArkuiHorizontalNavbar from "./cases/skill-arkui-horizontal-navbar.case"
+import authLoginWellknown from "./cases/auth-login-wellknown.case"
 import type { LiveTestCase } from "./types"
 
 export const cases: LiveTestCase[] = [
@@ -107,6 +108,7 @@ export const cases: LiveTestCase[] = [
   skillArkuiImageTextMix,
   skillArkuiVerticalList,
   skillArkuiHorizontalNavbar,
+  authLoginWellknown,
 ]
 
 export function getCaseByID(id: string) {
