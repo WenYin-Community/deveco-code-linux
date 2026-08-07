@@ -84,6 +84,7 @@ import { getDevEcoExtensions } from "./deveco-extensions"
 
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
+import { DialogTokenUsage } from "./component/dialog-token-usage"
 import { createTuiAttention } from "./attention"
 import * as TuiAudio from "./audio"
 import { DialogSoundSettings } from "./component/dialog-sound-settings"
@@ -985,6 +986,14 @@ function App(props: {
           kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
           await sync.session.refresh()
           dialog.clear()
+        },
+      },
+      {
+        name: "session.toggle.token_usage",
+        title: t("command.token_usage"),
+        category: t("category.session"),
+        run: () => {
+          dialog.replace(() => <DialogTokenUsage />)
         },
       },
       {

@@ -1,7 +1,14 @@
 {
   "session": {
     "fresh_start": "✧ Fresh start!",
-    "help_prompt": "What can I help you with?"
+    "help_prompt": "What can I help you with?",
+    "token_usage_title": "◈ Tokens",
+    "token_usage_step": "Step",
+    "token_usage_new": "New",
+    "token_usage_cached": "Cached",
+    "token_usage_total": "Total",
+    "token_usage_cache_bust": "! Likely cache bust: {{count}} fewer cached tokens than the previous step",
+    "token_usage_tool_call": "→ {{tool}} {{input}}"
   },
   "btw": {
     "title": "By the way",
@@ -139,6 +146,7 @@
     "toggle_session_scrollbar": "Toggle session scrollbar",
     "show_generic_tool_output": "Show generic tool output",
     "hide_generic_tool_output": "Hide generic tool output",
+    "token_usage": "Token usage",
     "messages_page_up": "Page up",
     "messages_page_down": "Page down",
     "messages_line_up": "Line up",
@@ -273,6 +281,10 @@
     "update_complete": "Update Complete",
     "update_complete_message": "Successfully updated to DevEco Code v{{version}}. Please restart the application.",
     "skip": "skip",
+    "token_usage_off": "Off",
+    "token_usage_on": "On",
+    "token_usage_verbose": "Verbose",
+    "token_usage_title": "Token Usage",
     "language_select_title": "Select Language",
     "language_english": "English",
     "language_chinese": "中文",

@@ -1,7 +1,14 @@
 {
   "session": {
     "fresh_start": "✧ 全新开始！",
-    "help_prompt": "有什么可以帮你的？"
+    "help_prompt": "有什么可以帮你的？",
+    "token_usage_title": "◈ Token 用量",
+    "token_usage_step": "步骤",
+    "token_usage_new": "新增",
+    "token_usage_cached": "缓存",
+    "token_usage_total": "总计",
+    "token_usage_cache_bust": "! 可能缓存失效：比上一步骤少了 {{count}} 个缓存 token",
+    "token_usage_tool_call": "→ {{tool}} {{input}}"
   },
   "btw": {
     "title": "顺带一问",
@@ -139,6 +146,7 @@
     "toggle_session_scrollbar": "切换会话滚动条",
     "show_generic_tool_output": "显示通用工具输出",
     "hide_generic_tool_output": "隐藏通用工具输出",
+    "token_usage": "Token 用量",
     "messages_page_up": "上翻页",
     "messages_page_down": "下翻页",
     "messages_line_up": "上移一行",
@@ -273,6 +281,10 @@
     "update_complete": "更新完成",
     "update_complete_message": "已成功更新到 DevEco Code v{{version}}。请重新启动应用。",
     "skip": "跳过",
+    "token_usage_off": "关闭",
+    "token_usage_on": "开启",
+    "token_usage_verbose": "详细",
+    "token_usage_title": "Token 用量",
     "language_select_title": "选择语言",
     "language_english": "English",
     "language_chinese": "中文",

@@ -37,6 +37,7 @@ import type {
   ReasoningPart,
   SessionStatus,
   DebugStatePart,
+  StepFinishPart,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
@@ -168,6 +169,7 @@ const context = createContext<{
   showTimestamps: () => boolean
   showDetails: () => boolean
   showGenericToolOutput: () => boolean
+  showTokenUsage: () => "off" | "on" | "verbose"
   diffWrapMode: () => "word" | "none"
   providers: () => ReadonlyMap<string, Provider>
   sync: ReturnType<typeof useSync>
@@ -268,6 +270,7 @@ export function Session() {
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
+  const [showTokenUsage, setShowTokenUsage] = kv.signal("token_usage_mode", "off" as "off" | "on" | "verbose")
 
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
@@ -1166,6 +1169,7 @@ export function Session() {
           showTimestamps,
           showDetails,
           showGenericToolOutput,
+          showTokenUsage,
           diffWrapMode,
           providers,
           sync,
@@ -1596,6 +1600,56 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     return props.message.time.completed - user.time.created
   })
 
+  const stepFinishes = createMemo(() => {
+    const allMessages = messages()
+    const currentIdx = allMessages.findIndex((m) => m.id === props.message.id)
+    if (currentIdx === -1) return []
+    // Walk backwards from current message to find the preceding user message
+    let userIdx = -1
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      if (allMessages[i].role === "user") {
+        userIdx = i
+        break
+      }
+    }
+    // Collect step-finish parts from all assistant messages in this turn
+    const startIdx = userIdx + 1
+    const result: StepFinishPart[] = []
+    for (let i = startIdx; i <= currentIdx; i++) {
+      const msg = allMessages[i]
+      if (msg.role !== "assistant") continue
+      const parts = sync.data.part[msg.id] ?? []
+      for (const p of parts) {
+        if (p.type === "step-finish") result.push(p)
+      }
+    }
+    return result
+  })
+
+  const allTurnParts = createMemo(() => {
+    const allMessages = messages()
+    const currentIdx = allMessages.findIndex((m) => m.id === props.message.id)
+    if (currentIdx === -1) return []
+    let userIdx = -1
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      if (allMessages[i].role === "user") {
+        userIdx = i
+        break
+      }
+    }
+    const result: Part[] = []
+    for (let i = userIdx + 1; i <= currentIdx; i++) {
+      const msg = allMessages[i]
+      if (msg.role !== "assistant") continue
+      result.push(...(sync.data.part[msg.id] ?? []))
+    }
+    return result
+  })
+
+  const turnComplete = createMemo(() => {
+    return final() || props.message.error?.name === "MessageAbortedError"
+  })
+
   const childShortcut = useCommandShortcut("session.child.first")
   const backgroundShortcut = useCommandShortcut("session.background")
 
@@ -1731,11 +1785,136 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
                 <span style={{ fg: theme.textMuted }}> · interrupted</span>
               </Show>
             </text>
+            <Show when={ctx.showTokenUsage() !== "off" && turnComplete() && stepFinishes().length > 0}>
+              <TokenUsage
+                steps={stepFinishes()}
+                allTurnParts={allTurnParts()}
+                isVerbose={ctx.showTokenUsage() === "verbose"}
+                t={t}
+                theme={theme}
+              />
+            </Show>
           </box>
         </Match>
       </Switch>
     </>
   )
+}
+
+function TokenUsage(props: {
+  steps: StepFinishPart[]
+  allTurnParts: Part[]
+  isVerbose: boolean
+  t: ReturnType<typeof useI18n>["t"]
+  theme: ReturnType<typeof useTheme>["theme"]
+}) {
+  const INDENT = " ".repeat(1 + Bun.stringWidth("◈ "))
+  const fmt = (n: number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  const padEnd = (s: string, w: number) => s + " ".repeat(Math.max(0, w - Bun.stringWidth(s)))
+  const padStart = (s: string, w: number) => " ".repeat(Math.max(0, w - Bun.stringWidth(s))) + s
+  const formatRow = (cells: string[]) => INDENT + cells.join("  ")
+
+  const stepH = createMemo(() => props.t("session.token_usage_step"))
+  const newH = createMemo(() => props.t("session.token_usage_new"))
+  const cachedH = createMemo(() => props.t("session.token_usage_cached"))
+  const totalH = createMemo(() => props.t("session.token_usage_total"))
+
+  const rows = createMemo(() => props.steps.map((s) => ({
+    step: s.reason === "tool-calls" ? "tool-call" : s.reason,
+    newTokens: s.tokens.input + s.tokens.cache.write + s.tokens.output + s.tokens.reasoning,
+    cached: s.tokens.cache.read,
+    total: s.tokens.input + s.tokens.cache.write + s.tokens.output + s.tokens.reasoning + s.tokens.cache.read,
+  })))
+
+  const stepW = createMemo(() => Math.max(
+    Bun.stringWidth(stepH()),
+    ...rows().map((r) => Bun.stringWidth(r.step)),
+  ))
+  const numW = createMemo(() => Math.max(
+    Bun.stringWidth(newH()),
+    Bun.stringWidth(cachedH()),
+    Bun.stringWidth(totalH()),
+    ...rows().flatMap((r) => [fmt(r.newTokens).length, fmt(r.cached).length, fmt(r.total).length]),
+  ))
+  const dataRow = (r: ReturnType<typeof rows>[number]) =>
+    formatRow([padEnd(r.step, stepW()), padStart(fmt(r.newTokens), numW()), padStart(fmt(r.cached), numW()), padStart(fmt(r.total), numW())])
+  const headerRow = createMemo(() =>
+    formatRow([padEnd(stepH(), stepW()), padStart(newH(), numW()), padStart(cachedH(), numW()), padStart(totalH(), numW())]),
+  )
+
+  const toolsByStep = createMemo(() =>
+    props.isVerbose ? collectToolsByStep(props.steps, props.allTurnParts) : [],
+  )
+  const globalMaxToolW = createMemo(() =>
+    props.isVerbose
+      ? Math.max(0, ...toolsByStep().flatMap((tcs) => tcs.map((tc) => Bun.stringWidth(tc.tool))))
+      : 0,
+  )
+
+  return (
+    <>
+      <text marginTop={1} fg={props.theme.textMuted}>
+        {" "}{props.t("session.token_usage_title")}
+      </text>
+      <text fg={props.theme.textMuted}>
+        <span style={{ italic: true, fg: props.theme.textMuted }}>
+          {headerRow()}
+        </span>
+      </text>
+      <For each={rows()}>
+        {(r, i) => {
+          const tools = createMemo(() => toolsByStep()[i()] ?? [])
+          const cacheBust = createMemo(() => i() > 0 ? rows()[i() - 1].cached - r.cached : 0)
+          return (
+            <>
+              <text fg={props.theme.textMuted}>{dataRow(r)}</text>
+              <For each={tools()}>
+                {(tc) => {
+                  const paddedTool = padEnd(tc.tool, globalMaxToolW())
+                  const detail = tc.input ?? ""
+                  return (
+                    <box paddingLeft={4} flexDirection="row">
+                      <text fg={props.theme.info} wrapMode="none">
+                        {"→ "}{paddedTool}{detail ? " " : ""}
+                      </text>
+                      <Show when={detail}>
+                        <text fg={props.theme.info} flexGrow={1}>
+                          {detail}
+                        </text>
+                      </Show>
+                    </box>
+                  )
+                }}
+              </For>
+              <Show when={i() > 0 && cacheBust() > 0}>
+                <text fg={props.theme.warning}>
+                  {INDENT}{props.t("session.token_usage_cache_bust", { count: fmt(cacheBust()) })}
+                </text>
+              </Show>
+            </>
+          )
+        }}
+      </For>
+    </>
+  )
+}
+
+function collectToolsByStep(
+  steps: StepFinishPart[],
+  turnParts: Part[],
+): Array<Array<{ tool: string; input: string }>> {
+  const stepStarts = turnParts.filter((p) => p.type === "step-start")
+  return steps.map((step, i) => {
+    const startIdx = stepStarts[i]?.id ? turnParts.findIndex((p) => p.id === stepStarts[i].id) : -1
+    const endIdx = turnParts.findIndex((p) => p.id === step.id)
+    if (startIdx < 0 || endIdx < 0) return []
+    return turnParts.slice(startIdx + 1, endIdx).flatMap((p) => {
+      if (p.type !== "tool") return []
+      const title =
+        (p.state.status === "completed" || p.state.status === "running") ? p.state.title : undefined
+      return [{ tool: p.tool, input: title ?? input(p.state.input ?? {}) }]
+    })
+  })
 }
 
 const PART_MAPPING = {
