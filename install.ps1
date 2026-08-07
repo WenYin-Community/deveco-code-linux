@@ -227,7 +227,7 @@ function Test-Avx2 {
     return $type::IsProcessorFeaturePresent(40)
 }
 
-# M1: Check if the target version is already installed; exit 0 if so
+# M1: Check if the target version is already installed; return true if so
 function Test-InstalledVersion {
     param([string]$TargetVersion)
     if (-not (Test-Path $BinPath)) { return }
@@ -240,9 +240,10 @@ function Test-InstalledVersion {
     if (-not $installed) { return }
     if ($installed -eq $TargetVersion) {
         Write-Host "Version $TargetVersion already installed, skipping" -ForegroundColor DarkGray
-        exit 0
+        return $true
     }
     Write-Host "Installed version: $installed." -ForegroundColor DarkGray
+    return $false
 }
 
 function Cleanup-OldVersions {
@@ -268,7 +269,7 @@ function Cleanup-OldVersions {
 
 if ($Help) {
     Show-Help
-    exit 0
+    return
 }
 
 # --- Discover version (skipped when -Binary is provided) ---
@@ -276,7 +277,7 @@ if ($Binary) {
     if (-not (Test-Path $Binary)) {
         Write-Error "Binary not found: $Binary"
         Write-Host "Please check the path and try again" -ForegroundColor DarkGray
-        exit 1
+        throw "Installer failed"
     }
     $tag = "local"
 } else {
@@ -311,7 +312,7 @@ if ($Binary) {
         } catch {
             Write-Error "Failed to fetch version info from GitCode: $_"
             Write-Host "Hint: Use -Version 0.1.4 to specify a version manually." -ForegroundColor DarkGray
-            exit 1
+            throw "Installer failed"
         }
     } else {
         Write-Host "Using specified version: $tag" -ForegroundColor DarkGray
@@ -323,12 +324,12 @@ if ($Binary) {
         } catch {
             Write-Error "Release v$tag not found: $_"
             Write-Host "Available releases: https://gitcode.com/$Repo/releases" -ForegroundColor DarkGray
-            exit 1
+            throw "Installer failed"
         }
     }
 
     # M1: Version skip check — only when NOT using -Binary
-    Test-InstalledVersion $tag
+    if (Test-InstalledVersion $tag) { return }
 }
 
 # Global try/finally: ensure temp file and staging dir are cleaned up on exception or Ctrl+C
@@ -385,7 +386,7 @@ try {
             Write-Error "Download failed: $_"
             Write-Host "Try downloading manually: $downloadUrl" -ForegroundColor DarkGray
             if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
-            exit 1
+            throw "Installer failed"
         }
 
         # Verify download is not empty
@@ -393,7 +394,7 @@ try {
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             Write-Error "Download failed — file is empty or missing"
             Write-Host "Check your network, or download manually from $downloadUrl" -ForegroundColor DarkGray
-            exit 1
+            throw "Installer failed"
         }
 
         # --- Extract to staging directory ---
@@ -408,7 +409,7 @@ try {
             Write-Error "Extraction failed: $_"
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            exit 1
+            throw "Installer failed"
         } finally {
             Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
         }
@@ -429,7 +430,7 @@ try {
             Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Binary '$AppName' not found in archive"
             Write-Host "The package may be corrupted — try downloading again" -ForegroundColor DarkGray
-            exit 1
+            throw "Installer failed"
         }
 
         # Move binary into staging/bin/ (normalize name to deveco.exe)
@@ -468,7 +469,7 @@ try {
             Remove-Item $versionDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Error "Installation verification failed — deveco could not run"
             Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
-            exit 1
+            throw "Installer failed"
         }
     }
 
