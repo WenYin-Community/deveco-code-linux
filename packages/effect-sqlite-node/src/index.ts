@@ -23,7 +23,6 @@ export type TypeId = "~@opencode-ai/effect-sqlite-node/NodeSqliteClient"
 export interface SqliteClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: SqliteClientConfig
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
   readonly updateValues: never
 }
 
@@ -36,15 +35,12 @@ export interface SqliteClientConfig {
   readonly readwrite?: boolean | undefined
   readonly disableWAL?: boolean | undefined
   readonly timeout?: number | undefined
-  readonly allowExtension?: boolean | undefined
   readonly spanAttributes?: Record<string, unknown> | undefined
   readonly transformResultNames?: ((str: string) => string) | undefined
   readonly transformQueryNames?: ((str: string) => string) | undefined
 }
 
-interface SqliteConnection extends Connection {
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
-}
+interface SqliteConnection extends Connection {}
 
 export const make = (
   options: SqliteClientConfig,
@@ -59,7 +55,6 @@ export const make = (
       const db = new DatabaseSync(options.filename, {
         readOnly: options.readonly,
         timeout: options.timeout,
-        allowExtension: options.allowExtension,
         enableForeignKeyConstraints: true,
         open: true,
       })
@@ -118,14 +113,6 @@ export const make = (
         executeStream() {
           return Stream.die("executeStream not implemented")
         },
-        loadExtension: (path) =>
-          Effect.try({
-            try: () => db.loadExtension(path),
-            catch: (cause) =>
-              new SqlError({
-                reason: classifySqliteError(cause, { message: "Failed to load extension", operation: "loadExtension" }),
-              }),
-          }),
       })
     })
 
@@ -155,7 +142,6 @@ export const make = (
       {
         [TypeId]: TypeId as TypeId,
         config: options,
-        loadExtension: (path: string) => Effect.flatMap(acquirer, (_) => _.loadExtension(path)),
       },
     )
   })

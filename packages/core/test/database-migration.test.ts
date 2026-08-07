@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
 import path from "path"
+import { stat } from "node:fs/promises"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { Effect, Layer } from "effect"
@@ -44,6 +45,20 @@ describe("DatabaseMigration", () => {
       ),
     )
   })
+  test("restricts database file permissions", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "permissions.sqlite")
+    const previous = process.umask(0)
+
+    try {
+      await Effect.runPromise(Effect.scoped(Layer.build(Database.layerFromPath(filename))))
+    } finally {
+      process.umask(previous)
+    }
+
+    expect((await stat(filename)).mode & 0o777).toBe(0o600)
+  })
+
   if (process.platform === "linux") {
     test("declared schema has no ungenerated migrations", async () => {
       const result = await $`bun ${fileURLToPath(new URL("../script/migration.ts", import.meta.url))} --check`

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite"
+import { chmodSync } from "node:fs"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
@@ -24,7 +25,6 @@ interface SqliteClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: Config
   readonly export: Effect.Effect<Uint8Array, SqlError>
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
   readonly updateValues: never
 }
 
@@ -41,7 +41,6 @@ interface Config {
 
 interface SqliteConnection extends Connection {
   readonly export: Effect.Effect<Uint8Array, SqlError>
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
 }
 
 const make = (options: Config) =>
@@ -108,14 +107,6 @@ const make = (options: Config) =>
             reason: classifySqliteError(cause, { message: "Failed to export database", operation: "export" }),
           }),
       }),
-      loadExtension: (path) =>
-        Effect.try({
-          try: () => native.loadExtension(path),
-          catch: (cause) =>
-            new SqlError({
-              reason: classifySqliteError(cause, { message: "Failed to load extension", operation: "loadExtension" }),
-            }),
-        }),
     })
 
     const semaphore = yield* Semaphore.make(1)
@@ -144,7 +135,6 @@ const make = (options: Config) =>
         [TypeId]: TypeId,
         config: options,
         export: Effect.flatMap(acquirer, (_) => _.export),
-        loadExtension: (path: string) => Effect.flatMap(acquirer, (_) => _.loadExtension(path)),
       },
     )
 
@@ -161,6 +151,7 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      if (config.filename !== ":memory:") chmodSync(config.filename, 0o600)
       if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
       return native
     }),

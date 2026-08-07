@@ -23,7 +23,6 @@ type TypeId = typeof TypeId
 interface SqliteClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: Config
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
   readonly updateValues: never
 }
 
@@ -34,15 +33,12 @@ interface Config {
   readonly readwrite?: boolean
   readonly disableWAL?: boolean
   readonly timeout?: number
-  readonly allowExtension?: boolean
   readonly spanAttributes?: Record<string, unknown>
   readonly transformResultNames?: (str: string) => string
   readonly transformQueryNames?: (str: string) => string
 }
 
-interface SqliteConnection extends Connection {
-  readonly loadExtension: (path: string) => Effect.Effect<void, SqlError>
-}
+interface SqliteConnection extends Connection {}
 
 const make = (options: Config) =>
   Effect.gen(function* () {
@@ -102,14 +98,6 @@ const make = (options: Config) =>
       executeStream() {
         return Stream.die("executeStream not implemented")
       },
-      loadExtension: (path) =>
-        Effect.try({
-          try: () => native.loadExtension(path),
-          catch: (cause) =>
-            new SqlError({
-              reason: classifySqliteError(cause, { message: "Failed to load extension", operation: "loadExtension" }),
-            }),
-        }),
     })
 
     const semaphore = yield* Semaphore.make(1)
@@ -137,7 +125,6 @@ const make = (options: Config) =>
       {
         [TypeId]: TypeId,
         config: options,
-        loadExtension: (path: string) => Effect.flatMap(acquirer, (_) => _.loadExtension(path)),
       },
     )
 
@@ -151,7 +138,6 @@ const nativeLayer = (config: Config) =>
       const native = new DatabaseSync(config.filename, {
         readOnly: config.readonly,
         timeout: config.timeout,
-        allowExtension: config.allowExtension,
         enableForeignKeyConstraints: true,
         open: true,
       })
