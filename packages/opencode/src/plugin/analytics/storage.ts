@@ -103,6 +103,8 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
       "toolExecutions",
       "totalElapsed",
       "firstResultElapsed",
+      "isFirstBuildSuccess",
+      "isFinalBuildSuccess",
     ])
   )
     return false
@@ -139,7 +141,9 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
     Array.isArray(value.toolExecutions) &&
     value.toolExecutions.every(isToolExecution) &&
     typeof value.totalElapsed === "number" &&
-    typeof value.firstResultElapsed === "number"
+    typeof value.firstResultElapsed === "number" &&
+    (value.isFirstBuildSuccess === null || typeof value.isFirstBuildSuccess === "boolean") &&
+    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === "boolean")
   )
 }
 

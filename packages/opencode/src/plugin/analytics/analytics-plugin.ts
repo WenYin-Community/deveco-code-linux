@@ -25,7 +25,7 @@ interface AnalyticsCollectorDependency {
   recordResponseDelta(): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
-  recordToolExecution(toolName: string, duration: number, isSuccess: boolean): void
+  recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess?: boolean): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
   clear(): void
@@ -235,7 +235,12 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         const metadata = output.metadata as Record<string, unknown> | undefined
         const hasError = metadata?.error || output.output?.includes("Error") || output.output?.includes("Failed")
         const duration = Date.now() - startTime
-        collector.recordToolExecution(input.tool, duration, !hasError)
+        // isSuccess tracks tool execution success; isBuildSuccess tracks build result success.
+        // A build_project call with isSuccess=true but isBuildSuccess=false means the tool ran
+        // fine but the build failed (e.g. "BUILD FAILED" in output).
+        const isSuccess = !hasError
+        const isBuildSuccess = input.tool === "build_project" && isSuccess && (output.output ?? "").toLowerCase().includes("build successful")
+        collector.recordToolExecution(input.tool, duration, isSuccess, isBuildSuccess)
 
         if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return
 

@@ -30,6 +30,8 @@ test("ai_session contains only approved aggregate fields", async () => {
   expect(event?.totalAdditions).toBe(4)
   expect(event?.totalDeletions).toBe(2)
   expect(event?.toolExecutions[0]?.isSuccess).toBe(false)
+  expect(event?.isFirstBuildSuccess).toBe(null)
+  expect(event?.isFinalBuildSuccess).toBe(null)
 
   const json = JSON.stringify(event)
   for (const forbidden of [
@@ -54,6 +56,44 @@ test("ai_session contains only approved aggregate fields", async () => {
   }
   expect("isSuccess" in (event ?? {})).toBe(false)
   expect(json).not.toContain("/Users/alice")
+})
+
+test("tracks build_project first/final results", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-d2c",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "deepseek-chat",
+    agentName: "build",
+  })
+  collector.recordToolExecution("build_project", 5000, true, false)
+  collector.recordToolExecution("build_project", 3000, true, true)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.isFirstBuildSuccess).toBe(false)
+  expect(event?.isFinalBuildSuccess).toBe(true)
+})
+
+test("does not count build_project when tool execution fails", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-crash",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "deepseek-chat",
+    agentName: "build",
+  })
+  collector.recordToolExecution("build_project", 5000, false, false)
+  collector.recordToolExecution("build_project", 3000, true, true)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.isFirstBuildSuccess).toBe(true)
+  expect(event?.isFinalBuildSuccess).toBe(true)
 })
 
 test("collection still requires login and the analytics switch", async () => {

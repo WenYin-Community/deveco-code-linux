@@ -5,7 +5,7 @@ import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import { createEnvironmentFields } from "./events"
-import type { AiSessionEvent, Operations, SessionContext } from "./types"
+import type { AiSessionEvent, BuildResults, Operations, SessionContext } from "./types"
 import { isBuiltinTool, isMcpTool, isSkillTool } from "./types"
 
 export type SessionStart = {
@@ -110,6 +110,7 @@ export class SessionCollector {
       modifiedFiles: new Map(),
       toolExecutions: [],
       toolCounts: new Map(),
+      buildResults: { isFirstBuildSuccess: null, isFinalBuildSuccess: null, buildCount: 0 },
     }
   }
 
@@ -117,7 +118,9 @@ export class SessionCollector {
     if (this.context?.firstResponseTime === null) this.context.firstResponseTime = Date.now()
   }
 
-  recordToolExecution(toolName: string, duration: number, isSuccess: boolean): void {
+  // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
+  // isBuildSuccess: only meaningful for build_project — true when output contains "build successful".
+  recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess = false): void {
     if (!this.context) return
     this.context.toolExecutions.push({
       toolName,
@@ -126,6 +129,14 @@ export class SessionCollector {
       timestamp: Date.now(),
     })
     this.context.toolCounts.set(toolName, (this.context.toolCounts.get(toolName) || 0) + 1)
+    // Skip build result tracking when the tool execution itself failed — no build actually ran.
+    if (toolName === "build_project" && isSuccess) this.updateBuildResults(this.context.buildResults, isBuildSuccess)
+  }
+
+  private updateBuildResults(results: BuildResults, isBuildSuccess: boolean): void {
+    results.buildCount++
+    if (results.isFirstBuildSuccess === null) results.isFirstBuildSuccess = isBuildSuccess
+    results.isFinalBuildSuccess = isBuildSuccess
   }
 
   recordFileDiff(filePath: string, additions: number, deletions: number): void {
@@ -180,6 +191,8 @@ export class SessionCollector {
       toolExecutions: this.context.toolExecutions,
       totalElapsed,
       firstResultElapsed,
+      isFirstBuildSuccess: this.context.buildResults.isFirstBuildSuccess,
+      isFinalBuildSuccess: this.context.buildResults.isFinalBuildSuccess,
     }
   }
 

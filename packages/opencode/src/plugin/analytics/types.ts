@@ -26,6 +26,18 @@ export interface AnalyticsEnvironmentFields {
   os_version: string
 }
 
+// Build result tracking for build_project tool calls.
+// Only counts calls where the tool execution itself succeeded (isSuccess=true),
+// so environment failures (DevEco not found, hvigor misconfigured) are excluded.
+export interface BuildResults {
+  // null until the first successful build_project tool execution; then fixed to that call's build result
+  isFirstBuildSuccess: boolean | null
+  // null until the first successful build_project tool execution; then always overwritten by the latest call's build result
+  isFinalBuildSuccess: boolean | null
+  // number of build_project calls where the tool execution succeeded (actual build attempts)
+  buildCount: number
+}
+
 export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   providerId: string
   modelId: string
@@ -41,6 +53,8 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   toolExecutions: ToolExecution[]
   totalElapsed: number
   firstResultElapsed: number
+  isFirstBuildSuccess: boolean | null
+  isFinalBuildSuccess: boolean | null
 }
 
 export interface AiCodeAttributionEvent {
@@ -92,6 +106,7 @@ export interface SessionContext {
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
   toolCounts: Map<string, number>
+  buildResults: BuildResults
 }
 
 export interface AnalyticsConfig {

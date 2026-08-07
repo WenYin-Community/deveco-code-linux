@@ -25,6 +25,8 @@ const builtEvent: AiSessionEvent = {
   toolExecutions: [],
   totalElapsed: 10,
   firstResultElapsed: 5,
+  isFirstBuildSuccess: null,
+  isFinalBuildSuccess: null,
 }
 
 function createHarness() {
@@ -36,6 +38,7 @@ function createHarness() {
   const startSession = mock((_input: SessionStart) => {
     active = true
   })
+  const recordToolExecution = mock((_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess: boolean) => undefined)
   const buildEvent = mock(async () => builtEvent)
   const upload = mock(async (_submission: AnalyticsSubmission) => true)
   const projectId = mock(async () => "550e8400-e29b-41d4-a716-446655440000")
@@ -70,7 +73,7 @@ function createHarness() {
       recordResponseDelta: () => undefined,
       recordFileEdit: () => undefined,
       recordFileDiff: () => undefined,
-      recordToolExecution: () => undefined,
+      recordToolExecution,
       getSessionID: () => (active ? "session-1" : null),
       buildEvent,
       clear: () => {
@@ -99,6 +102,7 @@ function createHarness() {
   return {
     plugin,
     startSession,
+    recordToolExecution,
     buildEvent,
     upload,
     projectId,
@@ -343,4 +347,30 @@ test("rechecks privacy before shutdown and purges pending attribution data", asy
   expect(harness.stopPeriodicFlush).toHaveBeenCalled()
   expect(harness.clearQueue).toHaveBeenCalledTimes(1)
   expect(harness.purgeAttribution).toHaveBeenCalledTimes(1)
+})
+
+test("records build_project tool execution for build result tracking", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    { title: "Build", output: "BUILD SUCCESSFUL", metadata: {} },
+  )
+
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true)
+})
+
+test("records build_project failure when output indicates BUILD FAILED", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    { title: "Build", output: "> hvigor ERROR: BUILD FAILED in 3 s 326 ms", metadata: {} },
+  )
+
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false)
 })

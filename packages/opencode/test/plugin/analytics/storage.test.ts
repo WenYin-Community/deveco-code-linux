@@ -40,6 +40,8 @@ function event(): AiSessionEvent {
     toolExecutions: [],
     totalElapsed: 10,
     firstResultElapsed: 5,
+    isFirstBuildSuccess: null,
+    isFinalBuildSuccess: null,
   }
 }
 
