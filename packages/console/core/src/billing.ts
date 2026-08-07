@@ -226,7 +226,9 @@ export namespace Billing {
       } catch {
         return false
       }
-      if (parsed.username || parsed.password) return false
+      if (parsed.username || parsed.password) {
+        return false
+      }
       const allowed =
         Resource.App.stage === "production"
           ? ["opencode.ai"]
