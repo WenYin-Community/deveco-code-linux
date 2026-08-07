@@ -244,20 +244,25 @@ const rgArchiveMap: Record<string, { archive: string; binary: string }> = {
 }
 
 const binaries: Record<string, string> = {}
-function resolveUiVerificationScript() {
+function resolveUiVerificationPackageDir() {
   try {
-    const pkgJson = createRequire(import.meta.url).resolve("ui-verification-mcp/package.json")
-    return path.join(path.dirname(pkgJson), "dist", "uiVerification.mjs")
+    const pkgJson = createRequire(import.meta.url).resolve('ui-verification-mcp/package.json');
+    return path.dirname(pkgJson);
   } catch {
-    console.error(`  ERROR: ui-verification-mcp dist/uiVerification.mjs not found. Run "bun install" first.`)
-    process.exit(1);
+    console.error(`  ERROR: ui-verification-mcp package not found. Run "bun install" first.`);
+    return process.exit(1);
   }
 }
 
 async function copyUiVerificationRuntime(name: string) {
+  const packageDir = resolveUiVerificationPackageDir()
   const vendorDir = path.join(dir, "dist", name, "vendor", "ui-verification-mcp")
   await fs.promises.mkdir(vendorDir, { recursive: true })
-  await fs.promises.copyFile(resolveUiVerificationScript(), path.join(vendorDir, "uiVerification.mjs"))
+  await fs.promises.copyFile(
+    path.join(packageDir, "dist", "uiVerification.mjs"),
+    path.join(vendorDir, "uiVerification.mjs"),
+  )
+  await fs.promises.copyFile(path.join(packageDir, "package.json"), path.join(vendorDir, "package.json"))
   console.log("  Bundled ui-verification-mcp");
 }
 if (!skipInstall) {
