@@ -797,6 +797,7 @@ export const dict = {
   "bench.list.table.model": "Modelo",
   "bench.list.table.score": "Puntuación",
   "bench.submission.error.allFieldsRequired": "Todos los campos son obligatorios.",
+  "bench.submission.error.unauthorized": "Autenticación requerida.",
 
   "bench.detail.title": "Benchmark - {{task}}",
   "bench.detail.notFound": "Tarea no encontrada",

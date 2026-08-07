@@ -798,6 +798,7 @@ export const dict = {
   "bench.list.table.model": "Model",
   "bench.list.table.score": "Puan",
   "bench.submission.error.allFieldsRequired": "Tüm alanlar gereklidir.",
+  "bench.submission.error.unauthorized": "Kimlik doğrulaması gerekli.",
 
   "bench.detail.title": "Benchmark - {{task}}",
   "bench.detail.notFound": "Görev bulunamadı",

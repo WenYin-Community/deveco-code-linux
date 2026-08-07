@@ -14,7 +14,7 @@ export default defineConfig({
     password: Resource.Database.password,
     port: Resource.Database.port,
     ssl: {
-      rejectUnauthorized: false,
+      rejectUnauthorized: true,
     },
   },
 })

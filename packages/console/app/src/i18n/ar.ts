@@ -785,6 +785,7 @@ export const dict = {
   "bench.list.table.model": "النموذج",
   "bench.list.table.score": "الدرجة",
   "bench.submission.error.allFieldsRequired": "جميع الحقول مطلوبة.",
+  "bench.submission.error.unauthorized": "المصادقة مطلوبة.",
 
   "bench.detail.title": "المعيار - {{task}}",
   "bench.detail.notFound": "المهمة غير موجودة",

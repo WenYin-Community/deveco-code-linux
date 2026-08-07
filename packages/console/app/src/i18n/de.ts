@@ -798,6 +798,7 @@ export const dict = {
   "bench.list.table.model": "Modell",
   "bench.list.table.score": "Score",
   "bench.submission.error.allFieldsRequired": "Alle Felder sind erforderlich.",
+  "bench.submission.error.unauthorized": "Authentifizierung erforderlich.",
 
   "bench.detail.title": "Benchmark - {{task}}",
   "bench.detail.notFound": "Task nicht gefunden",

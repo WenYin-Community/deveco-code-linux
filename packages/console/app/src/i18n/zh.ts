@@ -768,6 +768,7 @@ export const dict = {
   "bench.list.table.model": "模型",
   "bench.list.table.score": "分数",
   "bench.submission.error.allFieldsRequired": "所有字段均为必填项。",
+  "bench.submission.error.unauthorized": "需要身份认证。",
 
   "bench.detail.title": "基准测试 - {{task}}",
   "bench.detail.notFound": "未找到任务",

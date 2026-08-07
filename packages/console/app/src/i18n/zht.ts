@@ -767,6 +767,7 @@ export const dict = {
   "bench.list.table.model": "模型",
   "bench.list.table.score": "分數",
   "bench.submission.error.allFieldsRequired": "所有欄位均為必填。",
+  "bench.submission.error.unauthorized": "需要身份驗證。",
 
   "bench.detail.title": "評測 - {{task}}",
   "bench.detail.notFound": "找不到任務",

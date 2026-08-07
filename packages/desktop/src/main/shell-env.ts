@@ -1,8 +1,27 @@
 import { spawnSync } from "node:child_process"
+import { existsSync, statSync } from "node:fs"
 import { userInfo } from "node:os"
 import { basename } from "node:path"
 
 const TIMEOUT = 5_000
+
+const KNOWN_SHELL_NAMES = new Set([
+  "sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh",
+  "sh.exe", "bash.exe", "zsh.exe", "fish.exe",
+])
+
+function isValidShell(shell: string): boolean {
+  if (!shell) return false
+  const name = basename(shell).toLowerCase()
+  if (!KNOWN_SHELL_NAMES.has(name)) return false
+  if (!existsSync(shell)) return false
+  if (process.platform === "win32") return true
+  try {
+    return (statSync(shell).mode & 0o111) !== 0
+  } catch {
+    return false
+  }
+}
 
 type Probe = { type: "Loaded"; value: Record<string, string> } | { type: "Timeout" } | { type: "Unavailable" }
 type ShellEnvLogger = {
@@ -11,7 +30,10 @@ type ShellEnvLogger = {
 
 export function resolveUserShell(envShell: string | undefined, loginShell: string | null | undefined) {
   const resolvedLoginShell = loginShell && loginShell !== "unknown" ? loginShell : undefined
-  return envShell || resolvedLoginShell || "/bin/sh"
+  for (const candidate of [envShell, resolvedLoginShell]) {
+    if (candidate && isValidShell(candidate)) return candidate
+  }
+  return "/bin/sh"
 }
 
 export function getUserShell() {

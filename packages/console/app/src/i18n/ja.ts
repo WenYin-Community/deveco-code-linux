@@ -794,6 +794,7 @@ export const dict = {
   "bench.list.table.model": "モデル",
   "bench.list.table.score": "スコア",
   "bench.submission.error.allFieldsRequired": "すべての項目は必須です。",
+  "bench.submission.error.unauthorized": "認証が必要です。",
 
   "bench.detail.title": "ベンチマーク - {{task}}",
   "bench.detail.notFound": "タスクが見つかりません",

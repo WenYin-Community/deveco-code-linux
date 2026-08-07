@@ -832,4 +832,5 @@ export const dict = {
   "bench.detail.run.title": "Exécution {{n}}",
   "bench.detail.rawJson": "JSON brut",
   "bench.submission.error.allFieldsRequired": "Tous les champs sont requis.",
+  "bench.submission.error.unauthorized": "Authentification requise.",
 } satisfies Dict

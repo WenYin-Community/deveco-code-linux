@@ -785,6 +785,7 @@ export const dict = {
   "bench.list.table.model": "모델",
   "bench.list.table.score": "점수",
   "bench.submission.error.allFieldsRequired": "모든 필드는 필수 항목입니다.",
+  "bench.submission.error.unauthorized": "인증이 필요합니다.",
 
   "bench.detail.title": "벤치마크 - {{task}}",
   "bench.detail.notFound": "태스크를 찾을 수 없음",

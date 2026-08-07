@@ -756,6 +756,7 @@ export const dict = {
   "bench.list.table.model": "Модель",
   "bench.list.table.score": "Результат",
   "bench.submission.error.allFieldsRequired": "Усі поля обов'язкові.",
+  "bench.submission.error.unauthorized": "Потрібна автентифікація.",
 
   "bench.detail.title": "Бенчмарк — {{task}}",
   "bench.detail.notFound": "Завдання не знайдено",

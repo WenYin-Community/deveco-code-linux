@@ -4,6 +4,7 @@ export default defineConfig({
   dialect: "sqlite",
   schema: ["./src/**/*.sql.ts", "./src/**/sql.ts"],
   out: "./migration",
+  // SQLite local file path, no credentials involved
   dbCredentials: {
     url: "/home/thdxr/.local/share/opencode/deveco.db",
   },

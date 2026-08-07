@@ -788,6 +788,7 @@ export const dict = {
   "bench.list.table.model": "โมเดล",
   "bench.list.table.score": "คะแนน",
   "bench.submission.error.allFieldsRequired": "จำเป็นต้องกรอกทุกช่อง",
+  "bench.submission.error.unauthorized": "จำเป็นต้องยืนยันตัวตน",
 
   "bench.detail.title": "Benchmark - {{task}}",
   "bench.detail.notFound": "ไม่พบงาน",

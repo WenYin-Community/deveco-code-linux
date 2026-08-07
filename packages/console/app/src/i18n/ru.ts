@@ -802,6 +802,7 @@ export const dict = {
   "bench.list.table.model": "Модель",
   "bench.list.table.score": "Оценка",
   "bench.submission.error.allFieldsRequired": "Все поля обязательны.",
+  "bench.submission.error.unauthorized": "Требуется аутентификация.",
 
   "bench.detail.title": "Бенчмарк - {{task}}",
   "bench.detail.notFound": "Задача не найдена",
