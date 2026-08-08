@@ -18,6 +18,7 @@ import { formatResetTime, liteResetTimeKeys } from "~/lib/format-reset-time"
 import { createReferralFromCookie } from "~/lib/referral-invite"
 
 import { IconAlipay, IconUpi } from "~/component/icon"
+import { getRequestEvent } from "solid-js/web"
 
 export const queryLiteSubscription = query(async (workspaceID: string) => {
   "use server"
@@ -89,12 +90,16 @@ const createLiteCheckoutUrl = action(
   "liteCheckoutUrl",
 )
 
-const createSessionUrl = action(async (workspaceID: string, returnUrl: string) => {
+const createSessionUrl = action(async (workspaceID: string) => {
   "use server"
+  const event = getRequestEvent()
+  if (!event) throw new Error("No request event")
   return json(
     await withActor(
       () =>
-        Billing.generateSessionUrl({ returnUrl })
+        Billing.generateSessionUrl({
+          returnUrl: new URL(`/workspace/${encodeURIComponent(workspaceID)}/go`, event.request.url).toString(),
+        })
           .then((data) => ({ error: undefined, data }))
           .catch((e) => ({
             error: e.message as string,
@@ -168,7 +173,7 @@ export function LiteSection(props: { lite: LiteSubscription | undefined }) {
 
   async function onClickSession() {
     setStore("loading", "session")
-    const result = await sessionAction(params.id!, window.location.href)
+    const result = await sessionAction(params.id!)
     if (result.data) {
       window.location.href = result.data
       return

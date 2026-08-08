@@ -14,6 +14,7 @@ import waitlistStyles from "./black-waitlist-section.module.css"
 import { useI18n } from "~/context/i18n"
 import { formError } from "~/lib/form-error"
 import { blackResetTimeKeys, formatResetTime } from "~/lib/format-reset-time"
+import { getRequestEvent } from "solid-js/web"
 
 const querySubscription = query(async (workspaceID: string) => {
   "use server"
@@ -84,12 +85,16 @@ const enroll = action(async (workspaceID: string) => {
   )
 }, "enroll")
 
-const createSessionUrl = action(async (workspaceID: string, returnUrl: string) => {
+const createSessionUrl = action(async (workspaceID: string) => {
   "use server"
+  const event = getRequestEvent()
+  if (!event) throw new Error("No request event")
   return json(
     await withActor(
       () =>
-        Billing.generateSessionUrl({ returnUrl })
+        Billing.generateSessionUrl({
+          returnUrl: new URL(`/workspace/${encodeURIComponent(workspaceID)}/billing`, event.request.url).toString(),
+        })
           .then((data) => ({ error: undefined, data }))
           .catch((e) => ({
             error: e.message as string,
@@ -144,7 +149,7 @@ export function BlackSection() {
   })
 
   async function onClickSession() {
-    const result = await sessionAction(params.id!, window.location.href)
+    const result = await sessionAction(params.id!)
     if (result.data) {
       setStore("sessionRedirecting", true)
       window.location.href = result.data

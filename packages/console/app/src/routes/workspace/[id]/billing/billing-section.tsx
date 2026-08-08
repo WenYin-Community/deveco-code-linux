@@ -8,13 +8,18 @@ import styles from "./billing-section.module.css"
 import { createCheckoutUrl, formatBalance, queryBillingInfo } from "../../common"
 import { useI18n } from "~/context/i18n"
 import { localizeError } from "~/lib/form-error"
+import { getRequestEvent } from "solid-js/web"
 
-const createSessionUrl = action(async (workspaceID: string, returnUrl: string) => {
+const createSessionUrl = action(async (workspaceID: string) => {
   "use server"
+  const event = getRequestEvent()
+  if (!event) throw new Error("No request event")
   return json(
     await withActor(
       () =>
-        Billing.generateSessionUrl({ returnUrl })
+        Billing.generateSessionUrl({
+          returnUrl: new URL(`/workspace/${encodeURIComponent(workspaceID)}/billing`, event.request.url).toString(),
+        })
           .then((data) => ({ error: undefined, data }))
           .catch((e) => ({
             error: e.message as string,
@@ -62,8 +67,7 @@ export function BillingSection() {
   }
 
   async function onClickSession() {
-    const baseUrl = window.location.href
-    const sessionUrl = await sessionAction(params.id!, baseUrl)
+    const sessionUrl = await sessionAction(params.id!)
     if (sessionUrl && sessionUrl.data) {
       setStore("sessionRedirecting", true)
       window.location.href = sessionUrl.data
