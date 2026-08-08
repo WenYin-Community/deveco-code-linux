@@ -4,7 +4,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ProjectNotFoundError } from "../errors"
+import { InvalidRequestError, ProjectNotFoundError } from "../errors"
 import { markInstanceForReload } from "../lifecycle"
 
 export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", (handlers) =>
@@ -43,6 +43,15 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
             new ProjectNotFoundError({
               projectID: error.projectID,
               message: `Project not found: ${error.projectID}`,
+            }),
+          ),
+        ),
+        Effect.catchTag("Project.InvalidIconError", (error) =>
+          Effect.fail(
+            new InvalidRequestError({
+              message: `Invalid icon: ${error.reason}`,
+              kind: error.reason,
+              field: error.field,
             }),
           ),
         ),

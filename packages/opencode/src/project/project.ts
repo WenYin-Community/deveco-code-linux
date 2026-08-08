@@ -22,12 +22,22 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { sniffAttachmentMime } from "@/util/media"
+import photonWasm from "@silvia-odwyer/photon-node/photon_rs_bg.wasm" with { type: "file" }
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 const ProjectVcs = Schema.Literal("git")
 
+const MAX_ICON_BYTES = 512 * 1024
+const MAX_ICON_DATA_URL_LENGTH = Math.ceil(MAX_ICON_BYTES / 3) * 4 + 32
+const MAX_ICON_DIMENSION = 4096
+const MAX_ICON_PIXELS = 16_777_216
+const ALLOWED_ICON_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+
 const ProjectIcon = Schema.Struct({
-  url: optionalOmitUndefined(Schema.String),
-  override: optionalOmitUndefined(Schema.String),
+  url: optionalOmitUndefined(Schema.String.check(Schema.isMaxLength(MAX_ICON_DATA_URL_LENGTH))),
+  override: optionalOmitUndefined(Schema.String.check(Schema.isMaxLength(MAX_ICON_DATA_URL_LENGTH))),
   color: optionalOmitUndefined(Schema.String),
 })
 
@@ -105,6 +115,182 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Pro
   projectID: ProjectV2.ID,
 }) {}
 
+export class InvalidIconError extends Schema.TaggedErrorClass<InvalidIconError>()("Project.InvalidIconError", {
+  reason: Schema.String,
+  field: Schema.optional(Schema.String),
+}) {}
+
+export function validateIconBytes(
+  bytes: Uint8Array,
+  maxBytes = MAX_ICON_BYTES,
+  declaredMime?: string,
+  field = "icon.override",
+): InvalidIconError | void {
+  if (bytes.length > maxBytes) return new InvalidIconError({ reason: "icon_too_large", field })
+  const sniffed = sniffAttachmentMime(bytes, "")
+  if (!sniffed || !ALLOWED_ICON_MIMES.has(sniffed))
+    return new InvalidIconError({ reason: "unrecognized_image_format", field })
+  if (declaredMime && declaredMime !== sniffed) return new InvalidIconError({ reason: "image_mime_mismatch", field })
+  const dimensions = readIconDimensions(bytes, sniffed)
+  if (!dimensions) return new InvalidIconError({ reason: "invalid_image", field })
+  if (
+    dimensions.width > MAX_ICON_DIMENSION ||
+    dimensions.height > MAX_ICON_DIMENSION ||
+    dimensions.width * dimensions.height > MAX_ICON_PIXELS
+  )
+    return new InvalidIconError({ reason: "icon_dimensions_too_large", field })
+}
+
+const DATA_URL_RE = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
+export function validateIconDataUrl(value: string | undefined, field = "icon.override") {
+  if (!value) return Effect.succeed<InvalidIconError | void>(undefined)
+  if (value.length > MAX_ICON_DATA_URL_LENGTH)
+    return Effect.succeed<InvalidIconError | void>(new InvalidIconError({ reason: "icon_too_large", field }))
+  const match = DATA_URL_RE.exec(value)
+  if (!match || !BASE64_RE.test(match[2]))
+    return Effect.succeed<InvalidIconError | void>(new InvalidIconError({ reason: "invalid_data_url", field }))
+  const bytes = Buffer.from(match[2], "base64")
+  const error = validateIconBytes(bytes, MAX_ICON_BYTES, match[1].toLowerCase(), field)
+  if (error) return Effect.succeed<InvalidIconError | void>(error)
+  return decodeIcon(bytes, field)
+}
+
+function validateIconUrl(value: string | undefined) {
+  if (!value || value.startsWith("data:")) return validateIconDataUrl(value, "icon.url")
+  const url = URL.canParse(value) ? new URL(value) : undefined
+  if (url?.protocol === "https:") return Effect.succeed<InvalidIconError | void>(undefined)
+  return Effect.succeed<InvalidIconError | void>(
+    new InvalidIconError({ reason: "invalid_icon_url", field: "icon.url" }),
+  )
+}
+
+function decodeIcon(bytes: Uint8Array, field: string) {
+  return Effect.tryPromise(() => {
+    ;(globalThis as typeof globalThis & { __DEVECO_PHOTON_WASM_PATH?: string }).__DEVECO_PHOTON_WASM_PATH =
+      path.isAbsolute(photonWasm) ? photonWasm : fileURLToPath(new URL(photonWasm, import.meta.url))
+    return import("@silvia-odwyer/photon-node")
+  }).pipe(
+    Effect.flatMap((photon) =>
+      Effect.try({
+        try: () => {
+          const image = photon.PhotonImage.new_from_byteslice(bytes)
+          image.free()
+        },
+        catch: () => new InvalidIconError({ reason: "invalid_image", field }),
+      }),
+    ),
+    Effect.match({
+      onFailure: (error) =>
+        error instanceof InvalidIconError
+          ? error
+          : new InvalidIconError({ reason: "image_decoder_unavailable", field }),
+      onSuccess: () => undefined,
+    }),
+  )
+}
+
+function readIconDimensions(bytes: Uint8Array, mime: string) {
+  if (mime === "image/png") {
+    if (bytes.length < 24 || ascii(bytes, 12, 16) !== "IHDR") return
+    return { width: uint32(bytes, 16), height: uint32(bytes, 20) }
+  }
+  if (mime === "image/gif") {
+    return readGifDimensions(bytes)
+  }
+  if (mime === "image/webp") return readWebpDimensions(bytes)
+  return readJpegDimensions(bytes)
+}
+
+function readJpegDimensions(bytes: Uint8Array) {
+  const frames = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf])
+  for (let offset = 2; offset + 8 < bytes.length; ) {
+    if (bytes[offset] !== 0xff) return
+    while (bytes[offset] === 0xff) offset++
+    const marker = bytes[offset]
+    if (frames.has(marker)) return { width: uint16(bytes, offset + 6), height: uint16(bytes, offset + 4) }
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset++
+      continue
+    }
+    const length = uint16(bytes, offset + 1)
+    if (length < 2 || offset + 1 + length > bytes.length) return
+    offset += 1 + length
+  }
+}
+
+function readGifDimensions(bytes: Uint8Array) {
+  if (bytes.length < 14) return
+  let width = uint16le(bytes, 6)
+  let height = uint16le(bytes, 8)
+  let offset = 13 + ((bytes[10] & 0x80) === 0 ? 0 : 3 * 2 ** ((bytes[10] & 0x07) + 1))
+  while (offset < bytes.length) {
+    const marker = bytes[offset++]
+    if (marker === 0x3b) return { width, height }
+    if (marker === 0x21) {
+      if (offset >= bytes.length) return
+      offset = skipGifSubBlocks(bytes, offset + 1) ?? bytes.length
+      continue
+    }
+    if (marker !== 0x2c || offset + 9 > bytes.length) return
+    width = Math.max(width, uint16le(bytes, offset) + uint16le(bytes, offset + 4))
+    height = Math.max(height, uint16le(bytes, offset + 2) + uint16le(bytes, offset + 6))
+    const packed = bytes[offset + 8]
+    offset += 9 + ((packed & 0x80) === 0 ? 0 : 3 * 2 ** ((packed & 0x07) + 1))
+    if (offset >= bytes.length) return
+    offset = skipGifSubBlocks(bytes, offset + 1) ?? bytes.length
+  }
+}
+
+function skipGifSubBlocks(bytes: Uint8Array, start: number) {
+  for (let offset = start; offset < bytes.length; ) {
+    const size = bytes[offset]
+    if (size === 0) return offset + 1
+    if (offset + 1 + size > bytes.length) return
+    offset += 1 + size
+  }
+}
+
+function readWebpDimensions(bytes: Uint8Array) {
+  if (bytes.length < 30) return
+  const kind = ascii(bytes, 12, 16)
+  if (kind === "VP8X") return { width: 1 + uint24le(bytes, 24), height: 1 + uint24le(bytes, 27) }
+  if (kind === "VP8L" && bytes[20] === 0x2f)
+    return {
+      width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+      height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+    }
+  if (kind === "VP8 " && ascii(bytes, 23, 26) === "\u009d\u0001*")
+    return { width: uint16le(bytes, 26) & 0x3fff, height: uint16le(bytes, 28) & 0x3fff }
+}
+
+function ascii(bytes: Uint8Array, start: number, end: number) {
+  return String.fromCharCode(...bytes.subarray(start, end))
+}
+
+function uint16(bytes: Uint8Array, offset: number) {
+  return ((bytes[offset] ?? 0) << 8) | (bytes[offset + 1] ?? 0)
+}
+
+function uint16le(bytes: Uint8Array, offset: number) {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8)
+}
+
+function uint24le(bytes: Uint8Array, offset: number) {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8) | ((bytes[offset + 2] ?? 0) << 16)
+}
+
+function uint32(bytes: Uint8Array, offset: number) {
+  return (
+    ((bytes[offset] ?? 0) * 0x1000000 +
+      ((bytes[offset + 1] ?? 0) << 16) +
+      ((bytes[offset + 2] ?? 0) << 8) +
+      (bytes[offset + 3] ?? 0)) >>>
+    0
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Effect service
 // ---------------------------------------------------------------------------
@@ -117,10 +303,10 @@ export interface Interface {
    */
   readonly init: () => Effect.Effect<void>
   readonly fromDirectory: (directory: string) => Effect.Effect<{ project: Info; sandbox: string }>
-  readonly discover: (input: Info) => Effect.Effect<void>
+  readonly discover: (input: Info) => Effect.Effect<void, InvalidIconError>
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: ProjectV2.ID) => Effect.Effect<Info | undefined>
-  readonly update: (input: UpdateInput) => Effect.Effect<Info, NotFoundError>
+  readonly update: (input: UpdateInput) => Effect.Effect<Info, NotFoundError | InvalidIconError>
   readonly initGit: (input: { directory: string; project: Info }) => Effect.Effect<Info>
   readonly setInitialized: (id: ProjectV2.ID) => Effect.Effect<void>
   readonly sandboxes: (id: ProjectV2.ID) => Effect.Effect<string[]>
@@ -354,9 +540,16 @@ export const layer = Layer.effect(
       const shortest = matches.sort((a, b) => a.length - b.length)[0]
       if (!shortest) return
 
+      const stat = yield* fs.stat(shortest).pipe(Effect.orDie)
+      if (stat.size > MAX_ICON_BYTES) return
+
       const buffer = yield* fs.readFile(shortest).pipe(Effect.orDie)
+      const bytes = new Uint8Array(buffer)
+      const mime = sniffAttachmentMime(bytes, "")
+      if (validateIconBytes(bytes, MAX_ICON_BYTES, mime)) return
+      if (yield* decodeIcon(bytes, "icon.url")) return
+
       const base64 = Buffer.from(buffer).toString("base64")
-      const mime = FSUtil.mimeType(shortest)
       const url = `data:${mime};base64,${base64}`
       yield* update({ projectID: input.id, icon: { url } }).pipe(
         Effect.catchTag("Project.NotFoundError", () => Effect.void),
@@ -373,6 +566,11 @@ export const layer = Layer.effect(
     })
 
     const update = Effect.fn("Project.update")(function* (input: UpdateInput) {
+      const overrideError = yield* validateIconDataUrl(input.icon?.override)
+      const urlError = yield* validateIconUrl(input.icon?.url)
+      const iconError = overrideError ?? urlError
+      if (iconError) yield* iconError
+
       const result = yield* db
         .update(ProjectTable)
         .set({

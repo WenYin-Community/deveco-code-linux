@@ -13,8 +13,13 @@ import { useLanguage } from "@/context/language"
 import { getProjectAvatarSource } from "@/pages/layout/helpers"
 import { ServerConnection } from "@/context/server"
 import { useGlobal } from "@/context/global"
+import { ACCEPTED_IMAGE_TYPES } from "@/constants/file-picker"
 
 const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] as const
+const MAX_ICON_FILE_BYTES = 512 * 1024
+const MAX_ICON_DIMENSION = 4096
+const MAX_ICON_PIXELS = 16_777_216
+const ALLOWED_ICON_TYPES = new Set(ACCEPTED_IMAGE_TYPES)
 
 export function DialogEditProject(props: { project: LocalProject; server: ServerConnection.Any }) {
   const dialog = useDialog()
@@ -38,8 +43,18 @@ export function DialogEditProject(props: { project: LocalProject; server: Server
 
   let iconInput: HTMLInputElement | undefined
 
-  function handleFileSelect(file: File) {
-    if (!file.type.startsWith("image/")) return
+  async function handleFileSelect(file: File) {
+    if (!ALLOWED_ICON_TYPES.has(file.type)) return
+    if (file.size > MAX_ICON_FILE_BYTES) return
+    if (sniffIconMime(new Uint8Array(await file.slice(0, 30).arrayBuffer())) !== file.type) return
+    const image = await createImageBitmap(file).catch(() => undefined)
+    if (!image) return
+    const valid =
+      image.width <= MAX_ICON_DIMENSION &&
+      image.height <= MAX_ICON_DIMENSION &&
+      image.width * image.height <= MAX_ICON_PIXELS
+    image.close()
+    if (!valid) return
     const reader = new FileReader()
     reader.onload = (e) => {
       setStore("iconOverride", e.target?.result as string)
@@ -196,7 +211,7 @@ export function DialogEditProject(props: { project: LocalProject; server: Server
                   iconInput = el
                 }}
                 type="file"
-                accept="image/*"
+                accept={ACCEPTED_IMAGE_TYPES.join(",")}
                 class="hidden"
                 onChange={handleInputChange}
               />
@@ -264,4 +279,16 @@ export function DialogEditProject(props: { project: LocalProject; server: Server
       </form>
     </Dialog>
   )
+}
+
+function sniffIconMime(bytes: Uint8Array) {
+  const startsWith = (prefix: number[]) => prefix.every((value, index) => bytes[index] === value)
+  if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png"
+  if (startsWith([0xff, 0xd8, 0xff])) return "image/jpeg"
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return "image/gif"
+  if (
+    startsWith([0x52, 0x49, 0x46, 0x46]) &&
+    [0x57, 0x45, 0x42, 0x50].every((value, index) => bytes[index + 8] === value)
+  )
+    return "image/webp"
 }

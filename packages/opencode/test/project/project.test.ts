@@ -26,6 +26,11 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 
 const encoder = new TextEncoder()
 
+const VALID_PNG_BYTES = new Uint8Array(
+  await Bun.file(new URL("../../../ui/src/assets/favicon/favicon-96x96.png", import.meta.url)).arrayBuffer(),
+)
+const VALID_PNG_DATA_URL = `data:image/png;base64,${Buffer.from(VALID_PNG_BYTES).toString("base64")}`
+
 const layer = Layer.mergeAll(Project.defaultLayer, Database.defaultLayer, CrossSpawnSpawner.defaultLayer)
 const it = testEffect(layer)
 
@@ -410,8 +415,7 @@ describe("Project.discover", () => {
     Effect.gen(function* () {
       const project = yield* Project.Service
       const tmp = yield* tmpdirScoped({ git: true })
-      const pngData = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), pngData))
+      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), VALID_PNG_BYTES))
 
       const result = yield* project.fromDirectory(tmp)
       const updated = yield* waitForProjectIcon(result.project.id)
@@ -427,8 +431,7 @@ describe("Project.discover", () => {
       const tmp = yield* tmpdirScoped({ git: true })
       const result = yield* project.fromDirectory(tmp)
 
-      const pngData = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), pngData))
+      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), VALID_PNG_BYTES))
 
       yield* project.discover(result.project)
 
@@ -465,20 +468,19 @@ describe("Project.discover", () => {
 
       yield* project.update({
         projectID: result.project.id,
-        icon: { override: "data:image/png;base64,override" },
+        icon: { override: VALID_PNG_DATA_URL },
       })
 
       const updatedProject = yield* project.get(result.project.id)
       if (!updatedProject) throw new Error("Project not found")
 
-      const pngData = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), pngData))
+      yield* Effect.promise(() => Bun.write(path.join(tmp, "favicon.png"), VALID_PNG_BYTES))
 
       yield* project.discover(updatedProject)
 
       const updated = yield* project.get(result.project.id)
       expect(updated).toBeDefined()
-      expect(updated!.icon?.override).toBe("data:image/png;base64,override")
+      expect(updated!.icon?.override).toBe(VALID_PNG_DATA_URL)
       expect(updated!.icon?.url).toBeUndefined()
     }),
   )
@@ -547,13 +549,13 @@ describe("Project.update", () => {
 
       const updated = yield* project.update({
         projectID: result.project.id,
-        icon: { override: "data:image/png;base64,abc123" },
+        icon: { override: VALID_PNG_DATA_URL },
       })
 
-      expect(updated.icon?.override).toBe("data:image/png;base64,abc123")
+      expect(updated.icon?.override).toBe(VALID_PNG_DATA_URL)
 
       const fromDb = yield* project.get(result.project.id)
-      expect(fromDb?.icon?.override).toBe("data:image/png;base64,abc123")
+      expect(fromDb?.icon?.override).toBe(VALID_PNG_DATA_URL)
     }),
   )
 
@@ -619,13 +621,13 @@ describe("Project.update", () => {
       const updated = yield* project.update({
         projectID: result.project.id,
         name: "Multi Update",
-        icon: { url: "https://example.com/favicon.ico", override: "data:image/png;base64,abc123", color: "#00ff00" },
+        icon: { url: "https://example.com/favicon.ico", override: VALID_PNG_DATA_URL, color: "#00ff00" },
         commands: { start: "make start" },
       })
 
       expect(updated.name).toBe("Multi Update")
       expect(updated.icon?.url).toBe("https://example.com/favicon.ico")
-      expect(updated.icon?.override).toBe("data:image/png;base64,abc123")
+      expect(updated.icon?.override).toBe(VALID_PNG_DATA_URL)
       expect(updated.icon?.color).toBe("#00ff00")
       expect(updated.commands?.start).toBe("make start")
     }),
