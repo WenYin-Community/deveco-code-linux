@@ -121,7 +121,7 @@ Execute phases sequentially (1 → 5). Do not skip, merge, or reorder steps.
      b. **Tasks summary**: the complete task list from `tasks.md` (task IDs, descriptions, target file paths, dependencies, and execution flags).
      c. **Plan summary**: tech stack, architecture decisions, and module breakdown from `plan.md`.
      d. **Feature summary**: concise description of the overall feature requirements from Phase 1-3 — what the feature does, core user stories, key functional points.
-     e. **Execution constraints**: The subagent MUST (1) proceed autonomously without intermediate prompts, (2) execute only implementation tasks (excluding the Verification phase), and (3) return an implementation report.
+     e. **Execution constraints**: The subagent MUST (1) proceed autonomously without intermediate prompts, (2) execute only implementation tasks (excluding the Verification phase), (3) return an implementation report, and (4) if `{PROJECT_ROOT}` has no valid project files (`build-profile.json5` or `oh-package.json5`), invoke the `deveco-create-project` skill via the `skill` tool as the FIRST Setup action before any other implementation work — do NOT manually create project files.
 4. Transition: Update `todowrite` state. Proceed directly to Phase 5 — no `question` gate between Phase 4 and Phase 5.
 
 ### Phase 5: Verification & Validation
