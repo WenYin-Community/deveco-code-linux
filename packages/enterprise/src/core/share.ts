@@ -114,9 +114,8 @@ export namespace Share {
   }
 
   export const create = fn(z.object({ sessionID: z.string() }), async (body) => {
-    const isTest = process.env.NODE_ENV === "test" || body.sessionID.startsWith("test_")
     const info: Info = {
-      id: (isTest ? "test_" : "") + body.sessionID.slice(-8),
+      id: crypto.randomUUID(),
       sessionID: body.sessionID,
       secret: crypto.randomUUID(),
     }
@@ -161,6 +160,8 @@ export namespace Share {
   )
 
   export async function data(shareID: string) {
+    const share = await get(shareID)
+    if (!share) throw new Errors.NotFound(shareID)
     return (await readSnapshot(shareID)) ?? legacy(shareID)
   }
 

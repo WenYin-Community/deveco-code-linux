@@ -9,6 +9,8 @@ describe.concurrent("core.share", () => {
     const share = await Share.create({ sessionID })
 
     expect(share.sessionID).toBe(sessionID)
+    expect(share.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(share.id).not.toContain(sessionID.slice(-8))
     expect(share.secret).toBeDefined()
 
     await Share.remove({ id: share.id, secret: share.secret })
@@ -192,6 +194,17 @@ describe.concurrent("core.share", () => {
     expect(result).toEqual([])
 
     await Share.remove({ id: share.id, secret: share.secret })
+  })
+
+  test("should reject reads after the share record is removed", async () => {
+    const sessionID = Identifier.descending()
+    const share = await Share.create({ sessionID })
+
+    await Storage.remove(["share", share.id])
+
+    expect(Share.data(share.id)).rejects.toThrow(`Share not found: ${share.id}`)
+
+    await Storage.remove(["share_snapshot", share.id])
   })
 
   test("should migrate legacy event data into the snapshot", async () => {
