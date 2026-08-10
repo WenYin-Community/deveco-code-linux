@@ -4,6 +4,8 @@ on:
   pull_request_target:
     types: [open, reopen, update]
     branches: ["**"]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -22,6 +24,7 @@ stages:
     jobs:
       check-standards:
         name: 标题格式与关联 Issue
+        if: ${{ atomgit.event_name != 'issue_comment' || startsWith(atomgit.event.comment.body, '/recheck') }}
         runs-on: ubuntu-latest
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
@@ -40,12 +43,24 @@ stages:
               PR_TITLE: ${{ atomgit.event.pull_request.title }}
               PR_BODY: ${{ atomgit.event.pull_request.body }}
               PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
+              COMMENT_BODY: ${{ atomgit.event.comment.body }}
+              COMMENT_PR_FLAG: ${{ atomgit.event.issue.pull_request }}
+              ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
               PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
 
               if [ -z "$PR_NUMBER" ]; then
-                echo "No PR number found"
-                exit 0
+                if [ -n "$COMMENT_PR_FLAG" ] && [ "$COMMENT_PR_FLAG" != "null" ]; then
+                  if ! echo "$COMMENT_BODY" | grep -qiE '^/recheck\s*$'; then
+                    echo "Not a /recheck command, skipping"
+                    exit 0
+                  fi
+                  PR_NUMBER="$ISSUE_NUMBER"
+                  echo "Recheck triggered via comment on PR #$PR_NUMBER"
+                else
+                  echo "No PR number found"
+                  exit 0
+                fi
               fi
 
               echo "Checking PR #$PR_NUMBER"
@@ -99,7 +114,7 @@ stages:
                   echo '详见[贡献指南 - PR 标题](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#pr-titles)。'
                 } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
-                exit 0
+                exit 1
               fi
 
               echo "Title is valid"
@@ -127,11 +142,14 @@ stages:
                 echo '详见[贡献指南 - Issue 优先](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#issue-first-policy)。'
               } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
+              exit 1
+
   check-compliance:
     name: 检查 PR 模板合规
     jobs:
       check-compliance:
         name: PR 模板合规检查
+        if: ${{ atomgit.event_name != 'issue_comment' || startsWith(atomgit.event.comment.body, '/recheck') }}
         runs-on: ubuntu-latest
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
@@ -150,12 +168,24 @@ stages:
               PR_TITLE: ${{ atomgit.event.pull_request.title }}
               PR_BODY: ${{ atomgit.event.pull_request.body }}
               PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
+              COMMENT_BODY: ${{ atomgit.event.comment.body }}
+              COMMENT_PR_FLAG: ${{ atomgit.event.issue.pull_request }}
+              ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
               PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
 
               if [ -z "$PR_NUMBER" ]; then
-                echo "No PR number found"
-                exit 0
+                if [ -n "$COMMENT_PR_FLAG" ] && [ "$COMMENT_PR_FLAG" != "null" ]; then
+                  if ! echo "$COMMENT_BODY" | grep -qiE '^/recheck\s*$'; then
+                    echo "Not a /recheck command, skipping"
+                    exit 0
+                  fi
+                  PR_NUMBER="$ISSUE_NUMBER"
+                  echo "Recheck triggered via comment on PR #$PR_NUMBER"
+                else
+                  echo "No PR number found"
+                  exit 0
+                fi
               fi
 
               echo "Checking PR #$PR_NUMBER compliance"
@@ -246,6 +276,7 @@ stages:
                 COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **2 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
 
                 echo "$COMMENT_BODY" | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+                exit 1
               elif [ "$HAS_LABEL" = 1 ]; then
                 echo "PR is now compliant, removing label"
                 bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
