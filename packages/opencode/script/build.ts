@@ -17,6 +17,11 @@ const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
+import {
+  bundleDevecoCliVendor,
+  resolveDevecoCliVersionFromPackageJson,
+  type DevecoCliVendorTarget,
+} from "./vendor-deveco-cli"
 
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
@@ -383,6 +388,22 @@ for (const item of targets) {
         await fs.promises.chmod(rgDest, 0o755)
       }
       console.log(`  Bundled ripgrep for ${rgKey}`)
+    }
+  }
+
+  // Per-target @deveco/deveco-cli for curl/irm zip installs (npm still uses package dependency).
+  if (item.os === "darwin" || item.os === "win32") {
+    const cliTarget: DevecoCliVendorTarget = { os: item.os, arch: item.arch }
+    try {
+      await bundleDevecoCliVendor({
+        version: resolveDevecoCliVersionFromPackageJson(pkg),
+        cacheDir: path.join(dir, ".build-cache"),
+        vendorDir: path.join(dir, "dist", name, "vendor", "deveco-cli"),
+        target: cliTarget,
+      })
+    } catch (error) {
+      console.error(`  ERROR: failed to vendor @deveco/deveco-cli for ${item.os}-${item.arch}:`, error)
+      process.exit(1)
     }
   }
 

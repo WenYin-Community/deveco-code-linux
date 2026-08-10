@@ -17,6 +17,7 @@ import {
   resolveInstalledDevecoCliEntry,
   resolveInstalledDevecoCliEntryFromExecutable,
   resolveLocalBuildDevecoCliEntry,
+  resolveVendoredDevecoCliEntry,
   runBundledDevecoCli,
 } from "../../../src/tool/lib/deveco-cli"
 import { tmpdir } from "../../fixture/fixture"
@@ -57,6 +58,42 @@ describe("deveco-cli runtime", () => {
 
     await Bun.write(marker, "devecocli\n")
     expect(resolveInstalledDevecoCliEntry(installRoot)).toBeUndefined()
+  })
+
+  test("resolveInstalledDevecoCliEntry() falls back to vendor/deveco-cli for curl/irm layout", async () => {
+    await using tmp = await tmpdir()
+    const installRoot = path.join(tmp.path, "install")
+    const cli = path.join(installRoot, "vendor", "deveco-cli", "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
+    await fs.mkdir(path.dirname(cli), { recursive: true })
+    await Bun.write(cli, "console.log('vendored')\n")
+
+    expect(resolveVendoredDevecoCliEntry(installRoot)).toBe(path.resolve(cli))
+    expect(resolveInstalledDevecoCliEntry(installRoot)).toBe(path.resolve(cli))
+  })
+
+  test("resolveInstalledDevecoCliEntry() prefers absolute marker over vendor layout", async () => {
+    await using tmp = await tmpdir()
+    const installRoot = path.join(tmp.path, "install")
+    const markerCli = path.join(installRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
+    const vendorCli = path.join(
+      installRoot,
+      "vendor",
+      "deveco-cli",
+      "node_modules",
+      "@deveco",
+      "deveco-cli",
+      "dist",
+      "cli.js",
+    )
+    const marker = path.join(installRoot, "vendor", ".deveco-cli-entry")
+    await fs.mkdir(path.dirname(markerCli), { recursive: true })
+    await fs.mkdir(path.dirname(vendorCli), { recursive: true })
+    await fs.mkdir(path.dirname(marker), { recursive: true })
+    await Bun.write(markerCli, "console.log('marker')\n")
+    await Bun.write(vendorCli, "console.log('vendor')\n")
+    await Bun.write(marker, `${markerCli}\n`)
+
+    expect(resolveInstalledDevecoCliEntry(installRoot)).toBe(path.resolve(markerCli))
   })
 
   test("resolveInstalledDevecoCliEntry() never searches PATH for a global CLI", async () => {

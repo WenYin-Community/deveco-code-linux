@@ -6,6 +6,7 @@ import { Global } from "@opencode-ai/core/global"
 
 const PACKAGE_NAME = "@deveco/deveco-cli"
 const INSTALL_ENTRY_MARKER = ".deveco-cli-entry"
+const VENDOR_CLI_DIRNAME = "deveco-cli"
 const PATH_MARKER = ".deveco-cli-path"
 const SHIM_NAME = "devecocli"
 
@@ -24,15 +25,31 @@ function exists(file: string) {
   return fsSync.existsSync(file)
 }
 
+export function resolveVendoredDevecoCliEntry(installRoot: string): string | undefined {
+  const vendorRoot = path.join(installRoot, "vendor", VENDOR_CLI_DIRNAME)
+  const nested = [
+    path.join(vendorRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+    path.join(vendorRoot, "node_modules", "@deveco-test", "deveco-cli", "dist", "cli.js"),
+    path.join(vendorRoot, "dist", "cli.js"),
+  ]
+  for (const candidate of nested) {
+    if (exists(candidate)) return path.resolve(candidate)
+  }
+  return undefined
+}
+
 export function resolveInstalledDevecoCliEntry(installRoot: string): string | undefined {
+  // npm installs: prefer absolute marker written by postinstall (stable, unchanged).
   const marker = path.join(installRoot, "vendor", INSTALL_ENTRY_MARKER)
   try {
     const entry = fsSync.readFileSync(marker, "utf8").trim()
-    if (!path.isAbsolute(entry) || !exists(entry)) return undefined
-    return path.resolve(entry)
+    if (path.isAbsolute(entry) && exists(entry)) return path.resolve(entry)
   } catch {
-    return undefined
+    // fall through to vendor layout (curl/irm)
   }
+
+  // curl/irm (and platform packages that ship vendor/deveco-cli): convention path.
+  return resolveVendoredDevecoCliEntry(installRoot)
 }
 
 export function resolveInstalledDevecoCliEntryFromExecutable(executable: string): string | undefined {
