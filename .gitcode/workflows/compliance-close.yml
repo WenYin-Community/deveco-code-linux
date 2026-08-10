@@ -1,0 +1,120 @@
+name: Compliance Close
+
+on:
+  schedule:
+    - cron: '0 0/30 * * * ?'
+  workflow_dispatch:
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  close:
+    name: 关闭超时不合规项目
+    jobs:
+      close-non-compliant:
+        name: 关闭超时 Issue 和 PR
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 关闭超时不合规 Issue 和 PR
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+            run: |
+              RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/issues?state=open&labels=waiting_on_author&per_page=100" 2>/dev/null)
+
+              ITEMS=$(echo "$RESPONSE" | jq -r '.[] | "\(.number // .iid)\t\(.pull_request != null)"' 2>/dev/null)
+
+              if [ -z "$ITEMS" ]; then
+                echo "No items to check"
+                echo "## 合规关闭检查" >> "$ATOMGIT_STEP_SUMMARY"
+                echo "✅ 无超时项目需要关闭" >> "$ATOMGIT_STEP_SUMMARY"
+                exit 0
+              fi
+
+              CLOSED=0
+              SKIPPED=0
+              NOW_EPOCH=$(date +%s)
+              TWO_HOURS=$((2 * 60 * 60))
+
+              while IFS=$'\t' read -r NUMBER IS_PR; do
+                [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ] && continue
+                echo "Checking #$NUMBER"
+
+                if [ "$IS_PR" = "true" ]; then
+                  EP="pulls"
+                  KIND="PR"
+                  ST="pulls"
+                else
+                  EP="issues"
+                  KIND="Issue"
+                  ST="issues"
+                fi
+
+                ITEM_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/$EP/$NUMBER" 2>/dev/null)
+                AUTHOR=$(echo "$ITEM_DATA" | jq -r '.user.login // .user.username // ""')
+
+                if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                  echo "  Skipping: $AUTHOR is a team member"
+                  GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/$EP/$NUMBER/comments" 2>/dev/null)
+                COMMENT_CREATED=$(echo "$COMMENTS" \
+                  | jq -r '.[] | select(.body | contains("issue-compliance") or contains("pr-compliance")) | .created_at' 2>/dev/null | head -1)
+
+                if [ -z "$COMMENT_CREATED" ] || [ "$COMMENT_CREATED" = "null" ]; then
+                  echo "  No compliance comment found, skipping"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                COMMENT_EPOCH=$(date -d "$COMMENT_CREATED" +%s 2>/dev/null || echo 0)
+                if [ "$COMMENT_EPOCH" -eq 0 ]; then
+                  echo "  Could not parse comment date, skipping"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                AGE=$((NOW_EPOCH - COMMENT_EPOCH))
+                if [ "$AGE" -lt "$TWO_HOURS" ]; then
+                  echo "  Still within 2-hour window ($(( AGE / 60 ))m elapsed)"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                echo "  Closing: compliance window expired ($KIND)"
+
+                {
+                  echo "此${KIND}已被自动关闭，因为未在 2 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
+                  echo ""
+                  echo "欢迎按照规范重新提交${KIND}。"
+                } | GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null
+
+                GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
+                GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh close-issue "$NUMBER" 2>/dev/null
+
+                CLOSED=$((CLOSED + 1))
+              done <<< "$ITEMS"
+
+              echo "## 合规关闭检查" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 检查时间 | $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 关闭数 | $CLOSED |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 跳过数 | $SKIPPED |" >> "$ATOMGIT_STEP_SUMMARY"

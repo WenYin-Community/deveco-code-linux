@@ -223,7 +223,7 @@ You can optionally include a scope to indicate which package is affected:
 
 - `feat(app):` feature in the app package
 - `fix(desktop):` bug fix in the desktop package
-- `chore(opencode):` maintenance in the opencode package
+- `chore(deveco):` maintenance in the deveco package
 
 Examples:
 

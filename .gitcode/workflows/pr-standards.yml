@@ -1,0 +1,270 @@
+name: PR Standards
+
+on:
+  pull_request:
+    types: [open, reopen, update]
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "指定要检查的 PR 编号"
+        required: true
+        type: string
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  check-standards:
+    name: 检查标题与关联
+    jobs:
+      check-standards:
+        name: 标题格式与关联 Issue
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+              ref: ${{ atomgit.sha }}
+
+          - name: 检查标题与关联 Issue
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              GITCODE_TYPE: pulls
+              PR_TITLE: ${{ atomgit.event.pull_request.title }}
+              PR_BODY: ${{ atomgit.event.pull_request.body }}
+              PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
+            run: |
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "No PR number found"
+                exit 0
+              fi
+
+              echo "Checking PR #$PR_NUMBER"
+
+              TITLE="$PR_TITLE"
+              BODY="$PR_BODY"
+              AUTHOR="$PR_AUTHOR"
+
+              if [ -z "$TITLE" ] && [ -z "$AUTHOR" ]; then
+                PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
+                AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
+                TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
+                BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
+              fi
+
+              echo "Author: $AUTHOR"
+              echo "Title: $TITLE"
+
+              if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                echo "Skipping: $AUTHOR is a team member"
+                bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
+                exit 0
+              fi
+
+              TITLE_PATTERN='^(feat|fix|docs|chore|refactor|test)(\([a-zA-Z0-9-]+\))?:'
+              if ! echo "$TITLE" | grep -qE "$TITLE_PATTERN"; then
+                echo "Title does not follow conventional commit format"
+
+                bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
+
+                {
+                  echo '<!-- pr-standards:title -->'
+                  echo '## 📝 标题格式不符合规范'
+                  echo ''
+                  echo '你的 PR 标题不符合[约定式提交](https://www.conventionalcommits.org/)格式。'
+                  echo ''
+                  echo '**请修改标题，使其以下列前缀之一开头：**'
+                  echo ''
+                  echo '| 前缀 | 说明 |'
+                  echo '|------|------|'
+                  echo '| `feat:` | 新功能 |'
+                  echo '| `fix:` | Bug 修复 |'
+                  echo '| `docs:` | 文档变更 |'
+                  echo '| `chore:` | 维护任务 |'
+                  echo '| `refactor:` | 代码重构 |'
+                  echo '| `test:` | 测试相关 |'
+                  echo ''
+                  echo '> 可选 scope：`feat(scope):`，scope 为包名（如 `app`、`desktop`、`deveco`）'
+                  echo ''
+                  echo '详见[贡献指南 - PR 标题](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#pr-titles)。'
+                } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
+                exit 0
+              fi
+
+              echo "Title is valid"
+
+              if echo "$BODY" | grep -qiE '(closes?|fixes?|resolves?)\s+#\d+'; then
+                echo "Issue reference found"
+                exit 0
+              fi
+
+              echo "No issue reference found"
+
+              bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
+
+              {
+                echo '<!-- pr-standards:issue -->'
+                echo '## 🔗 未关联 Issue'
+                echo ''
+                echo '所有 PR 必须引用一个已存在的 Issue。'
+                echo ''
+                echo '**操作步骤：**'
+                echo ''
+                echo '1. 创建一个 Issue 描述 Bug 或功能需求（如果尚不存在）'
+                echo '2. 在此 PR 描述的 `### Issue for this PR` 段落中填写 `Closes #<编号>`'
+                echo ''
+                echo '详见[贡献指南 - Issue 优先](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#issue-first-policy)。'
+              } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
+  check-compliance:
+    name: 检查 PR 模板合规
+    jobs:
+      check-compliance:
+        name: PR 模板合规检查
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+              ref: ${{ atomgit.sha }}
+
+          - name: 检查 PR 模板合规性
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              GITCODE_TYPE: pulls
+              PR_TITLE: ${{ atomgit.event.pull_request.title }}
+              PR_BODY: ${{ atomgit.event.pull_request.body }}
+              PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
+            run: |
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "No PR number found"
+                exit 0
+              fi
+
+              echo "Checking PR #$PR_NUMBER compliance"
+
+              TITLE="$PR_TITLE"
+              BODY="$PR_BODY"
+              AUTHOR="$PR_AUTHOR"
+
+              PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
+
+              if [ -z "$TITLE" ] && [ -z "$AUTHOR" ]; then
+                AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
+                TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
+                BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
+              fi
+
+              if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                echo "Skipping: $AUTHOR is a team member"
+                bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
+                exit 0
+              fi
+
+              ISSUES=""
+              add_issue() {
+                if [ -z "$ISSUES" ]; then
+                  ISSUES="$1"
+                else
+                  ISSUES="$ISSUES"$'\n'"- $1"
+                fi
+              }
+
+              HAS_WHAT=$(echo "$BODY" | grep -q '### What does this PR do?' && echo 1 || echo 0)
+              HAS_TYPE=$(echo "$BODY" | grep -q '### Type of change' && echo 1 || echo 0)
+              HAS_VERIFY=$(echo "$BODY" | grep -q '### How did you verify your code works?' && echo 1 || echo 0)
+              HAS_CHECKLIST=$(echo "$BODY" | grep -q '### Checklist' && echo 1 || echo 0)
+              HAS_ISSUE_SEC=$(echo "$BODY" | grep -q '### Issue for this PR' && echo 1 || echo 0)
+
+              if [ "$HAS_WHAT" = 0 ] || [ "$HAS_TYPE" = 0 ] || [ "$HAS_VERIFY" = 0 ] || [ "$HAS_CHECKLIST" = 0 ] || [ "$HAS_ISSUE_SEC" = 0 ]; then
+                add_issue "PR 描述缺少必要的模板段落，请使用 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。"
+              fi
+
+              if [ "$HAS_WHAT" = 1 ]; then
+                WHAT_CONTENT=$(echo "$BODY" | awk '/^### What does this PR do\?$/{f=1;next} /^### /{if(f)exit} f{print}' | tr -d '[:space:]')
+                if [ -z "$WHAT_CONTENT" ]; then
+                  add_issue '"What does this PR do?" 段落为空，请描述你的改动。'
+                fi
+              fi
+
+              if [ "$HAS_TYPE" = 1 ]; then
+                TYPE_CONTENT=$(echo "$BODY" | awk '/^### Type of change$/{f=1;next} /^### /{if(f)exit} f{print}')
+                if ! echo "$TYPE_CONTENT" | grep -qi '\- \[x\]'; then
+                  add_issue '未勾选任何"变更类型"选项，请至少选择一项。'
+                fi
+              fi
+
+              if ! echo "$TITLE" | grep -qE '^(docs|refactor|feat)'; then
+                if [ "$HAS_ISSUE_SEC" = 1 ]; then
+                  ISSUE_CONTENT=$(echo "$BODY" | awk '/^### Issue for this PR$/{f=1;next} /^### /{if(f)exit} f{print}')
+                  if ! echo "$ISSUE_CONTENT" | grep -qiE '(closes?|fixes?|resolves?)\s+#\d+'; then
+                    add_issue '未关联 Issue，请添加 `Closes #<编号>` 引用相关 Issue。'
+                  fi
+                fi
+              fi
+
+              if [ "$HAS_VERIFY" = 1 ]; then
+                VERIFY_CONTENT=$(echo "$BODY" | awk '/^### How did you verify your code works\?$/{f=1;next} /^### /{if(f)exit} f{print}' | tr -d '[:space:]')
+                if [ -z "$VERIFY_CONTENT" ]; then
+                  add_issue '"How did you verify your code works?" 段落为空，请说明你如何测试。'
+                fi
+              fi
+
+              if [ "$HAS_CHECKLIST" = 1 ]; then
+                CHECKLIST_CONTENT=$(echo "$BODY" | awk '/^### Checklist$/{f=1;next} /^### /{if(f)exit} f{print}')
+                CHECKED=$(echo "$CHECKLIST_CONTENT" | grep -c '\- \[x\]' 2>/dev/null) || CHECKED=0
+                if [ "$CHECKED" -lt 2 ]; then
+                  add_issue '清单项未全部勾选，请确认你已在本地测试且未包含无关改动。'
+                fi
+              fi
+
+              HAS_LABEL=$(echo "$PR_DATA" | jq -r '.labels[].name' 2>/dev/null | grep -q '^waiting_on_author$' && echo 1 || echo 0)
+
+              if [ -n "$ISSUES" ]; then
+                echo "PR is non-compliant"
+
+                bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
+
+                COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **2 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
+
+                echo "$COMMENT_BODY" | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+              elif [ "$HAS_LABEL" = 1 ]; then
+                echo "PR is now compliant, removing label"
+                bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
+
+                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER/comments" 2>/dev/null)
+                for CID in $(echo "$COMMENTS" \
+                  | jq -r '.[] | select(.body | contains("pr-standards") or contains("pr-compliance")) | .id' 2>/dev/null); do
+                  bash .gitcode/scripts/gitcode-api.sh delete-comment "$CID"
+                done
+
+                {
+                  echo '## ✅ 已符合贡献指南'
+                  echo ''
+                  echo '感谢更新你的 PR！现已通过所有检查。👍'
+                } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+              else
+                echo "PR is compliant"
+              fi
+
+              echo "## PR 标准检查" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "✅ PR #$PR_NUMBER 检查完成" >> "$ATOMGIT_STEP_SUMMARY"

@@ -9,10 +9,6 @@ on:
         description: "指定要检查的 Issue 编号（留空则自动轮询新 Issue）"
         required: false
         type: string
-      release_token:
-        description: "GitCode API Token（测试用，正式环境设为 secret）"
-        required: true
-        type: string
       dashscope_api_key:
         description: "DashScope API Key (DASHSCOPE_API_KEY, 测试用，正式环境设为 secret)"
         required: true
@@ -32,7 +28,7 @@ stages:
         runs-on: ubuntu-latest
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
-          GITCODE_REPO: openharmony-sig/deveco-code
+          GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -49,7 +45,7 @@ stages:
 
           - name: 检查新 Issue 合规性与查重
             env:
-              GITCODE_TOKEN: ${{ inputs.release_token || secrets.RELEASE_TOKEN }}
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
               DASHSCOPE_API_KEY: ${{ inputs.dashscope_api_key || secrets.DASHSCOPE_API_KEY }}
               OPENCODE_PERMISSION: |
                 {
@@ -260,7 +256,7 @@ stages:
         runs-on: ubuntu-latest
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
-          GITCODE_REPO: openharmony-sig/deveco-code
+          GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -277,7 +273,7 @@ stages:
 
           - name: 复查不合规 Issue
             env:
-              GITCODE_TOKEN: ${{ inputs.release_token || secrets.RELEASE_TOKEN }}
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
               DASHSCOPE_API_KEY: ${{ inputs.dashscope_api_key || secrets.DASHSCOPE_API_KEY }}
               OPENCODE_PERMISSION: |
                 {
