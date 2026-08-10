@@ -58,7 +58,7 @@ stages:
               BODY="$PR_BODY"
               AUTHOR="$PR_AUTHOR"
 
-              if [ -z "$TITLE" ] && [ -z "$AUTHOR" ]; then
+              if [ -z "$TITLE" ] || [ "$TITLE" = "null" ] || [ -z "$AUTHOR" ] || [ "$AUTHOR" = "null" ]; then
                 PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                   "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
                 AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
@@ -173,7 +173,7 @@ stages:
               PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                 "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
 
-              if [ -z "$TITLE" ] && [ -z "$AUTHOR" ]; then
+              if [ -z "$TITLE" ] || [ "$TITLE" = "null" ] || [ -z "$AUTHOR" ] || [ "$AUTHOR" = "null" ]; then
                 AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
                 TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
                 BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
