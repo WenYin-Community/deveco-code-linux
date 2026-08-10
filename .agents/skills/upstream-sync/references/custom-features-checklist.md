@@ -8,27 +8,20 @@
 
 文件：`packages/opencode/src/tool/registry.ts`
 
-- [ ] **Imports** 存在：`HdcLogTool` from `"./hdc_log"`, `SwitchCwdTool` from `"./switch-cwd"`, `OhKnowledgeTool` from `"./oh_knowledge"`, `Auth` from `"@/auth"`, `PlanWriteTool` 和 `PlanEnterTool` from `"./plan"`（与 `PlanExitTool` 同在）
-- [ ] **Layer 依赖**：`Auth.Service` 在 `Layer.Layer` 类型联合中
-- [ ] **初始化**：`yield* HdcLogTool`, `yield* SwitchCwdTool`, `yield* OhKnowledgeTool`, `yield* PlanWriteTool`, `yield* PlanEnterTool`, `yield* Auth.Service`
-- [ ] **Tool.init()**：`hdclog`, `switchcwd`, `ohknowledge`, `planwrite`, `planenter` 在 `Effect.all` 块中
-- [ ] **ohknowledge OAuth 门控**：ohknowledge 工具仅在用户通过 deveco OAuth 认证时注册到 Builtin 列表，未认证用户不应看到该工具。参考实现：
-  ```ts
-  const authInfo = yield* auth.get("deveco").pipe(Effect.orElseSucceed(() => undefined))
-  const ohknowledgeEnabled = authInfo !== undefined && authInfo.type === "oauth"
-  ```
-  Builtin 列表中使用 `...(ohknowledgeEnabled ? [tool.ohknowledge] : [])` 条件展开（参考提交 `fee1ab5e`）
-- [ ] **Builtin 列表**：`tool.hdclog`, `tool.switchcwd`, `...(ohknowledgeEnabled ? [tool.ohknowledge] : [])`（带 `// HarmonyOS tools` 注释）；`tool.planwrite`, `tool.planenter` 与 `tool.plan` 同在 `flags.client === "cli"` 条件下（**不含** `experimentalPlanMode`）
-- [ ] **defaultLayer**：`Layer.provide(Auth.defaultLayer)` 在 provider chain 中
+- [ ] **Imports** 存在：`HdcLogTool` from `"./hdc_log"`, `SwitchCwdTool` from `"./switch-cwd"`, `PlanWriteTool` 和 `PlanEnterTool` from `"./plan"`（与 `PlanExitTool` 同在）
+- [ ] **初始化**：`yield* HdcLogTool`, `yield* SwitchCwdTool`, `yield* PlanWriteTool`, `yield* PlanEnterTool`
+- [ ] **Tool.init()**：`hdclog`, `switchcwd`, `planwrite`, `planenter` 在 `Effect.all` 块中
+- [ ] **Builtin 列表**：`tool.hdclog`, `tool.switchcwd`（带 `// HarmonyOS tools` 注释）；`tool.planwrite`, `tool.planenter` 与 `tool.plan` 同在 `flags.client === "cli"` 条件下（**不含** `experimentalPlanMode`）
+- [ ] **知识检索**：不再注册 `arkts_knowledge_search` / `OhKnowledgeTool`；ArkTS / HarmonyOS 文档通过 `bash` + `devecocli docs` 查询
 
-参考提交：`6067f5a6`（Agent 权限设定）、`fee1ab5e`（ohknowledge OAuth 门控）
+参考提交：`6067f5a6`（Agent 权限设定）
 
 ## 2. agent.ts — Agent 权限配置
 
 文件：`packages/opencode/src/agent/agent.ts`
 
 - [ ] **build agent**: `plan_enter: "ask"`, `plan_write: "deny"`（上游默认 `"allow"` / 缺失）
-- [ ] **plan agent**: `plan_exit: "ask"`, `plan_write: "allow"`, `edit: "deny"`, 以及 9 个 HarmonyOS 工具 deny 规则：`bash`, `build_project`, `arkts_check`, `perform_ui_action`, `get_app_ui_tree`, `start_app`, `hdc_log`, `switch_cwd`, `arkts_knowledge_search`
+- [ ] **plan agent**: `plan_exit: "ask"`, `plan_write: "allow"`, `edit: "deny"`, 以及 8 个 HarmonyOS 工具 deny 规则：`bash`, `build_project`, `arkts_check`, `perform_ui_action`, `get_app_ui_tree`, `start_app`, `hdc_log`, `switch_cwd`
 
 ## 3. package.json — 自定义依赖
 

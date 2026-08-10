@@ -119,7 +119,6 @@ it.instance("spec-implementation agent is a native subagent with correct permiss
     expect(evalPerm(impl, "read")).toBe("allow")
     expect(evalPerm(impl, "bash")).toBe("allow")
     expect(evalPerm(impl, "question")).toBe("allow")
-    expect(evalPerm(impl, "arkts_knowledge_search")).toBe("allow")
     expect(evalPerm(impl, "build_project")).toBe("deny")
     expect(evalPerm(impl, "start_app")).toBe("deny")
     expect(evalPerm(impl, "verify_ui")).toBe("deny")

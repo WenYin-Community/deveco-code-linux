@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Download ripgrep and mcp-bridge binaries to .build-cache/.
+ * Download ripgrep and mcp-bridge to .build-cache/.
  *
  * Run automatically via `bun install` (postinstall hook),
  * or manually: `bun run script/postinstall.ts`
@@ -199,4 +199,5 @@ for (const platform of platforms) {
   await downloadRipgrep(platform).catch((e) => console.log(`  Failed to download rg for ${platform}: ${e.message}`))
   await downloadMcpBridge(platform).catch((e) => console.log(`  Failed to download mcp-bridge for ${platform}: ${e.message}`))
 }
+
 console.log("Done.")

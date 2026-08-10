@@ -1,7 +1,6 @@
 {
   "devecoStudio": "https://cn.devecostudio.huawei.com",
   "devecoApiMaaS": "https://cn.devecostudio.huawei.com/sse/codeGenie/maas/v2",
-  "devecoApiBigSearch": "https://cn.devecostudio.huawei.com/codeGenie/bigSearch",
   "devecoApiTraceUpload": "https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload",
   "devecoApiExitQueue": "https://cn.devecostudio.huawei.com/sse/codeGenie/exitSessionQueue",
   "huaweiRealnameAuth": "https://developer.huawei.com/consumer/cn/personalcenter/myInfo/personalInfo",

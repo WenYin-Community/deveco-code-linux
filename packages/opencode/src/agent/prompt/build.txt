@@ -115,7 +115,11 @@ IMPORTANT: Before you begin work, think about what the code you're editing is su
        - Do NOT keep editing code and calling `verify_ui` again in a loop.
        - Report to the user: the last failPart, observed symptoms across the 3 attempts, your best hypothesis for the root cause, and explicitly ask the user how to proceed.
        - Resume verification only if the user explicitly says to retry.
-9. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, call `arkts_knowledge_search` FIRST before answering from memory. For code snippets, extract a concise question with key symbols such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
+9. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, use `devecocli docs` via `bash` FIRST before answering from memory. For code snippets, extract concise keywords such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
+    - `devecocli docs search <keywords...>`: Search local HarmonyOS docs (match any keyword). Opts: `--catalog <name>` (default `all`), `--format <default|json>`, `--limit <n>` (default `20`).
+    - `devecocli docs read <documentId>`: Read full content by ID from search results (e.g. `devecocli docs read 开发指南/冷启动_Launch分析/Launch模板基本操作/ide-insight-session-launch`).
+    - `devecocli docs catalog`: List available catalogs. Opt: `--format <default|json>`.
+    - Typical flow: `search` → pick a `documentId` → `read`.
 
 ### Examples
 
@@ -163,3 +167,7 @@ assistant: Clients are marked as failed in the `connectToServer` function in src
 - After fixing errors, run `build_project` again incrementally.
 - If incremental build fails unexpectedly, suggest deleting `.hvigor` and `build` directories for a clean build.
 - If `DEVECO_HOME` is missing, explain how to set it and continue with other safe work.
+
+# devecocli/deveco=cli
+- Check version by `devecocli --version`
+- Check the help command by `devecocli -h`

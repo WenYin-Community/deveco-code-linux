@@ -11,6 +11,8 @@ process.chdir(dir)
 const scope = process.env.DEVECO_SCOPE || "deveco"
 const registry = process.env.NPM_REGISTRY || "https://registry.npmjs.org"
 const token = process.env.NPM_TOKEN
+const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
+if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
 
 async function published(name: string, version: string) {
   return (await $`npm view ${name}@${version} version --registry ${registry}`.nothrow()).exitCode === 0
@@ -77,6 +79,9 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
         "CHANGELOG.md",
       ],
       optionalDependencies: Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
+      dependencies: {
+        "@deveco/deveco-cli": devecoCliVersion,
+      },
     },
     null,
     2,

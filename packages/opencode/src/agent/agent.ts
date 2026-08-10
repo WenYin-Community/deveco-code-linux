@@ -181,7 +181,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 todowrite: "allow",
-                arkts_knowledge_search: "allow",
                 check_ets_files: "allow",
                 build_project: "allow",
                 start_app: "allow",
@@ -225,7 +224,6 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 question: "allow",
-                arkts_knowledge_search: "allow",
                 build_project: "deny",
                 start_app: "deny",
               }),
@@ -244,7 +242,6 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 question: "allow",
-                arkts_knowledge_search: "allow",
                 verify_ui: "allow",
                 save_ui_screenshot: "allow",
                 get_ui_verification_log: "allow",
@@ -275,7 +272,6 @@ export const layer = Layer.effect(
                 start_app: "deny",
                 hdc_log: "deny",
                 switch_cwd: "deny",
-                arkts_knowledge_search: "deny",
                 external_directory: {
                   [path.join(Global.Path.data, "plans", "*")]: "allow",
                 },

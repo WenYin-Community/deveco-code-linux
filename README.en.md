@@ -241,7 +241,6 @@ DevEco Code integrates common HarmonyOS development tools:
 | `hdc_log` | Collect/clear device logs; list connected emulators |
 | `verify_ui` | Execute UI operations to verify features |
 | `arkts_check` | ArkTS static syntax checking |
-| `arkts_knowledge_search` | HarmonyOS knowledge search |
 | `switch_cwd` | Switch the build project path |
 
 Common scenarios include creating a HarmonyOS project from scratch, incremental page development, fixing build errors, and on-device debugging.

@@ -28,6 +28,20 @@ const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.n
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", "deveco.exe")
+const devecoCliEntryMarker = path.join(__dirname, "vendor", ".deveco-cli-entry")
+const devecoCliPackageName = "@deveco/deveco-cli"
+
+function resolveLocalDevecoCliEntry() {
+  const packageJsonPath = require.resolve(`${devecoCliPackageName}/package.json`)
+  const entry = path.join(path.dirname(packageJsonPath), "dist", "cli.js")
+  if (fs.existsSync(entry)) return entry
+  throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry at ${entry}.`)
+}
+
+function writeDevecoCliEntryMarker() {
+  fs.mkdirSync(path.dirname(devecoCliEntryMarker), { recursive: true })
+  fs.writeFileSync(devecoCliEntryMarker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
+}
 
 function supportsAvx2() {
   if (arch !== "x64") return false
@@ -137,6 +151,9 @@ function copyDir(src, dst) {
       copyDir(srcPath, dstPath)
     } else {
       fs.copyFileSync(srcPath, dstPath)
+      if (process.platform !== "win32") {
+        fs.chmodSync(dstPath, fs.statSync(srcPath).mode)
+      }
     }
   }
 }
@@ -146,6 +163,41 @@ function copyVendor(packageDir) {
   const vendorDst = path.join(__dirname, "vendor")
   if (fs.existsSync(vendorSrc)) {
     copyDir(vendorSrc, vendorDst)
+    // Windows packs often drop Unix +x; force it back on macOS/Linux install.
+    ensureVendorExecutables(vendorDst)
+    ensureVendorExecutables(path.join(packageDir, "vendor"))
+  }
+}
+
+/** Restore execute bits lost when packages are built/published from Windows. */
+function ensureVendorExecutables(vendorRoot) {
+  if (process.platform === "win32" || !fs.existsSync(vendorRoot)) return
+
+  const stack = [vendorRoot]
+  while (stack.length > 0) {
+    const dir = stack.pop()
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        stack.push(full)
+        continue
+      }
+      if (!entry.isFile()) continue
+      // Top-level vendor/ripgrep/rg and nested @vscode/ripgrep*/**/rg
+      if (entry.name === "rg") {
+        try {
+          fs.chmodSync(full, 0o755)
+        } catch {
+          // Best-effort; ignore files we cannot chmod.
+        }
+      }
+    }
   }
 }
 
@@ -192,6 +244,8 @@ function verifyBinary() {
 }
 
 function main() {
+  writeDevecoCliEntryMarker()
+
   for (const name of packageNames()) {
     try {
       copyBinary(resolveBinary(name), targetBinary)

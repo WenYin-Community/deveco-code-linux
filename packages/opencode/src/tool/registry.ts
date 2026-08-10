@@ -18,10 +18,10 @@ import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { HdcLogTool } from "./hdc_log"
 import { SwitchCwdTool } from "./switch-cwd"
-import { OhKnowledgeTool } from "./oh_knowledge"
 import { ArktsCheckTool } from "./arkts_check"
 import { GetUiVerificationLogTool, SaveUiScreenshotTool, VerifyUiTool } from "./ui-verification/ui-verification-tool"
-import { Auth } from "@/auth"
+import { BuildProjectTool } from "./build_project"
+import { StartAppTool } from "./start_app"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -119,13 +119,13 @@ export const layer = Layer.effect(
     const specwrite = yield* SpecWriteTool
     const hdclog = yield* HdcLogTool
     const switchcwd = yield* SwitchCwdTool
-    const ohknowledge = yield* OhKnowledgeTool
     const arktscheck = yield* ArktsCheckTool
+    const buildproject = yield* BuildProjectTool
+    const startapp = yield* StartAppTool
     const debugexit = yield* DebugExitTool
     const verifyui = yield* VerifyUiTool
     const getuilog = yield* GetUiVerificationLogTool
     const saveuiscreenshot = yield* SaveUiScreenshotTool
-    const auth = yield* Auth.Service
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -217,9 +217,6 @@ export const layer = Layer.effect(
         yield* config.get()
         const questionEnabled = ["app", "cli", "desktop"].includes(flags.client) || flags.enableQuestionTool
 
-        const authInfo = yield* auth.get("deveco").pipe(Effect.orElseSucceed(() => undefined))
-        const ohknowledgeEnabled = authInfo !== undefined && authInfo.type === "oauth"
-
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
@@ -242,8 +239,9 @@ export const layer = Layer.effect(
           spec_write: Tool.init(specwrite),
           hdclog: Tool.init(hdclog),
           switchcwd: Tool.init(switchcwd),
-          ohknowledge: Tool.init(ohknowledge),
           arktscheck: Tool.init(arktscheck),
+          buildproject: Tool.init(buildproject),
+          startapp: Tool.init(startapp),
           verify_ui: Tool.init(verifyui),
           get_ui_verification_log: Tool.init(getuilog),
           save_ui_screenshot: Tool.init(saveuiscreenshot),
@@ -273,12 +271,13 @@ export const layer = Layer.effect(
             // HarmonyOS tools
             tool.hdclog,
             tool.switchcwd,
+            tool.buildproject,
+            tool.startapp,
             tool.arktscheck,
             tool.verify_ui,
             tool.get_ui_verification_log,
             tool.save_ui_screenshot,
             tool.debugexit,
-            ...(ohknowledgeEnabled ? [tool.ohknowledge] : []),
           ],
           task: tool.task,
           read: tool.read,
@@ -382,7 +381,6 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(EventV2Bridge.defaultLayer),
     )
     .pipe(
-      Layer.provide(Auth.defaultLayer),
       Layer.provide(FetchHttpClient.layer),
       Layer.provide(Format.defaultLayer),
       Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -495,7 +493,6 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Truncate.node,
   RuntimeFlags.node,
   Database.node,
-  Auth.node,
 ])
 
 export * as ToolRegistry from "./registry"

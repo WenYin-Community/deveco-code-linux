@@ -37,7 +37,9 @@ console.log()
 console.log(">>> [2/2] Publishing CLI packages ...")
 process.chdir(cliDir)
 
-const pkg = (await Bun.file("./package.json").json()) as { name: string; license: string }
+const pkg = (await Bun.file("./package.json").json()) as { name: string; license: string; dependencies: Record<string, string> }
+const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
+if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
 // Map: scoped package name → { version, dir (relative to ./dist) }
@@ -87,6 +89,9 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
         "CHANGELOG.md",
       ],
       optionalDependencies: Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
+      dependencies: {
+        "@deveco/deveco-cli": devecoCliVersion,
+      },
     },
     null,
     2,

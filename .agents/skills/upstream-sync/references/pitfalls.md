@@ -18,20 +18,13 @@
 - **workspace dep name resets** *(Step 4)*: `packages/web/package.json` reverts to `"opencode": "workspace:*"` on every sync. Always verify.
 - **Agent tool permission overwrites** *(Step 3, Step 4)*: `packages/opencode/src/agent/agent.ts` — DevEco Code customizes permissions for two agents. When upstream restructures the permission format, naive conflict resolution drops these rules. **Accept upstream's new permission structure, but always re-add all custom permissions:**
   - **build agent**: `plan_enter: "ask"`, `plan_write: "deny"` (upstream defaults: `"allow"` / absent)
-  - **plan agent**: `plan_exit: "ask"`, `plan_write: "allow"`, `edit: "deny"`, plus 9 HarmonyOS tool deny rules (`bash`, `build_project`, `arkts_check`, `perform_ui_action`, `get_app_ui_tree`, `start_app`, `hdc_log`, `switch_cwd`, `arkts_knowledge_search`)
+  - **plan agent**: `plan_exit: "ask"`, `plan_write: "allow"`, `edit: "deny"`, plus 8 HarmonyOS tool deny rules (`bash`, `build_project`, `arkts_check`, `perform_ui_action`, `get_app_ui_tree`, `start_app`, `hdc_log`, `switch_cwd`)
 - **HarmonyOS custom tool registrations dropped** *(Step 3, Step 4, Step 7)*: `packages/opencode/src/tool/registry.ts` — upstream does not have HarmonyOS tools, so when upstream restructures the registry (renames tools, changes the import/init/builtin pattern, adds new Layer dependencies), the custom tool registrations are silently dropped even without conflict markers. **After every sync, verify the following functional requirements are met (adapt to current architecture):**
-  - **Imports**: `HdcLogTool` from `"./hdc_log"`, `SwitchCwdTool` from `"./switch-cwd"`, `OhKnowledgeTool` from `"./oh_knowledge"`, `Auth` from `"@/auth"`, `PlanWriteTool` and `PlanEnterTool` from `"./plan"` (alongside existing `PlanExitTool`)
-  - **Layer dependency**: `Auth.Service` in the `Layer.Layer` type union
-  - **Initialization**: `yield* HdcLogTool`, `yield* SwitchCwdTool`, `yield* OhKnowledgeTool`, `yield* PlanWriteTool`, `yield* PlanEnterTool`, `yield* Auth.Service`
-  - **Tool.init()**: `hdclog`, `switchcwd`, `ohknowledge`, `planwrite`, `planenter` in the `Effect.all` block
-  - **ohknowledge OAuth 门控**: ohknowledge 工具仅在用户通过 deveco OAuth 认证时注册到 Builtin 列表。参考实现：
-    ```ts
-    const authInfo = yield* auth.get("deveco").pipe(Effect.orElseSucceed(() => undefined))
-    const ohknowledgeEnabled = authInfo !== undefined && authInfo.type === "oauth"
-    ```
-    Builtin 列表中使用 `...(ohknowledgeEnabled ? [tool.ohknowledge] : [])` 条件展开（参考提交 `fee1ab5e`）
-  - **Builtin list**: `tool.hdclog`, `tool.switchcwd`, and `...(ohknowledgeEnabled ? [tool.ohknowledge] : [])` (with `// HarmonyOS tools` comment); `tool.planwrite`, `tool.planenter` alongside `tool.plan` gated by `flags.client === "cli"` only (**NOT** `experimentalPlanMode` — Plan mode is a core DevEco Code feature, not experimental)
-  - **defaultLayer**: `Layer.provide(Auth.defaultLayer)` in the provider chain
+  - **Imports**: `HdcLogTool` from `"./hdc_log"`, `SwitchCwdTool` from `"./switch-cwd"`, `PlanWriteTool` and `PlanEnterTool` from `"./plan"` (alongside existing `PlanExitTool`)
+  - **Initialization**: `yield* HdcLogTool`, `yield* SwitchCwdTool`, `yield* PlanWriteTool`, `yield* PlanEnterTool`
+  - **Tool.init()**: `hdclog`, `switchcwd`, `planwrite`, `planenter` in the `Effect.all` block
+  - **Builtin list**: `tool.hdclog`, `tool.switchcwd` (with `// HarmonyOS tools` comment); `tool.planwrite`, `tool.planenter` alongside `tool.plan` gated by `flags.client === "cli"` only (**NOT** `experimentalPlanMode` — Plan mode is a core DevEco Code feature, not experimental)
+  - ArkTS / HarmonyOS knowledge lookup is done via `bash` + `devecocli docs` (not a dedicated `arkts_knowledge_search` / `OhKnowledgeTool`)
 - **Plan tools gating condition overwritten** *(Step 3, Step 4, Step 7)*: upstream v1.15.0 added `experimentalPlanMode` to the Plan tools builtin condition. DevEco Code does not require this flag — Plan mode is a shipped feature. **After every sync, verify plan tools are gated only by client type, without experimentalPlanMode.**
   - Correct: `...(flags.client === "cli" ? [tool.plan, tool.planwrite, tool.planenter] : [])`
   - Wrong: `...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan, tool.planwrite, tool.planenter] : [])`
