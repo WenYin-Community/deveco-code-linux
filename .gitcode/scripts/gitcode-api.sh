@@ -20,6 +20,7 @@ Commands:
   reopen-issue <number>           Reopen an issue or PR
   get-issue <number>              Get details (JSON)
   list-comments <number>           List comments (JSON)
+  list-linked-issues <number>     List issues linked to a PR (JSON)
 
 Examples:
   echo "Please fix the title" | bash gitcode-api.sh post-comment 653
@@ -102,6 +103,10 @@ case "$CMD" in
   list-comments)
     NUMBER="$1"
     curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/$TYPE/$NUMBER/comments"
+    ;;
+  list-linked-issues)
+    NUMBER="$1"
+    curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/pulls/$NUMBER/issues"
     ;;
   *)
     show_help

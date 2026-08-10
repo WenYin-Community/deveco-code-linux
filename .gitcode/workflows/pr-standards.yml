@@ -108,8 +108,11 @@ stages:
 
               echo "Title is valid"
 
-              if echo "$BODY" | grep -qiE '(closes?|fixes?|resolves?)\s+#\d+'; then
-                echo "Issue reference found"
+              LINKED_ISSUES=$(bash .gitcode/scripts/gitcode-api.sh list-linked-issues "$PR_NUMBER")
+              LINKED_COUNT=$(echo "$LINKED_ISSUES" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)
+
+              if [ "$LINKED_COUNT" -gt 0 ]; then
+                echo "Linked issues found: $LINKED_COUNT"
                 exit 0
               fi
 
@@ -219,11 +222,10 @@ stages:
               fi
 
               if ! echo "$TITLE" | grep -qE '^(docs|refactor|feat)'; then
-                if [ "$HAS_ISSUE_SEC" = 1 ]; then
-                  ISSUE_CONTENT=$(echo "$BODY" | awk '/^### Issue for this PR$/{f=1;next} /^### /{if(f)exit} f{print}')
-                  if ! echo "$ISSUE_CONTENT" | grep -qiE '(closes?|fixes?|resolves?)\s+#\d+'; then
-                    add_issue '未关联 Issue，请添加 `Closes #<编号>` 引用相关 Issue。'
-                  fi
+                LINKED_ISSUES=$(bash .gitcode/scripts/gitcode-api.sh list-linked-issues "$PR_NUMBER")
+                LINKED_COUNT=$(echo "$LINKED_ISSUES" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)
+                if [ "$LINKED_COUNT" = 0 ]; then
+                  add_issue '未关联 Issue，请在 PR 描述中添加 `Closes #<编号>` 引用相关 Issue。'
                 fi
               fi
 
