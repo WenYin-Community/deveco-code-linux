@@ -19,6 +19,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { Slug } from "@opencode-ai/core/util/slug"
 import { WorkspaceTable } from "@opencode-ai/core/control-plane/workspace.sql"
 import { getAdapter, registeredAdapters } from "./adapters"
+import { SyncTicket } from "./sync-ticket"
 import { type Target, type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Session } from "@/session/session"
@@ -680,12 +681,23 @@ export const layer = Layer.effect(
         const batches = Iterable.chunksOf(rows, 10)
         const total = Iterable.size(batches)
 
+        // Bind the remote sync mutations to the target workspace so the target's
+        // SyncGuardMiddleware accepts them. ?workspace= lets the target resolve
+        // this workspace; the ticket proves the control-plane minted the request.
+        const ticket = SyncTicket.mint(space.id)
+        const syncUrl = (path: string) => {
+          const next = route(target.url, path)
+          next.searchParams.set("workspace", space.id)
+          next.searchParams.set(SyncTicket.QUERY, ticket)
+          return next
+        }
+
         yield* Effect.forEach(
           batches,
           (events, i) =>
             Effect.gen(function* () {
               const response = yield* http.execute(
-                HttpClientRequest.post(route(target.url, "/sync/replay"), {
+                HttpClientRequest.post(syncUrl("/sync/replay"), {
                   headers: new Headers(target.headers),
                   body: HttpBody.jsonUnsafe({
                     directory: space.directory ?? "",
@@ -709,7 +721,7 @@ export const layer = Layer.effect(
         )
 
         const response = yield* http.execute(
-          HttpClientRequest.post(route(target.url, "/sync/steal"), {
+          HttpClientRequest.post(syncUrl("/sync/steal"), {
             headers: new Headers(target.headers),
             body: HttpBody.jsonUnsafe({ sessionID: input.sessionID }),
           }),

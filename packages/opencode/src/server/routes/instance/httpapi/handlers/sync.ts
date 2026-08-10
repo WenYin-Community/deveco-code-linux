@@ -1,10 +1,11 @@
 import { Workspace } from "@/control-plane/workspace"
+import { SyncTicket } from "@/control-plane/sync-ticket"
 import * as InstanceState from "@/effect/instance-state"
 import { Session } from "@/session/session"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventTable } from "@opencode-ai/core/event/sql"
+import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { asc } from "drizzle-orm"
 import { and } from "drizzle-orm"
 import { eq } from "drizzle-orm"
@@ -14,7 +15,7 @@ import { or } from "drizzle-orm"
 import { Effect, Scope } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { HistoryPayload, ReplayPayload, SessionPayload } from "../groups/sync"
+import { HistoryPayload, ReplayPayload, SessionPayload, SyncGuardQuery } from "../groups/sync"
 import path from "path"
 
 export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handlers) =>
@@ -32,7 +33,17 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
       return true
     })
 
-    const replay = Effect.fn("SyncHttpApi.replay")(function* (ctx: { payload: typeof ReplayPayload.Type }) {
+    const replay = Effect.fn("SyncHttpApi.replay")(function* (ctx: {
+      payload: typeof ReplayPayload.Type
+      query: typeof SyncGuardQuery.Type
+    }) {
+      const ownerID = yield* InstanceState.workspaceID
+      // B: the workspace-bound SyncTicket proves the caller is the control-plane
+      // acting on this resolved workspace; basic auth alone is a shared
+      // credential with no workspace identity.
+      if (!SyncTicket.verify(ctx.query.ticket, ownerID)) {
+        return yield* new HttpApiError.Forbidden({})
+      }
       const payload: EventV2.SerializedEvent[] = ctx.payload.events.map((event) => ({
         id: event.id,
         aggregateID: event.aggregateID,
@@ -48,7 +59,6 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         last: payload.at(-1)?.seq,
         directory: path.basename(ctx.payload.directory),
       })
-      const ownerID = yield* InstanceState.workspaceID
       yield* events.replayAll(payload, { ownerID, strictOwner: true })
       yield* Effect.logInfo("sync replay complete", {
         sessionID: source,
@@ -59,9 +69,33 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
       return { sessionID: source }
     })
 
-    const steal = Effect.fn("SyncHttpApi.steal")(function* (ctx: { payload: typeof SessionPayload.Type }) {
+    const steal = Effect.fn("SyncHttpApi.steal")(function* (ctx: {
+      payload: typeof SessionPayload.Type
+      query: typeof SyncGuardQuery.Type
+    }) {
       const workspaceID = yield* InstanceState.workspaceID
       if (!workspaceID) return yield* new HttpApiError.BadRequest({})
+      // B: workspace-bound SyncTicket — basic auth is a shared credential with
+      // no workspace identity, so it cannot authorize pivoting a session into
+      // a workspace by setting ?workspace= alone.
+      if (!SyncTicket.verify(ctx.query.ticket, workspaceID)) {
+        return yield* new HttpApiError.Forbidden({})
+      }
+
+      // C: ownership ACL — reject reassigning a session whose event aggregate
+      // is already owned by another workspace. Defense in depth behind the
+      // ticket: a stolen or leaked ticket still cannot move a session the
+      // source workspace owns. An unowned aggregate (no replay yet) is
+      // claimable, matching events.claim semantics.
+      const owner = yield* db
+        .select({ ownerID: EventSequenceTable.owner_id })
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, ctx.payload.sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (owner?.ownerID && owner.ownerID !== workspaceID) {
+        return yield* new HttpApiError.Forbidden({})
+      }
 
       yield* session.setWorkspace({ sessionID: ctx.payload.sessionID, workspaceID })
 

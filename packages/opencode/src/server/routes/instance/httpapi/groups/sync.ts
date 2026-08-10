@@ -5,10 +5,20 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
-import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
+import { SyncGuardMiddleware } from "../middleware/sync-guard"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
 import { described } from "./metadata"
 
 const root = "/sync"
+
+// Query schema for endpoints gated by SyncGuardMiddleware: the routing fields
+// plus the workspace-bound SyncTicket minted by the control-plane. The ticket
+// is verified in the handler against the resolved workspaceID so a caller
+// cannot pivot sessions across workspaces by setting ?workspace= alone.
+export const SyncGuardQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  ticket: Schema.optional(Schema.String),
+})
 export const ReplayEvent = Schema.Struct({
   id: EventV2.ID,
   aggregateID: Schema.String,
@@ -57,10 +67,10 @@ export const SyncApi = HttpApi.make("sync")
           }),
         ),
         HttpApiEndpoint.post("replay", SyncPaths.replay, {
-          query: WorkspaceRoutingQuery,
+          query: SyncGuardQuery,
           payload: ReplayPayload,
           success: described(ReplayResponse, "Replayed sync events"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, HttpApiError.Forbidden],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.replay",
@@ -69,10 +79,10 @@ export const SyncApi = HttpApi.make("sync")
           }),
         ),
         HttpApiEndpoint.post("steal", SyncPaths.steal, {
-          query: WorkspaceRoutingQuery,
+          query: SyncGuardQuery,
           payload: SessionPayload,
           success: described(SessionPayload, "Session stolen into workspace"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, HttpApiError.Forbidden],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.steal",
@@ -102,7 +112,8 @@ export const SyncApi = HttpApi.make("sync")
       )
       .middleware(InstanceContextMiddleware)
       .middleware(WorkspaceRoutingMiddleware)
-      .middleware(Authorization),
+      .middleware(Authorization)
+      .middleware(SyncGuardMiddleware),
   )
   .annotateMerge(
     OpenApi.annotations({

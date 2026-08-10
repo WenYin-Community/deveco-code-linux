@@ -600,11 +600,13 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/sync/replay", "sync.replay")
     .at((ctx) => ({ path: "/sync/replay", headers: ctx.headers(), body: { directory: ctx.directory, events: [] } }))
-    .status(400),
+    // SyncGuardMiddleware returns 404 for replay/steal while experimentalWorkspaces
+    // is off (the default); the endpoints are not reachable attack then.
+    .status(404),
   http.protected
     .post("/sync/steal", "sync.steal.invalid")
     .at((ctx) => ({ path: "/sync/steal", headers: ctx.headers(), body: {} }))
-    .status(400, undefined, "status"),
+    .status(404, undefined, "status"),
   http.protected
     .post("/sync/start", "sync.start")
     .mutating()
