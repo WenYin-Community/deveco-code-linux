@@ -4,8 +4,10 @@ on:
   pull_request_target:
     types: [open, reopen, update]
     branches: ["**"]
-  issue_comment:
+  pull_request_comment:
     types: [created]
+    comments:
+      - '/recheck'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -42,24 +44,12 @@ stages:
               PR_TITLE: ${{ atomgit.event.pull_request.title }}
               PR_BODY: ${{ atomgit.event.pull_request.body }}
               PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
-              COMMENT_BODY: ${{ atomgit.event.comment.body }}
-              COMMENT_PR_FLAG: ${{ atomgit.event.issue.pull_request }}
-              ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
-              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
               if [ -z "$PR_NUMBER" ]; then
-                if [ -n "$COMMENT_PR_FLAG" ] && [ "$COMMENT_PR_FLAG" != "null" ]; then
-                  if ! echo "$COMMENT_BODY" | grep -qiE '^/recheck\s*$'; then
-                    echo "Not a /recheck command, skipping"
-                    exit 0
-                  fi
-                  PR_NUMBER="$ISSUE_NUMBER"
-                  echo "Recheck triggered via comment on PR #$PR_NUMBER"
-                else
-                  echo "No PR number found"
-                  exit 0
-                fi
+                echo "No PR number found"
+                exit 1
               fi
 
               echo "Checking PR #$PR_NUMBER"
@@ -166,24 +156,12 @@ stages:
               PR_TITLE: ${{ atomgit.event.pull_request.title }}
               PR_BODY: ${{ atomgit.event.pull_request.body }}
               PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
-              COMMENT_BODY: ${{ atomgit.event.comment.body }}
-              COMMENT_PR_FLAG: ${{ atomgit.event.issue.pull_request }}
-              ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
-              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
               if [ -z "$PR_NUMBER" ]; then
-                if [ -n "$COMMENT_PR_FLAG" ] && [ "$COMMENT_PR_FLAG" != "null" ]; then
-                  if ! echo "$COMMENT_BODY" | grep -qiE '^/recheck\s*$'; then
-                    echo "Not a /recheck command, skipping"
-                    exit 0
-                  fi
-                  PR_NUMBER="$ISSUE_NUMBER"
-                  echo "Recheck triggered via comment on PR #$PR_NUMBER"
-                else
-                  echo "No PR number found"
-                  exit 0
-                fi
+                echo "No PR number found"
+                exit 1
               fi
 
               echo "Checking PR #$PR_NUMBER compliance"
