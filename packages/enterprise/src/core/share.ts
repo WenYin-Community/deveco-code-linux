@@ -15,6 +15,10 @@ export namespace Share {
   })
   export type Info = z.infer<typeof Info>
 
+  // Share IDs are server-derived short alphanumeric tokens (see `create`). Route params must be
+  // validated against this pattern to keep `..` / `/` out of Storage keys (path traversal).
+  export const Id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, 'Invalid share ID')
+
   export const Data = z.discriminatedUnion("type", [
     z.looseObject({
       type: z.literal("session"),

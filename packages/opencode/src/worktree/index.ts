@@ -409,6 +409,14 @@ export const layer: Layer.Layer<
 
       const directory = yield* canonical(input.directory)
 
+      // Guard against path traversal: only delete directories under this project's worktree root.
+      const worktreeRoot = yield* canonical(pathSvc.join(Global.Path.data, 'worktree', ctx.project.id));
+      if (directory !== worktreeRoot && !directory.startsWith(`${worktreeRoot}${pathSvc.sep}`)) {
+        return yield* new RemoveFailedError({
+          message: 'Refusing to remove a directory outside the project worktree root',
+        });
+      }
+
       // Preserve the loaded path casing for the store cache; `directory` is lowercased on Windows.
       if (directory !== (yield* canonical(ctx.worktree))) yield* store.disposeDirectory(input.directory)
 

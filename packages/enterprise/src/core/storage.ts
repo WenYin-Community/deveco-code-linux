@@ -91,7 +91,19 @@ export namespace Storage {
     throw new Error("No storage adapter configured")
   })
 
+  function assertSafeKey(key: string[]) {
+    // Defense-in-depth against key traversal: a single Storage key segment must never carry a
+    // path separator or `..`, otherwise a crafted shareID could escape its key prefix once the
+    // adapter's `fetch` normalizes URL path segments.
+    for (const seg of key) {
+      if (seg.includes('..') || seg.includes('/') || seg.includes('\\')) {
+        throw new Error(`Invalid storage key segment: ${seg}`);
+      }
+    }
+  }
+
   function resolve(key: string[]) {
+    assertSafeKey(key)
     return key.join("/") + ".json"
   }
 
@@ -126,6 +138,9 @@ export namespace Storage {
   }
 
   export async function list(options?: { prefix?: string[]; limit?: number; after?: string; before?: string }) {
+    if (options?.prefix) {
+      assertSafeKey(options.prefix)
+    }
     const p = options?.prefix ? options.prefix.join("/") + (options.prefix.length ? "/" : "") : ""
     const result = await adapter().list({
       prefix: p,

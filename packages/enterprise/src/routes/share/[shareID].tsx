@@ -130,7 +130,11 @@ export default function () {
   const params = useParams()
   const data = createAsync(async () => {
     if (!params.shareID) throw new Error("Missing shareID")
-    return getData(params.shareID)
+    const parsed = Share.Id.safeParse(params.shareID);
+    if (!parsed.success) {
+      throw new SessionDataMissingError({ sessionID: params.shareID });
+    }
+    return getData(parsed.data);
   })
 
   return (

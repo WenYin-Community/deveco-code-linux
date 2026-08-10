@@ -85,7 +85,7 @@ app
         },
       },
     }),
-    validator("param", z.object({ shareID: z.string() })),
+    validator("param", z.object({ shareID: Share.Id })),
     validator("json", z.object({ secret: z.string(), data: Share.Data.array() })),
     async (c) => {
       const { shareID } = c.req.valid("param")
@@ -113,7 +113,7 @@ app
         },
       },
     }),
-    validator("param", z.object({ shareID: z.string() })),
+    validator("param", z.object({ shareID: Share.Id })),
     async (c) => {
       const { shareID } = c.req.valid("param")
       c.header("Cache-Control", "public, max-age=30, s-maxage=300, stale-while-revalidate=86400")
@@ -136,7 +136,7 @@ app
         },
       },
     }),
-    validator("param", z.object({ shareID: z.string() })),
+    validator("param", z.object({ shareID: Share.Id })),
     validator("json", z.object({ secret: z.string() })),
     async (c) => {
       const { shareID } = c.req.valid("param")

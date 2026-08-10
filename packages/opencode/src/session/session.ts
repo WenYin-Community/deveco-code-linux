@@ -21,7 +21,6 @@ import { and } from "drizzle-orm"
 import { gte } from "drizzle-orm"
 import { isNull } from "drizzle-orm"
 import { desc } from "drizzle-orm"
-import { like } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
@@ -47,6 +46,12 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
+
+// Escape LIKE wildcard/metacharacters in a literal so it matches verbatim. Pair with
+// `ESCAPE '!'` on the LIKE clause (see packages/core/src/session.ts for the reference pattern).
+function escapeLikeLiteral(value: string) {
+  return value.replaceAll('!', '!!').replaceAll('%', '!%').replaceAll('_', '!_');
+}
 
 function formatLocalTime(date: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0")
@@ -613,7 +618,9 @@ export const layer: Layer.Layer<
       if (input?.roots) conditions.push(isNull(SessionTable.parent_id))
       if (input?.start) conditions.push(gte(SessionTable.time_updated, input.start))
       if (input?.cursor) conditions.push(lt(SessionTable.time_updated, input.cursor))
-      if (input?.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
+      if (input?.search) {
+        conditions.push(sql`${SessionTable.title} LIKE ${`%${escapeLikeLiteral(input.search)}%`} ESCAPE '!'`);
+      }
       if (!input?.archived) conditions.push(isNull(SessionTable.time_archived))
 
       const query =
@@ -1074,7 +1081,7 @@ function listByProject(
     if (input.path) {
       const conds = [
         eq(SessionTable.path, input.path),
-        like(SessionTable.path, sql.param(`${input.path}/%`, SessionTable.path)),
+        sql`${SessionTable.path} LIKE ${`${escapeLikeLiteral(input.path)}/%`} ESCAPE '!'`,
       ]
 
       conditions.push(
@@ -1095,7 +1102,7 @@ function listByProject(
     conditions.push(gte(SessionTable.time_updated, input.start))
   }
   if (input.search) {
-    conditions.push(like(SessionTable.title, `%${input.search}%`))
+    conditions.push(sql`${SessionTable.title} LIKE ${`%${escapeLikeLiteral(input.search)}%`} ESCAPE '!'`);
   }
 
   const limit = input.limit ?? 100
@@ -1137,7 +1144,7 @@ export function* listGlobal(input?: {
     conditions.push(lt(SessionTable.time_updated, input.cursor))
   }
   if (input?.search) {
-    conditions.push(like(SessionTable.title, `%${input.search}%`))
+    conditions.push(sql`${SessionTable.title} LIKE ${`%${escapeLikeLiteral(input.search)}%`} ESCAPE '!'`);
   }
   if (!input?.archived) {
     conditions.push(isNull(SessionTable.time_archived))
