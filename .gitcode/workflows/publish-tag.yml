@@ -105,11 +105,8 @@ jobs:
           fi
 
           # 追加安装提示
-          RELEASE_BODY="${RELEASE_BODY}
-
----
-
-如需下载使用，请执行：\`npm install -g @${DEVECO_SCOPE}/deveco-code\`"
+          SEP="---"
+          RELEASE_BODY="${RELEASE_BODY}"$'\n\n'"${SEP}"$'\n\n'"如需下载使用，请执行：\`npm install -g @${DEVECO_SCOPE}/deveco-code\`"
 
           # 将 body 转为 JSON 安全格式
           BODY_JSON=$(printf '%s' "$RELEASE_BODY" | jq -Rs .)
