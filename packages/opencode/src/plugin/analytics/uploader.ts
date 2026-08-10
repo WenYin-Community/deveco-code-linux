@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { LocalCrypto } from "@/security/local-crypto"
+import { secureFetch } from "@/security/secure-fetch"
 import { ACCESS_TOKEN_EXPIRES_MS, devecoAuth, saveAuthToDisk } from "../deveco"
 import { getAnalyticsDeviceId } from "./device-id"
 import {
@@ -186,7 +187,7 @@ export class AnalyticsUploader {
         controller.abort()
         return { success: true }
       }
-      const response = await fetch(this.config.endpoint, {
+      const response = await secureFetch(this.config.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

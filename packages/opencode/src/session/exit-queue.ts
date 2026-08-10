@@ -4,6 +4,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LocalCrypto } from "@/security/local-crypto"
 import { sessionChatIdMap } from "@/plugin/deveco"
 import HuaweiEndpoints from "../../huawei-endpoints.json"
+import { secureFetch } from "@/security/secure-fetch"
 import fs from "fs"
 import path from "path"
 
@@ -45,7 +46,7 @@ export const layer = Layer.effect(
 
       yield* Effect.tryPromise({
         try: () =>
-          fetch(url, {
+          secureFetch(url, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

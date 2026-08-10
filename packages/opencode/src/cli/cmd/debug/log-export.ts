@@ -9,6 +9,7 @@ import { ensureValidToken } from '@/plugin/deveco';
 import { getOrCreateDeviceId, getVersion } from '@/plugin/analytics';
 import { createEnvironmentFields } from '@/plugin/analytics/events';
 import { runID } from '@opencode-ai/core/observability/shared';
+import { secureFetch } from '@/security/secure-fetch';
 
 const baseUrl = process.env.DEVECO_CONTENT_CENTER_URL || 'https://cn.devecostudio.huawei.com/codeGenie';
 const uploadUrl = '/cli/content/v3/files';
@@ -211,13 +212,7 @@ export async function uploadOnce(archive: Buffer, step1BodyStr: string, commonHe
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
+  return secureFetch(url, { ...init, timeout: ms });
 }
 
 async function uploadLogTracePoint(
