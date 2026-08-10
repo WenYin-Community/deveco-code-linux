@@ -74,6 +74,9 @@ export const Flag = {
   get DEVECO_PLUGIN_META_FILE() {
     return process.env["DEVECO_PLUGIN_META_FILE"]
   },
+  get DEVECO_DISABLE_CREDENTIAL_KEYCHAIN() {
+    return truthy("DEVECO_DISABLE_CREDENTIAL_KEYCHAIN")
+  },
   get DEVECO_CLIENT() {
     return process.env["DEVECO_CLIENT"] ?? "cli"
   },

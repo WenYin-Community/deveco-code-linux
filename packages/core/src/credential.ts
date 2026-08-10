@@ -7,6 +7,8 @@ import { IntegrationSchema } from "./integration/schema"
 import { NonNegativeInt, withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
 import { CredentialTable } from "./credential/sql"
+import { isSealed, open, seal } from "./credential/crypto"
+import { loadKey } from "./credential/keychain"
 
 export const ID = Schema.String.pipe(
   Schema.brand("Credential.ID"),
@@ -65,47 +67,64 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const { db } = yield* Database.Service
+    const { db, filename } = yield* Database.Service
+    // Defer key loading until the first credential read/write so the .key
+    // file is not created when the credential table stays empty.
+    const getKey = yield* Effect.cached(loadKey(filename))
+    const encode = Schema.encodeSync(Info)
     const decode = Schema.decodeUnknownSync(Info)
-    const stored = (row: typeof CredentialTable.$inferSelect) => {
+    // Bind each ciphertext to its row so values cannot be swapped between rows.
+    const aad = (id: ID) => `credential:${id}:value`
+    const stored = (key: Uint8Array, row: typeof CredentialTable.$inferSelect) => {
       if (!row.integration_id) return
       return new Stored({
         id: row.id,
         integrationID: row.integration_id,
         label: row.label,
-        value: decode(row.value),
+        // Rows written before encryption was introduced stay readable as
+        // plaintext JSON and are sealed on their next write (lazy migration).
+        value: decode(JSON.parse(isSealed(row.value) ? open(key, aad(row.id), row.value) : row.value)),
       })
     }
 
     return Service.of({
       all: Effect.fn("Credential.all")(function* () {
-        return (yield* db
+        const rows = yield* db
           .select()
           .from(CredentialTable)
           .orderBy(asc(CredentialTable.time_created))
           .all()
-          .pipe(Effect.orDie)).flatMap((row) => {
-          const credential = stored(row)
+          .pipe(Effect.orDie)
+        if (rows.length === 0) return []
+        const key = yield* getKey
+        return rows.flatMap((row) => {
+          const credential = stored(key, row)
           return credential ? [credential] : []
         })
       }),
       list: Effect.fn("Credential.list")(function* (integrationID) {
-        return (yield* db
+        const rows = yield* db
           .select()
           .from(CredentialTable)
           .where(eq(CredentialTable.integration_id, integrationID))
           .orderBy(asc(CredentialTable.time_created))
           .all()
-          .pipe(Effect.orDie)).flatMap((row) => {
-          const credential = stored(row)
+          .pipe(Effect.orDie)
+        if (rows.length === 0) return []
+        const key = yield* getKey
+        return rows.flatMap((row) => {
+          const credential = stored(key, row)
           return credential ? [credential] : []
         })
       }),
       get: Effect.fn("Credential.get")(function* (id) {
         const row = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(Effect.orDie)
-        return row ? stored(row) : undefined
+        if (!row) return undefined
+        const key = yield* getKey
+        return stored(key, row)
       }),
       create: Effect.fn("Credential.create")(function* (input) {
+        const key = yield* getKey
         const credential = new Stored({
           id: ID.create(),
           integrationID: input.integrationID,
@@ -125,7 +144,7 @@ export const layer = Layer.effect(
                   id: credential.id,
                   integration_id: credential.integrationID,
                   label: credential.label,
-                  value: credential.value,
+                  value: seal(key, aad(credential.id), JSON.stringify(encode(credential.value))),
                 })
                 .run()
             }),
@@ -135,9 +154,13 @@ export const layer = Layer.effect(
       }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
         if (!updates.label && !updates.value) return
+        const key = yield* getKey
         yield* db
           .update(CredentialTable)
-          .set({ label: updates.label, value: updates.value })
+          .set({
+            label: updates.label,
+            value: updates.value ? seal(key, aad(id), JSON.stringify(encode(updates.value))) : undefined,
+          })
           .where(eq(CredentialTable.id, id))
           .run()
           .pipe(Effect.orDie)

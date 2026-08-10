@@ -15,7 +15,10 @@ type DatabaseShape = Effect.Success<typeof makeDatabase>
 
 export interface Interface {
   db: DatabaseShape
+  filename: string
 }
+
+class Filename extends Context.Service<Filename, string>()("@opencode/v2/storage/Database.Filename") {}
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/storage/Database") {}
 
@@ -32,12 +35,14 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
 
-    return { db }
+    return { db, filename: yield* Filename }
   }).pipe(Effect.orDie),
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(Layer.provide(sqliteLayer({ filename })))
+  return layer.pipe(
+    Layer.provide(Layer.mergeAll(sqliteLayer({ filename }), Layer.succeed(Filename, filename))),
+  )
 }
 
 export function path() {
