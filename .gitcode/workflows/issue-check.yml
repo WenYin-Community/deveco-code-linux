@@ -1,0 +1,420 @@
+name: Issue Check
+
+on:
+  schedule:
+    - cron: '0 0/5 * * * ?'
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "指定要检查的 Issue 编号（留空则自动轮询新 Issue）"
+        required: false
+        type: string
+      release_token:
+        description: "GitCode API Token（测试用，正式环境设为 secret）"
+        required: true
+        type: string
+      dashscope_api_key:
+        description: "DashScope API Key (DASHSCOPE_API_KEY, 测试用，正式环境设为 secret)"
+        required: true
+        type: string
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  check-new:
+    name: 检查新 Issue
+    jobs:
+      check-duplicates:
+        name: 合规检查与查重
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: openharmony-sig/deveco-code
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 设置 Node.js
+            uses: setup-node
+            with:
+              node-version: 22
+
+          - name: 安装 opencode
+            run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g opencode-ai
+
+          - name: 检查新 Issue 合规性与查重
+            env:
+              GITCODE_TOKEN: ${{ inputs.release_token || secrets.RELEASE_TOKEN }}
+              DASHSCOPE_API_KEY: ${{ inputs.dashscope_api_key || secrets.DASHSCOPE_API_KEY }}
+              OPENCODE_PERMISSION: |
+                {
+                  "bash": {
+                    "*": "deny",
+                    "bash .gitcode/scripts/gitcode-api.sh*": "allow"
+                  },
+                  "webfetch": "deny"
+                }
+            run: |
+              ISSUE_INPUT="${{ inputs.issue_number }}"
+
+              if [ -n "$ISSUE_INPUT" ]; then
+                ISSUES_TO_CHECK="$ISSUE_INPUT"
+              else
+                SINCE=$(date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+                echo "Polling for new issues since $SINCE"
+
+                RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/issues?state=open&since=$SINCE&per_page=50")
+
+                ISSUES_TO_CHECK=$(echo "$RESPONSE" | python3 -c "
+              import json, sys
+              from datetime import datetime, timezone, timedelta
+              data = json.load(sys.stdin)
+              cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+              for issue in data:
+                  if issue.get('pull_request') is not None:
+                      continue
+                  created = issue.get('created_at', '')
+                  try:
+                      dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                  except:
+                      continue
+                  if dt < cutoff:
+                      continue
+                  labels = [l.get('name', '') for l in issue.get('labels', [])]
+                  if 'waiting_on_author' in labels:
+                      continue
+                  number = issue.get('number') or issue.get('iid', '')
+                  print(number)
+              " 2>/dev/null)
+              fi
+
+              if [ -z "$ISSUES_TO_CHECK" ]; then
+                echo "No new issues to check"
+                echo "## Issue 合规检查" >> "$ATOMGIT_STEP_SUMMARY"
+                echo "✅ 无新 Issue 需要检查" >> "$ATOMGIT_STEP_SUMMARY"
+                exit 0
+              fi
+
+              # Pre-fetch recent issues for duplicate check (shared across all issues in this run)
+              RECENT_ISSUES=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/issues?state=open&per_page=50" 2>/dev/null | \
+                jq -r '[.[] | select(.pull_request == null)] | .[] | "#\(.number) \(.title)"' 2>/dev/null)
+
+              PROCESSED=0
+              SKIPPED=0
+
+              for NUMBER in $ISSUES_TO_CHECK; do
+                [ -z "$NUMBER" ] && continue
+                echo "Processing issue #$NUMBER"
+
+                # Pre-fetch issue data
+                ISSUE_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER" 2>/dev/null)
+                AUTHOR=$(echo "$ISSUE_DATA" | jq -r '.user.login // .user.username // ""' 2>/dev/null)
+                echo "  Author: $AUTHOR"
+
+                if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                  echo "  Skipping: $AUTHOR is a team member"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                # Pre-fetch comments - skip if already has compliance comment
+                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER/comments" 2>/dev/null)
+                if echo "$COMMENTS" | jq -r '.[].body' 2>/dev/null | grep -q '<!-- issue-compliance -->'; then
+                  echo "  Skipping: already has compliance comment"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                # Build readable issue summary
+                ISSUE_SUMMARY=$(echo "$ISSUE_DATA" | jq -r '"Title: \(.title)\nAuthor: \(.user.login)\nCreated: \(.created_at)\nLabels: \([.labels[].name] | join(", "))\n\nBody:\n\(.body)"')
+
+                # Build recent issues list excluding current issue
+                RECENT_FOR_CHECK=$(echo "$RECENT_ISSUES" | grep -v "^#$NUMBER " 2>/dev/null || echo "$RECENT_ISSUES")
+
+                cat > /tmp/check_prompt_$NUMBER.txt <<PROMPT_EOF
+              A new issue has been created. You are checking issue #$NUMBER.
+
+              The issue data and existing issues list are provided below — do NOT fetch them again. All API operations must go through the helper script.
+
+              ---
+
+              ISSUE DATA:
+              $ISSUE_SUMMARY
+
+              ---
+
+              EXISTING ISSUES FOR DUPLICATE CHECK (compare with the issue above):
+              $RECENT_FOR_CHECK
+
+              ---
+
+              API TOOL: Use the script .gitcode/scripts/gitcode-api.sh for all GitCode operations. Examples:
+              - Post comment: echo "comment text" | bash .gitcode/scripts/gitcode-api.sh post-comment $NUMBER
+              - Add label: bash .gitcode/scripts/gitcode-api.sh add-label $NUMBER waiting_on_author
+
+              ---
+
+              STRICT RULES — violating any of these is a critical error:
+              - You may ONLY post a comment that starts with <!-- issue-compliance --> and contains compliance findings or duplicate detection results.
+              - You may ONLY add the waiting_on_author label to issue #$NUMBER.
+              - You MUST NOT post any other comment — no test messages, no debug output, no greetings, no confirmations, no "checking..." messages.
+              - You MUST NOT close issues, edit issue titles/bodies, or modify any issue other than adding the waiting_on_author label.
+              - You MUST NOT post comments on any issue other than #$NUMBER.
+              - If everything is compliant and no duplicates found, do NOT post anything at all.
+              - You MUST NOT use curl directly. Only use bash .gitcode/scripts/gitcode-api.sh for API calls.
+
+              ---
+
+              TASK 1: CONTRIBUTING GUIDELINES COMPLIANCE CHECK
+
+              Check whether the issue follows our contributing guidelines and issue templates.
+
+              This project has five issue templates that every issue MUST use one of:
+
+              1. Bug Report (bug-report.yml) — requires: 问题描述, 预期行为, 复现步骤, DevEco Code 版本, 操作系统, 终端, and checklist
+              2. Feature Request (feature-request.yml) — requires: 功能描述, 使用场景, and checklist; title should start with [Feature]
+              3. Question (question.yml) — requires: 问题, DevEco Code 版本, and checklist
+              4. Document (document.yml) — requires: 改进建议描述, 使用的分支信息, and checklist
+              5. Refactor (refactor.yml) — requires: 代码重构描述, 代码重构涉及内容与验证, DevEco Code 版本, and checklist
+
+              Additionally check:
+              - No AI-generated walls of text (long, AI-generated descriptions are not acceptable)
+              - The issue has real content, not just template placeholder text left unchanged
+              - Bug reports should include some context about how to reproduce
+              - Feature requests should explain the problem or need
+              - We want to push for having the user provide system description & information
+
+              Do NOT be nitpicky about optional fields. Only flag real problems like: no template used, required fields empty or placeholder text only, obviously AI-generated walls of text, or completely empty/nonsensical content.
+
+              ---
+
+              TASK 2: DUPLICATE CHECK
+
+              Compare the issue with the EXISTING ISSUES list above. Consider:
+              1. Similar titles or descriptions
+              2. Same error messages or symptoms
+              3. Related functionality or components
+              4. Similar feature requests
+
+              ---
+
+              发布评论：
+
+              如果 Issue 不合规，以以下内容开头：
+              <!-- issue-compliance -->
+              然后说明需要修复的问题，并告知有 2 小时时间编辑 Issue，否则将被自动关闭。同时添加 waiting_on_author 标签。
+
+              如果发现重复，附上可能重复的 Issue 链接。
+
+              如果 Issue 合规且未发现重复，不要发布任何评论。
+
+              使用以下格式：
+
+              [不合规时:]
+              <!-- issue-compliance -->
+              此 Issue 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。
+
+              **需要修复的问题：**
+              - [具体原因]
+
+              请在 **2 小时内**编辑此 Issue 以解决上述问题，否则将被自动关闭。
+
+              [发现重复时，附加:]
+              ---
+              此 Issue 可能与已有 Issue 重复，请检查：
+              - #<issue_number>: [相似之处简述]
+
+              [不合规时，结尾添加:]
+              如果您认为此标记有误，请联系维护者。
+
+              记住：最多发布一条评论，合并所有发现。如果一切正常，不要发布任何内容。
+              PROMPT_EOF
+
+                opencode run -m alibaba-cn/glm-5.2 "$(cat /tmp/check_prompt_$NUMBER.txt)" || echo "  AI check failed for #$NUMBER"
+                rm -f /tmp/check_prompt_$NUMBER.txt
+                PROCESSED=$((PROCESSED + 1))
+              done
+
+              echo "## Issue 合规检查" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 检查时间 | $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 处理数 | $PROCESSED |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 跳过数 | $SKIPPED |" >> "$ATOMGIT_STEP_SUMMARY"
+
+  recheck:
+    name: 复查不合规 Issue
+    jobs:
+      recheck-compliance:
+        name: 复查已编辑的不合规 Issue
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: openharmony-sig/deveco-code
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 设置 Node.js
+            uses: setup-node
+            with:
+              node-version: 22
+
+          - name: 安装 opencode
+            run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g opencode-ai
+
+          - name: 复查不合规 Issue
+            env:
+              GITCODE_TOKEN: ${{ inputs.release_token || secrets.RELEASE_TOKEN }}
+              DASHSCOPE_API_KEY: ${{ inputs.dashscope_api_key || secrets.DASHSCOPE_API_KEY }}
+              OPENCODE_PERMISSION: |
+                {
+                  "bash": {
+                    "*": "deny",
+                    "bash .gitcode/scripts/gitcode-api.sh*": "allow"
+                  },
+                  "webfetch": "deny"
+                }
+            run: |
+              RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/issues?state=open&labels=waiting_on_author&per_page=50" 2>/dev/null)
+
+              NUMBERS=$(echo "$RESPONSE" | jq -r '[.[] | select(.pull_request == null)] | .[] | .number // .iid // empty' 2>/dev/null)
+
+              if [ -z "$NUMBERS" ]; then
+                echo "No issues to recheck"
+                echo "## Issue 复查" >> "$ATOMGIT_STEP_SUMMARY"
+                echo "✅ 无不合规 Issue 需要复查" >> "$ATOMGIT_STEP_SUMMARY"
+                exit 0
+              fi
+
+              RECHECKED=0
+              SKIPPED=0
+
+              for NUMBER in $NUMBERS; do
+                [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ] && continue
+                echo "Rechecking issue #$NUMBER"
+
+                # Pre-fetch issue data
+                ISSUE_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER" 2>/dev/null)
+                AUTHOR=$(echo "$ISSUE_DATA" | jq -r '.user.login // .user.username // ""' 2>/dev/null)
+                UPDATED_AT=$(echo "$ISSUE_DATA" | jq -r '.updated_at' 2>/dev/null)
+
+                if grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                  echo "  Skipping: $AUTHOR is a team member, removing label"
+                  bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                # Pre-fetch comments
+                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER/comments" 2>/dev/null)
+                COMMENT_CREATED=$(echo "$COMMENTS" \
+                  | jq -r '.[] | select(.body | contains("issue-compliance")) | .created_at' 2>/dev/null | head -1)
+
+                if [ -z "$COMMENT_CREATED" ] || [ "$COMMENT_CREATED" = "null" ]; then
+                  echo "  No compliance comment found, skipping"
+                  SKIPPED=$((SKIPPED + 1))
+                  continue
+                fi
+
+                UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null || echo 0)
+                COMMENT_EPOCH=$(date -d "$COMMENT_CREATED" +%s 2>/dev/null || echo 0)
+
+                if [ "$UPDATED_EPOCH" -gt 0 ] && [ "$COMMENT_EPOCH" -gt 0 ]; then
+                  BUFFER=$((COMMENT_EPOCH + 60))
+                  if [ "$UPDATED_EPOCH" -le "$BUFFER" ]; then
+                    echo "  Not updated since compliance comment, skipping"
+                    SKIPPED=$((SKIPPED + 1))
+                    continue
+                  fi
+                fi
+
+                # Build readable issue summary
+                ISSUE_SUMMARY=$(echo "$ISSUE_DATA" | jq -r '"Title: \(.title)\nAuthor: \(.user.login)\nUpdated: \(.updated_at)\nLabels: \([.labels[].name] | join(", "))\n\nBody:\n\(.body)"')
+
+                # Find compliance comment ID for deletion
+                COMPLIANCE_COMMENT_ID=$(echo "$COMMENTS" \
+                  | jq -r '.[] | select(.body | contains("issue-compliance")) | .id' 2>/dev/null | head -1)
+
+                cat > /tmp/recheck_prompt_$NUMBER.txt <<PROMPT_EOF
+              Issue #$NUMBER was previously flagged as non-compliant and has been edited.
+
+              The issue data is provided below — do NOT fetch it again. All API operations must go through the helper script.
+
+              ---
+
+              ISSUE DATA:
+              $ISSUE_SUMMARY
+
+              ---
+
+              API TOOL: Use the script .gitcode/scripts/gitcode-api.sh for all GitCode operations. Examples:
+              - Post comment: echo "comment text" | bash .gitcode/scripts/gitcode-api.sh post-comment $NUMBER
+              - Delete comment (ID: $COMPLIANCE_COMMENT_ID): bash .gitcode/scripts/gitcode-api.sh delete-comment $COMPLIANCE_COMMENT_ID
+              - Remove label: bash .gitcode/scripts/gitcode-api.sh remove-label $NUMBER waiting_on_author
+
+              ---
+
+              STRICT RULES — violating any of these is a critical error:
+              - You may ONLY post a compliance recheck result comment or a thank-you comment after fixing.
+              - You MUST NOT post any other comment — no test messages, no debug output, no greetings, no "checking..." messages.
+              - You MUST NOT close issues, edit issue titles/bodies.
+              - You MUST NOT post comments on any issue other than #$NUMBER.
+              - You may ONLY: remove the waiting_on_author label, delete the previous compliance comment, and post a single recheck result or thank-you comment.
+              - You MUST NOT use curl directly. Only use bash .gitcode/scripts/gitcode-api.sh for API calls.
+
+              Re-check whether the issue now follows our contributing guidelines and issue templates.
+
+              This project has five issue templates that every issue MUST use one of:
+
+              1. Bug Report (bug-report.yml) — requires: 问题描述, 预期行为, 复现步骤, DevEco Code 版本, 操作系统, 终端, and checklist
+              2. Feature Request (feature-request.yml) — requires: 功能描述, 使用场景, and checklist; title should start with [Feature]
+              3. Question (question.yml) — requires: 问题, DevEco Code 版本, and checklist
+              4. Document (document.yml) — requires: 改进建议描述, 使用的分支信息, and checklist
+              5. Refactor (refactor.yml) — requires: 代码重构描述, 代码重构涉及内容与验证, DevEco Code 版本, and checklist
+
+              Additionally check:
+              - No AI-generated walls of text (long, AI-generated descriptions are not acceptable)
+              - The issue has real content, not just template placeholder text left unchanged
+              - Bug reports should include some context about how to reproduce
+              - Feature requests should explain the problem or need
+              - We want to push for having the user provide system description & information
+
+              Do NOT be nitpicky about optional fields. Only flag real problems like: no template used, required fields empty or placeholder text only, obviously AI-generated walls of text, or completely empty/nonsensical content.
+
+              如果 Issue 现在合规：
+              1. 移除 waiting_on_author 标签
+              2. 删除之前的合规评论（ID: $COMPLIANCE_COMMENT_ID）
+              3. 发布一条简短评论，感谢用户更新了 Issue
+
+              如果 Issue 仍然不合规：
+              发布评论说明仍需修复的问题。保留 waiting_on_author 标签。
+              PROMPT_EOF
+
+                opencode run -m alibaba-cn/glm-5.2 "$(cat /tmp/recheck_prompt_$NUMBER.txt)" || echo "  AI recheck failed for #$NUMBER"
+                rm -f /tmp/recheck_prompt_$NUMBER.txt
+                RECHECKED=$((RECHECKED + 1))
+              done
+
+              echo "## Issue 复查" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 复查时间 | $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S') |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 复查数 | $RECHECKED |" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "| 跳过数 | $SKIPPED |" >> "$ATOMGIT_STEP_SUMMARY"

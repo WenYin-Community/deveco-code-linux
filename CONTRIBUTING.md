@@ -1,6 +1,6 @@
-# Contributing to OpenCode
+# Contributing to DevEco Code
 
-We want to make it easy for you to contribute to OpenCode. Here are the most common type of changes that get merged:
+We want to make it easy for you to contribute to DevEco Code. Here are the most common type of changes that get merged:
 
 - Bug fixes
 - Additional LSPs / Formatters
@@ -14,10 +14,10 @@ However, any UI or core product feature must go through a design review with the
 
 If you are unsure if a PR would be accepted, feel free to ask a maintainer or look for issues with any of the following labels:
 
-- [`help wanted`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Ahelp-wanted)
-- [`good first issue`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)
-- [`bug`](https://github.com/anomalyco/opencode/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug)
-- [`perf`](https://github.com/anomalyco/opencode/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22perf%22)
+- [`help wanted`](https://gitcode.com/openharmony-sig/deveco-code/issues?q=is%3Aissue%20state%3Aopen%20label%3Ahelp-wanted)
+- [`good first issue`](https://gitcode.com/openharmony-sig/deveco-code/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22)
+- [`bug`](https://gitcode.com/openharmony-sig/deveco-code/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug)
+- [`perf`](https://gitcode.com/openharmony-sig/deveco-code/issues?q=is%3Aopen%20is%3Aissue%20label%3A%22perf%22)
 
 > [!NOTE]
 > PRs that ignore these guardrails will likely be closed.
@@ -26,10 +26,9 @@ Want to take on an issue? Leave a comment and a maintainer may assign it to you 
 
 ## Adding New Providers
 
-New providers shouldn't require many if ANY code changes, but if you want to add support for a new provider first make a PR to:
-https://github.com/anomalyco/models.dev
+New providers shouldn't require many if ANY code changes. If you want to add support for a new provider, the models database is maintained alongside this repository. Submit a PR with your provider configuration.
 
-## Developing OpenCode
+## Developing DevEco Code
 
 - Requirements: Bun 1.3+
 - Install dependencies and start the dev server from the repo root:
@@ -41,13 +40,13 @@ https://github.com/anomalyco/models.dev
 
 ### Running against a different directory
 
-By default, `bun dev` runs OpenCode in the `packages/opencode` directory. To run it against a different directory or repository:
+By default, `bun dev` runs DevEco Code in the `packages/opencode` directory. To run it against a different directory or repository:
 
 ```bash
 bun dev <directory>
 ```
 
-To run OpenCode in the root of the opencode repo itself:
+To run DevEco Code in the root of the repo itself:
 
 ```bash
 bun dev .
@@ -70,7 +69,7 @@ Then run it with:
 Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
 
 - Core pieces:
-  - `packages/opencode`: OpenCode core business logic & server.
+  - `packages/opencode`: DevEco Code core business logic & server.
   - `packages/opencode/src/cli/cmd/tui/`: The TUI code, written in SolidJS with [opentui](https://github.com/sst/opentui)
   - `packages/app`: The shared web UI components, written in SolidJS
   - `packages/desktop`: The native desktop app, built with Electron (wraps `packages/app`)
@@ -96,7 +95,7 @@ opencode <directory>     # Start TUI in specific directory
 
 ### Running the API Server
 
-To start the OpenCode headless API server:
+To start the DevEco Code headless API server:
 
 ```bash
 bun dev serve
@@ -112,7 +111,7 @@ bun dev serve --port 8080
 
 To test UI changes during development:
 
-1. **First, start the OpenCode server** (see [Running the API Server](#running-the-api-server) section above)
+1. **First, start the DevEco Code server** (see [Running the API Server](#running-the-api-server) section above)
 2. **Then run the web app:**
 
 ```bash
@@ -147,12 +146,12 @@ Please try to follow the [style guide](./AGENTS.md)
 
 Bun debugging is currently rough around the edges. We hope this guide helps you get set up and avoid some pain points.
 
-The most reliable way to debug OpenCode is to run it manually in a terminal via `bun run --inspect=<url> dev ...` and attach
+The most reliable way to debug DevEco Code is to run it manually in a terminal via `bun run --inspect=<url> dev ...` and attach
 your debugger via that URL. Other methods can result in breakpoints being mapped incorrectly, at least in VSCode (YMMV).
 
 Caveats:
 
-- If you want to run the OpenCode TUI and have breakpoints triggered in the server code, you might need to run `bun dev spawn` instead of
+- If you want to run the DevEco Code TUI and have breakpoints triggered in the server code, you might need to run `bun dev spawn` instead of
   the usual `bun dev`. This is because `bun dev` runs the server in a worker thread and breakpoints might not work there.
 - If `spawn` does not work for you, you can debug the server separately:
   - Debug server: `bun run --inspect=ws://localhost:6499/ --cwd packages/opencode ./src/index.ts serve --port 4096`,
@@ -171,7 +170,7 @@ If you use VSCode, you can use our example configurations [.vscode/settings.exam
 Some debug methods that can be problematic:
 
 - Debug configurations with `"request": "launch"` can have breakpoints incorrectly mapped and thus unusable
-- The same problem arises when running OpenCode in the VSCode `JavaScript Debug Terminal`
+- The same problem arises when running DevEco Code in the VSCode `JavaScript Debug Terminal`
 
 With that said, you may want to try these methods, as they might work for you.
 
@@ -250,34 +249,7 @@ These are not strictly enforced, they are just general guidelines:
 
 ## Feature Requests
 
-For net-new functionality, start with a design conversation. Open an issue describing the problem, your proposed approach (optional), and why it belongs in OpenCode. The core team will help decide whether it should move forward; please wait for that approval instead of opening a feature PR directly.
-
-## Trust & Vouch System
-
-This project uses [vouch](https://github.com/mitchellh/vouch) to manage contributor trust. The vouch list is maintained in [`.github/VOUCHED.td`](.github/VOUCHED.td).
-
-### How it works
-
-- **Vouched users** are explicitly trusted contributors.
-- **Denounced users** are explicitly blocked. Issues and pull requests from denounced users are automatically closed. If you have been denounced, you can request to be unvouched by reaching out to a maintainer on [Discord](https://opencode.ai/discord)
-- **Everyone else** can participate normally — you don't need to be vouched to open issues or PRs.
-
-### For maintainers
-
-Collaborators with write access can manage the vouch list by commenting on any issue:
-
-- `vouch` — vouch for the issue author
-- `vouch @username` — vouch for a specific user
-- `denounce` — denounce the issue author
-- `denounce @username` — denounce a specific user
-- `denounce @username <reason>` — denounce with a reason
-- `unvouch` / `unvouch @username` — remove someone from the list
-
-Changes are committed automatically to `.github/VOUCHED.td`.
-
-### Denouncement policy
-
-Denouncement is reserved for users who repeatedly submit low-quality AI-generated contributions, spam, or otherwise act in bad faith. It is not used for disagreements or honest mistakes.
+For net-new functionality, start with a design conversation. Open an issue describing the problem, your proposed approach (optional), and why it belongs in DevEco Code. The core team will help decide whether it should move forward; please wait for that approval instead of opening a feature PR directly.
 
 ## Issue Requirements
 
@@ -286,6 +258,8 @@ All issues **must** use one of our issue templates:
 - **Bug report** — for reporting bugs (requires a description)
 - **Feature request** — for suggesting enhancements (requires verification checkbox and description)
 - **Question** — for asking questions (requires the question)
+- **Document** — for documentation improvements (requires improvement description and branch info)
+- **Refactor** — for code refactoring suggestions (requires refactoring description and verification)
 
 Blank issues are not allowed. When a new issue is opened, an automated check verifies that it follows a template and meets our contributing guidelines. If an issue doesn't meet the requirements, you'll receive a comment explaining what needs to be fixed and have **2 hours** to edit the issue. After that, it will be automatically closed.
 
