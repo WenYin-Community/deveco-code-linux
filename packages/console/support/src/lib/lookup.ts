@@ -1,6 +1,7 @@
 "use server"
 
 import { getRequestEvent } from "solid-js/web"
+import { timingSafeEqual } from "node:crypto"
 import { Database, and, eq, isNull, sql } from "@opencode-ai/console-core/drizzle/index.js"
 import { AuthTable } from "@opencode-ai/console-core/schema/auth.sql.js"
 import { UserTable } from "@opencode-ai/console-core/schema/user.sql.js"
@@ -45,6 +46,15 @@ export type WorkspaceSection = {
 // Set SUPPORT_ACCESS_TOKEN in the worker environment; clients pass it back via
 // the `x-support-token` request header. Without the token configured the
 // endpoint refuses all lookups rather than running open by default.
+function tokenEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) {
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}
+
 function authorizeLookup(): void {
   const expected = process.env.SUPPORT_ACCESS_TOKEN;
   if (!expected) {
@@ -52,7 +62,7 @@ function authorizeLookup(): void {
   }
   const event = getRequestEvent();
   const presented = event?.request.headers.get('x-support-token');
-  if (!presented || presented !== expected) {
+  if (!presented || !tokenEquals(presented, expected)) {
     throw new Error('Unauthorized');
   }
 }

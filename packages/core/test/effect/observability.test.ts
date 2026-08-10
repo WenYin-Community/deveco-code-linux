@@ -5,7 +5,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { fileLogger } from "../../src/observability/logging"
-import { resource } from "../../src/observability/otlp"
+import { parseOtlpHeaders, resource } from "../../src/observability/otlp"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
 const opencodeClient = process.env.DEVECO_CLIENT
@@ -50,6 +50,49 @@ describe("resource", () => {
     expect(resource().attributes["service.instance.id"]).not.toBe("override")
     expect(resource().attributes["opencode.run"]).toMatch(/^[0-9a-f]{8}$/)
   })
+})
+
+describe("parseOtlpHeaders", () => {
+  test("parses key=value pairs", () => {
+    const result = parseOtlpHeaders('a=1,b=2');
+    expect(result).toEqual({ a: '1', b: '2' });
+  });
+
+  test('preserves = in value', () => {
+    const result = parseOtlpHeaders('auth=Bearer abc=def');
+    expect(result).toEqual({ auth: 'Bearer abc=def' });
+  });
+
+  test('rejects CRLF in key (header injection)', () => {
+    const result = parseOtlpHeaders('a\r\nb=1,c=2');
+    expect(result).toEqual({ c: '2' });
+  });
+
+  test('rejects CRLF in value (header injection)', () => {
+    const result = parseOtlpHeaders('a=1\r\n,b=2');
+    expect(result).toEqual({ b: '2' });
+  });
+
+  test('rejects oversized key (>1024 chars)', () => {
+    const longKey = 'x'.repeat(1025);
+    const result = parseOtlpHeaders(longKey + '=1,b=2');
+    expect(result).toEqual({ b: '2' });
+  });
+
+  test('rejects oversized value (>8192 chars)', () => {
+    const longVal = 'x'.repeat(8193);
+    const result = parseOtlpHeaders('a=' + longVal + ',b=2');
+    expect(result).toEqual({ b: '2' });
+  });
+
+  test('skips empty key', () => {
+    const result = parseOtlpHeaders('=1,b=2');
+    expect(result).toEqual({ b: '2' });
+  });
+
+  test('returns empty object for empty string', () => {
+    expect(parseOtlpHeaders('')).toEqual({});
+  });
 })
 
 test("file logger appends concurrent runs with a run on every line", async () => {

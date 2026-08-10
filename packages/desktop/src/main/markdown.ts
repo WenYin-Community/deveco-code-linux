@@ -18,7 +18,7 @@ const renderer = new marked.Renderer();
 
 renderer.link = ({ href, title, text }: Tokens.Link) => {
   const safeHref = typeof href === 'string' && SAFE_HREF_PROTOCOLS.test(href) ? escapeAttr(href) : '#';
-  const titleAttr = title ? ` title='"'${escapeAttr(title)}"` : '';
+  const titleAttr = title ? ` title="${escapeAttr(title)}"` : '';
   return `<a href="${safeHref}"${titleAttr} class='external-link' target='_blank' rel="noopener noreferrer">${escapeText(text)}</a>`;
 };
 

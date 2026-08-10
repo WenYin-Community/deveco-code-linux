@@ -33,6 +33,11 @@ const SSRF_BLOCKED_HOSTS = new Set([
 // so strip them before matching against the blocklist/private-host patterns.
 const SSRF_PRIVATE_HOST = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)|^169\.254\.|^f[cd][0-9a-f]{2}:|^fe[89ab][0-9a-f]:/i;
 
+// Block decimal-integer IPv4 bypasses: a host like "2130706433" is 127.0.0.1
+// written as a single 32-bit integer. WHATWG URL does not normalize this back
+// to dotted-decimal, so the dotted-pattern regex would miss it.
+const SSRF_DECIMAL_IP = /^\d{1,10}$/;
+
 export function isSsrfSafeUrl(url: string): boolean {
   let parsed: URL;
   try {
@@ -48,6 +53,9 @@ export function isSsrfSafeUrl(url: string): boolean {
     return false;
   }
   if (SSRF_PRIVATE_HOST.test(host)) {
+    return false;
+  }
+  if (SSRF_DECIMAL_IP.test(host)) {
     return false;
   }
   return true;
