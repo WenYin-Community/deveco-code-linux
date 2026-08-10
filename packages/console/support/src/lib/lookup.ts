@@ -1,5 +1,6 @@
 "use server"
 
+import { getRequestEvent } from "solid-js/web"
 import { Database, and, eq, isNull, sql } from "@opencode-ai/console-core/drizzle/index.js"
 import { AuthTable } from "@opencode-ai/console-core/schema/auth.sql.js"
 import { UserTable } from "@opencode-ai/console-core/schema/user.sql.js"
@@ -38,7 +39,26 @@ export type WorkspaceSection = {
   disabledModels: Record<string, unknown>[]
 }
 
+// Authorize the lookup. The support app exposes financial and PII data
+// (Stripe customer/payment IDs, balances, subscription state, emails) for any
+// identifier, so every call must present the shared support access token.
+// Set SUPPORT_ACCESS_TOKEN in the worker environment; clients pass it back via
+// the `x-support-token` request header. Without the token configured the
+// endpoint refuses all lookups rather than running open by default.
+function authorizeLookup(): void {
+  const expected = process.env.SUPPORT_ACCESS_TOKEN;
+  if (!expected) {
+    throw new Error('support lookup is not configured (SUPPORT_ACCESS_TOKEN missing)');
+  }
+  const event = getRequestEvent();
+  const presented = event?.request.headers.get('x-support-token');
+  if (!presented || presented !== expected) {
+    throw new Error('Unauthorized');
+  }
+}
+
 export async function lookup(identifier: string): Promise<LookupResult> {
+  authorizeLookup();
   if (!identifier) throw new Error("Identifier is required")
 
   if (identifier.startsWith("wrk_")) {

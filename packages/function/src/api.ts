@@ -1,10 +1,44 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { DurableObject } from "cloudflare:workers"
-import { randomUUID } from "node:crypto"
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto"
 import { jwtVerify, createRemoteJWKSet } from "jose"
 import { createAppAuth } from "@octokit/auth-app"
 import { Octokit } from "@octokit/rest"
 import { Resource } from "sst"
+
+// Verify a Lark/Feishu event-subscription signature (v2) against the worker's
+// FEISHU_ENCRYPT_KEY. The signature is HMAC-SHA256 over `timestamp + nonce +
+// encrypt_key + rawBody`, hex-encoded, sent in the X-Lark-Signature header.
+// Rejects when headers are missing, the timestamp is stale (>5 min), or the
+// signature does not match — so a forged POST cannot be relayed to Discord.
+function verifyLarkSignature(c: Context, rawBody: string): boolean {
+  const encryptKey = Resource.FEISHU_ENCRYPT_KEY.value;
+  if (!encryptKey) {
+    return false;
+  }
+  const timestamp = c.req.header('X-Lark-Request-Timestamp');
+  const nonce = c.req.header('X-Lark-Request-Nonce');
+  const signature = c.req.header('X-Lark-Signature');
+  if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(now - ts) > 300) {
+    return false;
+  }
+  const expected = createHmac('sha256', encryptKey).update(`${timestamp}${nonce}${encryptKey}${rawBody}`).digest('hex');
+  return safeEqual(expected, signature);
+}
+
+// Constant-time string compare for secret/token equality. Length-mismatched
+// inputs short-circuit to false (timingSafeEqual throws on unequal lengths),
+// but the equal-length case does not leak a per-character early exit.
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
 
 type Env = {
   SYNC_SERVER: DurableObjectNamespace<SyncServer>
@@ -141,7 +175,9 @@ export default new Hono<{ Bindings: Env }>()
     const body = await c.req.json<{ sessionShortName: string; adminSecret: string }>()
     const sessionShortName = body.sessionShortName
     const adminSecret = body.adminSecret
-    if (adminSecret !== Resource.ADMIN_SECRET.value) throw new Error("Invalid admin secret")
+    if (!safeEqual(adminSecret, Resource.ADMIN_SECRET.value)) {
+      throw new Error('Invalid admin secret');
+    }
     const id = c.env.SYNC_SERVER.idFromName(sessionShortName)
     const stub = c.env.SYNC_SERVER.get(id)
     await stub.clear()
@@ -202,7 +238,14 @@ export default new Hono<{ Bindings: Env }>()
     return c.json({ info, messages })
   })
   .post("/feishu", async (c) => {
-    const body = (await c.req.json()) as {
+    // Read raw body first — signature is computed over the exact bytes, so
+    // c.req.json() cannot be used before verification.
+    const rawBody = await c.req.text();
+    if (!verifyLarkSignature(c, rawBody)) {
+      return c.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+
+    const body = JSON.parse(rawBody) as {
       challenge?: string
       event?: {
         message?: {
@@ -348,8 +391,12 @@ export default new Hono<{ Bindings: Env }>()
 
       return c.json({ token: installationAuth.token })
     } catch (e: any) {
-      console.error("GitHub app token generation failed:", e)
-      return c.json({ error: "Authorization failed" }, { status: 401 })
+      let error = e;
+      if (e instanceof Error) {
+        error = e.message;
+      }
+
+      return c.json({ error }, { status: 401 });
     }
   })
   /**

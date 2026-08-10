@@ -159,9 +159,9 @@ export function createMainWindow() {
   wireWindowRecovery(win, "main")
 
   win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
-    const { requestHeaders } = details
-    upsertKeyValue(requestHeaders, "Access-Control-Allow-Origin", ["*"])
-    callback({ requestHeaders })
+    // ACAO is a response header; injecting it into request headers is a no-op
+    // (servers ignore it), so this hook now passes headers through unchanged.
+    callback({ requestHeaders: details.requestHeaders });
   })
 
   win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
@@ -373,8 +373,11 @@ function isTrustedRendererUrl(value?: string) {
 }
 
 function addRendererHeaders(value: string, headers: Record<string, any>) {
+  // ACAO:* stays — the renderer legitimately fetches cross-origin (theme
+  // loads, notification icons, provider endpoints). ACAH:* is dropped: it let
+  // any cross-origin request carry arbitrary headers, which is broader than
+  // what reading cross-origin responses actually needs.
   upsertKeyValue(headers, "Access-Control-Allow-Origin", ["*"])
-  upsertKeyValue(headers, "Access-Control-Allow-Headers", ["*"])
   if (isRendererUrl(value, true)) upsertKeyValue(headers, documentPolicyHeader, [jsCallStacksDocumentPolicy])
 }
 

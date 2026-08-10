@@ -71,6 +71,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "FEISHU_ENCRYPT_KEY": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "GITHUB_APP_ID": {
       "type": "sst.sst.Secret"
       "value": string

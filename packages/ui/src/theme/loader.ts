@@ -76,6 +76,17 @@ html[data-theme="${themeId}"] {
 }
 
 export async function loadThemeFromUrl(url: string): Promise<DesktopTheme> {
+  // Reject non-https schemes so a user-controlled URL cannot be used to reach
+  // file:// (and a known theme ID cannot be coerced into an http:// SSRF).
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid theme URL: ${url}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Theme URL must be https: ${url}`)
+  }
   const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`Failed to load theme from ${url}: ${response.statusText}`)

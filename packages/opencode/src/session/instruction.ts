@@ -14,6 +14,45 @@ import { Global } from "@opencode-ai/core/global"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
 
+// Block hosts that would let a crafted `instructions` URL reach internal
+// services or cloud-metadata endpoints. This is a depth-of-field guard: the
+// instructions list is user-controlled, so a malicious config could otherwise
+// make the server fetch http://169.254.169.254/... and inject the response.
+// DNS-rebinding resistance is out of scope here; the blocklist matches the
+// common internal/metadata targets.
+const SSRF_BLOCKED_HOSTS = new Set([
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1',
+  '169.254.169.254', // AWS / Azure / GCP IMDS
+  'metadata',
+])
+
+// WHATWG URL.hostname keeps the brackets on IPv6 literals (e.g. "[::1]"),
+// so strip them before matching against the blocklist/private-host patterns.
+const SSRF_PRIVATE_HOST = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)|^169\.254\.|^f[cd][0-9a-f]{2}:|^fe[89ab][0-9a-f]:/i;
+
+export function isSsrfSafeUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (SSRF_BLOCKED_HOSTS.has(host)) {
+    return false;
+  }
+  if (SSRF_PRIVATE_HOST.test(host)) {
+    return false;
+  }
+  return true;
+}
+
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()
   for (const msg of messages) {
@@ -93,6 +132,7 @@ const relative = Effect.fnUntraced(function* (instruction: string) {
     })
 
     const fetch = Effect.fnUntraced(function* (url: string) {
+      if (!isSsrfSafeUrl(url)) return ""
       const res = yield* http.execute(HttpClientRequest.get(url)).pipe(
         Effect.timeout(5000),
         Effect.catch(() => Effect.succeed(null)),

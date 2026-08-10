@@ -6,16 +6,28 @@ import { runID } from "./shared"
 
 const endpoint = Flag.OTEL_EXPORTER_OTLP_ENDPOINT
 
-const headers = Flag.OTEL_EXPORTER_OTLP_HEADERS
-  ? Flag.OTEL_EXPORTER_OTLP_HEADERS.split(",").reduce(
-      (acc, entry) => {
-        const [key, ...value] = entry.split("=")
-        acc[key] = value.join("=")
-        return acc
-      },
-      {} as Record<string, string>,
-    )
-  : undefined
+// Parse the OTEL_EXPORTER_OTLP_HEADERS env var (`k=v,k=v`) into a header map.
+// Rejects entries with CRLF (HTTP header-injection guard) or oversized
+// keys/values. Exported so the parsing is unit-testable.
+export function parseOtlpHeaders(raw: string): Record<string, string> {
+  return raw.split(',').reduce(
+    (acc, entry) => {
+      const [key, ...value] = entry.split('=');
+      const val = value.join('=');
+      if (!key || /[\r\n]/.test(key) || /[\r\n]/.test(val)) {
+        return acc;
+      }
+      if (key.length > 1024 || val.length > 8192) {
+        return acc;
+      }
+      acc[key] = val;
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
+}
+
+const headers = Flag.OTEL_EXPORTER_OTLP_HEADERS ? parseOtlpHeaders(Flag.OTEL_EXPORTER_OTLP_HEADERS) : undefined;
 
 function resourceAttributes() {
   const value = process.env.OTEL_RESOURCE_ATTRIBUTES

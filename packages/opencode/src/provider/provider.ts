@@ -1076,11 +1076,41 @@ export const ConfigProvidersResult = Schema.Struct({
 })
 export type ConfigProvidersResult = Types.DeepMutable<Schema.Schema.Type<typeof ConfigProvidersResult>>
 
+// Fields that may carry secrets. Stripped to a masked form by toPublicInfo so
+// provider API keys / OAuth tokens are never exposed through the HTTP API
+// (`/experimental/providers`, `/config/providers`) even when the server runs
+// without a password.
+const SENSITIVE_KEYS = new Set([
+  'key',
+  'apikey',
+  'api_key',
+  'secret',
+  'token',
+  'password',
+  'authorization',
+])
+
+function maskSecret(value: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value.length <= 8) {
+    return '****';
+  }
+  return `${value.slice(0, 4)}****${value.slice(-4)}`;
+}
+
 export function toPublicInfo(provider: Info): Info {
   return JSON.parse(
-    JSON.stringify(provider, (_, value) => {
+    JSON.stringify(provider, (key, value) => {
       if (typeof value === "function" || typeof value === "symbol" || value === undefined) return undefined
       if (typeof value === "bigint") return value.toString()
+      // Mask secrets on fields whose name looks like a credential. The top-level
+      // `key` is the provider API key (assigned from env/auth in loadProviders);
+      // nested ones under `options` (apiKey, token, …) are covered too.
+      if (typeof key === 'string' && SENSITIVE_KEYS.has(key.toLowerCase()) && typeof value === 'string') {
+        return maskSecret(value);
+      }
       return value
     }),
   )
