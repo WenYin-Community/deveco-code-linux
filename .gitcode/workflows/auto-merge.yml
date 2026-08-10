@@ -1,0 +1,130 @@
+name: Auto Merge
+
+on:
+  schedule:
+    - cron: '0 0/5 * * * ?'
+  pull_request_comment:
+    types: [created]
+    comments:
+      - '/merge'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "指定要合入的 PR 编号"
+        required: true
+        type: string
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  merge:
+    name: 自动合入
+    jobs:
+      auto-merge:
+        name: 检查并合入 PR
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 检查 CI 状态并合入
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              PR_NUMBER_INPUT: ${{ inputs.pr_number }}
+              ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
+            run: |
+              check_and_merge() {
+                NUMBER="$1"
+                PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/pulls/$NUMBER" 2>/dev/null)
+
+                STATE=$(echo "$PR_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('state',''))" 2>/dev/null)
+                if [ "$STATE" != "open" ]; then
+                  echo "PR #$NUMBER is not open ($STATE), skipping"
+                  return 1
+                fi
+
+                MERGEABLE=$(echo "$PR_DATA" | python3 -c "
+              import json,sys
+              d = json.load(sys.stdin)
+              ms = d.get('mergeable_state', {})
+              checks = [
+                  ms.get('ci_state_passed', False),
+                  ms.get('conflict_passed', False),
+                  ms.get('non_ff_passed', False),
+                  ms.get('mr_state_passed', False),
+                  ms.get('approval_testers_required_passed', False),
+                  ms.get('approval_reviewers_required_passed', False),
+                  ms.get('approval_approvers_required_passed', False),
+              ]
+              print('1' if all(checks) else '0')
+              " 2>/dev/null)
+
+                if [ "$MERGEABLE" != "1" ]; then
+                  echo "PR #$NUMBER CI or checks not passed, skipping"
+                  if [ -n "$PR_NUMBER_INPUT" ] || [ -n "$ISSUE_NUMBER" ]; then
+                    {
+                      echo '## ⏳ 暂无法合入'
+                      echo ''
+                      echo 'PR 的 CI 检查或合规检查尚未全部通过，请等待检查完成后再评论 `/merge`。'
+                    } | bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER"
+                  fi
+                  return 1
+                fi
+
+                echo "PR #$NUMBER all checks passed, merging..."
+                bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER"
+
+                {
+                  echo '## ✅ PR 已自动合入'
+                  echo ''
+                  echo '所有 CI 检查已通过，PR 已自动合入。'
+                } | bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER"
+
+                echo "PR #$NUMBER merged successfully"
+                return 0
+              }
+
+              PR_NUMBER="${PR_NUMBER_INPUT:-$ISSUE_NUMBER}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "Schedule mode: scanning open PRs"
+
+                RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/pulls?state=open&per_page=20" 2>/dev/null)
+
+                NUMBERS=$(echo "$RESPONSE" | python3 -c "
+              import json, sys
+              data = json.load(sys.stdin)
+              for pr in data:
+                  print(pr.get('number') or pr.get('iid', ''))
+              " 2>/dev/null)
+
+                MERGED=0
+                for NUMBER in $NUMBERS; do
+                  [ -z "$NUMBER" ] && continue
+                  if check_and_merge "$NUMBER"; then
+                    MERGED=$((MERGED + 1))
+                  fi
+                done
+
+                echo "## 自动合入" >> "$ATOMGIT_STEP_SUMMARY"
+                echo "本轮合入 $MERGED 个 PR" >> "$ATOMGIT_STEP_SUMMARY"
+                exit 0
+              fi
+
+              echo "Comment/manual mode: checking PR #$PR_NUMBER"
+              if ! check_and_merge "$PR_NUMBER"; then
+                exit 1
+              fi
+
+              echo "## 自动合入" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "✅ PR #$PR_NUMBER 已合入" >> "$ATOMGIT_STEP_SUMMARY"

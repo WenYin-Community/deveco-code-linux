@@ -21,6 +21,9 @@ Commands:
   get-issue <number>              Get details (JSON)
   list-comments <number>           List comments (JSON)
   list-linked-issues <number>     List issues linked to a PR (JSON)
+  merge-pr <number>               Merge a PR
+  assign-tester <number> <user>  Assign a tester to a PR
+  approve-test <number> [state]  Submit test result (passed/failed)
 
 Examples:
   echo "Please fix the title" | bash gitcode-api.sh post-comment 653
@@ -107,6 +110,25 @@ case "$CMD" in
   list-linked-issues)
     NUMBER="$1"
     curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/pulls/$NUMBER/issues"
+    ;;
+  merge-pr)
+    NUMBER="$1"
+    curl -sS -X PUT -H "Authorization: Bearer $TOKEN" \
+      "$API/repos/$REPO/pulls/$NUMBER/merge"
+    ;;
+  assign-tester)
+    NUMBER="$1"
+    TESTER="$2"
+    curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"testers\":[\"$TESTER\"]}" \
+      "$API/repos/$REPO/pulls/$NUMBER/testers"
+    ;;
+  approve-test)
+    NUMBER="$1"
+    STATE="${2:-passed}"
+    curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"test_state\":\"$STATE\"}" \
+      "$API/repos/$REPO/pulls/$NUMBER/test"
     ;;
   *)
     show_help
