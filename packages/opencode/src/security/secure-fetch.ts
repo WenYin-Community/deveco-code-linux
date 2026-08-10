@@ -1,3 +1,4 @@
+import http from 'http';
 import https from 'https';
 import type { ClientRequest, IncomingMessage } from 'http';
 import { URL } from 'url';
@@ -29,6 +30,60 @@ function isWhitelisted(cipher: string, protocol: string): boolean {
     return whitelist.tls12.has(cipher);
   }
   return false;
+}
+
+const opensslToIetf = new Map<string, string>();
+for (const name of [...TlsCipherWhitelist.tls12, ...TlsCipherWhitelist.tls13]) {
+  const openssl = name
+    .replace(/^TLS_/, '')
+    .replace(/_WITH_/g, '-')
+    .replace(/POLY1305_SHA256$/, 'POLY1305')
+    .replace(/([A-Z])_(\d)/g, '$1$2')
+    .replace(/_/g, '-');
+  opensslToIetf.set(openssl, name);
+}
+
+const sharedAgent = new https.Agent({ keepAlive: true });
+
+function getProxyUrl(): URL | undefined {
+  const raw = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return new URL(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function connectViaProxy(proxyUrl: URL, targetHost: string, targetPort: number): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const connectReq = http.request({
+      hostname: proxyUrl.hostname,
+      port: proxyUrl.port || 80,
+      method: 'CONNECT',
+      path: `${targetHost}:${targetPort}`,
+      headers: { Host: `${targetHost}:${targetPort}` },
+    });
+    const timeoutId = setTimeout(() => {
+      connectReq.destroy(new Error(`Proxy CONNECT timeout after ${DEFAULT_TIMEOUT_MS}ms`));
+    }, DEFAULT_TIMEOUT_MS);
+    connectReq.on('connect', (res, socket) => {
+      clearTimeout(timeoutId);
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(new Error(`Proxy CONNECT failed with status ${res.statusCode}`));
+        return;
+      }
+      resolve(socket);
+    });
+    connectReq.on('error', (err) => {
+      clearTimeout(timeoutId);
+      reject(err);
+    });
+    connectReq.end();
+  });
 }
 
 export interface SecureFetchOptions extends Omit<RequestInit, 'signal'> {
@@ -157,12 +212,29 @@ function setContentLength(headers: Record<string, string>, bodyBuffer: Buffer | 
   }
 }
 
+function setContentType(headers: Record<string, string>, body: BodyInit | null | undefined): void {
+  if (body === undefined || body === null) {
+    return;
+  }
+  const hasContentType = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+  if (hasContentType) {
+    return;
+  }
+  if (typeof body === 'string') {
+    headers['Content-Type'] = 'text/plain;charset=UTF-8';
+  } else if (body instanceof URLSearchParams) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+  } else {
+    headers['Content-Type'] = 'application/octet-stream';
+  }
+}
+
 function validateCipher(socket: TLSSocket, url: URL): Error | null {
   const cipher = socket.getCipher();
   if (!cipher) {
     return new Error('Failed to get TLS cipher information');
   }
-  const standardName = cipher.standardName ?? cipher.name;
+  const standardName = cipher.standardName ?? opensslToIetf.get(cipher.name) ?? cipher.name;
   const negotiatedProtocol = socket.getProtocol() ?? cipher.version;
   if (!isWhitelisted(standardName, negotiatedProtocol)) {
     return new InsecureCipherError(standardName, negotiatedProtocol, url.toString());
@@ -176,9 +248,62 @@ function sendBody(req: ClientRequest, bodyBuffer: Buffer | undefined, bodyState:
   }
   bodyState.sent = true;
   if (bodyBuffer) {
-    req.write(bodyBuffer);
+    req.end(bodyBuffer);
+  } else {
+    req.end();
   }
-  req.end();
+}
+
+function startHandshakeTimeout(
+  req: ClientRequest,
+  cipherState: CipherState,
+  deadline: number,
+): ReturnType<typeof setTimeout> | undefined {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    req.destroy(new Error('Request timeout before TLS handshake'));
+    return undefined;
+  }
+  return setTimeout(() => {
+    if (!cipherState.validated) {
+      req.destroy(new Error(`TLS handshake timeout after ${remaining}ms`));
+    }
+  }, remaining);
+}
+
+function runCipherCheck(
+  req: ClientRequest,
+  socket: Socket,
+  url: URL,
+  cipherState: CipherState,
+  bodyBuffer: Buffer | undefined,
+  bodyState: BodyState,
+  deadline: number,
+  handshakeTimeoutId: { value: ReturnType<typeof setTimeout> | undefined },
+  timeoutRef: { value: ReturnType<typeof setTimeout> | undefined },
+): void {
+  if (cipherState.validated) {
+    return;
+  }
+  if (handshakeTimeoutId.value) {
+    clearTimeout(handshakeTimeoutId.value);
+    handshakeTimeoutId.value = undefined;
+  }
+  const err = validateCipher(socket as TLSSocket, url);
+  if (err) {
+    req.destroy(err);
+    return;
+  }
+  cipherState.validated = true;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    req.destroy(new Error('Request timeout after cipher validation'));
+    return;
+  }
+  timeoutRef.value = setTimeout(() => {
+    req.destroy(new Error(`Request timeout after ${remaining}ms`));
+  }, remaining);
+  sendBody(req, bodyBuffer, bodyState);
 }
 
 function bindCipherValidation(
@@ -187,33 +312,34 @@ function bindCipherValidation(
   cipherState: CipherState,
   bodyBuffer: Buffer | undefined,
   bodyState: BodyState,
-): void {
+  deadline: number,
+): () => void {
+  const handshakeTimeoutId = { value: undefined as ReturnType<typeof setTimeout> | undefined };
+  const timeoutRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
+
   req.on('socket', (socket: Socket) => {
-    const checkCipher = () => {
-      if (cipherState.validated) {
-        return;
-      }
-      const err = validateCipher(socket as TLSSocket, url);
-      if (err) {
-        req.destroy(err);
-        return;
-      }
-      cipherState.validated = true;
-      sendBody(req, bodyBuffer, bodyState);
-    };
-
+    handshakeTimeoutId.value = startHandshakeTimeout(req, cipherState, deadline);
+    const checkCipher = () =>
+      runCipherCheck(req, socket, url, cipherState, bodyBuffer, bodyState, deadline, handshakeTimeoutId, timeoutRef);
     socket.on('secureConnect', checkCipher);
-
-    if ((socket as TLSSocket).encrypted) {
-      checkCipher();
+    if (socket.readyState === 'open') {
+      process.nextTick(checkCipher);
     }
   });
+
+  return () => {
+    if (handshakeTimeoutId.value) {
+      clearTimeout(handshakeTimeoutId.value);
+    }
+    if (timeoutRef.value) {
+      clearTimeout(timeoutRef.value);
+    }
+  };
 }
 
 function setupRequestLifecycle(
   req: ClientRequest,
   init: SecureFetchOptions | undefined,
-  timeoutMs: number,
 ): () => void {
   let abortHandler: (() => void) | undefined;
   if (init?.signal) {
@@ -221,12 +347,7 @@ function setupRequestLifecycle(
     init.signal.addEventListener('abort', abortHandler, { once: true });
   }
 
-  const timeoutId = setTimeout(() => {
-    req.destroy(new Error(`Request timeout after ${timeoutMs}ms`));
-  }, timeoutMs);
-
   return () => {
-    clearTimeout(timeoutId);
     if (abortHandler && init?.signal) {
       init.signal.removeEventListener('abort', abortHandler);
     }
@@ -248,32 +369,26 @@ function parseResponseHeaders(rawHeaders: IncomingMessage['headers']): Headers {
   return headers;
 }
 
-function buildStreamResponse(res: IncomingMessage, cleanup: () => void, statusCode: number): Response {
-  const responseHeaders = parseResponseHeaders(res.headers);
-  const body = new ReadableStream({
-    start(controller) {
-      res.on('data', (chunk: Buffer) => {
-        controller.enqueue(new Uint8Array(chunk));
-      });
-      res.on('end', () => {
-        cleanup();
-        controller.close();
-      });
-      res.on('error', (err) => {
-        cleanup();
-        controller.error(err);
-      });
-    },
-    cancel() {
-      cleanup();
-      res.destroy();
-    },
-  });
+function buildBufferedResponse(res: IncomingMessage, cleanup: () => void, statusCode: number): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const responseHeaders = parseResponseHeaders(res.headers);
+    const chunks: Buffer[] = [];
 
-  return new Response(body, {
-    status: statusCode,
-    statusText: res.statusMessage ?? '',
-    headers: responseHeaders,
+    res.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    res.on('end', () => {
+      cleanup();
+      resolve(new Response(Buffer.concat(chunks), {
+        status: statusCode,
+        statusText: res.statusMessage ?? '',
+        headers: responseHeaders,
+      }));
+    });
+    res.on('error', (err) => {
+      cleanup();
+      reject(err);
+    });
   });
 }
 
@@ -370,6 +485,7 @@ function handleRedirect(
   statusCode: number,
   method: string,
   url: URL,
+  req: ClientRequest,
   res: IncomingMessage,
   init: SecureFetchOptions | undefined,
   redirectCount: number,
@@ -378,6 +494,8 @@ function handleRedirect(
   reject: (reason: Error) => void,
 ): void {
   if (redirectCount >= MAX_REDIRECTS) {
+    res.on('error', () => {});
+    req.destroy();
     cleanup();
     reject(new Error(`Maximum redirects (${MAX_REDIRECTS}) exceeded`));
     return;
@@ -387,12 +505,16 @@ function handleRedirect(
   res.resume();
 
   if (url.protocol === 'https:' && redirectUrl.protocol === 'http:') {
+    res.on('error', () => {});
+    req.destroy();
     cleanup();
     reject(new Error(`Refusing to follow HTTPS-to-HTTP redirect for ${url.toString()}`));
     return;
   }
 
   const redirectInit = prepareRedirectInit(init, statusCode, method, url, redirectUrl);
+  res.on('error', () => {});
+  req.destroy();
   cleanup();
   secureFetchInternal(redirectUrl, redirectInit, redirectCount + 1).then(resolve).catch(reject);
 }
@@ -401,6 +523,7 @@ function handleResponse(
   res: IncomingMessage,
   url: URL,
   method: string,
+  req: ClientRequest,
   init: SecureFetchOptions | undefined,
   redirectCount: number,
   cipherState: CipherState,
@@ -411,6 +534,8 @@ function handleResponse(
   if (!cipherState.validated) {
     const err = validateCipher(res.socket as TLSSocket, url);
     if (err) {
+      res.on('error', () => {});
+      req.destroy();
       cleanup();
       reject(err);
       return;
@@ -421,11 +546,11 @@ function handleResponse(
   const statusCode = res.statusCode ?? 200;
 
   if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
-    handleRedirect(statusCode, method, url, res, init, redirectCount, cleanup, resolve, reject);
+    handleRedirect(statusCode, method, url, req, res, init, redirectCount, cleanup, resolve, reject);
     return;
   }
 
-  resolve(buildStreamResponse(res, cleanup, statusCode));
+  buildBufferedResponse(res, cleanup, statusCode).then(resolve).catch(reject);
 }
 
 function bindResponseHandler(
@@ -440,7 +565,7 @@ function bindResponseHandler(
   reject: (reason: Error) => void,
 ): void {
   req.on('response', (res: IncomingMessage) => {
-    handleResponse(res, url, method, init, redirectCount, cipherState, cleanup, resolve, reject);
+    handleResponse(res, url, method, req, init, redirectCount, cipherState, cleanup, resolve, reject);
   });
 }
 
@@ -451,33 +576,50 @@ function bindErrorHandler(req: ClientRequest, cleanup: () => void, reject: (reas
   });
 }
 
-function executeRequest(
+async function executeRequest(
   url: URL,
   init: SecureFetchOptions | undefined,
   headers: Record<string, string>,
   bodyBuffer: Buffer | undefined,
   redirectCount: number,
 ): Promise<Response> {
+  const proxyUrl = getProxyUrl();
+  let socket: Socket | undefined;
+  if (proxyUrl) {
+    socket = await connectViaProxy(proxyUrl, url.hostname, Number(url.port) || 443);
+  }
+
   return new Promise((resolve, reject) => {
-    const method = init?.method ?? 'GET';
-    const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS;
+    try {
+      const method = init?.method ?? 'GET';
+      const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
 
-    const req = https.request({
-      hostname: url.hostname,
-      port: url.port || 443,
-      path: url.pathname + url.search,
-      method,
-      headers,
-      minVersion: 'TLSv1.2',
-    });
+      const req = https.request({
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: url.pathname + url.search,
+        method,
+        headers,
+        minVersion: 'TLSv1.2',
+        agent: socket ? undefined : sharedAgent,
+        createConnection: socket ? () => socket : undefined,
+      });
 
-    const cipherState: CipherState = { validated: false };
-    const bodyState: BodyState = { sent: false };
-    const cleanup = setupRequestLifecycle(req, init, timeoutMs);
+      const cipherState: CipherState = { validated: false };
+      const bodyState: BodyState = { sent: false };
+      const abortCleanup = setupRequestLifecycle(req, init);
+      const timeoutCleanup = bindCipherValidation(req, url, cipherState, bodyBuffer, bodyState, deadline);
+      const cleanup = () => {
+        abortCleanup();
+        timeoutCleanup();
+      };
 
-    bindCipherValidation(req, url, cipherState, bodyBuffer, bodyState);
-    bindResponseHandler(req, url, method, init, redirectCount, cipherState, cleanup, resolve, reject);
-    bindErrorHandler(req, cleanup, reject);
+      bindResponseHandler(req, url, method, init, redirectCount, cipherState, cleanup, resolve, reject);
+      bindErrorHandler(req, cleanup, reject);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -497,8 +639,12 @@ async function secureFetchInternal(
   }
 
   const headers = parseHeaders(mergedInit?.headers);
+  setContentType(headers, mergedInit?.body);
   const bodyBuffer = await bodyToBuffer(mergedInit?.body);
   setContentLength(headers, bodyBuffer);
+  if (mergedInit) {
+    mergedInit.body = bodyBuffer as BodyInit | undefined;
+  }
 
   return executeRequest(url, mergedInit, headers, bodyBuffer, redirectCount);
 }

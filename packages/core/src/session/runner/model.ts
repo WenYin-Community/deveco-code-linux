@@ -95,7 +95,12 @@ export const fromCatalogModel = (
     credential?.value.metadata === undefined
       ? model
       : produce(model, (draft) => {
-          Object.assign(draft.request.body, credential.value.metadata)
+          const blocked = new Set(['apikey', 'baseurl', 'url']);
+          for (const [key, value] of Object.entries(credential.value.metadata!)) {
+            if (!blocked.has(key.toLowerCase())) {
+              draft.request.body[key] = value;
+            }
+          }
         })
   const key = apiKey(resolved, connection, credential)
   if (resolved.api.type === "aisdk" && resolved.api.package === "@ai-sdk/openai") {

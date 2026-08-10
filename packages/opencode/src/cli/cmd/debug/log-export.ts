@@ -212,7 +212,16 @@ export async function uploadOnce(archive: Buffer, step1BodyStr: string, commonHe
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
-  return secureFetch(url, { ...init, timeout: ms });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ms);
+  if (init.signal) {
+    init.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  try {
+    return await secureFetch(url, { ...init, signal: controller.signal, timeout: ms });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function uploadLogTracePoint(

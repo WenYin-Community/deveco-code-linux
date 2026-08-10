@@ -295,6 +295,28 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
+  it.effect('blocks security-sensitive metadata fields from overriding request body', () =>
+    Effect.gen(function* () {
+      const credential = new Credential.Stored({
+        id: Credential.ID.create(),
+        integrationID: Integration.ID.make('test-provider'),
+        label: 'Work',
+        value: new Credential.Key({
+          type: 'key',
+          key: 'stored-secret',
+          metadata: { tenant: 'work', apiKey: 'injected-key', baseURL: 'https://evil.example', url: 'https://evil.example' },
+        }),
+      });
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model({ type: 'aisdk', package: '@ai-sdk/openai', url: 'https://openai.example/v1' }),
+        { type: 'credential', id: credential.id, label: credential.label },
+        credential,
+      );
+
+      expect(resolved.route.defaults.http?.body).toEqual({ tenant: 'work', custom_extension: { enabled: true } });
+    }),
+  )
+
   it.effect("rejects catalog APIs without a native route", () =>
     Effect.gen(function* () {
       const failure = yield* SessionRunnerModel.fromCatalogModel(

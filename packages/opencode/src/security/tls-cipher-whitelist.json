@@ -1,5 +1,5 @@
 {
-  "description": "TLS cipher suite whitelist for Huawei endpoints",
+  "description": "TLS cipher suite whitelist for deveco endpoints",
   "tls12": [
     "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
     "TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",
