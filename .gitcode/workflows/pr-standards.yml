@@ -78,7 +78,7 @@ stages:
               fi
 
               CLEAN_TITLE=$(echo "$TITLE" | sed 's/^\[[^]]*\]//')
-              TITLE_PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([a-zA-Z0-9-]+\))?!?: .{1,72}$'
+              TITLE_PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?!?: .{1,72}$'
               if ! echo "$CLEAN_TITLE" | grep -qP "$TITLE_PATTERN"; then
                 echo "Title does not follow conventional commit format"
 
