@@ -2,6 +2,7 @@ import http from 'http';
 import https from 'https';
 import type { ClientRequest, IncomingMessage } from 'http';
 import { URL } from 'url';
+import tls from 'tls';
 import type { TLSSocket } from 'tls';
 import type { Socket } from 'net';
 import TlsCipherWhitelist from './tls-cipher-whitelist.json';
@@ -43,8 +44,6 @@ for (const name of [...TlsCipherWhitelist.tls12, ...TlsCipherWhitelist.tls13]) {
   opensslToIetf.set(openssl, name);
 }
 
-const sharedAgent = new https.Agent({ keepAlive: true });
-
 function getProxyUrl(): URL | undefined {
   const raw = process.env.HTTPS_PROXY ?? process.env.https_proxy;
   if (!raw) {
@@ -57,32 +56,42 @@ function getProxyUrl(): URL | undefined {
   }
 }
 
+function setupProxyConnect(
+  proxyUrl: URL,
+  targetHost: string,
+  targetPort: number,
+  resolve: (socket: Socket) => void,
+  reject: (err: Error) => void,
+): void {
+  const connectReq = http.request({
+    hostname: proxyUrl.hostname,
+    port: proxyUrl.port || 80,
+    method: 'CONNECT',
+    path: `${targetHost}:${targetPort}`,
+    headers: { Host: `${targetHost}:${targetPort}` },
+  });
+  const timeoutId = setTimeout(() => {
+    connectReq.destroy(new Error(`Proxy CONNECT timeout after ${DEFAULT_TIMEOUT_MS}ms`));
+  }, DEFAULT_TIMEOUT_MS);
+  connectReq.on('connect', (res, socket) => {
+    clearTimeout(timeoutId);
+    if (res.statusCode !== 200) {
+      socket.destroy();
+      reject(new Error(`Proxy CONNECT failed with status ${res.statusCode}`));
+      return;
+    }
+    resolve(socket);
+  });
+  connectReq.on('error', (err) => {
+    clearTimeout(timeoutId);
+    reject(err);
+  });
+  connectReq.end();
+}
+
 function connectViaProxy(proxyUrl: URL, targetHost: string, targetPort: number): Promise<Socket> {
   return new Promise((resolve, reject) => {
-    const connectReq = http.request({
-      hostname: proxyUrl.hostname,
-      port: proxyUrl.port || 80,
-      method: 'CONNECT',
-      path: `${targetHost}:${targetPort}`,
-      headers: { Host: `${targetHost}:${targetPort}` },
-    });
-    const timeoutId = setTimeout(() => {
-      connectReq.destroy(new Error(`Proxy CONNECT timeout after ${DEFAULT_TIMEOUT_MS}ms`));
-    }, DEFAULT_TIMEOUT_MS);
-    connectReq.on('connect', (res, socket) => {
-      clearTimeout(timeoutId);
-      if (res.statusCode !== 200) {
-        socket.destroy();
-        reject(new Error(`Proxy CONNECT failed with status ${res.statusCode}`));
-        return;
-      }
-      resolve(socket);
-    });
-    connectReq.on('error', (err) => {
-      clearTimeout(timeoutId);
-      reject(err);
-    });
-    connectReq.end();
+    setupProxyConnect(proxyUrl, targetHost, targetPort, resolve, reject);
   });
 }
 
@@ -255,41 +264,36 @@ function sendBody(req: ClientRequest, bodyBuffer: Buffer | undefined, bodyState:
 }
 
 function startHandshakeTimeout(
-  req: ClientRequest,
+  destroy: (err: Error) => void,
   cipherState: CipherState,
   deadline: number,
 ): ReturnType<typeof setTimeout> | undefined {
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
-    req.destroy(new Error('Request timeout before TLS handshake'));
+    destroy(new Error('Request timeout before TLS handshake'));
     return undefined;
   }
   return setTimeout(() => {
     if (!cipherState.validated) {
-      req.destroy(new Error(`TLS handshake timeout after ${remaining}ms`));
+      destroy(new Error(`TLS handshake timeout after ${remaining}ms`));
     }
   }, remaining);
 }
 
 function runCipherCheck(
-  req: ClientRequest,
-  socket: Socket,
+  socket: TLSSocket,
   url: URL,
   cipherState: CipherState,
   bodyBuffer: Buffer | undefined,
   bodyState: BodyState,
   deadline: number,
-  handshakeTimeoutId: { value: ReturnType<typeof setTimeout> | undefined },
+  req: ClientRequest,
   timeoutRef: { value: ReturnType<typeof setTimeout> | undefined },
 ): void {
   if (cipherState.validated) {
     return;
   }
-  if (handshakeTimeoutId.value) {
-    clearTimeout(handshakeTimeoutId.value);
-    handshakeTimeoutId.value = undefined;
-  }
-  const err = validateCipher(socket as TLSSocket, url);
+  const err = validateCipher(socket, url);
   if (err) {
     req.destroy(err);
     return;
@@ -306,44 +310,24 @@ function runCipherCheck(
   sendBody(req, bodyBuffer, bodyState);
 }
 
-function bindCipherValidation(
-  req: ClientRequest,
-  url: URL,
-  cipherState: CipherState,
-  bodyBuffer: Buffer | undefined,
-  bodyState: BodyState,
-  deadline: number,
-): () => void {
-  const handshakeTimeoutId = { value: undefined as ReturnType<typeof setTimeout> | undefined };
-  const timeoutRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
-
-  req.on('socket', (socket: Socket) => {
-    handshakeTimeoutId.value = startHandshakeTimeout(req, cipherState, deadline);
-    const checkCipher = () =>
-      runCipherCheck(req, socket, url, cipherState, bodyBuffer, bodyState, deadline, handshakeTimeoutId, timeoutRef);
-    socket.on('secureConnect', checkCipher);
-    if (socket.readyState === 'open') {
-      process.nextTick(checkCipher);
-    }
-  });
-
-  return () => {
-    if (handshakeTimeoutId.value) {
-      clearTimeout(handshakeTimeoutId.value);
-    }
-    if (timeoutRef.value) {
-      clearTimeout(timeoutRef.value);
-    }
-  };
-}
-
 function setupRequestLifecycle(
   req: ClientRequest,
   init: SecureFetchOptions | undefined,
+  cleanup: () => void,
+  reject: (reason: Error) => void,
 ): () => void {
   let abortHandler: (() => void) | undefined;
   if (init?.signal) {
-    abortHandler = () => req.destroy(new DOMException('The operation was aborted.', 'AbortError'));
+    abortHandler = () => {
+      const err = new DOMException('The operation was aborted.', 'AbortError');
+      cleanup();
+      reject(err);
+      req.destroy(err);
+    };
+    if (init.signal.aborted) {
+      abortHandler();
+      return () => {};
+    }
     init.signal.addEventListener('abort', abortHandler, { once: true });
   }
 
@@ -576,6 +560,128 @@ function bindErrorHandler(req: ClientRequest, cleanup: () => void, reject: (reas
   });
 }
 
+function connectTls(url: URL, rawSocket: Socket | undefined): TLSSocket {
+  return tls.connect({
+    host: url.hostname,
+    port: Number(url.port) || 443,
+    minVersion: 'TLSv1.2',
+    ...(rawSocket ? { socket: rawSocket } : {}),
+  });
+}
+
+function createRequestCleanup(
+  tlsSocket: TLSSocket,
+  rawSocket: Socket | undefined,
+): { cleanup: () => void; cleanupFns: Array<() => void> } {
+  const cleanupFns: Array<() => void> = [];
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    for (const fn of cleanupFns) {
+      fn();
+    }
+    tlsSocket.destroy();
+    rawSocket?.destroy();
+  };
+  return { cleanup, cleanupFns };
+}
+
+function createHttpRequest(
+  url: URL,
+  method: string,
+  headers: Record<string, string>,
+  tlsSocket: TLSSocket,
+): ClientRequest {
+  return https.request({
+    hostname: url.hostname,
+    port: url.port || 443,
+    path: url.pathname + url.search,
+    method,
+    headers,
+    agent: false,
+    createConnection: () => tlsSocket,
+  });
+}
+
+function bindSecureRequest(
+  req: ClientRequest,
+  url: URL,
+  method: string,
+  init: SecureFetchOptions | undefined,
+  redirectCount: number,
+  cipherState: CipherState,
+  cleanup: () => void,
+  cleanupFns: Array<() => void>,
+  timeoutRef: { value: ReturnType<typeof setTimeout> | undefined },
+  safeResolve: (value: Response) => void,
+  safeReject: (err: Error) => void,
+): void {
+  cleanupFns.push(() => {
+    if (timeoutRef.value) {
+      clearTimeout(timeoutRef.value);
+    }
+  });
+  cleanupFns.push(setupRequestLifecycle(req, init, cleanup, safeReject));
+  bindResponseHandler(req, url, method, init, redirectCount, cipherState, cleanup, safeResolve, safeReject);
+  bindErrorHandler(req, cleanup, safeReject);
+}
+
+function handleOnSecureConnect(
+  handshakeTimeoutId: ReturnType<typeof setTimeout> | undefined,
+  tlsSocket: TLSSocket,
+  url: URL,
+  cipherState: CipherState,
+  bodyBuffer: Buffer | undefined,
+  bodyState: BodyState,
+  deadline: number,
+  req: ClientRequest,
+  timeoutRef: { value: ReturnType<typeof setTimeout> | undefined },
+): void {
+  if (handshakeTimeoutId) {
+    clearTimeout(handshakeTimeoutId);
+  }
+  runCipherCheck(tlsSocket, url, cipherState, bodyBuffer, bodyState, deadline, req, timeoutRef);
+}
+
+function setupRequestPromise(
+  url: URL,
+  init: SecureFetchOptions | undefined,
+  headers: Record<string, string>,
+  bodyBuffer: Buffer | undefined,
+  redirectCount: number,
+  rawSocket: Socket | undefined,
+  safeResolve: (value: Response) => void,
+  safeReject: (err: Error) => void,
+): void {
+  const method = init?.method ?? 'GET';
+  const deadline = Date.now() + (init?.timeout || DEFAULT_TIMEOUT_MS);
+  const cipherState: CipherState = { validated: false };
+  const bodyState: BodyState = { sent: false };
+  const timeoutRef = { value: undefined as ReturnType<typeof setTimeout> | undefined };
+  const tlsSocket = connectTls(url, rawSocket);
+  const { cleanup, cleanupFns } = createRequestCleanup(tlsSocket, rawSocket);
+  const handshakeTimeoutId = startHandshakeTimeout(
+    (err: Error) => {
+      cleanup();
+      safeReject(err);
+    },
+    cipherState,
+    deadline,
+  );
+  tlsSocket.on('secureConnect', () => {
+    handleOnSecureConnect(handshakeTimeoutId, tlsSocket, url, cipherState, bodyBuffer, bodyState, deadline, req as ClientRequest, timeoutRef);
+  });
+  tlsSocket.on('error', (err: Error) => {
+    cleanup();
+    safeReject(err);
+  });
+  const req = createHttpRequest(url, method, headers, tlsSocket);
+  bindSecureRequest(req, url, method, init, redirectCount, cipherState, cleanup, cleanupFns, timeoutRef, safeResolve, safeReject);
+}
+
 async function executeRequest(
   url: URL,
   init: SecureFetchOptions | undefined,
@@ -584,41 +690,32 @@ async function executeRequest(
   redirectCount: number,
 ): Promise<Response> {
   const proxyUrl = getProxyUrl();
-  let socket: Socket | undefined;
+  let rawSocket: Socket | undefined;
   if (proxyUrl) {
-    socket = await connectViaProxy(proxyUrl, url.hostname, Number(url.port) || 443);
+    rawSocket = await connectViaProxy(proxyUrl, url.hostname, Number(url.port) || 443);
   }
 
   return new Promise((resolve, reject) => {
-    try {
-      const method = init?.method ?? 'GET';
-      const timeoutMs = init?.timeout ?? DEFAULT_TIMEOUT_MS;
-      const deadline = Date.now() + timeoutMs;
-
-      const req = https.request({
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname + url.search,
-        method,
-        headers,
-        minVersion: 'TLSv1.2',
-        agent: socket ? undefined : sharedAgent,
-        createConnection: socket ? () => socket : undefined,
-      });
-
-      const cipherState: CipherState = { validated: false };
-      const bodyState: BodyState = { sent: false };
-      const abortCleanup = setupRequestLifecycle(req, init);
-      const timeoutCleanup = bindCipherValidation(req, url, cipherState, bodyBuffer, bodyState, deadline);
-      const cleanup = () => {
-        abortCleanup();
-        timeoutCleanup();
-      };
-
-      bindResponseHandler(req, url, method, init, redirectCount, cipherState, cleanup, resolve, reject);
-      bindErrorHandler(req, cleanup, reject);
-    } catch (err) {
+    let settled = false;
+    const safeResolve = (value: Response) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
+    const safeReject = (err: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       reject(err);
+    };
+
+    try {
+      setupRequestPromise(url, init, headers, bodyBuffer, redirectCount, rawSocket, safeResolve, safeReject);
+    } catch (err) {
+      safeReject(err as Error);
     }
   });
 }
