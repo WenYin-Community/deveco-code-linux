@@ -77,7 +77,7 @@ stages:
                 exit 0
               fi
 
-              TITLE_PATTERN='^(\[.*\])?(feat|fix|docs|chore|refactor|test)(\([a-zA-Z0-9-]+\))?:'
+              TITLE_PATTERN='^(\[.*\])?(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(?:\([^)]+\))?!?: .{1,72}$'
               if ! echo "$TITLE" | grep -qE "$TITLE_PATTERN"; then
                 echo "Title does not follow conventional commit format"
 

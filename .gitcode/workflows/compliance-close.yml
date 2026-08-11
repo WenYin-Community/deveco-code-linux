@@ -30,86 +30,75 @@ stages:
             env:
               GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
             run: |
-              RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                "$GITCODE_API/repos/$GITCODE_REPO/issues?state=open&labels=waiting_on_author&per_page=100" 2>/dev/null)
-
-              ITEMS=$(echo "$RESPONSE" | jq -r '.[] | "\(.number // .iid)\t\(.pull_request != null)"' 2>/dev/null)
-
-              if [ -z "$ITEMS" ]; then
-                echo "No items to check"
-                echo "## 合规关闭检查" >> "$ATOMGIT_STEP_SUMMARY"
-                echo "✅ 无超时项目需要关闭" >> "$ATOMGIT_STEP_SUMMARY"
-                exit 0
-              fi
-
               CLOSED=0
               SKIPPED=0
               NOW_EPOCH=$(date +%s)
               TWO_HOURS=$((2 * 60 * 60))
 
-              while IFS=$'\t' read -r NUMBER IS_PR; do
-                [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ] && continue
-                echo "Checking #$NUMBER"
+              check_and_close() {
+                TYPE="$1"
+                if [ "$TYPE" = "pulls" ]; then KIND="PR"; else KIND="Issue"; fi
 
-                if [ "$IS_PR" = "true" ]; then
-                  EP="pulls"
-                  KIND="PR"
-                  ST="pulls"
-                else
-                  EP="issues"
-                  KIND="Issue"
-                  ST="issues"
-                fi
+                RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "$GITCODE_API/repos/$GITCODE_REPO/$TYPE?state=open&labels=waiting_on_author&per_page=100" 2>/dev/null)
 
-                ITEM_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                  "$GITCODE_API/repos/$GITCODE_REPO/$EP/$NUMBER" 2>/dev/null)
-                AUTHOR=$(echo "$ITEM_DATA" | jq -r '.user.login // .user.username // ""')
+                NUMBERS=$(echo "$RESPONSE" | jq -r '.[] | "\(.number // .iid)"' 2>/dev/null)
 
-                if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                  echo "  Skipping: $AUTHOR is a team member"
-                  GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
+                for NUMBER in $NUMBERS; do
+                  [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ] && continue
+                  echo "Checking $KIND #$NUMBER"
 
-                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                  "$GITCODE_API/repos/$GITCODE_REPO/$EP/$NUMBER/comments" 2>/dev/null)
-                COMMENT_CREATED=$(echo "$COMMENTS" \
-                  | jq -r '.[] | select(.body | contains("issue-compliance") or contains("pr-compliance")) | .created_at' 2>/dev/null | head -1)
+                  ITEM_DATA=$(GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh get-issue "$NUMBER" 2>/dev/null)
+                  AUTHOR=$(echo "$ITEM_DATA" | jq -r '.user.login // .user.username // ""')
 
-                if [ -z "$COMMENT_CREATED" ] || [ "$COMMENT_CREATED" = "null" ]; then
-                  echo "  No compliance comment found, skipping"
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
+                  if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
+                    echo "  Skipping: $AUTHOR is a team member"
+                    GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
+                    SKIPPED=$((SKIPPED + 1))
+                    continue
+                  fi
 
-                COMMENT_EPOCH=$(date -d "$COMMENT_CREATED" +%s 2>/dev/null || echo 0)
-                if [ "$COMMENT_EPOCH" -eq 0 ]; then
-                  echo "  Could not parse comment date, skipping"
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
+                  COMMENTS=$(GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh list-comments "$NUMBER" 2>/dev/null)
+                  COMMENT_CREATED=$(echo "$COMMENTS" \
+                    | jq -r '.[] | select(.body | contains("issue-compliance") or contains("pr-compliance") or contains("pr-standards")) | .created_at' 2>/dev/null | sort | tail -1)
 
-                AGE=$((NOW_EPOCH - COMMENT_EPOCH))
-                if [ "$AGE" -lt "$TWO_HOURS" ]; then
-                  echo "  Still within 2-hour window ($(( AGE / 60 ))m elapsed)"
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
+                  if [ -z "$COMMENT_CREATED" ] || [ "$COMMENT_CREATED" = "null" ]; then
+                    echo "  No compliance comment found, skipping"
+                    SKIPPED=$((SKIPPED + 1))
+                    continue
+                  fi
 
-                echo "  Closing: compliance window expired ($KIND)"
+                  COMMENT_EPOCH=$(date -d "$COMMENT_CREATED" +%s 2>/dev/null || echo 0)
+                  if [ "$COMMENT_EPOCH" -eq 0 ]; then
+                    echo "  Could not parse comment date, skipping"
+                    SKIPPED=$((SKIPPED + 1))
+                    continue
+                  fi
 
-                {
-                  echo "此${KIND}已被自动关闭，因为未在 2 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
-                  echo ""
-                  echo "欢迎按照规范重新提交${KIND}。"
-                } | GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null
+                  AGE=$((NOW_EPOCH - COMMENT_EPOCH))
+                  if [ "$AGE" -lt "$TWO_HOURS" ]; then
+                    echo "  Still within 2-hour window ($(( AGE / 60 ))m elapsed)"
+                    SKIPPED=$((SKIPPED + 1))
+                    continue
+                  fi
 
-                GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
-                GITCODE_TYPE=$ST bash .gitcode/scripts/gitcode-api.sh close-issue "$NUMBER" 2>/dev/null
+                  echo "  Closing: compliance window expired ($KIND)"
 
-                CLOSED=$((CLOSED + 1))
-              done <<< "$ITEMS"
+                  {
+                    echo "此${KIND}已被自动关闭，因为未在 2 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
+                    echo ""
+                    echo "欢迎按照规范重新提交${KIND}。"
+                  } | GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null
+
+                  GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
+                  GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh close-issue "$NUMBER" 2>/dev/null
+
+                  CLOSED=$((CLOSED + 1))
+                done
+              }
+
+              check_and_close "issues"
+              check_and_close "pulls"
 
               echo "## 合规关闭检查" >> "$ATOMGIT_STEP_SUMMARY"
               echo "" >> "$ATOMGIT_STEP_SUMMARY"
