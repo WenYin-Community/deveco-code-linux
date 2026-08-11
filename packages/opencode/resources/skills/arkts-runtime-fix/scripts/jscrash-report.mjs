@@ -20,7 +20,7 @@ import {
   buildNextActionText,
   formatCrashReportText,
 } from './shared/jscrash-parse.mjs';
-import { resolveHdcOrThrow, runHdc, targetArgs } from './shared/hdc.mjs';
+import { runDevecoCli } from './shared/deveco-cli.mjs';
 import { printKv, toErrorMessage } from './shared/utils.mjs';
 
 function parseArgs(argv) {
@@ -56,38 +56,27 @@ function parseArgs(argv) {
     throw new Error('Provide at most one of --log-text or --log-file');
   }
 
-  const lines = Number(map.get('lines') ?? '4000');
-  if (!Number.isInteger(lines) || lines < 200 || lines > 10000) {
-    throw new Error('--lines must be an integer between 200 and 10000');
-  }
-
   return {
     logText,
     logFile,
     bundleName: map.get('bundle-name') ?? '',
     processHint: map.get('process-hint') ?? '',
     deviceId: map.get('device-id') ?? '',
-    lines,
     includeText: flags.has('include-text'),
   };
 }
 
-function cleanLines(input) {
-  return input
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim().length > 0);
-}
-
-async function collectHilogText(deviceId, lines) {
-  const hdc = await resolveHdcOrThrow();
-  const out = await runHdc([hdc, ...targetArgs(deviceId), 'shell', 'hilog', '-x']);
+async function collectCrashText(deviceId, bundleName) {
+  const out = await runDevecoCli([
+    'log',
+    '--crash',
+    ...(deviceId ? ['--device', deviceId] : []),
+    ...(bundleName ? ['--bundle-name', bundleName] : []),
+  ]);
   if (out.exitCode !== 0) {
-    throw new Error(out.stderr || out.stdout || `hdc hilog -x failed (code=${out.exitCode})`);
+    throw new Error(out.stderr || out.stdout || `devecocli log --crash failed (code=${out.exitCode})`);
   }
-
-  const all = cleanLines(out.stdout);
-  return all.slice(Math.max(0, all.length - lines)).join('\n');
+  return out.stdout;
 }
 
 async function loadInput(args) {
@@ -97,7 +86,7 @@ async function loadInput(args) {
   if (args.logFile) {
     return { text: await fs.readFile(args.logFile, 'utf8'), source: 'file' };
   }
-  return { text: await collectHilogText(args.deviceId, args.lines), source: 'device_hilog' };
+  return { text: await collectCrashText(args.deviceId, args.bundleName), source: 'device_crash' };
 }
 
 function printReport(report, source, includeText) {

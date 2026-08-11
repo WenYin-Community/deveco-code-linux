@@ -7,7 +7,7 @@ description: Load for ArkTS/JavaScript jscrash, runtime crash, uncaught exceptio
 
 Use this skill to diagnose and fix ArkTS or JavaScript runtime crashes with minimal edits.
 
-Use this skill's private Node scripts under `skills/arkts-runtime-fix/scripts/` to parse crash evidence, inspect recent faultlogger entries, or collect hilog when no better evidence is available.
+Use `devecocli` for device discovery and log acquisition. Use this skill's private Node scripts under `skills/arkts-runtime-fix/scripts/` only to parse evidence or save a hilog snapshot.
 
 If `node` is unavailable, stop and explain that the private scripts cannot run.
 
@@ -39,7 +39,9 @@ Avoid broad `Read` / `Glob` / `Explore` across the whole project until you have 
 
 Do not over-collect logs. If the user already gave enough crash evidence, parse that evidence first and move into focused reading and minimal fixes.
 
-## Tool And Script Contract
+## CLI And Script Contract
+
+Run `devecocli` through Shell. Do not call `hdc`, read `DEVECO_HOME`, or use DevEco Code-specific device/log tools directly.
 
 ### Private Node scripts
 
@@ -77,27 +79,20 @@ Before collecting device evidence:
 2. Do not guess `bundleName` from `vendor`, module folder names, or prefixes such as `com.example`.
 3. Resolve the target device:
    - If the user provided a `deviceId`, use it for every device-side command.
-   - If no `deviceId` is provided, call `hdc_log(action="list_devices")` first.
+   - If no `deviceId` is provided, run `devecocli device list` first.
    - If exactly one device is connected, use that device.
-   - If multiple devices are connected, ask the user which device to inspect. Do not probe faultlogger, fetch faultlog, or collect hilog until the user selects a device.
+   - If multiple devices are connected, ask the user which device to inspect. Do not collect logs until the user selects a device.
    - If no devices are connected, report that device-side evidence cannot be collected and ask for a connected device or a local crash log.
 
-After the user reproduces the crash on the selected device, inspect recent faultlogger evidence:
+After the user reproduces the crash on the selected device, fetch and parse the latest matching crash log:
 
 ```bash
-node "{SKILL_DIR}/scripts/probe-faultlogger.mjs" --bundle-name "{bundleName}" --device-id "{deviceId}" --max-age-minutes "30" --limit "10"
+node "{SKILL_DIR}/scripts/jscrash-report.mjs" --bundle-name "{bundleName}" --device-id "{deviceId}" --include-text
 ```
 
-If `status: found`, fetch and parse the latest faultlog:
+With no `--log-text` or `--log-file`, `jscrash-report.mjs` runs `devecocli log --crash --device ... --bundle-name ...` and parses its output. If no matching crash is returned, ask the user to reproduce and retry immediately; do not guess from symptoms alone.
 
-```bash
-node "{SKILL_DIR}/scripts/fetch-faultlog.mjs" --faultlog-name "{latestFaultlog}" --device-id "{deviceId}" --output-dir "{tempDir}"
-node "{SKILL_DIR}/scripts/parse-jscrash-log.mjs" --log-file "{localFaultlogPath}" --bundle-name "{bundleName}" --source file --include-text
-```
-
-If `status: not_found`, do not broad-read the project or guess from symptoms alone. Ask the user to reproduce the crash on the selected device, then probe faultlogger again immediately.
-
-If faultlogger is unavailable, the reproduced crash still does not create a matching faultlog, or the parsed faultlog is still not enough, fall back to hilog:
+If the crash log is unavailable or insufficient, fall back to hilog. The collector runs `devecocli log --device ... --tail ...` and only handles the local snapshot file itself:
 
 ```bash
 node "{SKILL_DIR}/scripts/collect-hilog.mjs" --device-id "{deviceId}" --lines "4000" --output-dir "{tempDir}"
@@ -181,7 +176,7 @@ After parsing crash evidence and obtaining `error_type`, match patterns from the
 ## Conversational Shape
 
 1. Say what evidence you already have.
-2. If logs are missing, say whether you are using faultlogger or hilog to get a better anchor.
+2. If logs are missing, say whether you are using a crash log or hilog to get a better anchor.
 3. Once you have an anchor, switch into focused code reading and minimal fixing.
 
 ## Constraints

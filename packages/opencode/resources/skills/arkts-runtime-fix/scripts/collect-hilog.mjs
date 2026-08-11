@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { resolveHdcOrThrow, runHdc, targetArgs } from './shared/hdc.mjs';
+import { runDevecoCli } from './shared/deveco-cli.mjs';
 import { printKv, toErrorMessage } from './shared/utils.mjs';
 
 function cleanLines(input) {
@@ -72,10 +72,15 @@ function printCollectFailed(nextAction) {
   });
 }
 
-async function collectHilogText(hdc, deviceId, lines) {
-  const out = await runHdc([hdc, ...targetArgs(deviceId), 'shell', 'hilog', '-x']);
+async function collectHilogText(deviceId, lines) {
+  const out = await runDevecoCli([
+    'log',
+    ...(deviceId ? ['--device', deviceId] : []),
+    '--tail',
+    String(lines),
+  ]);
   if (out.exitCode !== 0) {
-    throw new Error(out.stderr || out.stdout || `hdc hilog -x failed (code=${out.exitCode})`);
+    throw new Error(out.stderr || out.stdout || `devecocli log failed (code=${out.exitCode})`);
   }
 
   const all = cleanLines(out.stdout);
@@ -102,8 +107,7 @@ function printCollected(logFile, recent) {
 async function main() {
   try {
     const { outputDir, deviceId, lines } = parseArgs(process.argv.slice(2));
-    const hdc = await resolveHdcOrThrow();
-    const recent = await collectHilogText(hdc, deviceId, lines);
+    const recent = await collectHilogText(deviceId, lines);
     const logFile = await writeHilogSnapshot(outputDir, recent);
     printCollected(logFile, recent);
     process.exit(0);

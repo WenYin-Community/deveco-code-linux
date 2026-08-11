@@ -1,7 +1,7 @@
 ---
 name: deveco-cli
 description: >-
-  **REQUIRED** and **MANDATORY** if the process involves viewing connected devices and managing emulators (including starting/stopping emulators, creating/deleting emulator instances, downloading/deleting emulator images) and generate HarmonyOS signing materials, or if the user mentions managing (add/remove) harmonyOS skill or UI inpection and operation.
+  **REQUIRED** and **MANDATORY** when creating, building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation.
 ---
 
 # DevEco CLI
@@ -9,6 +9,38 @@ description: >-
 `devecocli` wraps DevEco Studio's `hvigor`, `ohpm`, `hdc`, emulator toolchain, and bundled skills installer. **Prefer `devecocli` over invoking underlying tools directly.**
 
 Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui`, `skills`, `log`, `create`, `init`, `serve`, `docs`, `signature`, `auth`.
+
+Run `devecocli <command> -h` when an option is uncertain. Commands return a non-zero exit code and an actionable error when validation or execution fails.
+
+### `devecocli create`
+Scaffold a HarmonyOS application. `--project-path` is the final project directory, not its parent.
+- `--app-name <name>`: Application name.
+- `--project-path <path>`: Output directory; defaults to `./<app-name>`.
+- `--bundle-name <bundle>`: Defaults to `com.example.<app-name>`.
+- `--api-level <level>`: Defaults to the highest installed supported SDK; rejects unsupported levels.
+
+### `devecocli build`
+Build from the project root.
+- `--product <product>`: Product name; default `default`.
+- `--modules <modules...>`: Module or `module@target` values.
+- `--build-mode <mode>`: Build mode; default `debug`.
+- `clean`: Clean build outputs.
+
+### `devecocli run`
+Build, deploy, and launch from the project root.
+- `--module <modules...>`: Module or `module@target` values.
+- `--device <device>`: Device name or serial.
+- `--product <product>`, `--build-mode <mode>`, `--ability <ability>`: Target selection.
+- `--uninstall`, `--skip-build`: Deployment controls.
+
+### `devecocli log`
+Obtain device logs. Output contains the log timestamp and application identity when supplied by the device log.
+- `--device <device>`: Device name or serial.
+- `--crash`: Return the latest crash log; combine with `--bundle-name` for the target app.
+- `--bundle-name <bundle-name>`, `--level <D|I|W|E|F>`, `--keyword <keyword>`: Filters.
+- `--tail <num>`: Latest N lines.
+- `--from <offset>`, `--to <offset>`: Relative time range such as `30s` or `5m`.
+- `--follow`: Stream logs.
 
 ### `devecocli emulator`
 Manage local emulator instances and system images.

@@ -5,7 +5,7 @@ description: ArkTS Runtime Fix 的中文参考版本，仅用于保留中文说�
 
 # ArkTS Runtime Fix（中文参考）
 
-本技能通过 **skill 私有脚本**（Node）完成证据采集与结构化解析，不再使用全局崩溃分析工具。执行前若环境无 `node`，须停止并向用户说明。
+本技能通过 `devecocli` 完成设备发现与日志采集，通过 **skill 私有脚本**（Node）完成结构化解析和本地快照处理。不得直接调用 `hdc`、读取 `DEVECO_HOME` 或依赖 DevEco Code 专用 Tool。执行前若环境无 `node`，须停止并向用户说明。
 
 ## 症状与触发
 
@@ -32,7 +32,7 @@ description: ArkTS Runtime Fix 的中文参考版本，仅用于保留中文说�
 
 ## 私有脚本执行约定
 
-所有脚本通过 Shell 执行，形式与 `deveco-create-project` 一致：
+所有脚本和 `devecocli` 命令均通过 Shell 执行：
 
 ```bash
 node "{SKILL_DIR}/scripts/<script>.mjs" ...
@@ -56,20 +56,17 @@ node "{SKILL_DIR}/scripts/parse-jscrash-log.mjs" --log-file "{logFilePath}" --bu
 
 设备采证前必须先读取 `AppScope/app.json5` 中的 `app.bundleName`，作为后续 `--bundle-name` 的精确值；禁止用 `vendor`、`com.example` 或模块目录名猜测。
 
-先探测 faultlogger 近期 `jscrash-*.log`：
+若用户未指定设备，先运行 `devecocli device list`。只有一个设备时直接使用；多个设备时须请用户选择；无设备时请求连接设备或提供本地日志。
+
+用户在选定设备上复现后，获取并解析最新的匹配崩溃日志：
 
 ```bash
-node "{SKILL_DIR}/scripts/probe-faultlogger.mjs" --bundle-name "{bundleName}" --device-id "{deviceId}" --max-age-minutes "30" --limit "10"
+node "{SKILL_DIR}/scripts/jscrash-report.mjs" --bundle-name "{bundleName}" --device-id "{deviceId}" --include-text
 ```
 
-- 若输出 `status: found`：读取 `latest_faultlog` 或 `candidates`，再拉取并解析：
+未提供 `--log-text` 或 `--log-file` 时，`jscrash-report.mjs` 内部执行 `devecocli log --crash --device ... --bundle-name ...` 并解析输出。若没有匹配日志，应让用户立即复现后重试，不得仅凭症状猜测。
 
-```bash
-node "{SKILL_DIR}/scripts/fetch-faultlog.mjs" --faultlog-name "{latestFaultlog}" --device-id "{deviceId}" --output-dir "{tempDir}"
-node "{SKILL_DIR}/scripts/parse-jscrash-log.mjs" --log-file "{localFaultlogPath}" --bundle-name "{bundleName}" --source file --include-text
-```
-
-- 若输出 `status: not_found` 或 `status: probe_failed`：可按需进入 hilog 兜底采集：
+若崩溃日志不可用或证据不足，再进入 hilog 兜底采集。采集脚本内部执行 `devecocli log --device ... --tail ...`，自身仅负责写入本地快照：
 
 ```bash
 node "{SKILL_DIR}/scripts/collect-hilog.mjs" --device-id "{deviceId}" --lines "4000" --output-dir "{tempDir}"

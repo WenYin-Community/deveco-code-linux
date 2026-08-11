@@ -17,7 +17,6 @@ const DevEcoRequiredSkills = new Set([
   "arkts-error-fixes",
   "arkts-grammar-standards",
   "arkts-runtime-fix",
-  "deveco-create-project",
 ])
 
 export const SkillTool = Tool.define(
