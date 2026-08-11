@@ -177,6 +177,9 @@ export async function checkUpgradeBackground() {
     return
   }
 
+  const prevState = readUpgradeState()
+  const isNewVersion = !prevState?.pendingVersion || prevState.pendingVersion !== latest
+
   await writeUpgradeState({ pendingVersion: latest, checkedAt: now })
 
   const decision = decideUpgrade({
@@ -187,7 +190,7 @@ export async function checkUpgradeBackground() {
     method,
   })
 
-  if (decision === "notify") {
+  if (decision === "notify" && isNewVersion) {
     GlobalBus.emit("event", {
       directory: "global",
       payload: {

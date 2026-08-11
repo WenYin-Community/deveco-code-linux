@@ -101,7 +101,7 @@ describe('toPublicInfo', () => {
       models: { 'test-model': { id: 'test-model' } },
     } as unknown as Info;
     const result = toPublicInfo(provider);
-    expect(result.id).toBe('test');
+    expect(result.id as string).toBe('test');
     expect(result.name).toBe('Test Provider');
   });
 
