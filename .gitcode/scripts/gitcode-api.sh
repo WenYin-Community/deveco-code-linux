@@ -21,7 +21,7 @@ Commands:
   get-issue <number>              Get details (JSON)
   list-comments <number>           List comments (JSON)
   list-linked-issues <number>     List issues linked to a PR (JSON)
-  merge-pr <number>               Merge a PR
+  merge-pr <number> [method]      Merge a PR (ff/rebase/squash, default: ff)
   assign-tester <number> <user>  Assign a tester to a PR
   approve-test <number> [state]  Submit test result (passed/failed)
   reset-test <number>            Reset test approval (revoke tester accept)
@@ -114,7 +114,9 @@ case "$CMD" in
     ;;
   merge-pr)
     NUMBER="$1"
-    curl -sS -X PUT -H "Authorization: Bearer $TOKEN" \
+    METHOD="${2:-ff}"
+    curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"merge_method\":\"$METHOD\"}" \
       "$API/repos/$REPO/pulls/$NUMBER/merge"
     ;;
   assign-tester)

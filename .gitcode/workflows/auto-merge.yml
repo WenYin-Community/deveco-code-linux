@@ -5,6 +5,8 @@ on:
     types: [created]
     comments:
       - '/merge'
+  schedule:
+    - cron: '0 0/5 * * * ?'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -27,6 +29,7 @@ stages:
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
+          GITCODE_TYPE: pulls
         steps:
           - name: 检出代码
             uses: checkout
@@ -54,32 +57,45 @@ stages:
               import json,sys
               d = json.load(sys.stdin)
               ms = d.get('mergeable_state', {})
-              checks = [
-                  ms.get('ci_state_passed', False),
-                  ms.get('conflict_passed', False),
-                  ms.get('non_ff_passed', False),
-                  ms.get('mr_state_passed', False),
-                  ms.get('approval_testers_required_passed', False),
-                  ms.get('approval_reviewers_required_passed', False),
-                  ms.get('approval_approvers_required_passed', False),
-              ]
-              print('1' if all(checks) else '0')
+              labels = {
+                  'ci_state_passed': 'CI 检查通过',
+                  'conflict_passed': '无代码冲突',
+                  'mr_state_passed': 'PR 状态合法',
+                  'approval_testers_required_passed': '测试人审批通过',
+                  'approval_reviewers_required_passed': '审查人审批通过',
+                  'approval_approvers_required_passed': '评审人审批通过',
+              }
+              failed = [v for k, v in labels.items() if not ms.get(k, False)]
+              method = 'rebase' if not ms.get('non_ff_passed', False) else 'ff'
+              if failed:
+                  print(f'FAIL:{method}:' + ';'.join(failed))
+              else:
+                  print(f'OK:{method}')
               " 2>/dev/null)
 
-                if [ "$MERGEABLE" != "1" ]; then
-                  echo "PR #$NUMBER CI or checks not passed, skipping"
+                if [[ "$MERGEABLE" == FAIL:* ]]; then
+                  MERGE_METHOD=$(echo "$MERGEABLE" | cut -d: -f2)
+                  FAILED_ITEMS=$(echo "$MERGEABLE" | sed 's/^FAIL:[^:]*://')
+                  echo "PR #$NUMBER checks not passed, skipping"
                   if [ -n "$PR_NUMBER_INPUT" ] || [ -n "$ISSUE_NUMBER" ]; then
                     {
                       echo '## ⏳ 暂无法合入'
                       echo ''
-                      echo 'PR 的 CI 检查或合规检查尚未全部通过，请等待检查完成后再评论 `/merge`。'
+                      echo '以下检查项尚未通过：'
+                      echo ''
+                      for item in $(echo "$FAILED_ITEMS" | tr ';' ' '); do
+                        echo "- ❌ $item"
+                      done
+                      echo ''
+                      echo '请等待上述检查全部通过后再评论 `/merge`。'
                     } | bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER"
                   fi
                   return 1
                 fi
 
-                echo "PR #$NUMBER all checks passed, merging..."
-                bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER"
+                MERGE_METHOD=$(echo "$MERGEABLE" | sed 's/^OK://')
+                echo "PR #$NUMBER all checks passed (method=$MERGE_METHOD), merging..."
+                bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER" "$MERGE_METHOD"
 
                 {
                   echo '## ✅ PR 已自动合入'
@@ -91,9 +107,9 @@ stages:
                 return 0
               }
 
-              PR_NUMBER="${PR_NUMBER_INPUT:-$ISSUE_NUMBER}"
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
-              if [ -z "$PR_NUMBER" ]; then
+              if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
                 echo "Schedule mode: scanning open PRs"
 
                 RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
