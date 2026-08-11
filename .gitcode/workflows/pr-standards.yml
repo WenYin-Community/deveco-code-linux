@@ -77,8 +77,9 @@ stages:
                 exit 0
               fi
 
-              TITLE_PATTERN='^(\[.*\])?(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(?:\([^)]+\))?!?: .{1,72}$'
-              if ! echo "$TITLE" | grep -qE "$TITLE_PATTERN"; then
+              CLEAN_TITLE=$(echo "$TITLE" | sed 's/^\[[^]]*\]//')
+              TITLE_PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([a-zA-Z0-9-]+\))?!?: .{1,72}$'
+              if ! echo "$CLEAN_TITLE" | grep -qP "$TITLE_PATTERN"; then
                 echo "Title does not follow conventional commit format"
 
                 bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
@@ -96,11 +97,20 @@ stages:
                   echo '| `feat:` | 新功能 |'
                   echo '| `fix:` | Bug 修复 |'
                   echo '| `docs:` | 文档变更 |'
+                  echo '| `style:` | 代码格式 |'
                   echo '| `chore:` | 维护任务 |'
                   echo '| `refactor:` | 代码重构 |'
+                  echo '| `perf:` | 性能优化 |'
                   echo '| `test:` | 测试相关 |'
+                  echo '| `build:` | 构建系统 |'
+                  echo '| `ci:` | CI 配置 |'
+                  echo '| `revert:` | 回退变更 |'
                   echo ''
                   echo '> 可选 scope：`feat(scope):`，scope 为包名（如 `app`、`desktop`、`deveco`）'
+                  echo '>'
+                  echo '> 破坏性变更：`feat!:` 或 `feat(scope)!:`'
+                  echo '>'
+                  echo '> 描述部分不超过 72 字符'
                   echo ''
                   echo '详见[贡献指南 - PR 标题](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#pr-titles)。'
                 } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
@@ -223,7 +233,8 @@ stages:
                 fi
               fi
 
-              if ! echo "$TITLE" | grep -qE '^(docs|refactor|feat)'; then
+              CLEAN_TITLE=$(echo "$TITLE" | sed 's/^\[[^]]*\]//')
+              if ! echo "$CLEAN_TITLE" | grep -qP '^(docs|refactor|feat)'; then
                 LINKED_ISSUES=$(bash .gitcode/scripts/gitcode-api.sh list-linked-issues "$PR_NUMBER")
                 LINKED_COUNT=$(echo "$LINKED_ISSUES" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)
                 if [ "$LINKED_COUNT" = 0 ]; then
