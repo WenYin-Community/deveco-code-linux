@@ -31,14 +31,14 @@ export function decideUpgrade(input: DecideInput): UpgradeDecision {
 }
 
 export type UpgradeState = {
-  pendingVersion?: string
-  checkedAt: number
+  pending_version?: string
+  checked_at: number
 }
 
 const FRESH_MS = 24 * 60 * 60 * 1000
 
 export function isStateFresh(state: UpgradeState): boolean {
-  return Date.now() - state.checkedAt < FRESH_MS
+  return Date.now() - state.checked_at < FRESH_MS
 }
 
 function readUpgradeState(): UpgradeState | undefined {
@@ -125,13 +125,13 @@ export async function checkPendingUpgrade() {
   if (Installation.isLocal()) return
   const state = readUpgradeState()
   if (!state || !isStateFresh(state)) return
-  if (!state.pendingVersion) return
-  if (InstallationVersion === state.pendingVersion) return
+  if (!state.pending_version) return
+  if (InstallationVersion === state.pending_version) return
 
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   const method = await Installation.method()
   const skipped = readKVSkippedVersion()
-  if (skipped && state.pendingVersion === skipped) return
+  if (skipped && state.pending_version === skipped) return
 
   const decision = decideUpgrade({
     autoupdate: config.autoupdate,
@@ -144,7 +144,7 @@ export async function checkPendingUpgrade() {
   if (decision === "skip") return
 
   prompts.intro(t("upgrade.intro"))
-  prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: state.pendingVersion }))
+  prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: state.pending_version }))
 
   if (decision === "notify") {
     const confirm = await prompts.confirm({
@@ -158,7 +158,7 @@ export async function checkPendingUpgrade() {
   }
 
   const isUnknown = method === "unknown"
-  await runUpgradeWithInterrupt(isUnknown ? "npm" : method, isUnknown ? "latest" : state.pendingVersion)
+  await runUpgradeWithInterrupt(isUnknown ? "npm" : method, isUnknown ? "latest" : state.pending_version)
 }
 
 export async function checkUpgradeBackground() {
@@ -173,14 +173,14 @@ export async function checkUpgradeBackground() {
   const now = Date.now()
 
   if (InstallationVersion === latest) {
-    await writeUpgradeState({ checkedAt: now })
+    await writeUpgradeState({ checked_at: now })
     return
   }
 
   const prevState = readUpgradeState()
-  const isNewVersion = !prevState?.pendingVersion || prevState.pendingVersion !== latest
+  const isNewVersion = !prevState?.pending_version || prevState.pending_version !== latest
 
-  await writeUpgradeState({ pendingVersion: latest, checkedAt: now })
+  await writeUpgradeState({ pending_version: latest, checked_at: now })
 
   const decision = decideUpgrade({
     autoupdate: config.autoupdate,
@@ -248,6 +248,7 @@ async function runUpgradeWithInterrupt(method: Installation.Method, target: stri
 
     spinner.message(`${renderBar(100, true)} 100%  \x1b[32m${t("upgrade.complete")}\x1b[0m`)
     spinner.stop(t("upgrade.upgraded_to", { target }))
+    await writeUpgradeState({ checked_at: Date.now() })
     prompts.outro("\x1b[1m" + t("upgrade.restart") + "\x1b[0m")
     process.exit(0)
   }

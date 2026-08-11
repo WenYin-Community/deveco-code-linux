@@ -49,8 +49,8 @@ describe("decideUpgrade", () => {
 })
 
 describe("isStateFresh", () => {
-  const fresh: UpgradeState = { checkedAt: Date.now() }
-  const stale: UpgradeState = { checkedAt: Date.now() - 25 * 60 * 60 * 1000 }
+  const fresh: UpgradeState = { checked_at: Date.now() }
+  const stale: UpgradeState = { checked_at: Date.now() - 25 * 60 * 60 * 1000 }
 
   test("returns true when checkedAt is within 24 hours", () => {
     expect(isStateFresh(fresh)).toBe(true)
@@ -61,12 +61,12 @@ describe("isStateFresh", () => {
   })
 
   test("returns true at exactly 24 hours minus 1ms", () => {
-    const state: UpgradeState = { checkedAt: Date.now() - (24 * 60 * 60 * 1000 - 1) }
+    const state: UpgradeState = { checked_at: Date.now() - (24 * 60 * 60 * 1000 - 1) }
     expect(isStateFresh(state)).toBe(true)
   })
 
   test("returns false at exactly 24 hours", () => {
-    const state: UpgradeState = { checkedAt: Date.now() - 24 * 60 * 60 * 1000 }
+    const state: UpgradeState = { checked_at: Date.now() - 24 * 60 * 60 * 1000 }
     expect(isStateFresh(state)).toBe(false)
   })
 })
