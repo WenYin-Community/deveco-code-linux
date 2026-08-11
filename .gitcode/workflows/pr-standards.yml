@@ -54,7 +54,7 @@ stages:
 
               echo "Checking PR #$PR_NUMBER"
 
-              bash .gitcode/scripts/gitcode-api.sh approve-test "$PR_NUMBER" failed || true
+              bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
               TITLE="$PR_TITLE"
               BODY="$PR_BODY"
@@ -263,7 +263,7 @@ stages:
                 echo "PR is non-compliant"
 
                 bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
-                bash .gitcode/scripts/gitcode-api.sh approve-test "$PR_NUMBER" failed || true
+                bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
                 COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **2 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
 

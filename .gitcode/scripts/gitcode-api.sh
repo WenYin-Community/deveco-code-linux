@@ -24,6 +24,7 @@ Commands:
   merge-pr <number>               Merge a PR
   assign-tester <number> <user>  Assign a tester to a PR
   approve-test <number> [state]  Submit test result (passed/failed)
+  reset-test <number>            Reset test approval (revoke tester accept)
 
 Examples:
   echo "Please fix the title" | bash gitcode-api.sh post-comment 653
@@ -129,6 +130,11 @@ case "$CMD" in
     curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
       -d "{\"test_state\":\"$STATE\"}" \
       "$API/repos/$REPO/pulls/$NUMBER/test"
+    ;;
+  reset-test)
+    NUMBER="$1"
+    curl -sS -X PATCH -H "Authorization: Bearer $TOKEN" \
+      "$API/repos/$REPO/pulls/$NUMBER/testers"
     ;;
   *)
     show_help
