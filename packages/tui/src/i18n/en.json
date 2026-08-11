@@ -61,7 +61,11 @@
     "provider_id_invalid": "Provider ids must start with a lowercase letter or number and only use lowercase letters, numbers, hyphens, and underscores",
     "oauth_failed": "OAuth authorization failed. Try /connect again.",
     "saved_credential": "Saved credential for {{providerID}}. Configure it in deveco.json to use it.",
-    "switched_to_org": "Switched to {{orgName}}"
+    "switched_to_org": "Switched to {{orgName}}",
+    "collect_select_one": "Please select at least one log file",
+    "collect_no_files": "No log files found",
+    "collect_success": "Logs uploaded successfully",
+    "collect_failed": "Failed to upload logs"
   },
   "command": {
     "show_command_palette": "Show command palette",
@@ -528,7 +532,20 @@
     "sound_builtin": "Builtin",
     "sound_reset_hint": "Reset to default",
     "sound_preview": "Preview sound",
-    "sound_confirm": "Confirm and go back"
+    "sound_confirm": "Confirm and go back",
+    "collect_title": "Collect Logs",
+    "collect_main_logs": "Main logs",
+    "collect_mcp_logs": "MCP logs",
+    "collect_view_privacy": "View Privacy Policy",
+    "collect_upload": "Upload",
+    "collect_skip": "Skip",
+    "collect_uploading": "Uploading",
+    "collect_footer_navigate": "navigate",
+    "collect_footer_navigate_key": "up/down",
+    "collect_footer_click": "click",
+    "collect_footer_click_key": "space",
+    "collect_footer_view_privacy": "view privacy policy",
+    "collect_footer_view_privacy_key": "v"
   },
   "permission": {
     "no_diff": "No diff provided",

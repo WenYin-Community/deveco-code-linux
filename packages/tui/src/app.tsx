@@ -507,6 +507,18 @@ function App(props: {
     })
   })
 
+  // Show crash log collection dialog after UI is fully loaded
+  let crashDialogShown = false
+  createEffect(() => {
+    if (crashDialogShown || sync.status !== "complete") return;
+    if (getDevEcoExtensions().consumeCrashInfo?.() === false) return;
+    crashDialogShown = true;
+    const CollectDialog = getDevEcoExtensions().collectDialog;
+    if (CollectDialog) {
+      dialog.replace(() => <CollectDialog triggerType='00002' />);
+    }
+  })
+
   let continued = false
   createEffect(() => {
     // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
@@ -1049,6 +1061,24 @@ function App(props: {
               },
               category: t("category.system"),
             },
+            {
+              name: 'collect.open',
+ 	            title: t('command.collect'),
+ 	            description: 'Select and upload log files to cloud',
+ 	            slashName: 'collect',
+ 	            run: () => {
+                const CollectDialog = getDevEcoExtensions().collectDialog;
+ 	              if (!CollectDialog) {
+                  toast.show({
+ 	                  message: t('dialog.collect_not_available'),
+ 	                  variant: 'error',
+ 	                });
+                  return;
+ 	              }
+               dialog.replace(() => <CollectDialog triggerType="00001" />);
+ 	            },
+              category: t('category.system'),
+ 	          },
           ]
         : []),
     ].map((command) => ({

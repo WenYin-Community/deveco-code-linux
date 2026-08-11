@@ -57,7 +57,8 @@
     "./component/banner": "./src/component/banner.tsx",
     "./component/banner-logo": "./src/component/banner-logo.ts",
     "./component/prompt": "./src/component/prompt/index.tsx",
-    "./routes/home/session-destination": "./src/routes/home/session-destination.tsx"
+    "./routes/home/session-destination": "./src/routes/home/session-destination.tsx",
+    "./i18n": "./src/i18n/index.tsx"
   },
   "dependencies": {
     "@opencode-ai/core": "workspace:*",

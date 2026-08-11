@@ -1,10 +1,10 @@
-import { randomUUID } from "crypto"
-import fs from "fs/promises"
-import path from "path"
-import { Flock } from "@opencode-ai/core/util/flock"
-import { Global } from "@opencode-ai/core/global"
-import { LocalCrypto } from "@/security/local-crypto"
-import { ANALYTICS_ACTION } from "./types"
+import { randomUUID } from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
+import os from 'os';
+import { Flock } from '@opencode-ai/core/util/flock';
+import { Global } from '@opencode-ai/core/global';
+import { LocalCrypto } from '@/security/local-crypto';
 import type {
   AiCodeAttributionEvent,
   AiSessionEvent,
@@ -13,17 +13,20 @@ import type {
   QueuedAnalyticsSubmission,
   ToolExecution,
   ToolSummary,
-} from "./types"
+} from './types';
+import { ANALYTICS_ACTION } from './types';
 
-const ANALYTICS_FILE = "analytics.json"
-const DEVICE_ID_FILE = "device-id.json"
-export const ANALYTICS_SCHEMA_VERSION = 14
-export const ANALYTICS_MAX_PENDING_EVENTS = 1000
+const ANALYTICS_FILE = 'analytics.json';
+const DEVICE_ID_FILE = 'device-id.json';
+export const ANALYTICS_SCHEMA_VERSION = 13;
+export const ANALYTICS_MAX_PENDING_EVENTS = 1000;
 
 export interface AnalyticsStorage {
-  schemaVersion: typeof ANALYTICS_SCHEMA_VERSION
-  pendingEvents: PendingAnalyticsEvent[]
-  lastFlush: number
+  uid: string;
+  userid: string;
+  schemaVersion: typeof ANALYTICS_SCHEMA_VERSION;
+  pendingEvents: PendingAnalyticsEvent[];
+  lastFlush: number;
 }
 
 export type PendingAnalyticsEvent = QueuedAnalyticsSubmission & {
@@ -32,146 +35,162 @@ export type PendingAnalyticsEvent = QueuedAnalyticsSubmission & {
 }
 
 function getAnalyticsDir(): string {
-  return path.join(Global.Path.data, "analytics")
+  return path.join(Global.Path.data, 'analytics');
 }
 
 function getAnalyticsFilePath(): string {
-  return path.join(getAnalyticsDir(), ANALYTICS_FILE)
+  return path.join(getAnalyticsDir(), ANALYTICS_FILE);
+}
+
+async function ensureDir(): Promise<void> {
+  const dir = getAnalyticsDir();
+  try {
+    await fs.mkdir(dir, { recursive: true });
+  } catch {
+    // ignore
+  }
 }
 
 function storageLock(): string {
-  return `analytics:${getAnalyticsFilePath()}`
+  return `analytics:${getAnalyticsFilePath()}`;
 }
 
 function createStorage(): AnalyticsStorage {
   return {
+    uid: randomUUID(),
+    userid: 'unknown',
     schemaVersion: ANALYTICS_SCHEMA_VERSION,
     pendingEvents: [],
     lastFlush: Date.now(),
-  }
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value)
-  return actual.length === expected.length && actual.every((key) => expected.includes(key))
+  const actual = Object.keys(value);
+  return actual.length === expected.length && actual.every((key) => expected.includes(key));
 }
 
 function isToolSummary(value: unknown): value is ToolSummary {
   return (
     isRecord(value) &&
-    hasExactKeys(value, ["name", "count"]) &&
-    typeof value.name === "string" &&
-    typeof value.count === "number"
-  )
+    hasExactKeys(value, ['name', 'count']) &&
+    typeof value.name === 'string' &&
+    typeof value.count === 'number'
+  );
 }
 
 function isToolExecution(value: unknown): value is ToolExecution {
   return (
     isRecord(value) &&
-    hasExactKeys(value, ["toolName", "duration", "isSuccess", "timestamp"]) &&
-    typeof value.toolName === "string" &&
-    typeof value.duration === "number" &&
-    typeof value.isSuccess === "boolean" &&
-    typeof value.timestamp === "number"
-  )
+    hasExactKeys(value, ['toolName', 'duration', 'isSuccess', 'timestamp']) &&
+    typeof value.toolName === 'string' &&
+    typeof value.duration === 'number' &&
+    typeof value.isSuccess === 'boolean' &&
+    typeof value.timestamp === 'number'
+  );
 }
 
 function isAiSessionEvent(value: unknown): value is AiSessionEvent {
-  if (!isRecord(value)) return false
+  if (!isRecord(value)) {
+    return false;
+  }
   if (
     !hasExactKeys(value, [
-      "sourceType",
-      "sourceVersion",
-      "os_arch",
-      "os_name",
-      "os_version",
-      "providerId",
-      "modelId",
-      "sessionid",
-      "messageId",
-      "agentName",
-      "projectId",
-      "bundleName",
-      "modifiedFileCount",
-      "totalAdditions",
-      "totalDeletions",
-      "operations",
-      "toolExecutions",
-      "totalElapsed",
-      "firstResultElapsed",
-      "isFirstBuildSuccess",
-      "isFinalBuildSuccess",
+      'sourceType',
+      'sourceVersion',
+      'os_arch',
+      'os_name',
+      'os_version',
+      'providerId',
+      'modelId',
+      'sessionid',
+      'messageId',
+      'agentName',
+      'projectId',
+      'bundleName',
+      'modifiedFileCount',
+      'totalAdditions',
+      'totalDeletions',
+      'operations',
+      'toolExecutions',
+      'totalElapsed',
+      'firstResultElapsed',
+      'isFirstBuildSuccess',
+      'isFinalBuildSuccess',
     ])
-  )
-    return false
+  ) {
+    return false;
+  }
 
-  const operations = value.operations
+  const operations = value.operations;
   if (
     !isRecord(operations) ||
-    !hasExactKeys(operations, ["builtinTools", "mcpTools", "skillTools"]) ||
+    !hasExactKeys(operations, ['builtinTools', 'mcpTools', 'skillTools']) ||
     !Array.isArray(operations.builtinTools) ||
     !operations.builtinTools.every(isToolSummary) ||
     !Array.isArray(operations.mcpTools) ||
     !operations.mcpTools.every(isToolSummary) ||
     !Array.isArray(operations.skillTools) ||
     !operations.skillTools.every(isToolSummary)
-  )
-    return false
+  ) {
+    return false;
+  }
 
   return (
-    value.sourceType === "DevEco-Code-Cli" &&
-    typeof value.sourceVersion === "string" &&
-    typeof value.os_arch === "string" &&
-    typeof value.os_name === "string" &&
-    typeof value.os_version === "string" &&
-    typeof value.providerId === "string" &&
-    typeof value.modelId === "string" &&
-    typeof value.sessionid === "string" &&
-    typeof value.messageId === "string" &&
-    typeof value.agentName === "string" &&
-    typeof value.projectId === "string" &&
-    typeof value.bundleName === "string" &&
-    typeof value.modifiedFileCount === "number" &&
-    typeof value.totalAdditions === "number" &&
-    typeof value.totalDeletions === "number" &&
+    value.sourceType === 'DevEco-Code-Cli' &&
+    typeof value.sourceVersion === 'string' &&
+    typeof value.os_arch === 'string' &&
+    typeof value.os_name === 'string' &&
+    typeof value.os_version === 'string' &&
+    typeof value.providerId === 'string' &&
+    typeof value.modelId === 'string' &&
+    typeof value.sessionid === 'string' &&
+    typeof value.messageId === 'string' &&
+    typeof value.agentName === 'string' &&
+    typeof value.projectId === 'string' &&
+    typeof value.bundleName === 'string' &&
+    typeof value.modifiedFileCount === 'number' &&
+    typeof value.totalAdditions === 'number' &&
+    typeof value.totalDeletions === 'number' &&
     Array.isArray(value.toolExecutions) &&
     value.toolExecutions.every(isToolExecution) &&
-    typeof value.totalElapsed === "number" &&
-    typeof value.firstResultElapsed === "number" &&
-    (value.isFirstBuildSuccess === null || typeof value.isFirstBuildSuccess === "boolean") &&
-    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === "boolean")
-  )
+    typeof value.totalElapsed === 'number' &&
+    typeof value.firstResultElapsed === 'number' &&
+    (value.isFirstBuildSuccess === null || typeof value.isFirstBuildSuccess === 'boolean') &&
+    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === 'boolean')
+  );
 }
 
 function isAnalyticsTransportFields(value: unknown): value is AnalyticsTransportFields {
-  return isRecord(value) && typeof value.uid === "string"
+  return isRecord(value) && typeof value.uid === 'string';
 }
 
 function isLineCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isAiCodeAttributionEvent(value: unknown): value is AiCodeAttributionEvent {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
-      "projectId",
-      "aiGeneratedLines",
-      "humanGeneratedLines",
-      "unknownGeneratedLines",
-      "totalGeneratedLines",
+      'projectId',
+      'aiGeneratedLines',
+      'humanGeneratedLines',
+      'unknownGeneratedLines',
+      'totalGeneratedLines',
     ]) ||
-    typeof value.projectId !== "string" ||
+    typeof value.projectId !== 'string' ||
     !isLineCount(value.aiGeneratedLines) ||
     !isLineCount(value.humanGeneratedLines) ||
     !isLineCount(value.unknownGeneratedLines) ||
     !isLineCount(value.totalGeneratedLines)
-  )
-    return false
+  ) {
+    return false;
+  }
 
   return (
     value.totalGeneratedLines > 0 &&
@@ -182,16 +201,21 @@ function isAiCodeAttributionEvent(value: unknown): value is AiCodeAttributionEve
 function isPendingAnalyticsEvent(value: unknown): value is PendingAnalyticsEvent {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["action", "event", "uid", "queueId", "sealed"]) ||
+    !hasExactKeys(value, ['action', 'event', 'uid', 'queueId', 'sealed']) ||
     !isAnalyticsTransportFields(value) ||
-    typeof value.queueId !== "string" ||
-    typeof value.sealed !== "boolean"
-  )
-    return false
+    typeof value.queueId !== 'string' ||
+    typeof value.sealed !== 'boolean'
+  ) {
+    return false;
+  }
 
-  if (value.action === ANALYTICS_ACTION.AI_SESSION) return isAiSessionEvent(value.event)
-  if (value.action === ANALYTICS_ACTION.AI_CODE_ATTRIBUTION) return isAiCodeAttributionEvent(value.event)
-  return false
+  if (value.action === ANALYTICS_ACTION.AI_SESSION) {
+    return isAiSessionEvent(value.event);
+  }
+  if (value.action === ANALYTICS_ACTION.AI_CODE_ATTRIBUTION) {
+    return isAiCodeAttributionEvent(value.event);
+  }
+  return false;
 }
 
 function createPendingEvent(submission: AnalyticsQueueSubmission): PendingAnalyticsEvent {
@@ -200,126 +224,188 @@ function createPendingEvent(submission: AnalyticsQueueSubmission): PendingAnalyt
     uid: randomUUID(),
     queueId: randomUUID(),
     sealed: false,
-  }
+  };
 }
 
 function parseStorage(value: unknown): { storage: AnalyticsStorage; needsSave: boolean } {
-  if (!isRecord(value)) return { storage: createStorage(), needsSave: false }
+  if (!isRecord(value)) {
+    return { storage: createStorage(), needsSave: false };
+  }
   if (value.schemaVersion !== ANALYTICS_SCHEMA_VERSION) {
-    return { storage: createStorage(), needsSave: true }
+    return { storage: createStorage(), needsSave: true };
   }
 
-  const source = Array.isArray(value.pendingEvents) ? value.pendingEvents : []
-  const pendingEvents = source.filter(isPendingAnalyticsEvent).slice(-ANALYTICS_MAX_PENDING_EVENTS)
+  const source = Array.isArray(value.pendingEvents) ? value.pendingEvents : [];
+  const pendingEvents = source.filter(isPendingAnalyticsEvent).slice(-ANALYTICS_MAX_PENDING_EVENTS);
   return {
     storage: {
+      uid: randomUUID(),
+      userid: 'unknown',
       schemaVersion: ANALYTICS_SCHEMA_VERSION,
       pendingEvents,
-      lastFlush: typeof value.lastFlush === "number" ? value.lastFlush : Date.now(),
+      lastFlush: typeof value.lastFlush === 'number' ? value.lastFlush : Date.now(),
     },
     needsSave:
       !Array.isArray(value.pendingEvents) ||
       pendingEvents.length !== source.length ||
-      typeof value.lastFlush !== "number",
-  }
+      typeof value.lastFlush !== 'number',
+  };
 }
 
 async function loadStorageUnlocked(): Promise<{ storage: AnalyticsStorage; needsSave: boolean }> {
   try {
-    const persisted = JSON.parse(await fs.readFile(getAnalyticsFilePath(), "utf8"))
-    const encrypted = LocalCrypto.isEncryptedBlob(persisted)
-    const plain = encrypted ? JSON.parse(LocalCrypto.decryptForLocalStorage(persisted)) : persisted
-    const parsed = parseStorage(plain)
-    return { ...parsed, needsSave: parsed.needsSave || !encrypted }
+    const persisted = JSON.parse(await fs.readFile(getAnalyticsFilePath(), 'utf8'));
+    const encrypted = LocalCrypto.isEncryptedBlob(persisted);
+    const plain = encrypted ? JSON.parse(LocalCrypto.decryptForLocalStorage(persisted)) : persisted;
+    const parsed = parseStorage(plain);
+    return { ...parsed, needsSave: parsed.needsSave || !encrypted };
   } catch {
-    return { storage: createStorage(), needsSave: false }
+    return { storage: createStorage(), needsSave: false };
   }
 }
 
 async function saveStorageUnlocked(storage: AnalyticsStorage): Promise<void> {
-  await fs.mkdir(getAnalyticsDir(), { recursive: true, mode: 0o700 })
-  const file = getAnalyticsFilePath()
-  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`
-  const encrypted = LocalCrypto.encryptForLocalStorage(JSON.stringify(storage))
+  await fs.mkdir(getAnalyticsDir(), { recursive: true, mode: 0o700 });
+  const file = getAnalyticsFilePath();
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  const encrypted = LocalCrypto.encryptForLocalStorage(JSON.stringify(storage));
   try {
-    await fs.writeFile(temporary, JSON.stringify(encrypted, null, 2), { encoding: "utf8", mode: 0o600 })
-    await fs.rename(temporary, file)
+    await fs.writeFile(temporary, JSON.stringify(encrypted, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, file);
   } finally {
-    await fs.unlink(temporary).catch(() => undefined)
+    await fs.unlink(temporary).catch(() => undefined);
   }
 }
 
 async function mutateStorage<T>(fn: (storage: AnalyticsStorage) => T | Promise<T>): Promise<T> {
   return Flock.withLock(storageLock(), async () => {
-    const { storage } = await loadStorageUnlocked()
-    const result = await fn(storage)
-    await saveStorageUnlocked(storage)
-    return result
-  })
-}
-
-export async function loadStorage(): Promise<AnalyticsStorage> {
-  return Flock.withLock(storageLock(), async () => {
-    const result = await loadStorageUnlocked()
-    if (result.needsSave) await saveStorageUnlocked(result.storage)
-    return result.storage
-  })
+    const { storage } = await loadStorageUnlocked();
+    const result = await fn(storage);
+    await saveStorageUnlocked(storage);
+    return result;
+  });
 }
 
 export async function enqueuePendingEvent(submission: AnalyticsQueueSubmission): Promise<number> {
   return mutateStorage((storage) => {
-    storage.pendingEvents.push(createPendingEvent(submission))
-    storage.pendingEvents = storage.pendingEvents.slice(-ANALYTICS_MAX_PENDING_EVENTS)
-    return storage.pendingEvents.length
-  })
+    storage.pendingEvents.push(createPendingEvent(submission));
+    storage.pendingEvents = storage.pendingEvents.slice(-ANALYTICS_MAX_PENDING_EVENTS);
+    return storage.pendingEvents.length;
+  });
 }
 
-export const appendPendingEvent = enqueuePendingEvent
-
 export async function getPendingEvents(): Promise<PendingAnalyticsEvent[]> {
-  return (await loadStorage()).pendingEvents
+  return (await loadStorage()).pendingEvents;
 }
 
 export async function preparePendingBatch(limit: number): Promise<PendingAnalyticsEvent[]> {
   return mutateStorage((storage) => {
-    const batch = storage.pendingEvents.slice(0, Math.max(0, limit))
-    for (const pending of batch) pending.sealed = true
-    return structuredClone(batch)
-  })
+    const batch = storage.pendingEvents.slice(0, Math.max(0, limit));
+    for (const pending of batch) pending.sealed = true;
+    return structuredClone(batch);
+  });
 }
 
 export async function ackPendingEvents(uploaded: readonly PendingAnalyticsEvent[]): Promise<number> {
   return mutateStorage((storage) => {
-    const queueIds = new Set(uploaded.map((event) => event.queueId))
-    storage.pendingEvents = storage.pendingEvents.filter((event) => !queueIds.has(event.queueId))
-    storage.lastFlush = Date.now()
-    return storage.pendingEvents.length
-  })
+    const queueIds = new Set(uploaded.map((event) => event.queueId));
+    storage.pendingEvents = storage.pendingEvents.filter((event) => !queueIds.has(event.queueId));
+    storage.lastFlush = Date.now();
+    return storage.pendingEvents.length;
+  });
 }
 
 export async function clearPendingEvents(): Promise<void> {
   await mutateStorage((storage) => {
-    storage.pendingEvents = []
-    storage.lastFlush = Date.now()
-  })
+    storage.pendingEvents = [];
+    storage.lastFlush = Date.now();
+  });
 }
 
 function getDeviceIdFilePath(): string {
-  return path.join(Global.Path.data, DEVICE_ID_FILE)
+  return path.join(Global.Path.data, DEVICE_ID_FILE);
 }
 
 export async function getOrCreateDeviceId(): Promise<string> {
-  const file = getDeviceIdFilePath()
+  const file = getDeviceIdFilePath();
   try {
-    const parsed = JSON.parse(await fs.readFile(file, "utf8"))
-    if (typeof parsed.deviceId === "string" && parsed.deviceId.trim()) return parsed.deviceId
-  } catch {}
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
-  const deviceId = randomUUID()
-  await fs.writeFile(file, JSON.stringify({ deviceId }, null, 2), { encoding: "utf8", mode: 0o600 })
-  return deviceId
+    const parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+    if (typeof parsed.deviceId === 'string' && parsed.deviceId.trim()) {
+      return parsed.deviceId;
+    }
+  } catch {
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  const deviceId = randomUUID();
+  await fs.writeFile(file, JSON.stringify({ deviceId }, null, 2), 'utf8');
+  return deviceId;
+}
+
+export async function getOrCreateUid(): Promise<string> {
+  const storage = await loadStorage();
+  if (storage.uid.trim()) {
+    return storage.uid;
+  }
+  storage.uid = randomUUID();
+  await saveStorage(storage);
+  return storage.uid;
+}
+
+function isStorageShape(value: unknown): value is AnalyticsStorage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const item = value as Partial<AnalyticsStorage>;
+  return (
+    typeof item.uid === 'string' &&
+    typeof item.userid === 'string' &&
+    Array.isArray(item.pendingEvents) &&
+    typeof item.lastFlush === 'number'
+  );
+}
+
+export async function loadStorage(): Promise<AnalyticsStorage> {
+  const filePath = getAnalyticsFilePath();
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    let encrypted = JSON.parse(content);
+    if (LocalCrypto.isEncryptedBlob(encrypted)) {
+      encrypted = JSON.parse(LocalCrypto.decryptForLocalStorage(encrypted));
+    }
+    if (isStorageShape(encrypted)) {
+      if (!encrypted.userid) {
+        encrypted.userid = 'unknown';
+      }
+      await saveStorage(encrypted);
+      return encrypted;
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    uid: randomUUID(),
+    userid: 'unknown',
+    schemaVersion: ANALYTICS_SCHEMA_VERSION,
+    pendingEvents: [],
+    lastFlush: Date.now(),
+  };
+}
+
+export async function saveStorage(storage: AnalyticsStorage): Promise<void> {
+  await ensureDir();
+  const filePath = getAnalyticsFilePath();
+  const encrypted = LocalCrypto.encryptForLocalStorage(JSON.stringify(storage));
+  await fs.writeFile(filePath, JSON.stringify(encrypted, null, 2), 'utf-8');
+}
+
+export function getOsName(): string {
+  return process.platform;
+}
+
+export function getOsVersion(): string {
+  return os.release();
 }
 
 export function getVersion(): string {
-  return typeof DEVECO_VERSION === "string" ? DEVECO_VERSION : "0.0.0"
+  return typeof DEVECO_VERSION === 'string' ? DEVECO_VERSION : '0.0.0';
 }

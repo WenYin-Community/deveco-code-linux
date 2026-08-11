@@ -61,7 +61,11 @@
     "provider_id_invalid": "提供商 ID 必须以小写字母或数字开头，且只能包含小写字母、数字、连字符和下划线",
     "oauth_failed": "OAuth 授权失败。请重新执行 /connect。",
     "saved_credential": "已保存 {{providerID}} 的凭据。请在 deveco.json 中配置后使用。",
-    "switched_to_org": "已切换到 {{orgName}}"
+    "switched_to_org": "已切换到 {{orgName}}",
+    "collect_select_one": "请至少选择一个日志文件",
+    "collect_no_files": "未找到日志文件",
+    "collect_success": "日志上传成功",
+    "collect_failed": "日志上传失败"
   },
   "command": {
     "show_command_palette": "显示命令面板",
@@ -528,7 +532,20 @@
     "sound_builtin": "内置",
     "sound_reset_hint": "恢复默认",
     "sound_preview": "试听音效",
-    "sound_confirm": "确认并返回"
+    "sound_confirm": "确认并返回",
+    "collect_title": "收集日志",
+    "collect_main_logs": "主要日志",
+    "collect_mcp_logs": "MCP 日志",
+    "collect_view_privacy": "查看隐私政策",
+    "collect_upload": "上传",
+    "collect_skip": "跳过",
+    "collect_uploading": "上传中",
+    "collect_footer_navigate": "导航",
+    "collect_footer_navigate_key": "上/下",
+    "collect_footer_click": "点击",
+    "collect_footer_click_key": "空格",
+    "collect_footer_view_privacy": "隐私政策",
+    "collect_footer_view_privacy_key": "v"
   },
   "permission": {
     "no_diff": "没有提供差异信息",

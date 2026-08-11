@@ -5,8 +5,9 @@ export function sanitizePath(p: string | undefined): string {
   if (!p) {
     return String(p);
   }
-  return p.replace(/([/\\]Users[/\\])[^\\/]+/g, '$1***')
-    .replace(/([/\\]home[/\\])[^\\/]+/g, '$1***');
+  return p
+    .replace(/(\bUsers[\\/]+)[^\\/\s"]+/g, '$1***')
+ 	  .replace(/(\/home\/)[^/\s"\\]+/g, '$1***');
 }
 
 // Hash userId with SHA-256 for logging. Returns hex string.
