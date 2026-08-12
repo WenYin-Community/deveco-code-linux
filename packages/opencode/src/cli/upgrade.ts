@@ -6,6 +6,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import * as prompts from "@clack/prompts"
 import { errorMessage } from "@/util/error"
 import { t } from "@/cli/i18n"
+import { UI } from "@/cli/ui"
 import path from "path"
 import fs from "fs"
 import { Global } from "@opencode-ai/core/global"
@@ -143,6 +144,9 @@ export async function checkPendingUpgrade() {
 
   if (decision === "skip") return
 
+  UI.empty()
+  UI.println(UI.logo("  "))
+  UI.empty()
   prompts.intro(t("upgrade.intro"))
   prompts.log.info(t("upgrade.update_available", { current: InstallationVersion, latest: state.pending_version }))
 
