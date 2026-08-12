@@ -53,12 +53,13 @@ stages:
                   return 1
                 fi
 
+                CI_RESULT=$(bash .gitcode/scripts/gitcode-api.sh check-ci "$NUMBER" 2>/dev/null || echo "CI 检查失败")
+
                 MERGEABLE=$(echo "$PR_DATA" | python3 -c "
               import json,sys
               d = json.load(sys.stdin)
               ms = d.get('mergeable_state', {})
               labels = {
-                  'ci_state_passed': 'CI 检查通过',
                   'conflict_passed': '无代码冲突',
                   'mr_state_passed': 'PR 状态合法',
                   'approval_testers_required_passed': '测试人审批通过',
@@ -73,9 +74,23 @@ stages:
                   print(f'OK:{method}')
               " 2>/dev/null)
 
+                FAILED_ITEMS=""
+                MERGE_METHOD=""
                 if [[ "$MERGEABLE" == FAIL:* ]]; then
                   MERGE_METHOD=$(echo "$MERGEABLE" | cut -d: -f2)
                   FAILED_ITEMS=$(echo "$MERGEABLE" | sed 's/^FAIL:[^:]*://')
+                else
+                  MERGE_METHOD=$(echo "$MERGEABLE" | sed 's/^OK://')
+                fi
+                if [ "$CI_RESULT" != "OK" ] && [ -n "$CI_RESULT" ]; then
+                  if [ -n "$FAILED_ITEMS" ]; then
+                    FAILED_ITEMS="${FAILED_ITEMS};${CI_RESULT}"
+                  else
+                    FAILED_ITEMS="$CI_RESULT"
+                  fi
+                fi
+
+                if [ -n "$FAILED_ITEMS" ]; then
                   echo "PR #$NUMBER checks not passed, skipping"
                   if [ -n "$PR_NUMBER_INPUT" ] || [ -n "$ISSUE_NUMBER" ]; then
                     {
@@ -92,8 +107,6 @@ stages:
                   fi
                   return 1
                 fi
-
-                MERGE_METHOD=$(echo "$MERGEABLE" | sed 's/^OK://')
                 echo "PR #$NUMBER all checks passed (method=$MERGE_METHOD), merging..."
                 bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER" "$MERGE_METHOD"
 

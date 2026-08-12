@@ -41,9 +41,6 @@ stages:
             env:
               GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
               GITCODE_TYPE: pulls
-              PR_TITLE: ${{ atomgit.event.pull_request.title }}
-              PR_BODY: ${{ atomgit.event.pull_request.body }}
-              PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
             run: |
               PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
@@ -56,17 +53,9 @@ stages:
 
               bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
-              TITLE="$PR_TITLE"
-              BODY="$PR_BODY"
-              AUTHOR="$PR_AUTHOR"
-
-              if [ -z "$TITLE" ] || [ "$TITLE" = "null" ] || [ -z "$AUTHOR" ] || [ "$AUTHOR" = "null" ]; then
-                PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                  "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
-                AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
-                TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
-                BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
-              fi
+              PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
+              AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
+              TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
 
               echo "Author: $AUTHOR"
               echo "Title: $TITLE"
@@ -168,9 +157,6 @@ stages:
             env:
               GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
               GITCODE_TYPE: pulls
-              PR_TITLE: ${{ atomgit.event.pull_request.title }}
-              PR_BODY: ${{ atomgit.event.pull_request.body }}
-              PR_AUTHOR: ${{ atomgit.event.pull_request.user.login }}
             run: |
               PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
@@ -181,18 +167,11 @@ stages:
 
               echo "Checking PR #$PR_NUMBER compliance"
 
-              TITLE="$PR_TITLE"
-              BODY="$PR_BODY"
-              AUTHOR="$PR_AUTHOR"
+              PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
 
-              PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER" 2>/dev/null)
-
-              if [ -z "$TITLE" ] || [ "$TITLE" = "null" ] || [ -z "$AUTHOR" ] || [ "$AUTHOR" = "null" ]; then
-                AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
-                TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
-                BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
-              fi
+              AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
+              TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
+              BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
 
               if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
                 echo "Skipping: $AUTHOR is a team member"
@@ -209,27 +188,52 @@ stages:
                 fi
               }
 
-              HAS_WHAT=$(echo "$BODY" | grep -q '### What does this PR do?' && echo 1 || echo 0)
-              HAS_TYPE=$(echo "$BODY" | grep -q '### Type of change' && echo 1 || echo 0)
-              HAS_VERIFY=$(echo "$BODY" | grep -q '### How did you verify your code works?' && echo 1 || echo 0)
-              HAS_CHECKLIST=$(echo "$BODY" | grep -q '### Checklist' && echo 1 || echo 0)
-              HAS_ISSUE_SEC=$(echo "$BODY" | grep -q '### Issue for this PR' && echo 1 || echo 0)
+              # 模板段落定义（顺序即模板顺序）
+              TPL_HEADERS="### Issue for this PR
+### Type of change
+### What does this PR do?
+### How did you verify your code works?
+### Screenshots / recordings
+### Checklist"
 
-              if [ "$HAS_WHAT" = 0 ] || [ "$HAS_TYPE" = 0 ] || [ "$HAS_VERIFY" = 0 ] || [ "$HAS_CHECKLIST" = 0 ] || [ "$HAS_ISSUE_SEC" = 0 ]; then
+              # 检查段落是否存在
+              HAS_ISSUE_SEC=$(echo "$BODY" | grep -q '### Issue for this PR' && echo 1 || echo 0)
+              HAS_TYPE=$(echo "$BODY" | grep -q '### Type of change' && echo 1 || echo 0)
+              HAS_WHAT=$(echo "$BODY" | grep -q '### What does this PR do?' && echo 1 || echo 0)
+              HAS_VERIFY=$(echo "$BODY" | grep -q '### How did you verify your code works?' && echo 1 || echo 0)
+              HAS_SCREENSHOTS=$(echo "$BODY" | grep -q '### Screenshots / recordings' && echo 1 || echo 0)
+              HAS_CHECKLIST=$(echo "$BODY" | grep -q '### Checklist' && echo 1 || echo 0)
+
+              if [ "$HAS_ISSUE_SEC" = 0 ] || [ "$HAS_TYPE" = 0 ] || [ "$HAS_WHAT" = 0 ] || [ "$HAS_VERIFY" = 0 ] || [ "$HAS_SCREENSHOTS" = 0 ] || [ "$HAS_CHECKLIST" = 0 ]; then
                 add_issue "PR 描述缺少必要的模板段落，请使用 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。"
               fi
 
-              if [ "$HAS_WHAT" = 1 ]; then
-                WHAT_CONTENT=$(echo "$BODY" | awk '/^### What does this PR do\?$/{f=1;next} /^### /{if(f)exit} f{print}' | tr -d '[:space:]')
-                if [ -z "$WHAT_CONTENT" ]; then
-                  add_issue '"What does this PR do?" 段落为空，请描述你的改动。'
-                fi
+              # 检查段落顺序
+              TPL_PATTERN='### Issue for this PR|### Type of change|### What does this PR do\?|### How did you verify your code works\?|### Screenshots / recordings|### Checklist'
+              ACTUAL_ORDER=$(echo "$BODY" | grep -E "^($TPL_PATTERN)$" | tr '\n' '|')
+              EXPECTED_ORDER=$(echo "$TPL_HEADERS" | tr '\n' '|')
+              if [ -n "$ACTUAL_ORDER" ] && [ "$ACTUAL_ORDER" != "$EXPECTED_ORDER" ]; then
+                add_issue "段落顺序与 PR 模板不一致，请按模板顺序排列。"
               fi
 
+              # 检查 Type of change 选项文案
               if [ "$HAS_TYPE" = 1 ]; then
                 TYPE_CONTENT=$(echo "$BODY" | awk '/^### Type of change$/{f=1;next} /^### /{if(f)exit} f{print}')
                 if ! echo "$TYPE_CONTENT" | grep -qi '\- \[x\]'; then
                   add_issue '未勾选任何"变更类型"选项，请至少选择一项。'
+                fi
+                for opt in "Bug fix" "New feature" "Refactor / code improvement" "Documentation"; do
+                  if ! echo "$TYPE_CONTENT" | grep -qF "$opt"; then
+                    add_issue "\"Type of change\" 段落缺少模板选项: \`$opt\`，请使用 PR 模板原文选项。"
+                  fi
+                done
+              fi
+
+              # 检查 What does this PR do 内容
+              if [ "$HAS_WHAT" = 1 ]; then
+                WHAT_CONTENT=$(echo "$BODY" | awk '/^### What does this PR do\?$/{f=1;next} /^### /{if(f)exit} f{print}' | tr -d '[:space:]')
+                if [ -z "$WHAT_CONTENT" ]; then
+                  add_issue '"What does this PR do?" 段落为空，请描述你的改动。'
                 fi
               fi
 
@@ -242,6 +246,7 @@ stages:
                 fi
               fi
 
+              # 检查 How did you verify 内容
               if [ "$HAS_VERIFY" = 1 ]; then
                 VERIFY_CONTENT=$(echo "$BODY" | awk '/^### How did you verify your code works\?$/{f=1;next} /^### /{if(f)exit} f{print}' | tr -d '[:space:]')
                 if [ -z "$VERIFY_CONTENT" ]; then
@@ -249,12 +254,18 @@ stages:
                 fi
               fi
 
+              # 检查 Checklist 选项文案
               if [ "$HAS_CHECKLIST" = 1 ]; then
                 CHECKLIST_CONTENT=$(echo "$BODY" | awk '/^### Checklist$/{f=1;next} /^### /{if(f)exit} f{print}')
                 CHECKED=$(echo "$CHECKLIST_CONTENT" | grep -c '\- \[x\]' 2>/dev/null) || CHECKED=0
                 if [ "$CHECKED" -lt 2 ]; then
                   add_issue '清单项未全部勾选，请确认你已在本地测试且未包含无关改动。'
                 fi
+                for opt in "I have tested my changes locally" "I have not included unrelated changes in this PR"; do
+                  if ! echo "$CHECKLIST_CONTENT" | grep -qF "$opt"; then
+                    add_issue "\"Checklist\" 段落缺少模板选项: \`$opt\`，请使用 PR 模板原文选项。"
+                  fi
+                done
               fi
 
               HAS_LABEL=$(echo "$PR_DATA" | jq -r '.labels[].name' 2>/dev/null | grep -q '^waiting_on_author$' && echo 1 || echo 0)
@@ -273,8 +284,7 @@ stages:
                 echo "PR is now compliant, removing label"
                 bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
 
-                COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
-                  "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER/comments" 2>/dev/null)
+                COMMENTS=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER")
                 for CID in $(echo "$COMMENTS" \
                   | jq -r '.[] | select(.body | contains("pr-standards") or contains("pr-compliance")) | .id' 2>/dev/null); do
                   bash .gitcode/scripts/gitcode-api.sh delete-comment "$CID"
@@ -283,12 +293,29 @@ stages:
                 {
                   echo '## ✅ 已符合贡献指南'
                   echo ''
-                  echo '感谢更新你的 PR！现已通过所有检查。👍'
+                  echo '感谢更新你的 PR！现已通过模板检查。👍'
+                  echo ''
+                  echo '**合入前还需要：**'
+                  echo '- 至少一个审查人通过'
+                  echo '- openharmony_ci 测试通过'
+                  echo ''
+                  echo '满足后评论 `/merge` 合并，或等待自动合并。'
                 } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
                 bash .gitcode/scripts/gitcode-api.sh approve-test "$PR_NUMBER" passed || true
               else
                 echo "PR is compliant"
+
+                {
+                  echo '## ✅ 已符合贡献指南'
+                  echo ''
+                  echo '**合入前还需要：**'
+                  echo '- 至少一个审查人通过'
+                  echo '- openharmony_ci 测试通过'
+                  echo ''
+                  echo '满足后评论 `/merge` 合并，或等待自动合并。'
+                } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
                 bash .gitcode/scripts/gitcode-api.sh approve-test "$PR_NUMBER" passed || true
               fi
 

@@ -1,0 +1,41 @@
+name: Feishu Notify
+
+on:
+  workflow_call:
+    inputs:
+      command:
+        description: "通知类型: release, custom, ..."
+        required: true
+        type: string
+      data:
+        description: "JSON 格式的通知数据，内容取决于 command"
+        required: true
+        type: string
+    secrets:
+      feishu_webhook:
+        required: false
+
+permissions:
+  repository: read
+
+stages:
+  notify:
+    name: 飞书通知
+    jobs:
+      send:
+        name: 发送通知
+        runs-on: ubuntu-latest
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.feishu_webhook || secrets.FEISHU_WEBHOOK }}
+          FEISHU_DATA: ${{ inputs.data }}
+          GITCODE_OWNER: ${{ vars.GITCODE_OWNER || 'openharmony-sig' }}
+          GITCODE_REPO: ${{ vars.GITCODE_REPO || 'deveco-code' }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 发送飞书通知
+            run: |
+              bash .gitcode/scripts/feishu-notify.sh "${{ inputs.command }}"

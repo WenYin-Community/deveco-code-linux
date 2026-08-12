@@ -89,13 +89,9 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: 飞书通知
+      - name: 设置通知输出
+        id: notify-outputs
         run: |
-          TAG="v${DEVECO_VERSION}"
-          NPM_URL="https://www.npmjs.com/package/@${DEVECO_SCOPE}/deveco-code"
-          RELEASE_URL="https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases/${TAG}"
-          BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
-
           PACKAGES=""
           for pkgjson in packages/opencode/dist/deveco-*/package.json; do
             name=$(jq -r '.name' "$pkgjson")
@@ -103,54 +99,26 @@ jobs:
             PACKAGES="${PACKAGES}• [${name}@${DEVECO_VERSION}](https://www.npmjs.com/package/${name})"
           done
 
-          PAYLOAD=$(jq -n \
-            --arg tag "$TAG" \
-            --arg channel "$DEVECO_CHANNEL" \
-            --arg scope "$DEVECO_SCOPE" \
+          NOTIFY_DATA=$(jq -n \
+            --arg tag "v${DEVECO_VERSION}" \
+            --arg scope "${DEVECO_SCOPE}" \
+            --arg channel "${DEVECO_CHANNEL}" \
+            --arg branch "${DEVECO_BRANCH}" \
             --arg packages "$PACKAGES" \
-            --arg npm_url "$NPM_URL" \
-            --arg release_url "$RELEASE_URL" \
-            --arg branch "$DEVECO_BRANCH" \
-            --arg build_time "$BUILD_TIME" \
-            '{
-              msg_type: "interactive",
-              card: {
-                header: {
-                  title: {tag: "plain_text", content: "✅ DevEco Code \($tag) 发布完成"},
-                  template: "green"
-                },
-                elements: [
-                  {tag: "div", text: {tag: "lark_md", content: "**版本**: \($tag)\n**Channel**: \($channel)\n**Scope**: @\($scope)\n**分支**: \($branch)\n**出包时间**: \($build_time)\n**安装**: npm i -g @\($scope)/deveco-code@\($channel)"}},
-                  {tag: "hr"},
-                  {tag: "div", text: {tag: "lark_md", content: "**npm 包列表**:\n\($packages)"}},
-                  {tag: "hr"},
-                  {tag: "div", text: {tag: "lark_md", content: "**GitCode Release**: [\($tag)](\($release_url))"}},
-                  {tag: "action", actions: [
-                    {tag: "button", text: {tag: "plain_text", content: "📦 npm"}, url: $npm_url, type: "primary"},
-                    {tag: "button", text: {tag: "plain_text", content: "🚀 GitCode"}, url: $release_url, type: "default"}
-                  ]}
-                ]
-              }
-            }')
+            '{tag:$tag, scope:$scope, channel:$channel, branch:$branch, packages:$packages}'
+          )
 
-          WEBHOOK="${{ secrets.FEISHU_WEBHOOK }}"
-          if [ -z "$WEBHOOK" ]; then
-            echo "FEISHU_WEBHOOK not set, skipping notification"
-            exit 0
-          fi
-          curl -sS -X POST -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$WEBHOOK"
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "notify_data<<$EOF" >> "$ATOMGIT_OUTPUT"
+          echo "$NOTIFY_DATA" >> "$ATOMGIT_OUTPUT"
+          echo "$EOF" >> "$ATOMGIT_OUTPUT"
 
-          echo "## 飞书通知" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| 出包时间 | $BUILD_TIME |" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| 状态 | ✅ 已发送 |" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "### 安装命令" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo '```bash' >> "$ATOMGIT_STEP_SUMMARY"
-          echo "npm i -g @$DEVECO_SCOPE/deveco-code@$DEVECO_CHANNEL" >> "$ATOMGIT_STEP_SUMMARY"
-          echo '```' >> "$ATOMGIT_STEP_SUMMARY"
+  notify:
+    name: 飞书通知
+    needs: release
+    uses: ./.gitcode/workflows/feishu-notify.yml
+    with:
+      command: release
+      data: ${{ jobs.release.outputs.notify_data }}
+    secrets:
+      feishu_webhook: ${{ secrets.FEISHU_WEBHOOK }}

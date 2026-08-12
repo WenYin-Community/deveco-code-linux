@@ -8,19 +8,19 @@
 |------|------|----------|------|
 | `master` | 生产环境 | 永久 | 仅通过发布流程合入，禁止直接推送。详见 [RELEASE-WORKFLOW.md](./RELEASE-WORKFLOW.md) |
 | `develop` | 主开发 | 永久 | 新特性合入目标，上游同步在此进行 |
-| `<type>/<short-description>` | 功能 | 临时 | 从 `develop` 检出，PR 合回。分支命名格式见下方 |
+| `<short-description>` | 功能 | 临时 | 从 `develop` 检出，PR 合回。分支命名格式见下方 |
 
-分支命名格式：`<type>/<short-description>`
+分支命名格式：`<short-description>`
 
-- **type**: `feat` | `fix` | `chore` | `docs` | `style` | `refactor` | `perf` | `test` | `build` | `ci` | `revert`（与 Commit 类型一致）
-- **short-description**: 小写英文，短横线分隔，2-5 个词，仅含 `[a-z0-9-]`
+- 最多 3 个词，短横线分隔，仅含 `[a-z0-9-]`
+- 不使用斜杠或类型前缀（如 `feat/`、`fix/`）
 
-示例：`feat/login-auth`、`fix/startup-crash`、`perf/bundle-size`、`ci/add-release-job`、`revert/auth-refactor`
+示例：`login-auth`、`startup-crash`、`bundle-size`、`add-release-job`、`auth-refactor`
 
 ## 日常开发
 
 ```text
-<type>/<short-description> ──PR──▶ develop
+<short-description> ──PR──▶ develop
 ```
 
 1. 从 `develop` 创建功能分支
