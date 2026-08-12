@@ -311,7 +311,6 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
           stdout: upgradeResult.stdout,
           stderr: upgradeResult.stderr,
         })
-        yield* text([process.execPath, "--version"])
       }),
     }
 
