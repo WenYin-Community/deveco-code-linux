@@ -1,11 +1,13 @@
 ---
 name: gitcode-pr
-description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 提交、推送、上游 Issue/PR 关联及 CI 触发。当用户在 DevEco Code 或 openharmony-sig/deveco-code 仓库上下文中要求提交代码、提交当前改动、创建提交、推送代码或创建 PR 时使用；即使用户未提及 GitCode 或 PR，只要要求提交代码也必须触发。所有 GitCode API 操作通过 .gitcode/scripts/gitcode-api.sh 完成，无需 MCP。功能分支固定基于父仓库 develop，推送到 origin，不验证 Fork 关系。
+description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 提交、推送、上游 Issue/PR 关联及 CI 触发。当用户在 DevEco Code 或 openharmony-sig/deveco-code 仓库上下文中要求提交代码、提交当前改动、创建提交、推送代码或创建 PR 时使用；即使用户未提及 GitCode 或 PR，只要要求提交代码也必须触发。所有 GitCode API 操作通过 .gitcode/scripts/gitcode-api.sh 完成，无需 MCP。功能分支基于父仓库目标分支创建，推送到 origin，不验证 Fork 关系。可通过参数指定目标分支，未指定则询问用户。
 ---
 
 # DevEco Code GitCode 提交流程
 
 使用中文与用户沟通。按顺序执行门禁；任一门禁失败，立即停止依赖它的操作。
+
+**目标分支**：从用户指令中提取目标分支名（如 `develop`、`master`）。未指定时使用 `question` 工具询问用户。确定后在后续步骤中使用，记为 `<target_branch>`。
 
 ## 0. Token 门禁
 
@@ -42,7 +44,7 @@ bash .gitcode/scripts/gitcode-api.sh get-issue 1 2>/dev/null | python3 -c "impor
 
 - 父项目：`openharmony-sig/deveco-code`
 - 父项目 URL：`https://gitcode.com/openharmony-sig/deveco-code.git`
-- 分支基线和 PR 目标：父项目 `develop`
+- 分支基线和 PR 目标：父项目 `<target_branch>`（默认 `develop`，由用户指定或询问）
 - 推送目标：`origin`；不得验证或推断其 Fork 关系，不得向父项目推送
 - 所有 GitCode API 操作通过 `bash .gitcode/scripts/gitcode-api.sh` 完成，环境变量 `GITCODE_API`、`GITCODE_REPO`、`GITCODE_TOKEN` 在 Step 0 设置
 
@@ -51,7 +53,7 @@ bash .gitcode/scripts/gitcode-api.sh get-issue 1 2>/dev/null | python3 -c "impor
 1. 运行：
 
    ```bash
-   git fetch --no-tags https://gitcode.com/openharmony-sig/deveco-code.git refs/heads/develop
+   git fetch --no-tags https://gitcode.com/openharmony-sig/deveco-code.git refs/heads/<target_branch>
    ```
 
 2. 运行 `git switch --create <feature_branch> FETCH_HEAD` 并验证起点。不得复用、重置或覆盖同名本地分支。
@@ -70,11 +72,11 @@ hook、检查、提交验证或推送失败时停止后续流程。
 
 ## 4. Issue 与 PR
 
-1. 查询 `<origin_owner>:<feature_branch>` → `develop` 的开放 PR：
+1. 查询 `<origin_owner>:<feature_branch>` → `<target_branch>` 的开放 PR：
 
    ```bash
    ORIGIN_OWNER=$(git remote get-url origin | sed -n 's|.*\.com/\([^/]*\)/.*|\1|p')
-   bash .gitcode/scripts/gitcode-api.sh list-prs open "${ORIGIN_OWNER}:${feature_branch}" develop
+   bash .gitcode/scripts/gitcode-api.sh list-prs open "${ORIGIN_OWNER}:${feature_branch}" <target_branch>
    ```
 
    返回非空数组时复用，不重复创建。
@@ -89,10 +91,15 @@ hook、检查、提交验证或推送失败时停止后续流程。
 
    从响应中提取 Issue 编号。
 
-5. 创建 PR，body 中包含 `Closes #<issue_number>` 以自动关联：
+5. 创建 PR，body 中包含 `Closes #<issue_number>` 以自动关联。根据 commit type 自动勾选 "Type of change" 选项：
+   - `feat` → `[x] New feature`
+   - `fix` → `[x] Bug fix`
+   - `docs` → `[x] Documentation`
+   - `refactor` → `[x] Refactor / code improvement`
+   - 其他类型 → `[x] Refactor / code improvement`
 
    ```bash
-   echo "$PR_BODY" | bash .gitcode/scripts/gitcode-api.sh create-pr "$PR_TITLE" "${ORIGIN_OWNER}:${feature_branch}" develop
+   echo "$PR_BODY" | bash .gitcode/scripts/gitcode-api.sh create-pr "$PR_TITLE" "${ORIGIN_OWNER}:${feature_branch}" <target_branch>
    ```
 
 6. 验证关联：

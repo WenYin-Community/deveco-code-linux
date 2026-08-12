@@ -189,12 +189,7 @@ stages:
               }
 
               # 模板段落定义（顺序即模板顺序）
-              TPL_HEADERS="### Issue for this PR
-### Type of change
-### What does this PR do?
-### How did you verify your code works?
-### Screenshots / recordings
-### Checklist"
+              TPL_HEADERS=$'### Issue for this PR\n### Type of change\n### What does this PR do?\n### How did you verify your code works?\n### Screenshots / recordings\n### Checklist'
 
               # 检查段落是否存在
               HAS_ISSUE_SEC=$(echo "$BODY" | grep -q '### Issue for this PR' && echo 1 || echo 0)
