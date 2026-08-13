@@ -560,7 +560,7 @@ function bindErrorHandler(req: ClientRequest, cleanup: () => void, reject: (reas
   });
 }
 
-const ALLOWED_CIPHERS = [...TlsCipherWhitelist.tls12, ...TlsCipherWhitelist.tls13].join(':');
+const ALLOWED_CIPHERS = [...opensslToIetf.keys()].join(':');
 
 function connectTls(url: URL, rawSocket: Socket | undefined): TLSSocket {
   return tls.connect({
