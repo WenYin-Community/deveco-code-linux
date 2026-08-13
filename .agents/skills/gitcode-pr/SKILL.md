@@ -81,8 +81,23 @@ hook、检查、提交验证或推送失败时停止后续流程。
 
    返回非空数组时复用，不重复创建。
 
-2. 不存在时，按提交类型选择上游 Issue 模板：`feat` → `feature-request`、`fix` → `bug-report`、`docs` → `document`、`refactor` → `refactor`、`chore|test` → `question`。
-3. 优先使用 `.gitcode/ISSUE_TEMPLATE/`，其次使用 `.github/ISSUE_TEMPLATE/`。保留模板默认值，只填写已验证信息，缺失项写 `未提供`。
+2. 不存在时，按提交类型选择上游 Issue 模板（含标题前缀和必填字段映射）：
+
+   | commit type | 模板文件 | 标题前缀 | body 必填字段 |
+   |---|---|---|---|
+   | `feat` | `feature-request.yml` | `[Feature]` | 功能描述、使用场景/解决的问题 |
+   | `fix` | `bug-report.yml` | `[Bug]` | 问题描述、预期行为、实际行为、复现步骤、DevEco Code 版本、操作系统、终端 |
+   | `docs` | `document.yml` | `[Document]` | 改进建议描述、使用的分支信息 |
+   | `refactor` | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
+   | `chore` | `document.yml` | `[Document]` | 改进建议描述、使用的分支信息 |
+   | `test` | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
+   | `perf` | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
+   | `style` | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
+   | `build` | `document.yml` | `[Document]` | 改进建议描述、使用的分支信息 |
+   | `ci` | `document.yml` | `[Document]` | 改进建议描述、使用的分支信息 |
+   | 其他 | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
+
+3. 优先使用 `.gitcode/ISSUE_TEMPLATE/`，其次使用 `.github/ISSUE_TEMPLATE/`。读取所选模板的 YAML，按其字段 `label` 逐项生成 body：用 commit 信息填入必填字段，选填字段有内容则填、无则省略。不得使用模板中不存在的字段名。每个字段格式为 `### <label>\n\n<内容>`，末尾附检查清单（所有项勾选 `[x]`）。缺失的版本/系统信息写 `未提供`。
 4. 创建 Issue：
 
    ```bash
