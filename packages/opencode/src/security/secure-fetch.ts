@@ -560,14 +560,11 @@ function bindErrorHandler(req: ClientRequest, cleanup: () => void, reject: (reas
   });
 }
 
-const ALLOWED_CIPHERS = [...opensslToIetf.keys()].join(':');
-
 function connectTls(url: URL, rawSocket: Socket | undefined): TLSSocket {
   return tls.connect({
     host: url.hostname,
     port: Number(url.port) || 443,
     minVersion: 'TLSv1.2',
-    ciphers: ALLOWED_CIPHERS,
     ...(rawSocket ? { socket: rawSocket } : {}),
   });
 }
