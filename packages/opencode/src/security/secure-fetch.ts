@@ -44,6 +44,24 @@ for (const name of [...TlsCipherWhitelist.tls12, ...TlsCipherWhitelist.tls13]) {
   opensslToIetf.set(openssl, name);
 }
 
+const SUPPORTED_TLS12_CIPHERS = (() => {
+  const valid: string[] = [];
+  for (const name of TlsCipherWhitelist.tls12) {
+    const openssl = name
+      .replace(/^TLS_/, '')
+      .replace(/_WITH_/g, '-')
+      .replace(/POLY1305_SHA256$/, 'POLY1305')
+      .replace(/([A-Z])_(\d)/g, '$1$2')
+      .replace(/_/g, '-');
+    try {
+      tls.createSecureContext({ ciphers: openssl });
+      valid.push(openssl);
+    } catch {
+    }
+  }
+  return valid.join(':');
+})();
+
 function getProxyUrl(): URL | undefined {
   const raw = process.env.HTTPS_PROXY ?? process.env.https_proxy;
   if (!raw) {
@@ -565,6 +583,7 @@ function connectTls(url: URL, rawSocket: Socket | undefined): TLSSocket {
     host: url.hostname,
     port: Number(url.port) || 443,
     minVersion: 'TLSv1.2',
+    ciphers: SUPPORTED_TLS12_CIPHERS,
     ...(rawSocket ? { socket: rawSocket } : {}),
   });
 }
