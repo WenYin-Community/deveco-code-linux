@@ -16,7 +16,7 @@ export const Parameters = Schema.Struct({
 const DevEcoRequiredSkills = new Set([
   "arkts-error-fixes",
   "arkts-grammar-standards",
-  "arkts-runtime-fix",
+  "hmos-runtime-fix-skill",
 ])
 
 export const SkillTool = Tool.define(

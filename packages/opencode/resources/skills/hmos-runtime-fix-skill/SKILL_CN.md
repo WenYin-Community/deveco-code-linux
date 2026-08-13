@@ -1,5 +1,5 @@
 ---
-name: arkts-runtime-fix-cn
+name: hmos-runtime-fix-skill-cn
 description: ArkTS Runtime Fix 的中文参考版本，仅用于保留中文说明，不作为主入口 skill。
 ---
 

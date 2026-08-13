@@ -14,8 +14,8 @@ Run `devecocli <command> -h` when an option is uncertain. Commands return a non-
 
 ### `devecocli create`
 Scaffold a HarmonyOS application. `--project-path` is the final project directory, not its parent.
-- `--app-name <name>`: Application name.
-- `--project-path <path>`: Output directory; defaults to `./<app-name>`.
+- `--app-name <name>`: Must match `^[A-Za-z][A-Za-z0-9_]*$`.
+- `--project-path <path>`: Final project root; the target must be empty.
 - `--bundle-name <bundle>`: Defaults to `com.example.<app-name>`.
 - `--api-level <level>`: Defaults to the highest installed supported SDK; rejects unsupported levels.
 

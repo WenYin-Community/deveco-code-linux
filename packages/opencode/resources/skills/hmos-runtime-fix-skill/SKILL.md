@@ -1,5 +1,5 @@
 ---
-name: arkts-runtime-fix
+name: hmos-runtime-fix-skill
 description: Load for ArkTS/JavaScript jscrash, runtime crash, uncaught exception, stack trace, faultlog, or hilog diagnosis. Also load when the app 闪退/崩溃/白屏, exits after 点击/启动/launch, or build succeeds but runtime fails (no compile error). Use before broad Read/Glob on crash-only tasks.
 ---
 
@@ -7,7 +7,7 @@ description: Load for ArkTS/JavaScript jscrash, runtime crash, uncaught exceptio
 
 Use this skill to diagnose and fix ArkTS or JavaScript runtime crashes with minimal edits.
 
-Use `devecocli` for device discovery and log acquisition. Use this skill's private Node scripts under `skills/arkts-runtime-fix/scripts/` only to parse evidence or save a hilog snapshot.
+Use `devecocli` for device discovery and log acquisition. Use this skill's private Node scripts under `skills/hmos-runtime-fix-skill/scripts/` only to parse evidence or save a hilog snapshot.
 
 If `node` is unavailable, stop and explain that the private scripts cannot run.
 

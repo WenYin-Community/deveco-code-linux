@@ -3,7 +3,7 @@ import {
   buildCrashReport,
   buildNextActionText,
   formatCrashReportText,
-} from "../resources/skills/arkts-runtime-fix/scripts/shared/jscrash-parse.mjs"
+} from "../resources/skills/hmos-runtime-fix-skill/scripts/shared/jscrash-parse.mjs"
 
 describe("jscrash-parse buildCrashReport", () => {
   describe("basic crash detection", () => {

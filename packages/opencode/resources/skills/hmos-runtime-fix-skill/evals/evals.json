@@ -1,10 +1,10 @@
 {
-  "skill_name": "arkts-runtime-fix",
+  "skill_name": "hmos-runtime-fix-skill",
   "evals": [
     {
       "id": 1,
       "prompt": "点击应用就闪退，没有日志",
-      "expected_output": "加载 arkts-runtime-fix；优先从用户现有证据中建立 crash anchor；若缺少可用日志，使用 devecocli device list 选择设备，并在复现后通过 devecocli log --crash 获取最新崩溃日志，仍不足时再通过 devecocli log 获取 hilog；在拿到明确 anchor 前不大范围 Read/Glob 工程",
+      "expected_output": "加载 hmos-runtime-fix-skill；优先从用户现有证据中建立 crash anchor；若缺少可用日志，使用 devecocli device list 选择设备，并在复现后通过 devecocli log --crash 获取最新崩溃日志，仍不足时再通过 devecocli log 获取 hilog；在拿到明确 anchor 前不大范围 Read/Glob 工程",
       "files": []
     },
     {
