@@ -7,12 +7,10 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import path from "path"
-import emulatorTools from "../../src/tool/lib/emulator_tools.json"
 import { disposeAllInstances } from "../fixture/fixture"
 import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
 
-const HARMONY_NAPI_TOOL_NAMES = emulatorTools.map((tool) => tool.name)
 const DEVECO_REGISTRY_TOOL_NAMES = ["hdc_log", "switch_cwd", "build_project", "start_app"] as const
 
 const configLayer = TestConfig.layer({
@@ -48,27 +46,13 @@ describe("deveco builtin tools", () => {
   )
 
   it.instance(
-    "loads Harmony NAPI dynamic tools from the internal plugin",
-    () =>
-      Effect.gen(function* () {
-        const registry = yield* ToolRegistry.Service
-        const ids = yield* registry.ids()
-
-        for (const name of HARMONY_NAPI_TOOL_NAMES) {
-          expect(ids).toContain(name)
-        }
-        expect(ids.filter((id) => HARMONY_NAPI_TOOL_NAMES.includes(id)).length).toBe(HARMONY_NAPI_TOOL_NAMES.length)
-      }),
-    30_000,
-  )
-
-  it.instance(
-    "does not load arkts_knowledge_search",
+    "does not load arkts_knowledge_search or check_ets_files",
     () =>
       Effect.gen(function* () {
         const registry = yield* ToolRegistry.Service
         const ids = yield* registry.ids()
         expect(ids).not.toContain("arkts_knowledge_search")
+        expect(ids).not.toContain("check_ets_files")
       }),
     30_000,
   )

@@ -524,7 +524,6 @@
         "@ai-sdk/xai": "3.0.82",
         "@aws-sdk/credential-providers": "3.1057.0",
         "@clack/prompts": "1.0.0-alpha.1",
-        "@deveco-codegenie/mcp-bridge": "1.1.11",
         "@effect/opentelemetry": "catalog:",
         "@effect/platform-node": "catalog:",
         "@ff-labs/fff-bun": "0.9.4",
@@ -1318,14 +1317,6 @@
     "@cspotcode/source-map-support": ["@cspotcode/source-map-support@0.8.1", "https://registry.npmmirror.com/@cspotcode/source-map-support/-/source-map-support-0.8.1.tgz", { "dependencies": { "@jridgewell/trace-mapping": "0.3.9" } }, "sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw=="],
 
     "@ctrl/tinycolor": ["@ctrl/tinycolor@4.2.0", "https://registry.npmmirror.com/@ctrl/tinycolor/-/tinycolor-4.2.0.tgz", {}, "sha512-kzyuwOAQnXJNLS9PSyrk0CWk35nWJW/zl/6KvnTBMFK65gm7U1/Z5BqjxeapjZCIhQcM/DsrEmcbRwDyXyXK4A=="],
-
-    "@deveco-codegenie/mcp-bridge": ["@deveco-codegenie/mcp-bridge@1.1.11", "https://registry.npmmirror.com/@deveco-codegenie/mcp-bridge/-/mcp-bridge-1.1.11.tgz", { "optionalDependencies": { "@deveco-codegenie/mcp-bridge-darwin-arm64": "1.1.11", "@deveco-codegenie/mcp-bridge-darwin-x64": "1.1.11", "@deveco-codegenie/mcp-bridge-win32-x64": "1.1.11" } }, "sha512-ww/baPevZbgDa5ZAkOgmX5sI0rCIKCa0XFlQ0lh0Tz2kW3pul6g1Hku9g5M68HCe/C5oLN5a4R8NDyGKYs/7xg=="],
-
-    "@deveco-codegenie/mcp-bridge-darwin-arm64": ["@deveco-codegenie/mcp-bridge-darwin-arm64@1.1.11", "https://registry.npmmirror.com/@deveco-codegenie/mcp-bridge-darwin-arm64/-/mcp-bridge-darwin-arm64-1.1.11.tgz", { "os": "darwin", "cpu": "arm64" }, "sha512-H4XtEhoKyJoisEBFZKHq0oY21C9fxSAEuTRXWyzR+C64VOWM0i+W3viel8x9ld5Y8SKeDsbcPLw/CvDHwpBeoQ=="],
-
-    "@deveco-codegenie/mcp-bridge-darwin-x64": ["@deveco-codegenie/mcp-bridge-darwin-x64@1.1.11", "https://registry.npmmirror.com/@deveco-codegenie/mcp-bridge-darwin-x64/-/mcp-bridge-darwin-x64-1.1.11.tgz", { "os": "darwin", "cpu": "x64" }, "sha512-dicLAfLTTL7a1zJ7jA+ntv46VsrB71QQSjg3nRNE9h/s3lahapafo+JBBz/FygUImV2tG3tY2o32Pfa1cId+tQ=="],
-
-    "@deveco-codegenie/mcp-bridge-win32-x64": ["@deveco-codegenie/mcp-bridge-win32-x64@1.1.11", "https://registry.npmmirror.com/@deveco-codegenie/mcp-bridge-win32-x64/-/mcp-bridge-win32-x64-1.1.11.tgz", { "os": "win32", "cpu": "x64" }, "sha512-Mv3bMczBfLk3TQy59Q5qNZkamYtcc/Xh0ptNrGa655pl4oeml9VQqaKBvkkNBIBW8MZU0znRTcc7/hhitFJtmg=="],
 
     "@dot/log": ["@dot/log@0.1.5", "https://registry.npmmirror.com/@dot/log/-/log-0.1.5.tgz", { "dependencies": { "chalk": "^4.1.2", "loglevelnext": "^6.0.0", "p-defer": "^3.0.0" } }, "sha512-ECraEVJWv2f2mWK93lYiefUkphStVlKD6yKDzisuoEmxuLKrxO9iGetHK2DoEAkj7sxjE886n0OUVVCUx0YPNg=="],
 

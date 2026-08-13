@@ -191,7 +191,6 @@ const targets = singleFlag
 console.log("\n[4/5] Installing dependencies...")
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
-const mcpCacheDir = path.join(cacheDir, "mcp-bridge")
 
 const RG_VERSION = "15.1.0"
 const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
@@ -235,36 +234,6 @@ if (!skipInstall) {
       await fs.promises.chmod(cachePath, 0o755)
     }
     console.log(`  Cached rg for ${platform}`)
-  }
-
-  // Download mcp-bridge for each needed platform
-  for (const platform of neededPlatforms) {
-    if (!supportedPlatforms.has(platform)) continue
-    const os = platform.split("-")[0]
-    const arch = platform.split("-")[1]
-    const pkgName = `@deveco-codegenie/mcp-bridge-${os}-${arch}`
-    const cacheSubDir = path.join(mcpCacheDir, platform)
-    const cachedNode = path.join(cacheSubDir, "napi_bridge.node")
-    const cachedPkgJson = path.join(cacheSubDir, "package.json")
-    if (fs.existsSync(cachedNode) && fs.existsSync(cachedPkgJson)) {
-      console.log(`  mcp-bridge for ${platform} already cached`)
-      continue
-    }
-    try {
-      await $`mkdir -p ${cacheSubDir}`
-      await $`bun install --os="*" --cpu="*" ${pkgName}@${(pkg.dependencies as Record<string, string>)["@deveco-codegenie/mcp-bridge"]}`.quiet()
-      const nodeSrc = path.join(dir, "node_modules", pkgName, "napi_bridge.node")
-      const pkgJsonSrc = path.join(dir, "node_modules", pkgName, "package.json")
-      if (fs.existsSync(nodeSrc)) {
-        await fs.promises.copyFile(nodeSrc, cachedNode)
-        await fs.promises.copyFile(pkgJsonSrc, cachedPkgJson)
-        console.log(`  Cached mcp-bridge for ${platform}`)
-      } else {
-        console.log(`  Skipping mcp-bridge for ${platform} (no native module)`)
-      }
-    } catch {
-      console.log(`  Skipping mcp-bridge for ${platform} (install failed)`)
-    }
   }
 } else {
   console.log("  Skipping dependency installation (--skip-install)")
@@ -346,18 +315,6 @@ for (const item of targets) {
       DEVECO_CHANNEL: `'${Script.channel}'`,
     },
   })
-
-  // Copy mcp-bridge-native from cache
-  const mcpKey = `${item.os}-${item.arch}`
-  const mcpCache = path.join(mcpCacheDir, mcpKey)
-  const cachedNode = path.join(mcpCache, "napi_bridge.node")
-  if (fs.existsSync(cachedNode)) {
-    const vendorDir = path.join(dir, "dist", name, "vendor", "mcp-bridge-native")
-    await fs.promises.mkdir(vendorDir, { recursive: true })
-    await fs.promises.copyFile(path.join(mcpCache, "package.json"), path.join(vendorDir, "package.json"))
-    await fs.promises.copyFile(cachedNode, path.join(vendorDir, "napi_bridge.node"))
-    console.log(`    Bundled mcp-bridge for ${mcpKey}`)
-  }
 
   await copyUiVerificationRuntime(name)
 

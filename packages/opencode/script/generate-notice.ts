@@ -26,10 +26,6 @@ const OUTPUT = join(MONOREPO_ROOT, "NOTICE")
 // Key = package name, Value = SPDX license identifier.
 const LICENSE_OVERRIDES: Record<string, string> = {
   "@openauthjs/openauth": "MIT", // license not in npm tarball; repo is MIT
-  "@deveco-codegenie/mcp-bridge": "MIT",
-  "@deveco-codegenie/mcp-bridge-darwin-arm64": "MIT",
-  "@deveco-codegenie/mcp-bridge-darwin-x64": "MIT",
-  "@deveco-codegenie/mcp-bridge-win32-x64": "MIT",
 }
 
 // Workspace-internal packages (workspace:*) — skip these.

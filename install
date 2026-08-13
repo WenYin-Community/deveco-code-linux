@@ -459,7 +459,7 @@ download_and_install() {
     mv "$binary_src" "$stage_dir/bin/$APP"
     chmod 755 "$stage_dir/bin/$APP"
 
-    # Copy vendor directory into staging (ripgrep, mcp-bridge, etc.)
+    # Copy vendor directory into staging (ripgrep, ui-verification-mcp, etc.)
     local vendor_src
     vendor_src=$(find "$tmp_dir" -type d -name vendor -print -quit)
     if [ -n "$vendor_src" ]; then

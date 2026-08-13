@@ -144,12 +144,6 @@ try {
   } catch {
     // UI verification MCP may be absent or stop may fail; proceed to exit.
   }
-  try {
-    const { napiBridgeStop } = await import("./tool/lib/harmony_napi")
-    await napiBridgeStop()
-  } catch {
-    // Native MCP bridge may be absent or stop may fail; proceed to exit.
-  }
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.

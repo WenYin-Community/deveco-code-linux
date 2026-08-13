@@ -74,7 +74,6 @@ export function listLogFiles(): { path: string; label: string; group: string }[]
   const logDir = Global.Path.log;
   const dirs = [
     { dir: logDir, group: 'deveco' },
-    { dir: path.join(logDir, 'deveco-mcp', 'codegenie-mcp-server', 'logs'), group: 'mcp' },
   ];
   const results: { path: string; label: string; group: string }[] = [];
 

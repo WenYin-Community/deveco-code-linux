@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Download ripgrep and mcp-bridge to .build-cache/.
+ * Download ripgrep to .build-cache/.
  *
  * Run automatically via `bun install` (postinstall hook),
  * or manually: `bun run script/postinstall.ts`
@@ -10,7 +10,6 @@
  * Environment:
  * - HTTPS_PROXY / HTTP_PROXY — when set, download uses `undici` + EnvHttpProxyAgent.
  * - RIPGREP_DOWNLOAD_BASE — override ripgrep release URL prefix (default: ghproxy.net mirror).
- * - NPM_REGISTRY — override npm registry for mcp-bridge (default: https://registry.npmmirror.com).
  */
 
 import fs from "fs"
@@ -23,8 +22,6 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const dir = path.resolve(__dirname, "..")
 
-import pkg from "../package.json" with { type: "json" }
-
 // --- Config ---
 
 const RG_VERSION = "15.1.0"
@@ -33,7 +30,6 @@ const RG_BASE = (process.env.RIPGREP_DOWNLOAD_BASE ?? DEFAULT_RG_BASE).replace(/
 
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
-const mcpCacheDir = path.join(cacheDir, "mcp-bridge")
 
 const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
@@ -143,53 +139,6 @@ async function downloadRipgrep(platform: string) {
   console.log(`  Cached rg for ${platform}`)
 }
 
-// --- mcp-bridge ---
-
-async function downloadMcpBridge(platform: string) {
-  const os_ = platform.split("-")[0]
-  const arch = platform.split("-")[1]
-  const pkgName = `@deveco-codegenie/mcp-bridge-${os_}-${arch}`
-  const version = (pkg.dependencies as Record<string, string>)["@deveco-codegenie/mcp-bridge"]
-  const cacheSubDir = path.join(mcpCacheDir, platform)
-  const cachedNode = path.join(cacheSubDir, "napi_bridge.node")
-  const cachedPkgJson = path.join(cacheSubDir, "package.json")
-
-  if (fs.existsSync(cachedNode) && fs.existsSync(cachedPkgJson)) {
-    return
-  }
-
-  mkdirSync(cacheSubDir, { recursive: true })
-  const registry = (process.env.NPM_REGISTRY ?? "https://registry.npmmirror.com").replace(/\/$/, "")
-  const tarballUrl = `${registry}/${pkgName}/-/${pkgName.split("/")[1]}-${version}.tgz`
-  console.log(`  Downloading mcp-bridge for ${platform}...`)
-
-  const buffer = await downloadBuffer(tarballUrl)
-  console.log(`  Downloaded ${Math.round(buffer.length / 1024)} KB`)
-
-  const tmpDir = path.join(cacheSubDir, ".tmp-download")
-  fs.rmSync(tmpDir, { recursive: true, force: true })
-  mkdirSync(tmpDir, { recursive: true })
-  try {
-    const archivePath = path.join(tmpDir, "package.tgz")
-    writeFileSync(archivePath, buffer)
-    const result = spawnSync("tar", ["xzf", archivePath, "-C", tmpDir, "--strip-components=1"], { stdio: "pipe" })
-    if (result.status !== 0) {
-      throw new Error(`tar extract failed: ${result.stderr?.toString()}`)
-    }
-    const extractedNode = path.join(tmpDir, "napi_bridge.node")
-    const extractedPkgJson = path.join(tmpDir, "package.json")
-    if (fs.existsSync(extractedNode)) {
-      renameSync(extractedNode, cachedNode)
-      renameSync(extractedPkgJson, cachedPkgJson)
-      console.log(`  Cached mcp-bridge for ${platform}`)
-    } else {
-      throw new Error("napi_bridge.node not found in tarball")
-    }
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-  }
-}
-
 // --- Main ---
 
 const platforms = Array.from(supportedPlatforms)
@@ -197,7 +146,6 @@ const platforms = Array.from(supportedPlatforms)
 console.log(`Downloading vendored binaries... (${platforms.join(", ")})`)
 for (const platform of platforms) {
   await downloadRipgrep(platform).catch((e) => console.log(`  Failed to download rg for ${platform}: ${e.message}`))
-  await downloadMcpBridge(platform).catch((e) => console.log(`  Failed to download mcp-bridge for ${platform}: ${e.message}`))
 }
 
 console.log("Done.")

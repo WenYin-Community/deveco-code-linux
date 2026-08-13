@@ -22,7 +22,6 @@ import { DevEcoAuthPlugin } from "./deveco"
 import { DevEcoCliEnvPlugin } from "./deveco-cli-env"
 import AnalyticsPlugin from "./analytics/analytics-plugin"
 import AnalyticsMagpiePlugin from "./analytics-magpie/analytics-plugin"
-import HarmonyNapiDynamicToolsPlugin from "./harmony-napi-dynamic-tools"
 import { XaiAuthPlugin } from "./xai"
 import { SnowflakeCortexAuthPlugin } from "./snowflake-cortex"
 import { Effect, Layer, Context } from "effect"
@@ -85,7 +84,6 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     DevEcoCliEnvPlugin,
     AnalyticsPlugin,
     AnalyticsMagpiePlugin,
-    HarmonyNapiDynamicToolsPlugin,
     SnowflakeCortexAuthPlugin,
     XaiAuthPlugin,
   ]

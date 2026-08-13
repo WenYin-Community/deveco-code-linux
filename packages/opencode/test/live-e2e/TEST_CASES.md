@@ -30,7 +30,6 @@ This document is the case map for live end-to-end tests. These tests may use the
 | `SKILL_DEVECO_CREATE_HELLO_WORLD`  | 0-1构建项目                            | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-deveco-create-hello-world.case.ts`  |
 | `SKILL_DEVECO_API17_FALLBACK`      | SDK选择推荐                            | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-deveco-api17-fallback.case.ts`      |
 | `INCREMENTAL_DEV_BUILD_PROJECT`    | 增量开发触发build_project              | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`, `deveco-home` | `cases/incremental-dev-build-project.case.ts`    |
-| `ARKTS_CHECK_ETS`                  | 指定ets文件进行语法检查check_ets_files | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/arkts-check-ets.case.ts`                  |
 | `SWITCH_CWD_BUILD`                 | 指定目录不存在项目代码构建switch_cwd   | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/switch-cwd-build.case.ts`                 |
 | `SWITCH_CWD_PROJECT_BUILD`         | 支持指定目录项目代码构建switch_cwd     | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/switch-cwd-project-build.case.ts`         |
 | `BUILD_PROJECT`                    | 支持鸿蒙项目代码构建build project      | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/build-project.case.ts`                    |
@@ -408,30 +407,6 @@ Expected result:
 1. `copy-template` script executed successfully with `verified: true`.
 2. `build-profile.json5` exists in the project directory.
 3. `build_project` was called and build succeeded or was fixed.
-
-Cleanup:
-
-The temporary workspace is deleted after execution. The user's real DevEco auth and config files are read-only and are not cleaned or modified by this case.
-
-## ARKTS_CHECK_ETS
-
-Purpose:
-
-Verify that the `check_ets_files` tool can perform ArkTS static syntax checking on a specified .ets file. Based on the HarmonyOS project template, construct an erroneous .ets file (using `any` type, violating the `arkts-no-any-unknown` rule), invoke the tool, and verify that diagnostic results are returned.
-
-Steps:
-
-1. Create a temporary workspace and copy the HarmonyOS project template.
-2. Overwrite `entry/src/main/ets/pages/Index.ets` with an erroneous version that uses the `any` type.
-3. Run `deveco run --format json --dir <tmp>` with a prompt instructing the agent to use `check_ets_files` to check the file.
-4. Parse JSON-line events from stdout.
-5. Verify the agent's text response contains diagnostic-related keywords.
-
-Expected result:
-
-1. The process exits with code `0`.
-2. At least one `text` event is emitted.
-3. The received text contains diagnostic keywords (错误/error/诊断/diagnostic/警告/warning).
 
 Cleanup:
 

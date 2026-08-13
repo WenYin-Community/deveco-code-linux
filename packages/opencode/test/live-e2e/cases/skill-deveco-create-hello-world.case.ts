@@ -131,7 +131,7 @@ const testCase: LiveTestCase = {
       const buildEvents = events.filter((event) => {
         if (event.type !== "tool_use") return false
         const part = partOf(event)
-        if (!part || part.tool !== "codegenie-mcp_build_project") return false
+        if (!part || part.tool !== "build_project") return false
         return true
       })
 

@@ -136,7 +136,6 @@ export const layer = Layer.effect(
           debug_exit: "deny",
           spec_write: "deny",
           repo_overview: "deny",
-          check_ets_files: "deny",
           verify_ui: "deny",
           save_ui_screenshot: "deny",
           get_ui_verification_log: "deny",
@@ -181,7 +180,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 todowrite: "allow",
-                check_ets_files: "allow",
                 build_project: "allow",
                 start_app: "allow",
                 hdc_log: "allow",

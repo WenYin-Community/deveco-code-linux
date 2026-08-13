@@ -337,7 +337,7 @@ Key permission differences:
 - **`plan`**: `edit: deny *`, `bash: deny`, `plan_exit/plan_write: allow`. Only plan files under `.deveco/plans/` are editable.
 - **`general`**: Same as build but `todowrite: deny`.
 - **`explore`**: Read-only — `glob/grep/read/webfetch/websearch: allow`, all others denied.
-- **`debug`**: `question/todowrite/arkts_knowledge_search/check_ets_files/build_project/start_app/hdc_log/debug_exit: allow`.
+- **`debug`**: `question/todowrite/arkts_knowledge_search/build_project/start_app/hdc_log/debug_exit: allow`.
 
 All agents share base permissions: `external_directory: ask *`, `read: allow *` (except `*.env*` which requires `ask`).
 

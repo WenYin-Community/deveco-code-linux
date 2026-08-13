@@ -239,7 +239,6 @@ await $`rm -rf dist`
 // Vendored binaries cache (downloaded by postinstall.ts during bun install)
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
-const mcpCacheDir = path.join(cacheDir, "mcp-bridge")
 
 const RG_VERSION = "15.1.0"
 const rgArchiveMap: Record<string, { archive: string; binary: string }> = {
@@ -350,22 +349,6 @@ for (const item of targets) {
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`
-
-  // Copy mcp-bridge-native from cache
-  const mcpKey = `${item.os}-${item.arch}`
-  const mcpCache = path.join(mcpCacheDir, mcpKey)
-  const cachedNode = path.join(mcpCache, "napi_bridge.node")
-  if (!fs.existsSync(cachedNode)) {
-    console.error(`  ERROR: mcp-bridge cache not found for ${mcpKey}. Run "bun install" first to download vendored binaries.`)
-    process.exit(1)
-  }
-  {
-    const vendorDir = path.join(dir, "dist", name, "vendor", "mcp-bridge-native")
-    await fs.promises.mkdir(vendorDir, { recursive: true })
-    await fs.promises.copyFile(path.join(mcpCache, "package.json"), path.join(vendorDir, "package.json"))
-    await fs.promises.copyFile(cachedNode, path.join(vendorDir, "napi_bridge.node"))
-    console.log(`  Bundled mcp-bridge for ${mcpKey}`)
-  }
 
   await copyUiVerificationRuntime(name)
 
