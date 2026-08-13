@@ -19,7 +19,7 @@ const PNG_BYTES = new Uint8Array(
   await Bun.file(new URL("../../../ui/src/assets/favicon/favicon-96x96.png", import.meta.url)).arrayBuffer(),
 )
 const JPEG_BYTES = new Uint8Array(
-  await Bun.file(new URL("../../../console/app/src/asset/deveco-code-logo.jpg", import.meta.url)).arrayBuffer(),
+  await Bun.file(new URL("./fixture-jpeg.jpg", import.meta.url)).arrayBuffer(),
 )
 const TRUNCATED_PNG_BYTES = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
