@@ -7,3 +7,4 @@ script/build-*.ts
 .build-cache/
 temporary-*.md
 .artifacts
+src/server/shared/deveco-web-ui.gen.ts

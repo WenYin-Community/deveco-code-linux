@@ -2,15 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect } from "bun:test"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { ConfigProvider, Effect, Layer } from "effect"
-import {
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http"
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { ServerAuth } from "../../src/server/auth"
@@ -80,24 +72,21 @@ function app(input?: { password?: string; username?: string }) {
 function uiApp(input?: {
   password?: string
   username?: string
-  client?: Layer.Layer<HttpClient.HttpClient>
   disableEmbeddedWebUi?: boolean
 }) {
   const handler = HttpRouter.toWebHandler(
     HttpRouter.use((router) =>
       Effect.gen(function* () {
         const fs = yield* FSUtil.Service
-        const client = yield* HttpClient.HttpClient
         const flags = yield* RuntimeFlags.Service
         yield* router.add("*", "/*", (request) =>
-          serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+          serveUIEffect(request, { fs, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
         )
       }),
     ).pipe(
       Layer.provide(authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))),
       Layer.provide([
         FSUtil.defaultLayer,
-        input?.client ?? httpClient(new Response("ui")),
         RuntimeFlags.layer({ disableEmbeddedWebUi: input?.disableEmbeddedWebUi ?? false }),
         HttpServer.layerServices,
         ConfigProvider.layer(
@@ -125,34 +114,28 @@ function uiApp(input?: {
 }
 
 function routeOrderingApp() {
-  let proxiedUrl: string | undefined
   const handler = HttpRouter.toWebHandler(
     HttpRouter.use((router) =>
       Effect.gen(function* () {
         const fs = yield* FSUtil.Service
-        const client = yield* HttpClient.HttpClient
         const flags = yield* RuntimeFlags.Service
         yield* router.add("GET", "/session/:sessionID", () =>
           Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })),
         )
         yield* router.add("*", "/*", (request) =>
-          serveUIEffect(request, { fs, client, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
+          serveUIEffect(request, { fs, disableEmbeddedWebUi: flags.disableEmbeddedWebUi }),
         )
       }),
     ).pipe(
       Layer.provide([
         FSUtil.defaultLayer,
         RuntimeFlags.layer({ disableEmbeddedWebUi: true }),
-        httpClient(new Response("ui"), (request) => {
-          proxiedUrl = request.url
-        }),
         HttpServer.layerServices,
       ]),
     ),
     { disableLogger: true },
   ).handler
   return {
-    proxiedUrl: () => proxiedUrl,
     request(input: string | URL | Request, init?: RequestInit) {
       return Effect.promise(() =>
         Promise.resolve(
@@ -166,136 +149,11 @@ function routeOrderingApp() {
   }
 }
 
-function httpClient(response: Response, onRequest?: (request: HttpClientRequest.HttpClientRequest) => void) {
-  return Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => {
-      onRequest?.(request)
-      return Effect.succeed(HttpClientResponse.fromWeb(request, response))
-    }),
-  )
-}
-
 function responseText(response: Response) {
   return Effect.promise(() => response.text())
 }
 
 describe("HttpApi UI fallback", () => {
-  it.live("serves the web UI through the HTTP API app", () =>
-    Effect.gen(function* () {
-      let proxiedUrl: string | undefined
-
-      const response = yield* uiApp({
-        disableEmbeddedWebUi: true,
-        client: httpClient(
-          new Response("<html>opencode</html>", { headers: { "content-type": "text/html" } }),
-          (request) => {
-            proxiedUrl = request.url
-          },
-        ),
-      }).request("/")
-
-      expect(response.status).toBe(200)
-      expect(response.headers.get("content-type")).toContain("text/html")
-      expect(yield* responseText(response)).toBe("<html>opencode</html>")
-      expect(proxiedUrl).toBe("https://app.opencode.ai/")
-    }),
-  )
-
-  it.live("strips upstream transfer encoding headers from proxied assets", () =>
-    Effect.gen(function* () {
-      let proxiedUrl: string | undefined
-
-      const response = yield* Effect.gen(function* () {
-        const fs = yield* FSUtil.Service
-        const client = yield* HttpClient.HttpClient
-        const flags = yield* RuntimeFlags.Service
-        return yield* serveUIEffect(HttpServerRequest.fromWeb(new Request("http://localhost/assets/app.js")), {
-          fs,
-          client,
-          disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
-        })
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            RuntimeFlags.layer({ disableEmbeddedWebUi: true }),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make((request) => {
-                proxiedUrl = request.url
-                return Effect.succeed(
-                  HttpClientResponse.fromWeb(
-                    request,
-                    new Response("console.log('ok')", {
-                      headers: {
-                        "content-encoding": "br",
-                        "content-length": "999",
-                        "content-type": "text/javascript",
-                      },
-                    }),
-                  ),
-                )
-              }),
-            ),
-          ),
-        ),
-        Effect.map(HttpServerResponse.toWeb),
-      )
-
-      expect(response.status).toBe(200)
-      expect(proxiedUrl).toBe("https://app.opencode.ai/assets/app.js")
-      expect(response.headers.get("content-encoding")).toBeNull()
-      expect(response.headers.get("content-length")).not.toBe("999")
-      expect(response.headers.get("content-type")).toContain("text/javascript")
-      expect(yield* responseText(response)).toBe("console.log('ok')")
-    }),
-  )
-
-  // Regression for #25698 (Ope): upstream `transfer-encoding: chunked` was
-  // forwarded through the proxy while the proxy itself re-frames the body,
-  // causing browsers to fail with `ERR_INVALID_CHUNKED_ENCODING`.
-  it.live("strips upstream transfer-encoding header from proxied assets", () =>
-    Effect.gen(function* () {
-      const response = yield* Effect.gen(function* () {
-        const fs = yield* FSUtil.Service
-        const client = yield* HttpClient.HttpClient
-        const flags = yield* RuntimeFlags.Service
-        return yield* serveUIEffect(HttpServerRequest.fromWeb(new Request("http://localhost/")), {
-          fs,
-          client,
-          disableEmbeddedWebUi: flags.disableEmbeddedWebUi,
-        })
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            RuntimeFlags.layer({ disableEmbeddedWebUi: true }),
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make((request) =>
-                Effect.succeed(
-                  HttpClientResponse.fromWeb(
-                    request,
-                    new Response("<html>opencode</html>", {
-                      headers: {
-                        "transfer-encoding": "chunked",
-                        "content-type": "text/html",
-                      },
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        Effect.map(HttpServerResponse.toWeb),
-      )
-
-      expect(response.status).toBe(200)
-      expect(response.headers.get("transfer-encoding")).toBeNull()
-      expect(yield* responseText(response)).toBe("<html>opencode</html>")
-    }),
-  )
-
   it.live("serves embedded UI assets when Bun can read them but access reports missing", () =>
     Effect.gen(function* () {
       let readPath: string | undefined
@@ -358,7 +216,6 @@ describe("HttpApi UI fallback", () => {
       const response = yield* server.request("/session/ses_nope")
 
       expect(response.status).toBe(404)
-      expect(server.proxiedUrl()).toBeUndefined()
     }),
   )
 
@@ -385,7 +242,7 @@ describe("HttpApi UI fallback", () => {
         headers: { authorization: `Basic ${btoa("opencode:secret")}` },
       })
 
-      expect(response.status).toBe(200)
+      expect(response.status).not.toBe(401)
     }),
   )
 
@@ -399,7 +256,7 @@ describe("HttpApi UI fallback", () => {
         headers: { authorization: `Basic ${btoa("opencode:sec:ret")}` },
       })
 
-      expect(response.status).toBe(200)
+      expect(response.status).not.toBe(401)
     }),
   )
 
@@ -415,7 +272,6 @@ describe("HttpApi UI fallback", () => {
           password: "secret",
           username: "opencode",
           disableEmbeddedWebUi: true,
-          client: httpClient(new Response("ok")),
         }).request(path)
         expect(response.status).not.toBe(401)
       }

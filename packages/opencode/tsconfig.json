@@ -11,7 +11,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@test/*": ["./test/*"],
-      "@tui/*": ["../tui/src/*"]
+      "@tui/*": ["../tui/src/*"],
+      "deveco-web-ui.gen.ts": ["./deveco-web-ui.gen.ts"]
     },
     "plugins": [
       {
@@ -21,5 +22,5 @@
       }
     ]
   },
-  "exclude": ["node_modules", "**/oh_modules/**", "resources/"]
+  "exclude": ["node_modules", "**/oh_modules/**", "resources/", "deveco-web-ui.gen.ts"]
 }

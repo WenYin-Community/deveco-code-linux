@@ -164,29 +164,13 @@ console.log(`Loaded ${countSpecEntries(defaultSpecData)} default spec resources`
 
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
-  const appDir = path.join(import.meta.dirname, "../../app")
-  const dist = path.join(appDir, "dist")
-  await $`DEVECO_CHANNEL=${Script.channel} bun run --cwd ${appDir} build`
-  const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
-    .map((file) => file.replaceAll("\\", "/"))
-    .filter((file) => !file.endsWith(".map"))
-    .sort()
-  const imports = files.map((file, i) => {
-    const spec = path.relative(dir, path.join(dist, file)).replaceAll("\\", "/")
-    return `import file_${i} from ${JSON.stringify(spec.startsWith(".") ? spec : `./${spec}`)} with { type: "file" };`
-  })
-  const entries = files.map((file, i) => `  ${JSON.stringify(file)}: file_${i},`)
-  return [
-    `// Import all files as file_$i with type: "file"`,
-    ...imports,
-    `// Export with original mappings`,
-    `export default {`,
-    ...entries,
-    `}`,
-  ].join("\n")
+  const { buildWebUI } = await import("./gen-web-ui.ts")
+  return buildWebUI()
 }
 
 const embeddedFileMap = skipEmbedWebUi ? null : await createEmbeddedWebUIBundle()
+
+await Bun.$`rm -f ${path.join(dir, "deveco-web-ui.gen.ts")}`
 
 const allTargets: {
   os: string
@@ -316,8 +300,8 @@ for (const item of targets) {
       execArgv: [`--user-agent=deveco/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
-    files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
-    entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : [])],
+    files: embeddedFileMap ? { "deveco-web-ui.gen.ts": embeddedFileMap } : {},
+    entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["deveco-web-ui.gen.ts"] : [])],
     define: {
       FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
       DEVECO_VERSION: `'${Script.version}'`,

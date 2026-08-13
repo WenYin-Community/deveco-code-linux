@@ -24,7 +24,6 @@ const neededWorkspaces = [
   "packages/core",
   "packages/app",
   "packages/ui",
-  "packages/web",
   "packages/http-recorder",
   "packages/llm",
   // Transitive workspace deps: core depends on the two effect-* packages and

@@ -24,7 +24,7 @@ await Bun.build({
     DEVECO_CHANNEL: `'${Script.channel}'`,
   },
   files: {
-    "opencode-web-ui.gen.ts": "",
+    "deveco-web-ui.gen.ts": "",
   },
 })
 
