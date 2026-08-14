@@ -84,12 +84,42 @@ Signed-off-by: YourName <your.email@example.com>
 4. **粒度**：每个 commit 聚焦一个逻辑变更，避免混合不相关的修改
 5. **语言**：中英文均可，保持同一 commit 内一致
 
+## Issue 规范
+
+创建 Issue 必须使用 `.gitcode/ISSUE_TEMPLATE/` 中对应类型的模板，按模板字段逐项填写，不得省略必填字段、不得自创字段名。
+
+| commit type | 模板文件 | 标题前缀 |
+|---|---|---|
+| `feat` | `feature-request.yml` | `[Feature]` |
+| `fix` | `bug-report.yml` | `[Bug]` |
+| `docs` / `chore` / `build` / `ci` | `document.yml` | `[Document]` |
+| `refactor` / `test` / `perf` / `style` | `refactor.yml` | `[Refactor]` |
+
+- 标题须以模板要求的前缀开头
+- body 中每个字段格式为 `### <label>\n\n<内容>`，末尾附检查清单（所有项勾选 `[x]`）
+- 缺失的版本/系统信息写 `未提供`
+
+## PR 规范
+
+创建 PR 必须使用 `.gitcode/pull_request_template.md` 模板，保留所有章节标题，逐项填写：
+
+1. **Issue for this PR**：填写 `Closes #<issue_number>`
+2. **Type of change**：勾选与 commit type 对应的选项（仅一项 `[x]`）
+3. **What does this PR do?**：简述变更内容和原因
+4. **How did you verify your code works?**：描述验证方式
+5. **Screenshots / recordings**：UI 变更附截图，非 UI 变更写 `N/A`
+6. **Checklist**：逐项确认并勾选
+
+不得省略章节、不得自创格式。不遵循模板的 PR 将被自动拒绝。
+
 ## PR 检查清单
 
 提交 PR 前确认以下事项：
 
 - [ ] 代码通过类型检查（根目录运行 `bun turbo typecheck`，或从包目录运行 `bun typecheck`）
 - [ ] Commit 符合 Conventional Commits 规范
+- [ ] Issue 使用了正确的模板且必填字段完整
+- [ ] PR 正文遵循 `.gitcode/pull_request_template.md` 模板
 
 ## 代码拉取
 
