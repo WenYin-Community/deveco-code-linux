@@ -205,13 +205,20 @@ clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
 d = json.loads(clean)
 print(d.get('head',{}).get('sha',''))
 " 2>/dev/null)
+    HEAD_BRANCH=$(echo "$PR_DATA" | python3 -c "
+import json,sys,re
+raw = sys.stdin.read()
+clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
+d = json.loads(clean)
+print(d.get('head',{}).get('ref',''))
+" 2>/dev/null)
     if [ -z "$HEAD_SHA" ]; then
       echo "CI 检查失败"
       exit 1
     fi
     ACTIONS_API="${API%/v5}/v8"
     curl -sS -H "Authorization: Bearer $TOKEN" \
-      "$ACTIONS_API/repos/$REPO/actions/runs?per_page=100" 2>/dev/null \
+      "$ACTIONS_API/repos/$REPO/actions/runs?per_page=100&branch=$HEAD_BRANCH" 2>/dev/null \
       | python3 -c "
 import json,sys
 data = json.load(sys.stdin)
@@ -247,7 +254,7 @@ else:
     fi
     ACTIONS_API="${API%/v5}/v8"
     FAILED=$(curl -sS -H "Authorization: Bearer $TOKEN" \
-      "$ACTIONS_API/repos/$REPO/actions/runs?per_page=100" 2>/dev/null \
+      "$ACTIONS_API/repos/$REPO/actions/runs?per_page=100&branch=$HEAD_BRANCH" 2>/dev/null \
       | python3 -c "
 import json,sys
 data = json.load(sys.stdin)
