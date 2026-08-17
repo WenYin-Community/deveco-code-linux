@@ -25,6 +25,7 @@ Commands:
   get-issue <number>              Get details (JSON)
   list-comments <number>           List comments (JSON)
   list-linked-issues <number>     List issues linked to a PR (JSON)
+  list-issues [state]             List issues (JSON, paginated)
   list-prs [state] [head] [base]  List pull requests (JSON)
   merge-pr <number> [method]      Merge a PR (ff/rebase/squash, default: ff)
   assign-tester <number> <user>  Assign a tester to a PR
@@ -150,7 +151,7 @@ case "$CMD" in
   get-issue)
     NUMBER="$1"
     curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/$TYPE/$NUMBER" \
-      | tr -d '\000-\010\013\014\016-\037'
+      | tr -d '\000-\010\013-\037'
     ;;
   list-comments)
     NUMBER="$1"
@@ -159,6 +160,31 @@ case "$CMD" in
   list-linked-issues)
     NUMBER="$1"
     curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/pulls/$NUMBER/issues"
+    ;;
+  list-issues)
+    STATE="${1:-open}"
+    PAGE=1
+    PER_PAGE=100
+    RESULTS="[]"
+    while true; do
+      PAGE_JSON=$(curl -sS -H "Authorization: Bearer $TOKEN" \
+        "$API/repos/$REPO/issues?state=${STATE}&page=${PAGE}&per_page=${PER_PAGE}")
+      PAGE_COUNT=$(printf '%s' "$PAGE_JSON" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+      if [ "$PAGE_COUNT" -eq 0 ]; then break; fi
+      RESULTS=$(python3 -c "
+import json, sys
+a = json.loads(sys.argv[1])
+b = json.loads(sys.stdin.read())
+print(json.dumps(a + b))
+" "$RESULTS" <<< "$PAGE_JSON")
+      if [ "$PAGE_COUNT" -lt "$PER_PAGE" ]; then break; fi
+      PAGE=$((PAGE + 1))
+    done
+    printf '%s' "$RESULTS" | python3 -c "
+import json,sys
+d = json.loads(sys.stdin.read(), strict=False)
+print(json.dumps(d, ensure_ascii=False))
+"
     ;;
   list-prs)
     STATE="${1:-open}"
@@ -245,9 +271,22 @@ else:
     ;;
   rerun-failed)
     NUMBER="$1"
-    PR_DATA=$(bash "$0" get-issue "$NUMBER")
-    HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha // ""')
-    HEAD_BRANCH=$(echo "$PR_DATA" | jq -r '.head.ref // ""')
+    HEAD_SHA=$(curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/pulls/$NUMBER" \
+      | python3 -c "
+import json,sys,re
+raw = sys.stdin.read()
+clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
+d = json.loads(clean)
+print(d.get('head',{}).get('sha',''))
+" 2>/dev/null)
+    HEAD_BRANCH=$(curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/pulls/$NUMBER" \
+      | python3 -c "
+import json,sys,re
+raw = sys.stdin.read()
+clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
+d = json.loads(clean)
+print(d.get('head',{}).get('ref',''))
+" 2>/dev/null)
     if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_BRANCH" ]; then
       echo "Failed to get PR #$NUMBER head info" >&2
       exit 1
