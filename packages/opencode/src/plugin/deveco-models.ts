@@ -9,7 +9,6 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import * as ModelsDev from "@opencode-ai/core/models-dev"
 
 import HuaweiEndpoints from "../../huawei-endpoints.json"
-import { secureFetch } from "@/security/secure-fetch"
 
 type ModelsMap = Record<string, ModelsDev.Model>
 
@@ -153,7 +152,7 @@ let cachedTaskDefaultModelMap: Record<string, string> | null = null
 const API_ENDPOINT = `${DEVECO_BASE_URL}/codeGenie/modelConfig?localVersion=0&pluginVersion=CLI.${InstallationVersion}`
 
 async function fetchModelsFromAPI(accessToken: string): Promise<{ models: ModelsMap; taskDefaultModelMap: Record<string, string> | undefined }> {
-  const response = await secureFetch(API_ENDPOINT, {
+  const response = await fetch(API_ENDPOINT, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",

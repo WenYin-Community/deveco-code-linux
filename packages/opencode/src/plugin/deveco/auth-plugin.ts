@@ -7,7 +7,6 @@ import { GlobalBus } from "@/bus/global"
 import { logError } from "./log"
 import { TOOL_IMPROVEMENT_HEADER, readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
-import { secureFetch } from "@/security/secure-fetch"
 
 import { devecoAuth } from "./auth"
 import { sessionChatIdMap } from "./session"
@@ -149,7 +148,7 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
               headers.delete(TOOL_IMPROVEMENT_HEADER)
             }
 
-            return secureFetch(finalInput, {
+            return fetch(finalInput, {
               ...init,
               headers,
             })

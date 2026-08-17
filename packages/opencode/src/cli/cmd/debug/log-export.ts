@@ -10,11 +10,9 @@ import { ensureValidToken } from '@/plugin/deveco';
 import { getOrCreateUid, getOsName, getOsVersion, getVersion } from '@/plugin/analytics';
 import { createEnvironmentFields } from '@/plugin/analytics/events';
 import { runID } from '@opencode-ai/core/observability/shared';
-import { secureFetch } from '@/security/secure-fetch';
-import Endpoint from '../../../../huawei-endpoints.json';
 
 // Content Center configuration (via environment variables)
-const baseUrl = process.env.DEVECO_CONTENT_CENTER_URL || `${Endpoint.devecoStudio}/codeGenie`;
+const baseUrl = process.env.DEVECO_CONTENT_CENTER_URL || 'https://cn.devecostudio.huawei.com/codeGenie';
 const uploadUrl = '/cli/content/v3/files';
 const uploadCompleteUrl = '/cli/content/v3/files/complete';
 
@@ -246,14 +244,11 @@ export async function uploadOnce(archive: Buffer, authToken: string): Promise<st
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), ms);
-  if (init.signal) {
-    init.signal.addEventListener('abort', () => controller.abort(), { once: true });
-  }
+  const timeout = setTimeout(() => controller.abort(), ms);
   try {
-    return await secureFetch(url, { ...init, signal: controller.signal, timeout: ms });
+    return await fetch(url, { ...init, signal: controller.signal });
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(timeout);
   }
 }
 
