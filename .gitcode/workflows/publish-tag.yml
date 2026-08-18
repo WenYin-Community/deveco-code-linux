@@ -213,10 +213,7 @@ jobs:
             '{tag:$tag, scope:$scope, channel:$channel, branch:$branch, packages:$packages}'
           )
 
-          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "notify_data<<$EOF" >> "$ATOMGIT_OUTPUT"
-          echo "$NOTIFY_DATA" >> "$ATOMGIT_OUTPUT"
-          echo "$EOF" >> "$ATOMGIT_OUTPUT"
+          echo "notify_data=$(printf '%s' "$NOTIFY_DATA" | base64 -w0)" >> "$ATOMGIT_OUTPUT"
 
   notify:
     name: 飞书通知
