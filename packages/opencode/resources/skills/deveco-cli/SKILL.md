@@ -1,7 +1,7 @@
 ---
 name: deveco-cli
 description: >-
-  **REQUIRED** and **MANDATORY** when creating, building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation.
+  **REQUIRED** and **MANDATORY** when building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation. For creating or scaffolding a project, load `deveco-create-project` instead.
 ---
 
 # DevEco CLI
@@ -12,12 +12,8 @@ Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui
 
 Run `devecocli <command> -h` when an option is uncertain. Commands return a non-zero exit code and an actionable error when validation or execution fails.
 
-### `devecocli create`
-Scaffold a HarmonyOS application. `--project-path` is the final project directory, not its parent.
-- `--app-name <name>`: Must match `^[A-Za-z][A-Za-z0-9_]*$`.
-- `--project-path <path>`: Final project root; the target must be empty.
-- `--bundle-name <bundle>`: Defaults to `com.example.<app-name>`.
-- `--api-level <level>`: Defaults to the highest installed supported SDK; rejects unsupported levels.
+### Project creation
+Load `deveco-create-project` when creating or scaffolding a HarmonyOS application. Its private script validates the inputs, invokes `devecocli create`, verifies the generated project, and sets the session context. Do not invoke `devecocli create` directly for project-creation requests.
 
 ### `devecocli build`
 Build from the project root.
