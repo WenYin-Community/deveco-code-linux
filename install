@@ -26,15 +26,12 @@ warn() {
 }
 
 
-# ─── Dependency checks ───────────────────────────────────────────────────────
-if ! command -v curl >/dev/null 2>&1; then
-    die "'curl' is required but not installed"
-fi
-
 # ─── Global cleanup trap ────────────────────────────────────────────────────
 cleanup() {
     rm -rf "${TMPDIR:-/tmp}/deveco_install_$$"
-    rm -rf "$VERSIONS_DIR"/.staging.*.$$ 2>/dev/null || true
+    if [ -n "${VERSIONS_DIR:-}" ]; then
+        rm -rf "$VERSIONS_DIR"/.staging.*.$$ 2>/dev/null || true
+    fi
     printf '\033[?25h' 2>/dev/null
 }
 trap cleanup EXIT
@@ -100,10 +97,30 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+raw_os=$(uname -s)
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  *)
+    die "Unsupported OS: $raw_os" "This installer supports macOS only. On Windows, run install.ps1 from PowerShell"
+    ;;
+esac
+
+node_warning=false
+if command -v node >/dev/null 2>&1; then
+    node_version=$(node --version 2>/dev/null || echo "")
+    node_major=${node_version#v}
+    node_major=${node_major%%.*}
+    if [[ ! "$node_major" =~ ^[0-9]+$ ]] || [ "$node_major" -lt 22 ]; then
+        node_warning=true
+    fi
+else
+    node_warning=true
+fi
+
 # ─── Versioned install directories ──────────────────────────────────────────
 BIN_DIR="$HOME/.local/bin"
 BIN_LINK="$BIN_DIR/$APP"
-VERSIONS_DIR="$HOME/.local/share/deveco/versions"
+VERSIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/deveco/versions"
 VERSION_RETENTION_COUNT=2
 mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 
@@ -112,16 +129,15 @@ if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
         die "Binary not found: ${binary_path}" "Please check the path and try again"
     fi
-    specific_version="local"
+    binary_path="$(cd "$(dirname "$binary_path")" && pwd)/$(basename "$binary_path")"
+    specific_version=$("$binary_path" --version 2>/dev/null || echo "")
+    if [[ ! "$specific_version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+        die "Local binary returned an invalid version: $specific_version" "Use a binary produced by the DevEco Code build"
+    fi
 else
-    raw_os=$(uname -s)
-    case "$raw_os" in
-      Darwin*) os="darwin" ;;
-      MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-      *)
-        die "Unsupported OS: $raw_os" "DevEco Code currently supports macOS and Windows (via Git Bash)"
-        ;;
-    esac
+    if ! command -v curl >/dev/null 2>&1; then
+        die "'curl' is required but not installed"
+    fi
 
     arch=$(uname -m)
     if [[ "$arch" == "aarch64" ]]; then
@@ -141,38 +157,18 @@ else
 
     combo="$os-$arch"
     case "$combo" in
-      darwin-x64|darwin-arm64|windows-x64)
+      darwin-x64|darwin-arm64)
         ;;
       *)
-        die "Unsupported platform: $os/$arch" "Supported: macOS (Apple Silicon / Intel), Windows x64"
+        die "Unsupported platform: $os/$arch" "Supported: macOS (Apple Silicon / Intel)"
         ;;
     esac
-
-    # Windows: detect AVX2 support for baseline fallback
-    needs_baseline=false
-    if [ "$os" = "windows" ] && [ "$arch" = "x64" ]; then
-      ps="(Add-Type -MemberDefinition \"[DllImport(\"\"kernel32.dll\"\")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);\" -Name Kernel32 -Namespace Win32 -PassThru)::IsProcessorFeaturePresent(40)"
-      out=""
-      if command -v powershell.exe >/dev/null 2>&1; then
-        out=$(powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
-      elif command -v pwsh >/dev/null 2>&1; then
-        out=$(pwsh -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
-      fi
-      out=$(echo "$out" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr '[:space:]')
-      if [ "$out" != "true" ] && [ "$out" != "1" ]; then
-        needs_baseline=true
-      fi
-    fi
-
     target="$os-$arch"
-    if [ "$needs_baseline" = "true" ]; then
-      target="$target-baseline"
-    fi
 
     filename="$APP-$target.zip"
 
     if ! command -v unzip >/dev/null 2>&1; then
-        die "'unzip' is required but not installed" "macOS: brew install unzip  |  Ubuntu: sudo apt install unzip"
+        die "'unzip' is required but not installed" "Install it with: brew install unzip"
     fi
 
     if [ -z "$requested_version" ]; then
@@ -204,20 +200,41 @@ else
             die "Release v${requested_version} not found or unavailable (HTTP ${http_status})" "Available releases: https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
         fi
     fi
+    if [[ ! "$specific_version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+        die "Invalid release version: $specific_version" "Use a valid DevEco Code release version"
+    fi
     url="${GITCODE_API}/releases/v${specific_version}/attach_files/${filename}/download"
 fi
 
+deveco_cli_entry() {
+    local install_root="$1"
+    [ -d "$install_root/vendor/deveco-cli" ] || return 1
+    find "$install_root/vendor/deveco-cli" -path '*/dist/cli.js' -type f -print -quit
+}
+
+installation_complete() {
+    local install_root="$1"
+    [ -x "$install_root/bin/$APP" ] &&
+    [ -f "$install_root/CHANGELOG.md" ] &&
+    [ -n "$(deveco_cli_entry "$install_root")" ]
+}
+
 check_version() {
     if [ -L "$BIN_LINK" ] && [ -x "$BIN_LINK" ]; then
+        local version_dir="$VERSIONS_DIR/$specific_version"
         installed_version=$("$BIN_LINK" --version 2>/dev/null || echo "")
 
         if [[ "$installed_version" != "$specific_version" ]]; then
             echo -e "${MUTED}Installed version: ${NC}$installed_version."
-        else
+        elif installation_complete "$version_dir"; then
             echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping"
-            exit 0
+            update_symlink "$version_dir"
+            return 0
+        else
+            echo -e "${MUTED}Version ${NC}$specific_version${MUTED} is incomplete, repairing installation"
         fi
     fi
+    return 1
 }
 
 unbuffered_sed() {
@@ -418,7 +435,7 @@ download_and_install() {
     local tmp_dir="${TMPDIR:-/tmp}/deveco_install_$$"
 
     # Skip download if this version is already fully installed
-    if [ -x "$version_dir/bin/$APP" ]; then
+    if installation_complete "$version_dir"; then
         local existing_ver
         existing_ver=$("$version_dir/bin/$APP" --version 2>/dev/null || echo "")
         if [ "$existing_ver" = "$specific_version" ]; then
@@ -431,7 +448,7 @@ download_and_install() {
 
     mkdir -p "$stage_dir/bin" "$tmp_dir"
 
-    if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
+    if ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
         curl -f -# -L -o "$tmp_dir/$filename" "$url"
     fi
 
@@ -461,7 +478,10 @@ download_and_install() {
 
     # Copy vendor directory into staging (ripgrep, ui-verification-mcp, etc.)
     local vendor_src
-    vendor_src=$(find "$tmp_dir" -type d -name vendor -print -quit)
+    vendor_src="$tmp_dir/vendor"
+    if [ ! -d "$vendor_src" ]; then
+        vendor_src=$(find "$tmp_dir" -mindepth 2 -maxdepth 2 -type d -name vendor -print -quit)
+    fi
     if [ -n "$vendor_src" ]; then
         cp -r "$vendor_src" "$stage_dir/vendor"
     fi
@@ -473,16 +493,22 @@ download_and_install() {
         cp "$changelog_src" "$stage_dir/CHANGELOG.md"
     fi
 
+    if ! installation_complete "$stage_dir"; then
+        rm -rf "$stage_dir"
+        rm -rf "$tmp_dir"
+        die "Release archive is incomplete" "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+    fi
+
+    local installed_version
+    installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
+    if [ "$installed_version" != "$specific_version" ]; then
+        rm -rf "$stage_dir" "$tmp_dir"
+        die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}"
+    fi
+
     # Atomic switch: staging → version directory
     if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
     mv "$stage_dir" "$version_dir"
-
-    # Post-install smoke test
-    if ! "$version_dir/bin/$APP" --version >/dev/null 2>&1; then
-        rm -rf "$version_dir"
-        rm -rf "$tmp_dir"
-        die "Installation verification failed" "$version_dir/bin/$APP could not run — platform may be incompatible"
-    fi
 
     # Update symlink and clean up old versions
     update_symlink "$version_dir"
@@ -492,10 +518,34 @@ download_and_install() {
 
 install_from_binary() {
     echo -e "\n${MUTED}Installing ${NC}deveco ${MUTED}from: ${NC}$binary_path"
-    local version_dir="$VERSIONS_DIR/local"
-    mkdir -p "$version_dir/bin"
-    cp "$binary_path" "$version_dir/bin/$APP"
-    chmod 755 "$version_dir/bin/$APP"
+    local version_dir="$VERSIONS_DIR/$specific_version"
+    local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
+    local binary_abs
+    binary_abs="$(cd "$(dirname "$binary_path")" && pwd)/$(basename "$binary_path")"
+    local source_root
+    source_root=$(dirname "$(dirname "$binary_abs")")
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir/bin"
+    cp "$binary_abs" "$stage_dir/bin/$APP"
+    chmod 755 "$stage_dir/bin/$APP"
+    if [ -d "$source_root/vendor" ]; then
+        cp -r "$source_root/vendor" "$stage_dir/vendor"
+    else
+        die "No adjacent vendor directory found" "Use the binary from a complete build output containing vendor/deveco-cli"
+    fi
+    if [ -f "$source_root/CHANGELOG.md" ]; then
+        cp "$source_root/CHANGELOG.md" "$stage_dir/CHANGELOG.md"
+    fi
+    if ! installation_complete "$stage_dir"; then
+        die "Local build output is incomplete" "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+    fi
+    local installed_version
+    installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
+    if [ "$installed_version" != "$specific_version" ]; then
+        die "Installation verification failed" "$binary_abs did not preserve version $specific_version"
+    fi
+    if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
+    mv "$stage_dir" "$version_dir"
     update_symlink "$version_dir"
     cleanup_old_versions
 }
@@ -503,8 +553,11 @@ install_from_binary() {
 if [ -n "$binary_path" ]; then
     install_from_binary
 else
-    check_version
-    download_and_install
+    if check_version; then
+        cleanup_old_versions
+    else
+        download_and_install
+    fi
 fi
 
 
@@ -599,7 +652,7 @@ echo -e "${NC}▄   ▄ ▄▄▄▄ ▄   ▄ ▄▄▄▄ ▄     ▄   ▄   
 echo -e "${NC}▅   ▅ ▅    ▅   ▅ ▅    ▅   ▅ ▅   ▅   ▅   ▅ ▅   ▅ ▅   ▅ ▅   ${NC}"
 echo -e "${NC}▆▆▆▆  ▆▆▆▆  ▆▆▆  ▆▆▆▆  ▆▆▆   ▆▆▆     ▆▆▆   ▆▆▆  ▆▆▆▆  ▆▆▆▆${NC}"
 echo -e ""
-if [ "$specific_version" = "local" ]; then
+if [ -n "$binary_path" ]; then
     echo -e "${MUTED}Local binary installed.${NC}"
 else
     echo -e "${MUTED}v$specific_version installed.${NC}"
@@ -607,16 +660,25 @@ fi
 
 # PATH hint — only when PATH was actually modified
 if [ "$_path_modified" = true ]; then
+    echo -e ""
     echo -e "${ORANGE}Note: Open a new terminal for PATH changes to take effect.${NC}"
     echo -e ""
     echo -e "${MUTED}To activate PATH in this shell, run:${NC}"
-    echo -e "  ${GREEN}source $config_file${NC}"
-    echo -e ""
+    echo -e "${GREEN}source $config_file${NC}"
 fi
 
+echo -e ""
 echo -e ""
 echo -e "${MUTED}Get started:${NC}"
 echo -e ""
 echo -e "cd <project>  ${MUTED}# Open your project directory${NC}"
 echo -e "deveco        ${MUTED}# Launch DevEco Code${NC}"
 echo -e ""
+
+if [ "$node_warning" = "true" ]; then
+    echo -e "${RED}WARNING:${NC}"
+    echo -e "${RED}Node.js 22 or later is required.${NC}"
+    echo -e "${RED}Without it, some DevEco Code features will not work.${NC}"
+    echo -e "${RED}Install Node.js from https://nodejs.org/ and make sure \"node\" is available in your PATH.${NC}"
+    echo -e ""
+fi

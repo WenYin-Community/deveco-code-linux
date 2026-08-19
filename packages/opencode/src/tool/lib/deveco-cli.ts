@@ -3,6 +3,7 @@ import fsSync from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { Global } from "@opencode-ai/core/global"
+import { resolveInstallRoot } from "@opencode-ai/core/installation/vendor-path"
 
 const PACKAGE_NAME = "@deveco/deveco-cli"
 const INSTALL_ENTRY_MARKER = ".deveco-cli-entry"
@@ -77,7 +78,7 @@ export function __setTestDevecoCliEntry(entry: string | undefined) {
 export function resolveBundledDevecoCliEntry(): string | undefined {
   if (testEntryOverride && exists(testEntryOverride)) return path.resolve(testEntryOverride)
 
-  const installed = resolveInstalledDevecoCliEntryFromExecutable(process.execPath)
+  const installed = resolveInstalledDevecoCliEntry(resolveInstallRoot())
   if (installed) return installed
 
   const localBuild = resolveLocalBuildDevecoCliEntry(process.execPath)

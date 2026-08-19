@@ -13,10 +13,8 @@ function resolveResourceRoot(): string {
   const direct = path.join(execDir, "..")
 
   // 1) Versioned install — known at build time, no heuristics needed.
-  if (InstallationVersion !== "local") {
-    const versionedRoot = path.join(Global.Path.data, "versions", InstallationVersion)
-    if (fs.existsSync(versionedRoot)) return versionedRoot
-  }
+  const versionedRoot = path.join(Global.Path.data, "versions", InstallationVersion)
+  if (fs.existsSync(versionedRoot)) return versionedRoot
 
   // 2) Package directory itself (npm install, dev mode).
   if (

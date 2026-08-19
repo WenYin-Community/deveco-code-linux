@@ -39,7 +39,8 @@ $gitcodeRepo = if ($env:GITCODE_REPO) { $env:GITCODE_REPO } else { "deveco-code"
 $Repo = "$gitcodeOwner/$gitcodeRepo"
 $GitCodeApi = "https://gitcode.com/api/v5/repos/$Repo"
 $AppName = "deveco"
-$VersionsDir = Join-Path $env:USERPROFILE ".local\share\deveco\versions"
+$DataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $env:USERPROFILE ".local\share" }
+$VersionsDir = Join-Path $DataHome "deveco\versions"
 $BinDir = Join-Path $env:USERPROFILE ".local\bin"
 $BinPath = Join-Path $BinDir "$AppName.exe"
 $VersionRetentionCount = 2
@@ -227,10 +228,29 @@ function Test-Avx2 {
     return $type::IsProcessorFeaturePresent(40)
 }
 
+function Get-DevecoCliEntry {
+    param([string]$InstallRoot)
+    $vendorRoot = Join-Path $InstallRoot "vendor\deveco-cli"
+    if (-not (Test-Path -LiteralPath $vendorRoot -PathType Container)) { return $null }
+    $entry = Get-ChildItem -LiteralPath $vendorRoot -Filter "cli.js" -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '[\\/]dist[\\/]cli\.js$' } |
+        Select-Object -First 1
+    if ($entry) { return $entry.FullName }
+    return $null
+}
+
+function Test-InstallationComplete {
+    param([string]$InstallRoot)
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "bin\$AppName.exe") -PathType Leaf)) { return $false }
+    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "CHANGELOG.md") -PathType Leaf)) { return $false }
+    return -not [string]::IsNullOrWhiteSpace((Get-DevecoCliEntry $InstallRoot))
+}
+
 # M1: Check if the target version is already installed; return true if so
 function Test-InstalledVersion {
     param([string]$TargetVersion)
     if (-not (Test-Path $BinPath)) { return }
+    $versionDir = Join-Path $VersionsDir $TargetVersion
     try {
         $installed = (& $BinPath --version 2>$null) -join "`n"
     } catch {
@@ -238,9 +258,13 @@ function Test-InstalledVersion {
     }
     $installed = $installed.Trim()
     if (-not $installed) { return }
-    if ($installed -eq $TargetVersion) {
+    if ($installed -eq $TargetVersion -and (Test-InstallationComplete $versionDir)) {
         Write-Host "Version $TargetVersion already installed, skipping" -ForegroundColor DarkGray
         return $true
+    }
+    if ($installed -eq $TargetVersion) {
+        Write-Host "Version $TargetVersion is incomplete, repairing installation" -ForegroundColor DarkGray
+        return $false
     }
     Write-Host "Installed version: $installed." -ForegroundColor DarkGray
     return $false
@@ -256,8 +280,7 @@ function Cleanup-OldVersions {
     $currentVersion = $null
     if (Test-Path $BinPath) {
         try {
-            $lines = @(& $BinPath --version 2>$null)
-            if ($lines[0] -match '(\d+\.\d+\.\d+)') { $currentVersion = $Matches[1] }
+            $currentVersion = ((@(& $BinPath --version 2>$null) -join "`n").Trim())
         } catch {}
     }
     $toDelete = $dirs | Where-Object { $_.Name -ne $currentVersion } |
@@ -272,14 +295,40 @@ if ($Help) {
     return
 }
 
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+    Write-Error "This installer supports Windows PowerShell only. On macOS, run the install script from Bash."
+    throw "Unsupported operating system"
+}
+
+$nodeWarning = $true
+if (Get-Command node -ErrorAction SilentlyContinue) {
+    $nodeVersion = ((@(& node --version 2>$null) -join "`n").Trim()) -replace '^v', ''
+    $nodeMajor = 0
+    if ($LASTEXITCODE -eq 0 -and
+        [int]::TryParse(($nodeVersion -split '\.')[0], [ref]$nodeMajor) -and
+        $nodeMajor -ge 22) {
+        $nodeWarning = $false
+    }
+}
+
 # --- Discover version (skipped when -Binary is provided) ---
+$skipDownload = $false
+$resolvedBinary = $null
 if ($Binary) {
-    if (-not (Test-Path $Binary)) {
+    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
         Write-Error "Binary not found: $Binary"
         Write-Host "Please check the path and try again" -ForegroundColor DarkGray
         throw "Installer failed"
     }
-    $tag = "local"
+    $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
+    try {
+        $tag = ((@(& $resolvedBinary --version 2>$null) -join "`n").Trim())
+    } catch {
+        throw "Cannot read version from local binary"
+    }
+    if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
+        throw "Local binary returned an invalid version: $tag"
+    }
 } else {
     # Version priority: -Version param > $env:VERSION env var > auto-detect latest
     $tag = if (-not [string]::IsNullOrWhiteSpace($Version)) {
@@ -319,7 +368,7 @@ if ($Binary) {
         # Verify the release exists
         $releaseUrl = "$GitCodeApi/releases/v$tag"
         try {
-            $response = Invoke-WebRequest -Uri $releaseUrl -Method Head -UseBasicParsing -ErrorAction Stop
+            $response = Invoke-WebRequest -Uri $releaseUrl -Method Get -UseBasicParsing -ErrorAction Stop
             if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
         } catch {
             Write-Error "Release v$tag not found: $_"
@@ -328,8 +377,12 @@ if ($Binary) {
         }
     }
 
+    if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
+        throw "Invalid release version: $tag"
+    }
+
     # M1: Version skip check — only when NOT using -Binary
-    if (Test-InstalledVersion $tag) { return }
+    $skipDownload = [bool](Test-InstalledVersion $tag)
 }
 
 # Global try/finally: ensure temp file and staging dir are cleaned up on exception or Ctrl+C
@@ -345,17 +398,39 @@ try {
     }
 
     if ($Binary) {
-        # --- Binary install — copy local binary to versioned dir ---
+        # --- Binary install — stage the binary and adjacent runtime resources ---
         Write-Host ""
         Write-Host "Installing deveco from: $Binary" -ForegroundColor DarkGray
-        $versionDir = Join-Path $VersionsDir "local"
-        $versionBinDir = Join-Path $versionDir "bin"
-        if (-not (Test-Path $versionBinDir)) {
-            New-Item -ItemType Directory -Path $versionBinDir -Force | Out-Null
+        $versionDir = Join-Path $VersionsDir $tag
+        $stageDir = Join-Path $VersionsDir ".staging.$tag.$PID"
+        $stageBinDir = Join-Path $stageDir "bin"
+        if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
+        New-Item -ItemType Directory -Path $stageBinDir -Force | Out-Null
+        $versionBin = Join-Path $stageBinDir "$AppName.exe"
+        Copy-Item -Path $resolvedBinary -Destination $versionBin -Force
+
+        $sourceRoot = Split-Path (Split-Path $resolvedBinary -Parent) -Parent
+        $sourceVendor = Join-Path $sourceRoot "vendor"
+        if (Test-Path $sourceVendor) {
+            Copy-Item -Path $sourceVendor -Destination (Join-Path $stageDir "vendor") -Recurse -Force
+        } else {
+            throw "No adjacent vendor directory found. Use a complete build output containing vendor/deveco-cli."
         }
-        $versionBin = Join-Path $versionBinDir "$AppName.exe"
-        Copy-Item -Path $Binary -Destination $versionBin -Force
-    } else {
+        $sourceChangelog = Join-Path $sourceRoot "CHANGELOG.md"
+        if (Test-Path $sourceChangelog) {
+            Copy-Item -Path $sourceChangelog -Destination (Join-Path $stageDir "CHANGELOG.md") -Force
+        }
+
+        if (-not (Test-InstallationComplete $stageDir)) {
+            throw "Local build output is incomplete — bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+        }
+        $installedVersion = ((@(& $versionBin --version 2>$null) -join "`n").Trim())
+        if ($LASTEXITCODE -ne 0) { throw "Installation verification failed — deveco could not run" }
+        if ($installedVersion -ne $tag) { throw "Local binary version changed during installation" }
+        if (Test-Path $versionDir) { Remove-Item $versionDir -Recurse -Force }
+        Move-Item -Path $stageDir -Destination $versionDir
+        $versionBin = Join-Path $versionDir "bin\$AppName.exe"
+    } elseif (-not $skipDownload) {
         Write-Host ""
         Write-Host "Installing deveco version: $tag" -ForegroundColor DarkGray
 
@@ -455,26 +530,43 @@ try {
             }
         }
 
+        if (-not (Test-InstallationComplete $stageDir)) {
+            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Error "Release archive is incomplete"
+            Write-Host "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing" -ForegroundColor DarkGray
+            throw "Installer failed"
+        }
+
+        # --- Post-install smoke test ---
+        # NOTE: Avoid 2>&1 | Out-Null which resets $LASTEXITCODE to 0 in PS 5.1
+        $installedVersion = ((@(& $stageBin --version 2>$null) -join "`n").Trim())
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Error "Installation verification failed — deveco could not run"
+            Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
+            throw "Installer failed"
+        }
+        if ($installedVersion -ne $tag) {
+            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Error "Downloaded binary version $installedVersion does not match release v$tag"
+            throw "Installer failed"
+        }
+
         # --- Atomic switch: staging → version directory ---
         $versionDir = Join-Path $VersionsDir $tag
         if (Test-Path $versionDir) { Remove-Item $versionDir -Recurse -Force }
         Move-Item -Path $stageDir -Destination $versionDir
 
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
-
-        # --- Post-install smoke test ---
-        # NOTE: Avoid 2>&1 | Out-Null which resets $LASTEXITCODE to 0 in PS 5.1
-        & $versionBin --version 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item $versionDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Error "Installation verification failed — deveco could not run"
-            Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
-            throw "Installer failed"
-        }
+    } else {
+        $versionDir = Join-Path $VersionsDir $tag
+        $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     }
 
     # --- Windows rename-then-copy + rollback (aligned with Claude Code) ---
-    if (Test-Path $BinPath) {
+    if ($skipDownload) {
+        Write-Host "Keeping existing launcher binary" -ForegroundColor DarkGray
+    } elseif (Test-Path $BinPath) {
         $oldName = "$BinPath.old.$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
         $oldLeaf = Split-Path $oldName -Leaf
         Rename-Item -Path $BinPath -NewName $oldLeaf
@@ -540,17 +632,19 @@ try {
     Write-Host "▅   ▅ ▅    ▅   ▅ ▅    ▅   ▅ ▅   ▅   ▅   ▅ ▅   ▅ ▅   ▅ ▅   "
     Write-Host "▆▆▆▆  ▆▆▆▆  ▆▆▆  ▆▆▆▆  ▆▆▆   ▆▆▆     ▆▆▆   ▆▆▆  ▆▆▆▆  ▆▆▆▆"
     Write-Host ""
-    if ($tag -eq "local") {
+    if ($Binary) {
         Write-Host "Local binary installed." -ForegroundColor DarkGray
     } else {
         Write-Host "v$tag installed." -ForegroundColor DarkGray
     }
 
     if ($pathModified) {
+        Write-Host ""
         Write-Host "${ansiOrange}Note: Open a new terminal for PATH changes to take effect.${ansiReset}"
         Write-Host ""
     }
 
+    Write-Host ""
     Write-Host ""
     Write-Host "Get started:" -ForegroundColor DarkGray
     Write-Host ""
@@ -559,6 +653,14 @@ try {
     Write-Host "deveco        " -NoNewline
     Write-Host "# Launch DevEco Code" -ForegroundColor DarkGray
     Write-Host ""
+
+    if ($nodeWarning) {
+        Write-Host 'WARNING:' -ForegroundColor Red
+        Write-Host 'Node.js 22 or later is required.' -ForegroundColor Red
+        Write-Host 'Without it, some DevEco Code features will not work.' -ForegroundColor Red
+        Write-Host 'Install Node.js from https://nodejs.org/ and make sure "node" is available in your PATH.' -ForegroundColor Red
+        Write-Host ""
+    }
 } finally {
     # Global cleanup: ensure temp files are removed on exception or Ctrl+C
     if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }

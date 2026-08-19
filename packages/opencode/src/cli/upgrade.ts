@@ -13,6 +13,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { Filesystem } from "@/util/filesystem"
 import { GlobalBus } from "@/bus/global"
+import semver from "semver"
 
 export type UpgradeDecision = "skip" | "upgrade" | "notify"
 
@@ -40,6 +41,11 @@ const FRESH_MS = 24 * 60 * 60 * 1000
 
 export function isStateFresh(state: UpgradeState): boolean {
   return Date.now() - state.checked_at < FRESH_MS
+}
+
+export function isNewerVersion(current: string, candidate: string) {
+  if (!semver.valid(current) || !semver.valid(candidate)) return false
+  return semver.gt(candidate, current)
 }
 
 function readUpgradeState(): UpgradeState | undefined {
@@ -78,7 +84,7 @@ export async function checkPendingUpgrade() {
   const state = readUpgradeState()
   if (!state || !isStateFresh(state)) return
   if (!state.pending_version) return
-  if (InstallationVersion === state.pending_version) return
+  if (!isNewerVersion(InstallationVersion, state.pending_version)) return
 
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   const method = await Installation.method()
@@ -127,7 +133,7 @@ export async function checkUpgradeBackground() {
 
   const now = Date.now()
 
-  if (InstallationVersion === latest) {
+  if (!isNewerVersion(InstallationVersion, latest)) {
     await writeUpgradeState({ checked_at: now })
     return
   }

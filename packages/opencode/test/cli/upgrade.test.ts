@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { checkPendingUpgrade, checkUpgradeBackground, decideUpgrade, isStateFresh } from "../../src/cli/upgrade"
+import {
+  checkPendingUpgrade,
+  checkUpgradeBackground,
+  decideUpgrade,
+  isNewerVersion,
+  isStateFresh,
+} from "../../src/cli/upgrade"
 import type { UpgradeState } from "../../src/cli/upgrade"
 import type { Method } from "../../src/installation"
 
@@ -68,6 +74,19 @@ describe("isStateFresh", () => {
   test("returns false at exactly 24 hours", () => {
     const state: UpgradeState = { checked_at: Date.now() - 24 * 60 * 60 * 1000 }
     expect(isStateFresh(state)).toBe(false)
+  })
+})
+
+describe("isNewerVersion", () => {
+  test("accepts only a strictly newer semantic version", () => {
+    expect(isNewerVersion("1.2.3", "1.2.4")).toBe(true)
+    expect(isNewerVersion("1.2.3", "1.2.3")).toBe(false)
+    expect(isNewerVersion("1.2.3", "1.2.2")).toBe(false)
+  })
+
+  test("does not turn invalid version data into an automatic upgrade", () => {
+    expect(isNewerVersion("local", "1.2.3")).toBe(false)
+    expect(isNewerVersion("1.2.3", "latest")).toBe(false)
   })
 })
 

@@ -23,10 +23,12 @@ import {
 import { tmpdir } from "../../fixture/fixture"
 
 const originalBin = Global.Path.bin
+const originalData = Global.Path.data
 const originalPath = process.env.PATH
 
 afterEach(async () => {
   Global.Path.bin = originalBin
+  Global.Path.data = originalData
   if (originalPath === undefined) delete process.env.PATH
   else process.env.PATH = originalPath
   __setTestDevecoCliEntry(undefined)
@@ -41,6 +43,27 @@ describe("deveco-cli runtime", () => {
     await Bun.write(cli, "console.log('ok')\n")
 
     __setTestDevecoCliEntry(cli)
+    expect(resolveBundledDevecoCliEntry()).toBe(path.resolve(cli))
+  })
+
+  test("resolveBundledDevecoCliEntry() uses the shared versioned resource root", async () => {
+    await using tmp = await tmpdir()
+    const cli = path.join(
+      tmp.path,
+      "versions",
+      "local",
+      "vendor",
+      "deveco-cli",
+      "node_modules",
+      "@deveco",
+      "deveco-cli",
+      "dist",
+      "cli.js",
+    )
+    await fs.mkdir(path.dirname(cli), { recursive: true })
+    await Bun.write(cli, "console.log('versioned')\n")
+    Global.Path.data = tmp.path
+
     expect(resolveBundledDevecoCliEntry()).toBe(path.resolve(cli))
   })
 

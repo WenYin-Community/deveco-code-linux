@@ -3,6 +3,7 @@ import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
 import { Installation } from "../../installation"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { isNewerVersion } from "../upgrade"
 
 export const UpgradeCommand = {
   command: "upgrade [target]",
@@ -43,10 +44,10 @@ export const UpgradeCommand = {
       }
     }
     prompts.log.info("Using method: " + method)
-    const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest()
+    const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest(method)
 
-    if (InstallationVersion === target) {
-      prompts.log.warn(`deveco upgrade skipped: ${target} is already installed`)
+    if (InstallationVersion === target || (!args.target && !isNewerVersion(InstallationVersion, target))) {
+      prompts.log.warn(`deveco upgrade skipped: ${target} is not newer than ${InstallationVersion}`)
       prompts.outro("Done")
       return
     }

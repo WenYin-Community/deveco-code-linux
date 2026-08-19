@@ -22,6 +22,7 @@ async function publish(cwd: string, name: string, version: string) {
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(cwd)
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
+    await $`rm -f *.tgz`.cwd(cwd)
     return
   }
   await $`bun pm pack`.cwd(cwd)
@@ -30,6 +31,7 @@ async function publish(cwd: string, name: string, version: string) {
   } else {
     await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(cwd)
   }
+  await $`rm -f *.tgz`.cwd(cwd)
 }
 
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
