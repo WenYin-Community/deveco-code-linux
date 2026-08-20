@@ -39,7 +39,17 @@ export function play(sound: AudioSound, options?: AudioPlayOptions) {
   const current = getAudio()
   if (!current) return null
   if (!current.isStarted() && !current.start()) return null
-  return current.play(sound, options)
+  const result = current.play(sound, options)
+  if (result != null) return result
+  // Playback failed — likely due to audio output device change (e.g. Bluetooth
+  // disconnect/reconnect). Restart the engine to rebind to the current default
+  // device, then retry. If the retry also fails, clear the sound cache so
+  // subsequent loads produce fresh handles for the restarted engine.
+  current.stop()
+  if (!current.start()) return null
+  const retry = current.play(sound, options)
+  if (retry == null) sounds.clear()
+  return retry
 }
 
 export function stopVoice(voice: AudioVoice) {
