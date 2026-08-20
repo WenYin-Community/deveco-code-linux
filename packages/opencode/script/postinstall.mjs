@@ -28,7 +28,6 @@ const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.n
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", "deveco.exe")
-const devecoCliEntryMarker = path.join(__dirname, "vendor", ".deveco-cli-entry")
 const devecoCliPackageName = "@deveco/deveco-cli"
 
 function resolveLocalDevecoCliEntry() {
@@ -38,9 +37,10 @@ function resolveLocalDevecoCliEntry() {
   throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry at ${entry}.`)
 }
 
-function writeDevecoCliEntryMarker() {
-  fs.mkdirSync(path.dirname(devecoCliEntryMarker), { recursive: true })
-  fs.writeFileSync(devecoCliEntryMarker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
+function writeDevecoCliEntryMarker(installRoot) {
+  const marker = path.join(installRoot, "vendor", ".deveco-cli-entry")
+  fs.mkdirSync(path.dirname(marker), { recursive: true })
+  fs.writeFileSync(marker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
 }
 
 function supportsAvx2() {
@@ -244,12 +244,14 @@ function verifyBinary() {
 }
 
 function main() {
-  writeDevecoCliEntryMarker()
+  writeDevecoCliEntryMarker(__dirname)
 
   for (const name of packageNames()) {
     try {
+      const packageDir = resolvePackageDir(name)
       copyBinary(resolveBinary(name), targetBinary)
-      copyVendor(resolvePackageDir(name))
+      copyVendor(packageDir)
+      writeDevecoCliEntryMarker(packageDir)
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return

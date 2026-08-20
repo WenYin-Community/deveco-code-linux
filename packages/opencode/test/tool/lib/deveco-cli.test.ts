@@ -212,6 +212,8 @@ describe("deveco-cli runtime", () => {
 
     const marker = await fs.readFile(path.join(mainRoot, "vendor", ".deveco-cli-entry"), "utf8")
     expect(marker.trim()).toBe(cliEntry)
+    const platformMarker = await fs.readFile(path.join(platformRoot, "vendor", ".deveco-cli-entry"), "utf8")
+    expect(platformMarker.trim()).toBe(cliEntry)
     expect(await Bun.file(path.join(mainRoot, "bin", "deveco.exe")).exists()).toBe(true)
   })
 
@@ -262,6 +264,8 @@ describe("deveco-cli runtime", () => {
 
     const marker = await fs.readFile(path.join(mainRoot, "vendor", ".deveco-cli-entry"), "utf8")
     expect(marker.trim()).toBe(cliEntry)
+    const platformMarker = await fs.readFile(path.join(platformRoot, "vendor", ".deveco-cli-entry"), "utf8")
+    expect(platformMarker.trim()).toBe(cliEntry)
   })
 
   test("ensureDevecoCliShim() writes shim and buildDevecoCliShellEnv() prepends PATH", async () => {
