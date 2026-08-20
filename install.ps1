@@ -28,10 +28,11 @@ $ProgressPreference = 'SilentlyContinue'
 # Ensure console outputs Unicode characters correctly (progress bar uses ━/─); does not affect ASCII text
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# ANSI color codes for the gradient progress bar and muted text.
+# ANSI color codes shared with the macOS installer.
 # Use [char]27 instead of `e — the latter only works in PS 7+, not in Windows default PS 5.1
 $esc = [char]27
 $ansiOrange = "${esc}[38;5;214m"
+$ansiMuted  = "${esc}[0;2m"
 $ansiReset  = "${esc}[0m"
 
 $gitcodeOwner = if ($env:GITCODE_OWNER) { $env:GITCODE_OWNER } else { "openharmony-sig" }
@@ -175,16 +176,9 @@ function Copy-StreamWithProgress {
 # for the full install pattern.
 function Download-WithProgress {
     param([string]$Url, [string]$Output)
-    # Try BITS first — native, fast, no visible progress in PS console
-    if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-        try {
-            Start-BitsTransfer -Source $Url -Destination $Output -ErrorAction Stop
-            return
-        } catch {
-            Write-Host "BITS transfer failed ($($_.Exception.Message)), falling back to streaming download" -ForegroundColor DarkGray
-        }
-    }
-    # Fallback: streaming download with progress bar (PowerShell 5.1 Invoke-WebRequest progress is too slow)
+    # Stream the response directly so every successful download reports the same
+    # gradient progress as the macOS installer. BITS cannot expose progress when
+    # Start-BitsTransfer is used synchronously, which made the bar disappear.
     $client = [System.Net.Http.HttpClient]::new()
     $client.Timeout = [TimeSpan]::FromMinutes(10)
     $totalBytes = 0
@@ -244,6 +238,47 @@ function Test-InstallationComplete {
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "bin\$AppName.exe") -PathType Leaf)) { return $false }
     if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "CHANGELOG.md") -PathType Leaf)) { return $false }
     return -not [string]::IsNullOrWhiteSpace((Get-DevecoCliEntry $InstallRoot))
+}
+
+# Windows security software can briefly hold newly extracted executables open.
+# Prefer an atomic directory rename, retry transient locks, then fall back to a
+# validated copy so installation is not blocked indefinitely by the directory handle.
+function Publish-StagedInstallation {
+    param([string]$StageDir, [string]$VersionDir)
+    if (Test-Path -LiteralPath $VersionDir) {
+        Remove-Item -LiteralPath $VersionDir -Recurse -Force
+    }
+
+    $moveError = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            Move-Item -LiteralPath $StageDir -Destination $VersionDir -ErrorAction Stop
+            return
+        } catch [System.IO.IOException] {
+            $moveError = $_
+        } catch [System.UnauthorizedAccessException] {
+            $moveError = $_
+        }
+        Start-Sleep -Milliseconds (250 * $attempt)
+    }
+
+    Write-Host "${ansiMuted}The install directory is busy; finishing with a verified copy.${ansiReset}"
+    try {
+        New-Item -ItemType Directory -Path $VersionDir -Force | Out-Null
+        Get-ChildItem -LiteralPath $StageDir -Force |
+            Copy-Item -Destination $VersionDir -Recurse -Force -ErrorAction Stop
+        if (-not (Test-InstallationComplete $VersionDir)) {
+            throw "Copied installation is incomplete"
+        }
+        if ((Get-FileHash -LiteralPath (Join-Path $StageDir "bin\$AppName.exe") -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $VersionDir "bin\$AppName.exe") -Algorithm SHA256).Hash) {
+            throw "Copied executable failed SHA-256 verification"
+        }
+        Remove-Item -LiteralPath $StageDir -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Remove-Item -LiteralPath $VersionDir -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Could not publish the installation after retrying '$StageDir': $($moveError.Exception.Message)"
+    }
 }
 
 # M1: Check if the target version is already installed; return true if so
@@ -356,8 +391,7 @@ if ($Binary) {
             if ($isPrerelease) {
                 throw "Latest GitCode release is marked as prerelease"
             }
-            Write-Host "Latest version: " -ForegroundColor Green -NoNewline
-            Write-Host $tag
+            Write-Host "${ansiOrange}Latest version: ${ansiReset}$tag"
         } catch {
             Write-Error "Failed to fetch version info from GitCode: $_"
             Write-Host "Hint: Use -Version 0.1.4 to specify a version manually." -ForegroundColor DarkGray
@@ -400,7 +434,7 @@ try {
     if ($Binary) {
         # --- Binary install — stage the binary and adjacent runtime resources ---
         Write-Host ""
-        Write-Host "Installing deveco from: $Binary" -ForegroundColor DarkGray
+        Write-Host "${ansiMuted}Installing ${ansiReset}deveco ${ansiMuted}from: ${ansiReset}$Binary"
         $versionDir = Join-Path $VersionsDir $tag
         $stageDir = Join-Path $VersionsDir ".staging.$tag.$PID"
         $stageBinDir = Join-Path $stageDir "bin"
@@ -427,12 +461,11 @@ try {
         $installedVersion = ((@(& $versionBin --version 2>$null) -join "`n").Trim())
         if ($LASTEXITCODE -ne 0) { throw "Installation verification failed — deveco could not run" }
         if ($installedVersion -ne $tag) { throw "Local binary version changed during installation" }
-        if (Test-Path $versionDir) { Remove-Item $versionDir -Recurse -Force }
-        Move-Item -Path $stageDir -Destination $versionDir
+        Publish-StagedInstallation -StageDir $stageDir -VersionDir $versionDir
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     } elseif (-not $skipDownload) {
         Write-Host ""
-        Write-Host "Installing deveco version: $tag" -ForegroundColor DarkGray
+        Write-Host "${ansiMuted}Installing ${ansiReset}deveco ${ansiMuted}version: ${ansiReset}$tag"
 
         # --- Determine baseline vs AVX2 ---
         $useBaseline = $Baseline
@@ -552,10 +585,9 @@ try {
             throw "Installer failed"
         }
 
-        # --- Atomic switch: staging → version directory ---
+        # --- Publish staging → version directory ---
         $versionDir = Join-Path $VersionsDir $tag
-        if (Test-Path $versionDir) { Remove-Item $versionDir -Recurse -Force }
-        Move-Item -Path $stageDir -Destination $versionDir
+        Publish-StagedInstallation -StageDir $stageDir -VersionDir $versionDir
 
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     } else {
@@ -633,9 +665,9 @@ try {
     Write-Host "▆▆▆▆  ▆▆▆▆  ▆▆▆  ▆▆▆▆  ▆▆▆   ▆▆▆     ▆▆▆   ▆▆▆  ▆▆▆▆  ▆▆▆▆"
     Write-Host ""
     if ($Binary) {
-        Write-Host "Local binary installed." -ForegroundColor DarkGray
+        Write-Host "${ansiMuted}Local binary installed.${ansiReset}"
     } else {
-        Write-Host "v$tag installed." -ForegroundColor DarkGray
+        Write-Host "${ansiMuted}v$tag installed.${ansiReset}"
     }
 
     if ($pathModified) {
@@ -646,12 +678,12 @@ try {
 
     Write-Host ""
     Write-Host ""
-    Write-Host "Get started:" -ForegroundColor DarkGray
+    Write-Host "${ansiMuted}Get started:${ansiReset}"
     Write-Host ""
     Write-Host "cd <project>  " -NoNewline
-    Write-Host "# Open your project directory" -ForegroundColor DarkGray
+    Write-Host "${ansiMuted}# Open your project directory${ansiReset}"
     Write-Host "deveco        " -NoNewline
-    Write-Host "# Launch DevEco Code" -ForegroundColor DarkGray
+    Write-Host "${ansiMuted}# Launch DevEco Code${ansiReset}"
     Write-Host ""
 
     if ($nodeWarning) {
