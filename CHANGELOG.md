@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.1.9 (2026-08-20)
+
+### DevEco Code 核心
+
+#### 新特性
+
+- 内置 [DevEco CLI](https://gitcode.com/openharmony-sig/deveco-cli)，封装 `ohpm`、`hvigor`、`hdc` 等工具链，集成脚手架、技能安装与 MCP 服务
+
+#### 优化
+
+- 加固 Windows 安装程序：新增互斥锁防并发安装、失败自动重试、原子切换启动器（`1452fe8`）
+
+#### 缺陷修复
+
+- 修复 Windows baseline 包 CLI 入口缺失问题（`437de3d`）
+
+### TUI 终端界面
+
+#### 优化
+
+- 音频播放支持设备热切换：输出设备变更时自动重新绑定，恢复播放（`2bf3a39`）
+- 更新日志导出命令的国际化描述（`73882b9`）
+
 ## v0.1.8 (2026-08-18)
 
 ### DevEco Code 核心
