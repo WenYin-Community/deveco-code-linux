@@ -1045,9 +1045,9 @@ function App(props: {
             },
             {
               name: 'collect.open',
- 	            title: t('command.collect'),
- 	            description: 'Select and upload log files to cloud',
- 	            slashName: 'collect',
+              title: t('command.collect'),
+              desc: t('command.collect_desc'),
+              slashName: 'collect',
  	            run: () => {
                 const CollectDialog = getDevEcoExtensions().collectDialog;
  	              if (!CollectDialog) {
