@@ -1,6 +1,6 @@
 ---
 name: gitcode-pr
-description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 提交、推送、上游 Issue/PR 关联及 CI 触发。当用户在 DevEco Code 或 openharmony-sig/deveco-code 仓库上下文中要求提交代码、提交当前改动、创建提交、推送代码或创建 PR 时使用；即使用户未提及 GitCode 或 PR，只要要求提交代码也必须触发。所有 GitCode API 操作通过 .gitcode/scripts/gitcode-api.sh 完成，无需 MCP。功能分支基于父仓库目标分支创建，推送到 origin，不验证 Fork 关系。可通过参数指定目标分支，未指定则询问用户。
+description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 推送、上游 Issue/PR 关联及 CI 触发。仅当用户明确要求推送到 GitCode、创建或更新 GitCode PR、关联 GitCode Issue 或触发 GitCode CI 时使用。仅创建本地 commit 且不需要推送或 PR 时不使用。所有 GitCode API 操作通过 .gitcode/scripts/gitcode-api.sh 完成，无需 MCP。功能分支基于父仓库目标分支创建，推送到 origin，不验证 Fork 关系。
 ---
 
 # DevEco Code GitCode 提交流程
@@ -11,21 +11,23 @@ description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 提交、�
 
 ## 0. Token 门禁
 
-触发本 skill 后，从 git remote 提取 Token 并验证。不得跳过、不得在对话中回显 Token。
+触发本 skill 后，使用执行环境中已配置的 `GITCODE_TOKEN` 并验证。不得从 Git remote URL 提取 Token，也不得在对话中回显 Token。该方式兼容 SSH 和 HTTPS clone。
 
 ```bash
-TOKEN=$(git remote get-url origin | sed -n 's|https://[^:]*:\([^@]*\)@.*|\1|p')
+if [ -z "${GITCODE_TOKEN:-}" ]; then
+  echo "TOKEN MISSING"
+  exit 1
+fi
 ```
 
-- Token 为空或验证失败：停止，询问用户是否通过 `git remote set-url origin` 配置带 Token 的 remote URL。
-- 不得用其他方式获取 Token，不得安装依赖、修改配置或索取 Token。
+- Token 为空或验证失败：停止，告知用户需在执行环境中配置 `GITCODE_TOKEN`。
+- 不得修改 remote URL、安装依赖、索取 Token 或以其他方式获取 Token。
 
-验证方式：用提取的 Token 调用 `gitcode-api.sh get-issue 1` 检查 HTTP 响应非 401。
+验证方式：用执行环境中的 Token 调用 `gitcode-api.sh get-issue 1` 检查 HTTP 响应非 401。
 
 ```bash
 export GITCODE_API=https://api.gitcode.com/api/v5
 export GITCODE_REPO=openharmony-sig/deveco-code
-export GITCODE_TOKEN="$TOKEN"
 bash .gitcode/scripts/gitcode-api.sh get-issue 1 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('AUTH OK' if 'error_code' not in d or d.get('error_code')!=401 else 'AUTH FAIL')"
 ```
 

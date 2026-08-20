@@ -24,7 +24,7 @@
 ```
 
 1. 从 `develop` 创建功能分支
-2. 开发过程中定期同步上游：`git pull --rebase origin develop`
+2. 开发过程中定期同步上游：`git pull --rebase upstream develop`
 3. 开发完成提交 PR，目标 `develop`
 4. 通过 CI 和 Code Review 后合入
 
@@ -127,10 +127,10 @@ Signed-off-by: YourName <your.email@example.com>
 
 ```bash
 # 添加 upstream remote（首次）
-git remote add origin git@gitcode.com:openharmony-sig/deveco-code.git
+git remote add upstream git@gitcode.com:openharmony-sig/deveco-code.git
 
 # 拉取
-git pull --rebase origin develop
+git pull --rebase upstream develop
 ```
 
 避免无意义的 merge commit。
