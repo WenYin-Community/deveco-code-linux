@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入提问 ArkTS 和 TS 在函数声明上有什么不同，AI 能自动加载 arkts-grammar-standards skill 并返回一个清晰的差异点说明（如强制类型声明等）。",
+    "验证输入提问 ArkTS 和 TS 在函数声明上有什么不同，AI 能自动加载 hmos-arkui-develop-skill skill 并返回一个清晰的差异点说明（如强制类型声明等）。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送差异点查询提问。",

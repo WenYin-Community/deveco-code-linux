@@ -14,8 +14,7 @@ export const Parameters = Schema.Struct({
 })
 
 const DevEcoRequiredSkills = new Set([
-  "arkts-error-fixes",
-  "arkts-grammar-standards",
+  "hmos-arkui-develop-skill",
   "hmos-runtime-fix-skill",
 ])
 

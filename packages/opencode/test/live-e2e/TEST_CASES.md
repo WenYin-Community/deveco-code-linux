@@ -160,12 +160,12 @@ The temporary project workspace, npm prefix, and npm cache are deleted after exe
 
 Purpose:
 
-Verify that selecting the arkts-error-fixes skill via /skill and inputting code with an unimported router module produces a fix that includes `import router from 'ohos.router'`.
+Verify that inputting code with an unimported router module produces a fix that includes `import router from 'ohos.router'`.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-error-fixes` with code referencing `router.pushUrl` without importing the router module.
+2. Run `deveco run --format json --dir <tmp>` with code referencing `router.pushUrl` without importing the router module.
 3. Parse JSON-line events from stdout.
 4. Verify text events contain `import`, `router`, and `ohos.router`.
 
@@ -182,12 +182,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that selecting the arkts-error-fixes skill via /skill and inputting code with a type error (`let num: number = "hello"`) produces a type or value fix suggestion.
+Verify that inputting code with a type error (`let num: number = "hello"`) produces a type or value fix suggestion.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-error-fixes` with `let num: number = "hello"`.
+2. Run `deveco run --format json --dir <tmp>` with `let num: number = "hello"`.
 3. Parse JSON-line events from stdout.
 4. Verify text events contain type fix suggestion (string/number/类型).
 
@@ -204,12 +204,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that selecting the arkts-error-fixes skill via /skill and inputting component code with a missing closing brace produces a fix that identifies the missing `}`.
+Verify that inputting component code with a missing closing brace produces a fix that identifies the missing `}`.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-error-fixes` with component code missing a closing `}`.
+2. Run `deveco run --format json --dir <tmp>` with component code missing a closing `}`.
 3. Parse JSON-line events from stdout.
 4. Verify text events mention the missing `}` bracket.
 
@@ -226,7 +226,7 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that asking whether ArkTS type checking can be disabled to preserve dynamic property assignment loads the ArkTS error-fix guidance and returns a recommendation that type checking should not or cannot be disabled for that purpose.
+Verify that asking whether ArkTS type checking can be disabled to preserve dynamic property assignment returns a recommendation that type checking should not or cannot be disabled for that purpose.
 
 Steps:
 
@@ -248,12 +248,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that selecting the arkts-grammar-standards skill via /skill and asking about ArkTS vs TS function declaration differences returns a clear difference explanation (e.g., mandatory type declarations).
+Verify that selecting the hmos-arkui-develop-skill skill via /skill and asking about ArkTS vs TS function declaration differences returns a clear difference explanation (e.g., mandatory type declarations).
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-grammar-standards` with the question "ArkTS和TS在函数声明上有什么不同？".
+2. Run `deveco run --format json --dir <tmp>` with the question "ArkTS和TS在函数声明上有什么不同？".
 3. Parse JSON-line events from stdout.
 4. Verify text events contain type declaration and function difference explanations.
 
@@ -296,12 +296,12 @@ The temporary user home and both projects are deleted after execution. The user'
 
 Purpose:
 
-Verify that selecting the arkts-grammar-standards skill via /skill and asking how to define a class in ArkTS returns a code snippet containing `class` and key point explanations.
+Verify that selecting the hmos-arkui-develop-skill skill via /skill and asking how to define a class in ArkTS returns a code snippet containing `class` and key point explanations.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-grammar-standards` with the question "ArkTS中如何定义一个类？".
+2. Run `deveco run --format json --dir <tmp>` with the question "ArkTS中如何定义一个类？".
 3. Parse JSON-line events from stdout.
 4. Verify text events contain `class` keyword and ArkTS code.
 
@@ -318,12 +318,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that selecting the arkts-grammar-standards skill via /skill and providing TypeScript code returns equivalent ArkTS code.
+Verify that selecting the hmos-arkui-develop-skill skill via /skill and providing TypeScript code returns equivalent ArkTS code.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command arkts-grammar-standards` with a TS-to-ArkTS conversion request.
+2. Run `deveco run --format json --dir <tmp>` with a TS-to-ArkTS conversion request.
 3. Parse JSON-line events from stdout.
 4. Verify text events contain ArkTS equivalent code.
 

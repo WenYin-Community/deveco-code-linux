@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入缺少闭合括号的组件代码，AI 能自动加载 arkts-error-fixes skill 并指出需要添加缺失的 } 括号。",
+    "验证输入缺少闭合括号的组件代码，AI 能指出需要添加缺失的 } 括号。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送缺少闭合括号的组件代码。",

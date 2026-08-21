@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入引用了未导入 router 模块的代码，AI 能自动加载 arkts-error-fixes skill 并给出包含 import router from 'ohos.router' 的修复方案。",
+    "验证输入引用了未导入 router 模块的代码，AI 能给出包含 import router from 'ohos.router' 的修复方案。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送引用了未导入 router 模块的代码。",

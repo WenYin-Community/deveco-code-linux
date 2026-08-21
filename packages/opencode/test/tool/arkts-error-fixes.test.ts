@@ -56,16 +56,15 @@ function makeCtx(): { ctx: Tool.Context; requests: Array<Omit<PermissionV1.Reque
   return { ctx, requests }
 }
 
-describe("arkts-error-fixes DevEcoRequiredSkills guard", () => {
+describe("DevEcoRequiredSkills guard", () => {
   // Tests lines 35-39 of src/tool/skill.ts:
-  // DevEcoRequiredSkills = { arkts-error-fixes, arkts-grammar-standards,
+  // DevEcoRequiredSkills = { hmos-arkui-develop-skill,
   //   hmos-runtime-fix-skill }
   // Guard: if (DevEcoRequiredSkills.has(info.name) && !process.env.DEVECO_HOME?.trim())
   //   throw new Error("DEVECO_HOME ... is not configured ...")
 
   const DEV_ECO_REQUIRED = [
-    "arkts-error-fixes",
-    "arkts-grammar-standards",
+    "hmos-arkui-develop-skill",
     "hmos-runtime-fix-skill",
   ] as const
 
@@ -116,93 +115,4 @@ describe("arkts-error-fixes DevEcoRequiredSkills guard", () => {
       60_000,
     )
   }
-  it.instance(`throws when DEVECO_HOME is empty string`, () =>
-    Effect.gen(function* () {
-      const dir = (yield* TestInstance).directory
-      yield* Effect.promise(() =>
-        writeSkill(dir, "arkts-error-fixes", "Test.", `# Content`),
-      )
-
-      const home = process.env.DEVECO_TEST_HOME
-      const devecoHome = process.env.DEVECO_HOME
-      process.env.DEVECO_TEST_HOME = dir
-      process.env.DEVECO_HOME = ""
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          process.env.DEVECO_TEST_HOME = home
-          if (devecoHome !== undefined) process.env.DEVECO_HOME = devecoHome
-          else delete process.env.DEVECO_HOME
-        }),
-      )
-
-      const registry = yield* ToolRegistry.Service
-      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
-      const tool = (yield* registry.tools({
-        providerID: "opencode" as any,
-        modelID: "gpt-5" as any,
-        agent,
-      })).find((t) => t.id === SkillTool.id)
-      if (!tool) throw new Error("Skill tool not found")
-
-      const { ctx } = makeCtx()
-
-      const exit = yield* tool
-        .execute({ name: "arkts-error-fixes" }, ctx)
-        .pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause)
-        if (error instanceof Error) {
-          expect(error.message).toContain("DEVECO_HOME")
-        }
-      }
-    }),
-    60_000,
-  )
-
-  it.instance(`throws when DEVECO_HOME is whitespace only`, () =>
-    Effect.gen(function* () {
-      const dir = (yield* TestInstance).directory
-      yield* Effect.promise(() =>
-        writeSkill(dir, "arkts-error-fixes", "Test.", `# Content`),
-      )
-
-      const home = process.env.DEVECO_TEST_HOME
-      const devecoHome = process.env.DEVECO_HOME
-      process.env.DEVECO_TEST_HOME = dir
-      process.env.DEVECO_HOME = "   "
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          process.env.DEVECO_TEST_HOME = home
-          if (devecoHome !== undefined) process.env.DEVECO_HOME = devecoHome
-          else delete process.env.DEVECO_HOME
-        }),
-      )
-
-      const registry = yield* ToolRegistry.Service
-      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
-      const tool = (yield* registry.tools({
-        providerID: "opencode" as any,
-        modelID: "gpt-5" as any,
-        agent,
-      })).find((t) => t.id === SkillTool.id)
-      if (!tool) throw new Error("Skill tool not found")
-
-      const { ctx } = makeCtx()
-
-      const exit = yield* tool
-        .execute({ name: "arkts-error-fixes" }, ctx)
-        .pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause)
-        if (error instanceof Error) {
-          expect(error.message).toContain("DEVECO_HOME")
-        }
-      }
-    }),
-    60_000,
-  )
 })

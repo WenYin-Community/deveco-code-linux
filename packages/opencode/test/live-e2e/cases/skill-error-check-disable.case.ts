@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证提问是否可以通过关闭ArkTS类型检查来保留动态属性写法时，AI 自动加载 arkts-error-fixes skill 并返回不能或不可关闭检查的建议。",
+    "验证提问是否可以通过关闭ArkTS类型检查来保留动态属性写法时，AI 返回不能或不可关闭检查的建议。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送提问：是否可以通过关闭类型检查来保留动态属性写法。",

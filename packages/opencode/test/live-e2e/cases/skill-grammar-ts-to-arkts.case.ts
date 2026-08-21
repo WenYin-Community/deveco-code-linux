@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证给定 TS 代码，AI 能自动加载 arkts-grammar-standards skill 并返回符合 ArkTS 语法规范的等效代码。",
+    "验证给定 TS 代码，AI 能自动加载 hmos-arkui-develop-skill skill 并返回符合 ArkTS 语法规范的等效代码。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送 TS 代码转换请求。",

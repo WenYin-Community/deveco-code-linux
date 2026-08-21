@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入包含类型错误的代码（如 let num: number = \"hello\"），AI 能自动加载 arkts-error-fixes skill 并返回修正类型或值的修复建议。",
+    "验证输入包含类型错误的代码（如 let num: number = \"hello\"），AI 能返回修正类型或值的修复建议。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送包含类型错误的代码。",

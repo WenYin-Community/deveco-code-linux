@@ -32,7 +32,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 200_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入 ArkTS 中如何定义一个类，AI 能自动加载 arkts-grammar-standards skill 并返回包含 class 的 ArkTS 代码片段和关键点说明。",
+    "验证输入 ArkTS 中如何定义一个类，AI 能自动加载 hmos-arkui-develop-skill skill 并返回包含 class 的 ArkTS 代码片段和关键点说明。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送类定义查询。",
