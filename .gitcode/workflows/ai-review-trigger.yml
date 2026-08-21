@@ -1,0 +1,39 @@
+name: AI Review Trigger
+
+# 仅当 PR 评论为 /review 时触发,转发到 Multica autopilot → 代码审查 agent。
+# 其他评论(含 agent 自己发的行内评论)不触发,无自激、无 throwaway issue。
+on:
+  pull_request_comment:
+    types: [created]
+    comments:
+      - '/review'
+
+permissions:
+  repository: read
+
+stages:
+  trigger:
+    name: 转发 /review 到 Multica
+    jobs:
+      forward:
+        name: forward-to-multica
+        runs-on: ubuntu-latest
+        env:
+          MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
+          PR_NUMBER: ${{ atomgit.event.issue.number }}
+          REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 转发 review 请求
+            run: |
+              set -e
+              if [ -z "$MULTICA_WEBHOOK" ]; then
+                echo "::error::secret MULTICA_WEBHOOK_URL 未配置,请在仓库 Settings → Secrets 添加(值为 Multica autopilot 的 webhook_url)"
+                exit 1
+              fi
+              echo "转发 PR #$PR_NUMBER 的 /review 到 Multica"
+              code=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X POST "$MULTICA_WEBHOOK" \
+                -H "Content-Type: application/json" \
+                --data "{\"action\":\"reopened\",\"number\":${PR_NUMBER},\"repository\":{\"full_name\":\"${REPO}\"},\"pull_request\":{\"number\":${PR_NUMBER}}}")
+              echo "HTTP $code"
+              cat /tmp/resp.txt || true
+              if [ "$code" != "200" ]; then exit 1; fi
