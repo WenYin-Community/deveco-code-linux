@@ -20,14 +20,20 @@ stages:
         runs-on: ubuntu-latest
         env:
           MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
-          PR_NUMBER: ${{ atomgit.event.issue.number }}
           REPO: ${{ atomgit.repository }}
         steps:
           - name: 转发 review 请求
             run: |
               set -e
+              # PR 编号取自评论事件:issue.number(PR 评论时 issue.pull_request 存在)
+              PR_NUMBER="${{ atomgit.event.issue.number }}"
+              echo "PR_NUMBER=$PR_NUMBER issue.pull_request=${{ atomgit.event.issue.pull_request }}"
               if [ -z "$MULTICA_WEBHOOK" ]; then
                 echo "::error::secret MULTICA_WEBHOOK_URL 未配置,请在仓库 Settings → Secrets 添加(值为 Multica autopilot 的 webhook_url)"
+                exit 1
+              fi
+              if [ -z "$PR_NUMBER" ]; then
+                echo "::error::PR_NUMBER 为空(无法从事件上下文解析 PR 编号)"
                 exit 1
               fi
               echo "转发 PR #$PR_NUMBER 的 /review 到 Multica"
