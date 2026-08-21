@@ -21,13 +21,16 @@ stages:
         env:
           MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
           REPO: ${{ atomgit.repository }}
+          COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
+          HEAD_REF: ${{ atomgit.event.pull_request.head.ref || atomgit.head_ref }}
+          BASE_REF: ${{ atomgit.event.pull_request.base.ref || atomgit.base_ref }}
+          GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         steps:
           - name: 转发 review 请求
             run: |
               set -e
-              # PR 编号取自评论事件:issue.number(PR 评论时 issue.pull_request 存在)
-              PR_NUMBER="${{ atomgit.event.issue.number }}"
-              echo "PR_NUMBER=$PR_NUMBER issue.pull_request=${{ atomgit.event.issue.pull_request }}"
+              PR_NUMBER="${{ atomgit.event.pull_request.number || atomgit.event.issue.number }}"
+              echo "context: PR_NUMBER=$PR_NUMBER HEAD_REF=$HEAD_REF BASE_REF=$BASE_REF COMMENT_USER=$COMMENT_USER"
               if [ -z "$MULTICA_WEBHOOK" ]; then
                 echo "::error::secret MULTICA_WEBHOOK_URL 未配置,请在仓库 Settings → Secrets 添加(值为 Multica autopilot 的 webhook_url)"
                 exit 1
@@ -36,10 +39,64 @@ stages:
                 echo "::error::PR_NUMBER 为空(无法从事件上下文解析 PR 编号)"
                 exit 1
               fi
+              PR_DATA=""
+              if [ -n "$GITCODE_TOKEN" ]; then
+                PR_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                  "https://api.gitcode.com/api/v5/repos/$REPO/pulls/$PR_NUMBER" \
+                  | tr -d '\000-\010\013-\037' || true)
+              fi
+              if echo "$PR_DATA" | jq -e '.number' >/dev/null 2>&1; then
+                PAYLOAD=$(echo "$PR_DATA" | jq -c --arg comment_user "$COMMENT_USER" '
+                  {
+                    action: "reopened",
+                    object_kind: "note",
+                    event_type: "note",
+                    number: .number,
+                    repository: {
+                      full_name: .base.repo.full_name,
+                      html_url: .base.repo.html_url,
+                      clone_url: ("https://gitcode.com/" + .base.repo.full_name + ".git")
+                    },
+                    pull_request: {
+                      number: .number,
+                      title: .title,
+                      body: .body,
+                      state: .state,
+                      user: {login: .user.login},
+                      html_url: .html_url,
+                      head: {ref: .head.ref, sha: .head.sha, repo: {full_name: .head.repo.full_name, clone_url: .head.repo.html_url}},
+                      base: {ref: .base.ref, sha: .base.sha, repo: {full_name: .base.repo.full_name, clone_url: .base.repo.html_url}}
+                    },
+                    merge_request: {
+                      iid: .number,
+                      number: .number,
+                      title: .title,
+                      description: .body,
+                      state: (if .state == "open" then "opened" else .state end),
+                      source_branch: .head.ref,
+                      target_branch: .base.ref,
+                      url: .html_url,
+                      author: {username: .user.login},
+                      last_commit: {id: .head.sha},
+                      source: {path_with_namespace: .head.repo.full_name, git_http_url: .head.repo.html_url},
+                      target: {path_with_namespace: .base.repo.full_name, git_http_url: .base.repo.html_url}
+                    },
+                    object_attributes: {note: "/review", description: "/review", noteable_type: "MergeRequest"},
+                    user: {username: (if $comment_user != "" then $comment_user else .user.login end)}
+                  }')
+              else
+                echo "::warning::PR API 数据获取失败,回退到事件上下文的精简 payload"
+                PAYLOAD=$(jq -c -n --argjson number "$PR_NUMBER" --arg repo "$REPO" --arg head "$HEAD_REF" --arg base "$BASE_REF" \
+                  '{action:"reopened",number:$number,repository:{full_name:$repo},
+                    pull_request:({number:$number}
+                      + (if $head != "" then {head:{ref:$head}} else {} end)
+                      + (if $base != "" then {base:{ref:$base}} else {} end))}')
+              fi
               echo "转发 PR #$PR_NUMBER 的 /review 到 Multica"
+              echo "$PAYLOAD" | jq .
               code=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X POST "$MULTICA_WEBHOOK" \
                 -H "Content-Type: application/json" \
-                --data "{\"action\":\"reopened\",\"number\":${PR_NUMBER},\"repository\":{\"full_name\":\"${REPO}\"},\"pull_request\":{\"number\":${PR_NUMBER}}}")
+                --data "$PAYLOAD")
               echo "HTTP $code"
               cat /tmp/resp.txt || true
               if [ "$code" != "200" ]; then exit 1; fi
