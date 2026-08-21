@@ -158,10 +158,10 @@ describe("bash install script", () => {
 })
 
 describe("PowerShell install script", () => {
-  test("uses a UTF-8 BOM for Windows PowerShell Unicode compatibility", async () => {
+  test("omits the UTF-8 BOM so irm iex can parse the parameter block", async () => {
     const script = await fs.readFile(installPs1)
 
-    expect(Array.from(script.subarray(0, 3))).toEqual([0xef, 0xbb, 0xbf])
+    expect(Array.from(script.subarray(0, 3))).not.toEqual([0xef, 0xbb, 0xbf])
   })
 
   test("does not emit the successful HTTP response before download progress", async () => {
