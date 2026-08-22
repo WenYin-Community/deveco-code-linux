@@ -84,15 +84,16 @@ describe("bash install script", () => {
     expect(stderr).toContain("This installer supports macOS only")
   })
 
-  test("rejects a local build without the bundled deveco-cli runtime", async () => {
+  test("does not infer runtime resources beside an arbitrary local binary", async () => {
     await using tmp = await tmpdir()
     const artifact = path.join(tmp.path, "artifact")
-    const binary = path.join(artifact, "bin", "deveco")
+    const binary = path.join(artifact, "deveco")
     await fs.mkdir(path.dirname(binary), { recursive: true })
+    await fs.mkdir(path.join(tmp.path, "vendor"), { recursive: true })
     await Bun.write(binary, '#!/bin/sh\n[ "$1" = "--version" ] && echo local-test\n')
+    await Bun.write(path.join(tmp.path, "vendor", "unrelated.txt"), "unrelated\n")
+    await Bun.write(path.join(tmp.path, "CHANGELOG.md"), "# Unrelated\n")
     await fs.chmod(binary, 0o755)
-    await Bun.write(path.join(artifact, "CHANGELOG.md"), "# Changes\n")
-
     const proc = Bun.spawn(["bash", install, "--binary", binary, "--no-modify-path"], {
       env: {
         ...process.env,
@@ -105,8 +106,13 @@ describe("bash install script", () => {
     })
     const [stderr, exitCode] = await Promise.all([Bun.readableStreamToText(proc.stderr), proc.exited])
 
-    expect(exitCode).toBe(1)
-    expect(stderr).toContain("complete build output containing vendor/deveco-cli")
+    expect(exitCode, stderr).toBe(0)
+    expect(await fs.realpath(path.join(tmp.path, ".local", "bin", "deveco"))).toBe(
+      path.join(tmp.path, ".local", "share", "deveco", "versions", "local-test", "bin", "deveco"),
+    )
+    const root = path.join(tmp.path, ".local", "share", "deveco", "versions", "local-test")
+    expect(await fs.stat(path.join(root, "vendor")).then(() => true, () => false)).toBe(false)
+    expect(await fs.stat(path.join(root, "CHANGELOG.md")).then(() => true, () => false)).toBe(false)
   })
 
   test("installs successfully and warns when Node.js is older than the deveco-cli requirement", async () => {
@@ -189,6 +195,7 @@ describe("PowerShell install script", () => {
     expect(script).toContain('"System.IO.Compression.FileSystem"')
     expect(script).toContain("Add-Type -AssemblyName $compressionAssembly -ErrorAction Stop")
     expect(script).toContain("[System.IO.Compression.ZipFile]::ExtractToDirectory($tempFile, $stageDir)")
+    expect(script.match(/Download-WithRetry -Url \$downloadUrl -Output \$tempFile/g)).toHaveLength(2)
   })
 
   test("serializes installation before inspecting or mutating shared paths", async () => {
@@ -203,36 +210,52 @@ describe("PowerShell install script", () => {
     expect(script).toContain("[void]$installMutex.ReleaseMutex()")
   })
 
-  test("stages and verifies the launcher before publishing the version directory", async () => {
+  test("stages the launcher before publishing the version directory", async () => {
     const script = await fs.readFile(installPs1, "utf8")
     const downloadInstall = script.slice(
       script.indexOf('} elseif ($installationState -eq "download") {'),
       script.indexOf("# --- Switch the pre-verified launcher with ordinary rollback ---"),
     )
 
-    expect(downloadInstall.indexOf("New-StagedLauncher -Source $stageBin")).toBeGreaterThan(-1)
-    expect(downloadInstall.indexOf("New-StagedLauncher -Source $stageBin")).toBeLessThan(
+    expect(
+      downloadInstall.indexOf("Copy-Item -LiteralPath $stageBin -Destination $launcherStage"),
+    ).toBeGreaterThan(-1)
+    expect(
+      downloadInstall.indexOf("Copy-Item -LiteralPath $stageBin -Destination $launcherStage"),
+    ).toBeLessThan(
       downloadInstall.indexOf("Publish-StagedInstallation -StageDir $stageDir"),
     )
     expect(script).toContain("Move-Item -LiteralPath $launcherStage -Destination $BinPath")
     expect(script).not.toContain("Copy-Item -Path $versionBin -Destination $BinPath")
   })
 
-  test("retries file operations and preserves both publish errors", async () => {
+  test("retries busy version directories and falls back to a verified copy", async () => {
     const script = await fs.readFile(installPs1, "utf8")
 
-    expect(script).toContain("function Invoke-FileOperation")
-    expect(script).toContain("function Test-InstallationCompleteWithRetry")
-    expect(script).toContain('return "repair"')
+    expect(script).toContain("function Publish-StagedInstallation")
+    expect(script).toContain("function Move-DirectoryWithRetry")
+    expect(script).toContain("[int]$Attempts = 8")
+    expect(script).toContain("Move-DirectoryWithRetry -Source $StageDir -Destination $VersionDir")
+    expect(script).toContain("Move-DirectoryWithRetry -Source $versionRollback -Destination $VersionDir")
+    expect(script).toContain("Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction Stop")
+    expect(script).toContain("Copy-Item -Destination $VersionDir -Recurse -Force -ErrorAction Stop")
+    expect(script).toContain("if (-not (Test-InstallationComplete $VersionDir))")
     expect(script).toContain("Atomic move error: $($moveError.Exception.Message)")
     expect(script).toContain("Copy fallback error: $($copyError.Exception.Message)")
-    expect(script).toContain('-Description "Activate staged launcher')
-    expect(script).toContain('-Description "Restore previous launcher')
+    expect(script).toContain('-Filter ".staging.*"')
+    expect(script).toContain('return "repair"')
+    expect(script).not.toContain("function Invoke-FileOperation")
+    expect(script).not.toContain("function Test-InstallationCompleteWithRetry")
+    expect(script).not.toContain("Get-FileHash")
+    expect(script).not.toContain("SHA-256")
+    expect(script).toContain('(Split-Path $resolvedBinary -Parent) -Leaf) -ieq "bin"')
   })
 
-  test("uses bounded retries and ordinary rollback without background helpers", async () => {
+  test("bounds download and publish retries and uses ordinary launcher rollback", async () => {
     const script = await fs.readFile(installPs1, "utf8")
 
+    expect(script).toContain("function Download-WithRetry")
+    expect(script).toContain("[int]$Attempts = 3")
     expect(script).toContain("[System.IO.File]::Replace")
     expect(script).toContain("Close running deveco processes and run the installer again")
     expect(script).not.toContain("InstallTransaction")
@@ -241,11 +264,40 @@ describe("PowerShell install script", () => {
     expect(script).not.toContain(`Remove existing version directory '$VersionDir'`)
   })
 
+  test("probes native versions safely under the installer error policy", async () => {
+    const script = await fs.readFile(installPs1, "utf8")
+
+    expect(script).toContain("function Invoke-NativeVersion")
+    expect(script).toContain('$ErrorActionPreference = "Continue"')
+    expect(script).toContain("ExitCode = $LASTEXITCODE")
+    expect(script.match(/--version 2>\$null/g)).toHaveLength(1)
+  })
+
+  test("preserves expandable user PATH entries when adding the launcher", async () => {
+    const script = await fs.readFile(installPs1, "utf8")
+
+    expect(script).toContain("DoNotExpandEnvironmentNames")
+    expect(script).toContain('$environmentKey.SetValue("Path", $newPath, $pathKind)')
+    expect(script).toContain("Publish-EnvironmentChange")
+    expect(script).not.toContain('[Environment]::SetEnvironmentVariable("Path"')
+  })
+
+  test("keeps compatibility fallbacks small and non-fatal", async () => {
+    const script = await fs.readFile(installPs1, "utf8")
+
+    expect(script).toContain("[TimeSpan]::FromMinutes(60)")
+    expect(script).toContain("try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}")
+    expect(script).toContain("[version]::TryParse")
+  })
+
   test("accepts legacy version directories and matches macOS retention", async () => {
     const script = await fs.readFile(installPs1, "utf8")
 
     expect(script).not.toContain(".deveco-install.json")
     expect(script).toContain("function Test-InstallationComplete")
+    expect(script).not.toContain("Get-DevecoCliEntry")
+    expect(script).not.toContain("bundled @deveco/deveco-cli runtime or CHANGELOG.md")
+    expect(script).not.toContain("$_.Name -match '^\\d'")
     expect(script).toContain("$VersionRetentionCount = 2")
   })
 

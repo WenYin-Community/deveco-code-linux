@@ -44,7 +44,7 @@ Usage: install [options]
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific version (e.g., 0.1.4)
+    -v, --version <version> Install a specific version
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
@@ -55,7 +55,7 @@ Environment:
 
 Examples:
     curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | bash
-    curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | bash -s -- --version 0.1.4
+    curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | bash -s -- --version <version>
     ./install --binary /path/to/deveco
 EOF
 }
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
                 requested_version="$2"
                 shift 2
             else
-                die "--version requires a version argument" "Usage: install --version 0.1.4"
+                die "--version requires a version argument" "Usage: install --version <version>"
             fi
             ;;
         -b|--binary)
@@ -176,7 +176,7 @@ else
         # Parse tag_name and prerelease with sed/grep (no jq dependency, matches upstream opencode).
         # Use here-string to avoid macOS `echo` stripping unescaped control chars in the body.
         release_json=$(curl -sS "${GITCODE_API}/releases/latest" 2>/dev/null) || {
-            die "Failed to fetch version info from GitCode" "Check your network, or visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
+            die "Failed to fetch version info from GitCode" "Check your network, or run: npm install -g @deveco/deveco-code"
         }
         specific_version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$release_json" | head -1 | sed 's/^v//')
         if grep -q '"prerelease"[[:space:]]*:[[:space:]]*true' <<< "$release_json"; then is_prerelease="true"; else is_prerelease="false"; fi
@@ -206,17 +206,9 @@ else
     url="${GITCODE_API}/releases/v${specific_version}/attach_files/${filename}/download"
 fi
 
-deveco_cli_entry() {
-    local install_root="$1"
-    [ -d "$install_root/vendor/deveco-cli" ] || return 1
-    find "$install_root/vendor/deveco-cli" -path '*/dist/cli.js' -type f -print -quit
-}
-
 installation_complete() {
     local install_root="$1"
-    [ -x "$install_root/bin/$APP" ] &&
-    [ -f "$install_root/CHANGELOG.md" ] &&
-    [ -n "$(deveco_cli_entry "$install_root")" ]
+    [ -x "$install_root/bin/$APP" ]
 }
 
 check_version() {
@@ -454,12 +446,12 @@ download_and_install() {
 
     if [ ! -f "$tmp_dir/$filename" ] || [ ! -s "$tmp_dir/$filename" ]; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Download failed — file is empty or missing" "Check your network, or download manually from https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
+        die "Download failed — file is empty or missing" "Try again, or run: npm install -g @deveco/deveco-code"
     fi
 
     if ! unzip -q "$tmp_dir/$filename" -d "$tmp_dir" 2>/dev/null; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Failed to extract archive — file may be corrupted" "Try running the install command again, or download the zip manually"
+        die "Failed to extract archive — file may be corrupted" "Try again, or run: npm install -g @deveco/deveco-code"
     fi
 
     # Find the binary - it may be at root or in bin/ subdirectory
@@ -469,7 +461,7 @@ download_and_install() {
     fi
     if [ -z "$binary_src" ] || [ ! -f "$binary_src" ]; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Binary '$APP' not found in the archive" "The package may be corrupted — try downloading again"
+        die "Binary '$APP' not found in the archive" "Try again, or run: npm install -g @deveco/deveco-code"
     fi
 
     # Place binary into staging version directory
@@ -496,14 +488,14 @@ download_and_install() {
     if ! installation_complete "$stage_dir"; then
         rm -rf "$stage_dir"
         rm -rf "$tmp_dir"
-        die "Release archive is incomplete" "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+        die "Release archive is incomplete" "Try again, or run: npm install -g @deveco/deveco-code"
     fi
 
     local installed_version
     installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
     if [ "$installed_version" != "$specific_version" ]; then
         rm -rf "$stage_dir" "$tmp_dir"
-        die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}"
+        die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}. Try: npm install -g @deveco/deveco-code"
     fi
 
     # Atomic switch: staging → version directory
@@ -522,27 +514,27 @@ install_from_binary() {
     local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
     local binary_abs
     binary_abs="$(cd "$(dirname "$binary_path")" && pwd)/$(basename "$binary_path")"
-    local source_root
-    source_root=$(dirname "$(dirname "$binary_abs")")
+    local source_root=""
+    if [ "$(basename "$(dirname "$binary_abs")")" = "bin" ]; then
+        source_root=$(dirname "$(dirname "$binary_abs")")
+    fi
     rm -rf "$stage_dir"
     mkdir -p "$stage_dir/bin"
     cp "$binary_abs" "$stage_dir/bin/$APP"
     chmod 755 "$stage_dir/bin/$APP"
-    if [ -d "$source_root/vendor" ]; then
+    if [ -n "$source_root" ] && [ -d "$source_root/vendor" ]; then
         cp -r "$source_root/vendor" "$stage_dir/vendor"
-    else
-        die "No adjacent vendor directory found" "Use the binary from a complete build output containing vendor/deveco-cli"
     fi
-    if [ -f "$source_root/CHANGELOG.md" ]; then
+    if [ -n "$source_root" ] && [ -f "$source_root/CHANGELOG.md" ]; then
         cp "$source_root/CHANGELOG.md" "$stage_dir/CHANGELOG.md"
     fi
     if ! installation_complete "$stage_dir"; then
-        die "Local build output is incomplete" "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+        die "Local build output is incomplete" "The deveco executable is missing"
     fi
     local installed_version
     installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
     if [ "$installed_version" != "$specific_version" ]; then
-        die "Installation verification failed" "$binary_abs did not preserve version $specific_version"
+        die "Local binary version does not match" "Expected $specific_version, got ${installed_version:-no version output}"
     fi
     if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
     mv "$stage_dir" "$version_dir"

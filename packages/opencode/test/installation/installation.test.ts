@@ -150,21 +150,28 @@ describe("installation", () => {
       }),
     )
 
-    let irmReleaseUrl = ""
-    testEffect(testLayer((request) => {
-      irmReleaseUrl = request.url
-      if (request.url.includes("/releases/latest")) {
-        return jsonResponse({
-          tag_name: "v0.1.3",
-          prerelease: false,
-        })
-      }
-      return jsonResponse({ version: "1.2.3" })
-    })).effect("reads the latest version from GitCode releases/latest API for irm installs", () =>
+    const irmCalls: Array<{ cmd: string; args: readonly string[] }> = []
+    testEffect(
+      testLayer(
+        () => {
+          throw new Error("Windows irm lookup should use PowerShell")
+        },
+        (cmd, args) => {
+          irmCalls.push({ cmd, args })
+          if (args.includes("--version")) return "PowerShell 7.4.0"
+          return "v0.1.10\r\n"
+        },
+      ),
+    ).effect("uses PowerShell for the latest irm version on Windows", () =>
       Effect.gen(function* () {
-        const result = yield* Installation.use.latest("irm")
-        expect(result).toBe("0.1.3")
-        expect(irmReleaseUrl).toContain("/releases/latest")
+        const platform = process.platform
+        try {
+          Object.defineProperty(process, "platform", { value: "win32", configurable: true })
+          expect(yield* Installation.use.latest("irm")).toBe("0.1.10")
+          expect(irmCalls.some((call) => call.cmd === "pwsh" && call.args.includes("-Command"))).toBe(true)
+        } finally {
+          Object.defineProperty(process, "platform", { value: platform, configurable: true })
+        }
       }),
     )
 
@@ -502,13 +509,13 @@ describe("installation", () => {
 
           // 断言 pwsh 被实际调用(而非 bash/sh)
           expect(winShellCalls.some((c) => c.cmd === "pwsh")).toBe(true)
-          // 定位脚本执行调用(跳过 --version 探测调用),断言参数含 -Command 和 -
+          // 定位脚本执行调用(跳过 --version 探测调用)
           const pwshExecCall = winShellCalls.find(
             (c) => c.cmd === "pwsh" && c.args.includes("-Command"),
           )
           expect(pwshExecCall).toBeDefined()
           expect(pwshExecCall?.args).toContain("-Command")
-          expect(pwshExecCall?.args).toContain("-")
+          expect(pwshExecCall?.args.some((arg) => arg.includes("Invoke-RestMethod"))).toBe(true)
           // 断言未调用 bash/sh
           expect(winShellCalls.some((c) => c.cmd === "bash" || c.cmd === "sh")).toBe(false)
         } finally {
@@ -517,26 +524,22 @@ describe("installation", () => {
       }),
     )
 
-    const irmHttpUrls: string[] = []
     testEffect(
       testLayer(
-        (request) => {
-          irmHttpUrls.push(request.url)
-          return new Response("install.ps1 script content", { status: 200 })
+        () => {
+          throw new Error("irm upgrade should not use the HTTP client")
         },
         (cmd, args) => {
           if (cmd === "pwsh" && args.includes("--version")) return "PowerShell 7.4.0"
           return ""
         },
       ),
-    ).effect("fetches install.ps1 for irm upgrades", () =>
+    ).effect("lets PowerShell fetch install.ps1 for irm upgrades", () =>
       Effect.gen(function* () {
-        irmHttpUrls.length = 0
         const originalPlatform = process.platform
         try {
           Object.defineProperty(process, "platform", { value: "win32", configurable: true })
           yield* Installation.use.upgrade("irm", "9.9.9")
-          expect(irmHttpUrls.some((url) => url.includes("install.ps1"))).toBe(true)
         } finally {
           Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true })
         }

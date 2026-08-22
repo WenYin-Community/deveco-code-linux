@@ -3,7 +3,7 @@
 #
 # Usage:
 #   irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Version 0.1.4
+#   & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Version <version>
 #   & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Baseline
 #   & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Binary C:\path\to\deveco.exe
 #   & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -NoModifyPath
@@ -30,8 +30,8 @@ if (-not ("System.Net.Http.HttpClient" -as [type])) {
 # Prevent Invoke-WebRequest progress bar from significantly slowing down large file downloads in PS 5.1
 $ProgressPreference = 'SilentlyContinue'
 
-# Ensure console outputs Unicode characters correctly (progress bar uses ━/─); does not affect ASCII text
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# Ensure console outputs Unicode characters correctly when a console is attached.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 # ANSI color codes shared with the macOS installer.
 # Use [char]27 instead of `e — the latter only works in PS 7+, not in Windows default PS 5.1
@@ -57,7 +57,7 @@ function Show-Help {
     Write-Host "Usage: install.ps1 [options]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -Version <version>   Install a specific version (e.g., 0.1.4)"
+    Write-Host "  -Version <version>   Install a specific version"
     Write-Host "  -Baseline            Force baseline variant (no AVX2)"
     Write-Host "  -Binary <path>       Install from a local binary instead of downloading"
     Write-Host "  -NoModifyPath        Don't modify user PATH"
@@ -70,13 +70,8 @@ function Show-Help {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1 | iex"
-    Write-Host "  & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Version 0.1.4"
+    Write-Host "  & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Version <version>"
     Write-Host "  & ([scriptblock]::Create((irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1))) -Binary C:\path\to\deveco.exe"
-}
-
-function Write-InstallerError {
-    param([string]$Message)
-    Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
 
 # Progress bar constants — 6-stop gradient (pink→purple→blue→cyan→mint→green), ━ / ─ box-drawing chars.
@@ -85,7 +80,6 @@ function Write-InstallerError {
 $ProgressBarWidth  = 28
 $ProgressFillChar  = [char]0x2501   # ━ BOX DRAWINGS HEAVY HORIZONTAL
 $ProgressEmptyChar = [char]0x2500   # ─ BOX DRAWINGS LIGHT HORIZONTAL
-$ProgressLastPctInt = -1           # last rendered integer percent (1%-granularity throttle)
 
 $ProgressGradientStops = @(
     @(255, 100, 200),  # pink-500
@@ -158,6 +152,7 @@ function Copy-StreamWithProgress {
     )
     $buffer = New-Object byte[] 65536
     $totalRead = 0
+    $lastPercent = -1
     while (($bytesRead = $InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
         $OutputStream.Write($buffer, 0, $bytesRead)
         $totalRead += $bytesRead
@@ -165,8 +160,8 @@ function Copy-StreamWithProgress {
             $percent = [int][math]::Floor($totalRead * 100 / $TotalBytes)
             if ($percent -gt 100) { $percent = 100 }
             # 1%-granularity throttle: skip when same integer percent already rendered
-            if ($percent -lt 100 -and $percent -eq $ProgressLastPctInt) { continue }
-            $ProgressLastPctInt = $percent
+            if ($percent -lt 100 -and $percent -eq $lastPercent) { continue }
+            $lastPercent = $percent
             $bar = Format-UpgradeBar -Percent $percent -TrueColor $ProgressTrueColor
             $pctText = "{0,3}" -f $percent
             Write-Host "`r${bar} ${pctText}%" -NoNewline
@@ -193,7 +188,7 @@ function Download-WithProgress {
     # gradient progress as the macOS installer. BITS cannot expose progress when
     # Start-BitsTransfer is used synchronously, which made the bar disappear.
     $client = [System.Net.Http.HttpClient]::new()
-    $client.Timeout = [TimeSpan]::FromMinutes(10)
+    $client.Timeout = [TimeSpan]::FromMinutes(60)
     $totalBytes = 0
     try {
         $response = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
@@ -223,6 +218,40 @@ function Download-WithProgress {
     }
 }
 
+function Download-WithRetry {
+    param([string]$Url, [string]$Output, [int]$Attempts = 3)
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Download-WithProgress -Url $Url -Output $Output
+            return
+        } catch {
+            if ($attempt -eq $Attempts) { throw }
+            Start-Sleep -Milliseconds (500 * $attempt)
+        }
+    }
+}
+
+function Invoke-NativeVersion {
+    param([string]$ExePath)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        return @{
+            Output = ((@(& $ExePath --version 2>$null) -join "`n").Trim())
+            ExitCode = $LASTEXITCODE
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
+function Publish-EnvironmentChange {
+    $signature = '[DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr window, uint message, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);'
+    $type = Add-Type -MemberDefinition $signature -Name "DevEcoEnvironmentChange_$([guid]::NewGuid().ToString('N'))" -PassThru
+    $result = [UIntPtr]::Zero
+    [void]$type::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
+}
+
 # L1: Use PID-suffixed class name to avoid same-session type conflicts
 function Test-Avx2 {
     $className = "Avx2Check_$PID"
@@ -235,51 +264,22 @@ function Test-Avx2 {
     return $type::IsProcessorFeaturePresent(40)
 }
 
-function Get-DevecoCliEntry {
-    param([string]$InstallRoot)
-    $vendorRoot = Join-Path $InstallRoot "vendor\deveco-cli"
-    if (-not (Test-Path -LiteralPath $vendorRoot -PathType Container)) { return $null }
-    $entry = Get-ChildItem -LiteralPath $vendorRoot -Filter "cli.js" -File -Recurse -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '[\\/]dist[\\/]cli\.js$' } |
-        Select-Object -First 1
-    if ($entry) { return $entry.FullName }
-    return $null
-}
-
 function Test-InstallationComplete {
     param([string]$InstallRoot)
-    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "bin\$AppName.exe") -PathType Leaf)) { return $false }
-    if (-not (Test-Path -LiteralPath (Join-Path $InstallRoot "CHANGELOG.md") -PathType Leaf)) { return $false }
-    return -not [string]::IsNullOrWhiteSpace((Get-DevecoCliEntry $InstallRoot))
+    return (Test-Path -LiteralPath (Join-Path $InstallRoot "bin\$AppName.exe") -PathType Leaf)
 }
 
-function Test-InstallationCompleteWithRetry {
-    param([string]$InstallRoot, [int]$Attempts = 3)
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        if (Test-InstallationComplete $InstallRoot) { return $true }
-        if ($attempt -lt $Attempts) { Start-Sleep -Milliseconds (250 * $attempt) }
-    }
-    return $false
-}
-
-function Invoke-FileOperation {
-    param(
-        [string]$Description,
-        [scriptblock]$Operation,
-        [int]$Attempts = 5
-    )
-    $lastError = $null
+function Move-DirectoryWithRetry {
+    param([string]$Source, [string]$Destination, [int]$Attempts = 8)
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
         try {
-            return (& $Operation)
+            [System.IO.Directory]::Move($Source, $Destination)
+            return
         } catch {
-            $lastError = $_
-        }
-        if ($attempt -lt $Attempts) {
-            Start-Sleep -Milliseconds ([Math]::Min(250 * $attempt, 1500))
+            if ($attempt -eq $Attempts) { throw }
+            Start-Sleep -Milliseconds ([Math]::Min(250 * $attempt, 1000))
         }
     }
-    throw "$Description failed after $Attempts attempts: $($lastError.Exception.Message)"
 }
 
 function Wait-InstallMutex {
@@ -305,80 +305,47 @@ function Enter-InstallMutex {
     throw "Timed out waiting for another deveco installation to finish"
 }
 
-function New-StagedLauncher {
-    param([string]$Source, [string]$Destination)
-    if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-        throw "Launcher source disappeared before staging: $Source"
-    }
-    $sourceHash = Invoke-FileOperation -Description "Hash launcher source '$Source'" -Operation {
-        (Get-FileHash -LiteralPath $Source -Algorithm SHA256 -ErrorAction Stop).Hash
-    }
-    Invoke-FileOperation -Description "Stage launcher '$Source' to '$Destination'" -Operation {
-        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
-    }
-    $destinationHash = Invoke-FileOperation -Description "Hash staged launcher '$Destination'" -Operation {
-        (Get-FileHash -LiteralPath $Destination -Algorithm SHA256 -ErrorAction Stop).Hash
-    }
-    if ($sourceHash -ne $destinationHash) {
-        throw "Staged launcher failed SHA-256 verification"
-    }
-    return $sourceHash
-}
-
-# Windows security software can briefly hold newly extracted executables open.
-# Prefer an atomic directory rename, retry transient locks, then fall back to a
-# validated copy so installation is not blocked indefinitely by the directory handle.
+# Prefer a same-volume directory move, but tolerate security software briefly
+# holding the freshly verified executable open. A copy fallback keeps installs
+# working when the directory cannot be renamed at all.
 function Publish-StagedInstallation {
     param([string]$StageDir, [string]$VersionDir)
     $versionRollback = $null
     if (Test-Path -LiteralPath $VersionDir) {
         $versionRollback = Join-Path $VersionsDir ".rollback.$(Split-Path $VersionDir -Leaf).$([guid]::NewGuid().ToString('N'))"
-        Invoke-FileOperation -Description "Back up existing version directory '$VersionDir'" -Operation {
-            [System.IO.Directory]::Move($VersionDir, $versionRollback)
-        }
+        Move-DirectoryWithRetry -Source $VersionDir -Destination $versionRollback
     }
 
     $moveError = $null
     try {
-        Invoke-FileOperation -Description "Publish staged installation '$StageDir' to '$VersionDir'" -Operation {
-            [System.IO.Directory]::Move($StageDir, $VersionDir)
-        }
+        Move-DirectoryWithRetry -Source $StageDir -Destination $VersionDir
     } catch {
         $moveError = $_
     }
     if (-not $moveError) {
-        if (Test-InstallationCompleteWithRetry $VersionDir) {
-            if ($versionRollback) { Remove-Item -LiteralPath $versionRollback -Recurse -Force -ErrorAction SilentlyContinue }
-            return
-        }
-        Remove-Item -LiteralPath $VersionDir -Recurse -Force -ErrorAction SilentlyContinue
-        if ($versionRollback -and (Test-Path -LiteralPath $versionRollback)) {
-            [System.IO.Directory]::Move($versionRollback, $VersionDir)
-        }
-        throw "Published installation is incomplete; security software may have quarantined one of its files"
+        if ($versionRollback) { Remove-Item -LiteralPath $versionRollback -Recurse -Force -ErrorAction SilentlyContinue }
+        return
     }
 
     Write-Host "${ansiMuted}The install directory is busy; finishing with a verified copy.${ansiReset}"
     try {
-        Invoke-FileOperation -Description "Create version directory '$VersionDir'" -Operation {
-            New-Item -ItemType Directory -Path $VersionDir -Force -ErrorAction Stop | Out-Null
-        }
-        Invoke-FileOperation -Description "Copy staged installation '$StageDir' to '$VersionDir'" -Operation {
-            Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction Stop |
-                Copy-Item -Destination $VersionDir -Recurse -Force -ErrorAction Stop
-        }
-        if (-not (Test-InstallationCompleteWithRetry $VersionDir)) {
+        New-Item -ItemType Directory -Path $VersionDir -Force -ErrorAction Stop | Out-Null
+        Get-ChildItem -LiteralPath $StageDir -Force -ErrorAction Stop |
+            Copy-Item -Destination $VersionDir -Recurse -Force -ErrorAction Stop
+        if (-not (Test-InstallationComplete $VersionDir)) {
             throw "Copied installation is incomplete"
         }
-        Remove-Item -LiteralPath $StageDir -Recurse -Force -ErrorAction SilentlyContinue
         if ($versionRollback) { Remove-Item -LiteralPath $versionRollback -Recurse -Force -ErrorAction SilentlyContinue }
+        return
     } catch {
         $copyError = $_
         Remove-Item -LiteralPath $VersionDir -Recurse -Force -ErrorAction SilentlyContinue
         if ($versionRollback -and (Test-Path -LiteralPath $versionRollback)) {
             try {
-                [System.IO.Directory]::Move($versionRollback, $VersionDir)
-            } catch {}
+                Move-DirectoryWithRetry -Source $versionRollback -Destination $VersionDir
+            } catch {
+                throw "Could not publish '$StageDir'. Atomic move error: $($moveError.Exception.Message) Copy fallback error: $($copyError.Exception.Message) Rollback also failed: $($_.Exception.Message)"
+            }
         }
         throw "Could not publish '$StageDir'. Atomic move error: $($moveError.Exception.Message) Copy fallback error: $($copyError.Exception.Message)"
     }
@@ -392,16 +359,18 @@ function Get-InstallationState {
     $launcherVersion = $null
     if (Test-Path -LiteralPath $BinPath -PathType Leaf) {
         try {
-            $launcherVersion = ((@(& $BinPath --version 2>$null) -join "`n").Trim())
+            $probe = Invoke-NativeVersion -ExePath $BinPath
+            if ($probe.ExitCode -eq 0) { $launcherVersion = $probe.Output }
         } catch {}
     }
 
     if ((Test-Path -LiteralPath $versionDir -PathType Container) -and
-        (Test-InstallationCompleteWithRetry $versionDir)) {
+        (Test-InstallationComplete $versionDir)) {
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
         $versionedVersion = $null
         try {
-            $versionedVersion = ((@(& $versionBin --version 2>$null) -join "`n").Trim())
+            $probe = Invoke-NativeVersion -ExePath $versionBin
+            if ($probe.ExitCode -eq 0) { $versionedVersion = $probe.Output }
         } catch {}
         if ($versionedVersion -eq $TargetVersion) {
             if ($launcherVersion -eq $TargetVersion) {
@@ -424,22 +393,24 @@ function Get-InstallationState {
 
 function Cleanup-OldVersions {
     if ($VersionRetentionCount -le 0) { return }
-    $dirs = Get-ChildItem -Path $VersionsDir -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike '.*' -and $_.Name -match '^\d' } |
-        Sort-Object { [version]($_.Name -replace '-.*$','') } -ErrorAction SilentlyContinue
+    $dirs = Get-ChildItem -LiteralPath $VersionsDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '.*' } |
+        Sort-Object {
+            $parsed = $null
+            if ([version]::TryParse(($_.Name -replace '-.*$',''), [ref]$parsed)) { $parsed } else { [version]"9999.0" }
+        }
     if (-not $dirs -or $dirs.Count -le $VersionRetentionCount) { return }
-    # NOTE: Use 2>$null (not 2>&1 |) to avoid $LASTEXITCODE reset in PS 5.1
-    # and to exclude stderr noise (e.g. "Bun v1.3.14") that confuses the regex.
     $currentVersion = $null
-    if (Test-Path $BinPath) {
+    if (Test-Path -LiteralPath $BinPath) {
         try {
-            $currentVersion = ((@(& $BinPath --version 2>$null) -join "`n").Trim())
+            $probe = Invoke-NativeVersion -ExePath $BinPath
+            if ($probe.ExitCode -eq 0) { $currentVersion = $probe.Output }
         } catch {}
     }
     $toDelete = $dirs | Where-Object { $_.Name -ne $currentVersion } |
         Select-Object -First ($dirs.Count - $VersionRetentionCount)
     foreach ($dir in $toDelete) {
-        Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -449,19 +420,20 @@ if ($Help) {
 }
 
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
-    Write-InstallerError "This installer supports Windows PowerShell only. On macOS, run the install script from Bash."
-    throw "Unsupported operating system"
+    throw "This installer supports Windows PowerShell only. On macOS, run the install script from Bash."
 }
 
 $nodeWarning = $true
 if (Get-Command node -ErrorAction SilentlyContinue) {
-    $nodeVersion = ((@(& node --version 2>$null) -join "`n").Trim()) -replace '^v', ''
-    $nodeMajor = 0
-    if ($LASTEXITCODE -eq 0 -and
-        [int]::TryParse(($nodeVersion -split '\.')[0], [ref]$nodeMajor) -and
-        $nodeMajor -ge 22) {
-        $nodeWarning = $false
-    }
+    try {
+        $probe = Invoke-NativeVersion -ExePath "node"
+        $nodeMajor = 0
+        if ($probe.ExitCode -eq 0 -and
+            [int]::TryParse((($probe.Output -replace '^v', '') -split '\.')[0], [ref]$nodeMajor) -and
+            $nodeMajor -ge 22) {
+            $nodeWarning = $false
+        }
+    } catch {}
 }
 
 # --- Discover version (skipped when -Binary is provided) ---
@@ -469,15 +441,16 @@ $installationState = "download"
 $resolvedBinary = $null
 if ($Binary) {
     if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
-        Write-InstallerError "Binary not found: $Binary"
         Write-Host "Please check the path and try again" -ForegroundColor DarkGray
-        throw "Installer failed"
+        throw "Binary not found: $Binary"
     }
     $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
     try {
-        $tag = ((@(& $resolvedBinary --version 2>$null) -join "`n").Trim())
+        $probe = Invoke-NativeVersion -ExePath $resolvedBinary
+        if ($probe.ExitCode -ne 0) { throw "deveco exited with code $($probe.ExitCode)" }
+        $tag = $probe.Output
     } catch {
-        throw "Cannot read version from local binary"
+        throw "Cannot read version from local binary: $($_.Exception.Message)"
     }
     if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
         throw "Local binary returned an invalid version: $tag"
@@ -511,9 +484,8 @@ if ($Binary) {
             }
             Write-Host "${ansiOrange}Latest version: ${ansiReset}$tag"
         } catch {
-            Write-InstallerError "Failed to fetch version info from GitCode: $_"
-            Write-Host "Hint: Use -Version 0.1.4 to specify a version manually." -ForegroundColor DarkGray
-            throw "Installer failed"
+            Write-Host "Try: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
+            throw "Failed to fetch version info from GitCode: $($_.Exception.Message)"
         }
     } else {
         Write-Host "Using specified version: $tag" -ForegroundColor DarkGray
@@ -523,9 +495,8 @@ if ($Binary) {
             $response = Invoke-WebRequest -Uri $releaseUrl -Method Get -UseBasicParsing -ErrorAction Stop
             if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
         } catch {
-            Write-InstallerError "Release v$tag not found: $_"
             Write-Host "Available releases: https://gitcode.com/$Repo/releases" -ForegroundColor DarkGray
-            throw "Installer failed"
+            throw "Release v$tag not found: $($_.Exception.Message)"
         }
     }
 
@@ -539,22 +510,19 @@ if ($Binary) {
 $tempFile = $null
 $stageDir = $null
 $launcherStage = $null
-$launcherHash = $null
 $installMutex = $null
 try {
     $installMutex = Enter-InstallMutex
 
     # --- Create versioned install directories ---
-    if (-not (Test-Path $VersionsDir)) {
-        Invoke-FileOperation -Description "Create versions directory '$VersionsDir'" -Operation {
-            New-Item -ItemType Directory -Path $VersionsDir -Force -ErrorAction Stop | Out-Null
-        }
+    if (-not (Test-Path -LiteralPath $VersionsDir)) {
+        New-Item -ItemType Directory -Path $VersionsDir -Force -ErrorAction Stop | Out-Null
     }
-    if (-not (Test-Path $BinDir)) {
-        Invoke-FileOperation -Description "Create launcher directory '$BinDir'" -Operation {
-            New-Item -ItemType Directory -Path $BinDir -Force -ErrorAction Stop | Out-Null
-        }
+    if (-not (Test-Path -LiteralPath $BinDir)) {
+        New-Item -ItemType Directory -Path $BinDir -Force -ErrorAction Stop | Out-Null
     }
+    Get-ChildItem -LiteralPath $VersionsDir -Directory -Force -Filter ".staging.*" -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     $installID = [guid]::NewGuid().ToString("N")
 
     if (-not $Binary) {
@@ -582,46 +550,41 @@ try {
         $stageDir = Join-Path $VersionsDir ".staging.$tag.$installID"
         $stageBinDir = Join-Path $stageDir "bin"
         if (Test-Path -LiteralPath $stageDir) {
-            Invoke-FileOperation -Description "Remove stale staging directory '$stageDir'" -Operation {
-                Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction Stop
-            }
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction Stop
         }
-        Invoke-FileOperation -Description "Create staging directory '$stageBinDir'" -Operation {
-            New-Item -ItemType Directory -Path $stageBinDir -Force -ErrorAction Stop | Out-Null
-        }
+        New-Item -ItemType Directory -Path $stageBinDir -Force -ErrorAction Stop | Out-Null
         $versionBin = Join-Path $stageBinDir "$AppName.exe"
-        Invoke-FileOperation -Description "Copy local binary '$resolvedBinary' to '$versionBin'" -Operation {
-            Copy-Item -LiteralPath $resolvedBinary -Destination $versionBin -Force -ErrorAction Stop
-        }
+        Copy-Item -LiteralPath $resolvedBinary -Destination $versionBin -Force -ErrorAction Stop
 
-        $sourceRoot = Split-Path (Split-Path $resolvedBinary -Parent) -Parent
-        $sourceVendor = Join-Path $sourceRoot "vendor"
-        if (Test-Path $sourceVendor) {
-            $vendorDestination = Join-Path $stageDir "vendor"
-            Invoke-FileOperation -Description "Copy local runtime resources from '$sourceVendor'" -Operation {
+        $sourceRoot = if ((Split-Path (Split-Path $resolvedBinary -Parent) -Leaf) -ieq "bin") {
+            Split-Path (Split-Path $resolvedBinary -Parent) -Parent
+        } else {
+            $null
+        }
+        if ($sourceRoot) {
+            $sourceVendor = Join-Path $sourceRoot "vendor"
+            if (Test-Path -LiteralPath $sourceVendor) {
+                $vendorDestination = Join-Path $stageDir "vendor"
                 if (Test-Path -LiteralPath $vendorDestination) {
                     Remove-Item -LiteralPath $vendorDestination -Recurse -Force -ErrorAction Stop
                 }
                 Copy-Item -LiteralPath $sourceVendor -Destination $vendorDestination -Recurse -Force -ErrorAction Stop
             }
-        } else {
-            throw "No adjacent vendor directory found. Use a complete build output containing vendor/deveco-cli."
-        }
-        $sourceChangelog = Join-Path $sourceRoot "CHANGELOG.md"
-        if (Test-Path $sourceChangelog) {
-            Invoke-FileOperation -Description "Copy local changelog '$sourceChangelog'" -Operation {
+            $sourceChangelog = Join-Path $sourceRoot "CHANGELOG.md"
+            if (Test-Path -LiteralPath $sourceChangelog) {
                 Copy-Item -LiteralPath $sourceChangelog -Destination (Join-Path $stageDir "CHANGELOG.md") -Force -ErrorAction Stop
             }
         }
 
         if (-not (Test-InstallationComplete $stageDir)) {
-            throw "Local build output is incomplete — bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing"
+            throw "Local build output is incomplete — deveco.exe is missing"
         }
-        $installedVersion = ((@(& $versionBin --version 2>$null) -join "`n").Trim())
-        if ($LASTEXITCODE -ne 0) { throw "Installation verification failed — deveco could not run" }
-        if ($installedVersion -ne $tag) { throw "Local binary version changed during installation" }
+        $probe = Invoke-NativeVersion -ExePath $versionBin
+        $installedVersion = $probe.Output
+        if ($probe.ExitCode -ne 0) { throw "Installation verification failed — deveco could not run" }
+        if ($installedVersion -ne $tag) { throw "Local binary version does not match. Expected $tag, got $installedVersion" }
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
-        $launcherHash = New-StagedLauncher -Source $versionBin -Destination $launcherStage
+        Copy-Item -LiteralPath $versionBin -Destination $launcherStage -Force -ErrorAction Stop
         Publish-StagedInstallation -StageDir $stageDir -VersionDir $versionDir
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     } elseif ($installationState -eq "download") {
@@ -637,34 +600,25 @@ try {
         # --- Download to temp file ---
         $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + ".zip")
         try {
-            Invoke-FileOperation -Description "Download release archive '$assetName'" -Attempts 3 -Operation {
-                Download-WithProgress -Url $downloadUrl -Output $tempFile
-            }
+            Download-WithRetry -Url $downloadUrl -Output $tempFile
         } catch {
-            Write-InstallerError "Download failed: $_"
-            Write-Host "Try downloading manually: $downloadUrl" -ForegroundColor DarkGray
-            if (Test-Path $tempFile) { Remove-Item $tempFile -Force }
-            throw "Installer failed"
+            Write-Host "Try: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
+            throw "Download failed: $($_.Exception.Message)"
         }
 
         # Verify download is not empty
-        if (-not (Test-Path $tempFile) -or (Get-Item $tempFile).Length -eq 0) {
-            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-            Write-InstallerError "Download failed — file is empty or missing"
-            Write-Host "Check your network, or download manually from $downloadUrl" -ForegroundColor DarkGray
-            throw "Installer failed"
+        if (-not (Test-Path -LiteralPath $tempFile) -or (Get-Item -LiteralPath $tempFile).Length -eq 0) {
+            Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
+            Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
+            throw "Download failed — file is empty or missing"
         }
         # --- Extract to staging directory ---
         $stageDir = Join-Path $VersionsDir ".staging.$tag.$installID"
         $stageBinDir = Join-Path $stageDir "bin"
         if (Test-Path -LiteralPath $stageDir) {
-            Invoke-FileOperation -Description "Remove stale staging directory '$stageDir'" -Operation {
-                Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction Stop
-            }
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction Stop
         }
-        Invoke-FileOperation -Description "Create staging directory '$stageBinDir'" -Operation {
-            New-Item -ItemType Directory -Path $stageBinDir -Force -ErrorAction Stop | Out-Null
-        }
+        New-Item -ItemType Directory -Path $stageBinDir -Force -ErrorAction Stop | Out-Null
 
         # Avoid the noisy Expand-Archive progress UI in Windows PowerShell and PowerShell 7.
         if (-not ("System.IO.Compression.ZipFile" -as [type])) {
@@ -680,14 +634,14 @@ try {
             if ($extractAttempt -gt 1) {
                 Write-Host "${ansiMuted}Archive extraction failed; downloading a fresh copy.${ansiReset}"
                 try {
-                    Download-WithProgress -Url $downloadUrl -Output $tempFile
+                    Download-WithRetry -Url $downloadUrl -Output $tempFile
                 } catch {
                     $extractionError = $_
                     continue
                 }
             }
             if (Test-Path -LiteralPath $stageDir) {
-                Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             }
             New-Item -ItemType Directory -Path $stageBinDir -Force -ErrorAction Stop | Out-Null
             try {
@@ -696,87 +650,76 @@ try {
                 break
             } catch {
                 $extractionError = $_
-                Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
-        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
         if ($extractionError) {
-            Write-InstallerError "Extraction failed after a fresh download: $extractionError"
-            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            throw "Installer failed"
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            throw "Extraction failed after a fresh download: $($extractionError.Exception.Message)"
         }
 
         # --- Find binary and move to staging/bin/ ---
         $binarySrc = Join-Path $stageDir "$AppName.exe"
-        if (-not (Test-Path $binarySrc)) {
+        if (-not (Test-Path -LiteralPath $binarySrc)) {
             $binarySrc = Join-Path $stageDir $AppName
         }
-        if (-not (Test-Path $binarySrc)) {
-            $found = Get-ChildItem -Path $stageDir -Filter "$AppName.exe" -Recurse -File | Select-Object -First 1
+        if (-not (Test-Path -LiteralPath $binarySrc)) {
+            $found = Get-ChildItem -LiteralPath $stageDir -Filter "$AppName.exe" -Recurse -File | Select-Object -First 1
             if (-not $found) {
-                $found = Get-ChildItem -Path $stageDir -Filter $AppName -Recurse -File | Select-Object -First 1
+                $found = Get-ChildItem -LiteralPath $stageDir -Filter $AppName -Recurse -File | Select-Object -First 1
             }
             if ($found) { $binarySrc = $found.FullName }
         }
-        if (-not (Test-Path $binarySrc)) {
-            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-InstallerError "Binary '$AppName' not found in archive"
-            Write-Host "The package may be corrupted — try downloading again" -ForegroundColor DarkGray
-            throw "Installer failed"
+        if (-not (Test-Path -LiteralPath $binarySrc)) {
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
+            throw "Binary '$AppName' not found in archive"
         }
 
         # Move binary into staging/bin/ (normalize name to deveco.exe)
         $stageBin = Join-Path $stageBinDir "$AppName.exe"
         if ($binarySrc -ne $stageBin) {
-            Invoke-FileOperation -Description "Move extracted launcher '$binarySrc' to '$stageBin'" -Operation {
-                Move-Item -LiteralPath $binarySrc -Destination $stageBin -Force -ErrorAction Stop
-            }
+            Move-Item -LiteralPath $binarySrc -Destination $stageBin -Force -ErrorAction Stop
         }
 
         # Fallback: search for vendor/ and CHANGELOG.md if not at stageDir root
-        if (-not (Test-Path (Join-Path $stageDir "vendor"))) {
-            $vendorFound = Get-ChildItem -Path $stageDir -Directory -Filter "vendor" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not (Test-Path -LiteralPath (Join-Path $stageDir "vendor"))) {
+            $vendorFound = Get-ChildItem -LiteralPath $stageDir -Directory -Filter "vendor" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($vendorFound) {
-                Invoke-FileOperation -Description "Move extracted runtime resources '$($vendorFound.FullName)'" -Operation {
-                    Move-Item -LiteralPath $vendorFound.FullName -Destination (Join-Path $stageDir "vendor") -Force -ErrorAction Stop
-                }
+                Move-Item -LiteralPath $vendorFound.FullName -Destination (Join-Path $stageDir "vendor") -Force -ErrorAction Stop
             }
         }
-        if (-not (Test-Path (Join-Path $stageDir "CHANGELOG.md"))) {
-            $changelog = Get-ChildItem -Path $stageDir -File -Filter "CHANGELOG.md" -Recurse -ErrorAction SilentlyContinue |
+        if (-not (Test-Path -LiteralPath (Join-Path $stageDir "CHANGELOG.md"))) {
+            $changelog = Get-ChildItem -LiteralPath $stageDir -File -Filter "CHANGELOG.md" -Recurse -ErrorAction SilentlyContinue |
                 Where-Object { $_.FullName -notmatch '\\bin\\' -and $_.FullName -notmatch '\\vendor\\' } |
                 Select-Object -First 1
             if ($changelog) {
-                Invoke-FileOperation -Description "Copy extracted changelog '$($changelog.FullName)'" -Operation {
-                    Copy-Item -LiteralPath $changelog.FullName -Destination (Join-Path $stageDir "CHANGELOG.md") -Force -ErrorAction Stop
-                }
+                Copy-Item -LiteralPath $changelog.FullName -Destination (Join-Path $stageDir "CHANGELOG.md") -Force -ErrorAction Stop
             }
         }
 
         if (-not (Test-InstallationComplete $stageDir)) {
-            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-InstallerError "Release archive is incomplete"
-            Write-Host "The bundled @deveco/deveco-cli runtime or CHANGELOG.md is missing" -ForegroundColor DarkGray
-            throw "Installer failed"
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
+            throw "Release archive is incomplete"
         }
 
         # --- Post-install smoke test ---
-        # NOTE: Avoid 2>&1 | Out-Null which resets $LASTEXITCODE to 0 in PS 5.1
-        $installedVersion = ((@(& $stageBin --version 2>$null) -join "`n").Trim())
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-InstallerError "Installation verification failed — deveco could not run"
+        $probe = Invoke-NativeVersion -ExePath $stageBin
+        $installedVersion = $probe.Output
+        if ($probe.ExitCode -ne 0) {
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
-            throw "Installer failed"
+            throw "Installation verification failed — deveco could not run"
         }
         if ($installedVersion -ne $tag) {
-            Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
-            Write-InstallerError "Downloaded binary version $installedVersion does not match release v$tag"
-            throw "Installer failed"
+            Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+            throw "Downloaded binary version $installedVersion does not match release v$tag. Try: npm install -g @deveco/deveco-code"
         }
 
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
-        $launcherHash = New-StagedLauncher -Source $stageBin -Destination $launcherStage
+        Copy-Item -LiteralPath $stageBin -Destination $launcherStage -Force -ErrorAction Stop
 
         # --- Publish staging → version directory ---
         $versionDir = Join-Path $VersionsDir $tag
@@ -788,7 +731,7 @@ try {
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
         if ($installationState -eq "repair") {
             $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
-            $launcherHash = New-StagedLauncher -Source $versionBin -Destination $launcherStage
+            Copy-Item -LiteralPath $versionBin -Destination $launcherStage -Force -ErrorAction Stop
         }
     }
 
@@ -802,9 +745,7 @@ try {
             $replaced = $false
             if ($oldName) {
                 try {
-                    Invoke-FileOperation -Description "Atomically replace launcher '$BinPath'" -Operation {
-                        [System.IO.File]::Replace($launcherStage, $BinPath, $oldName, $true)
-                    }
+                    [System.IO.File]::Replace($launcherStage, $BinPath, $oldName, $true)
                     $replaced = $true
                 } catch {
                     # Some filesystems and executable sharing modes do not support ReplaceFile.
@@ -812,37 +753,21 @@ try {
             }
             if (-not $replaced) {
                 if ($oldName) {
-                    Invoke-FileOperation -Description "Back up current launcher '$BinPath'" -Operation {
-                        Rename-Item -LiteralPath $BinPath -NewName (Split-Path $oldName -Leaf) -ErrorAction Stop
-                    }
+                    Rename-Item -LiteralPath $BinPath -NewName (Split-Path $oldName -Leaf) -ErrorAction Stop
                 }
-                Invoke-FileOperation -Description "Activate staged launcher '$launcherStage'" -Operation {
-                    Move-Item -LiteralPath $launcherStage -Destination $BinPath -Force -ErrorAction Stop
-                }
+                Move-Item -LiteralPath $launcherStage -Destination $BinPath -Force -ErrorAction Stop
             }
             $newLauncherPlaced = $true
             $launcherStage = $null
-            $installedLauncherHash = Invoke-FileOperation -Description "Verify installed launcher '$BinPath'" -Operation {
-                (Get-FileHash -LiteralPath $BinPath -Algorithm SHA256 -ErrorAction Stop).Hash
-            }
-            if ($launcherHash -ne $installedLauncherHash) {
-                throw "Installed launcher failed SHA-256 verification"
-            }
             if ($oldName) { Remove-Item -LiteralPath $oldName -Force -ErrorAction SilentlyContinue }
         } catch {
             $switchError = $_
             if ($newLauncherPlaced -and (Test-Path -LiteralPath $BinPath)) {
-                try {
-                    Invoke-FileOperation -Description "Remove failed launcher '$BinPath'" -Operation {
-                        Remove-Item -LiteralPath $BinPath -Force -ErrorAction Stop
-                    }
-                } catch {}
+                try { Remove-Item -LiteralPath $BinPath -Force -ErrorAction Stop } catch {}
             }
             if ($oldName -and (Test-Path -LiteralPath $oldName)) {
                 try {
-                    Invoke-FileOperation -Description "Restore previous launcher '$oldName'" -Operation {
-                        Rename-Item -LiteralPath $oldName -NewName "$AppName.exe" -ErrorAction Stop
-                    }
+                    Rename-Item -LiteralPath $oldName -NewName "$AppName.exe" -ErrorAction Stop
                 } catch {
                     throw "Launcher activation failed: $($switchError.Exception.Message) Rollback also failed: $($_.Exception.Message) Previous launcher remains at '$oldName'."
                 }
@@ -852,7 +777,7 @@ try {
     }
 
     # --- Clean up stale .old.* files from previous installs ---
-    Get-ChildItem -Path $BinDir -Filter "$AppName.exe.old.*" -ErrorAction SilentlyContinue |
+    Get-ChildItem -LiteralPath $BinDir -Filter "$AppName.exe.old.*" -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
 
     # Keep the same bounded version history as the macOS installer.
@@ -864,23 +789,36 @@ try {
         Write-Host "Skipping PATH modification (-NoModifyPath)" -ForegroundColor DarkGray
     } else {
         $pathEntry = $BinDir
-        $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if (-not $currentPath) { $currentPath = "" }
-        $pathEntries = $currentPath -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        $alreadyInPath = $pathEntries | Where-Object { $_ -ieq $pathEntry }
-
-        if ($alreadyInPath) {
-            Write-Host "PATH already contains $pathEntry" -ForegroundColor DarkGray
-        } else {
-            if ($currentPath) {
-                $newPath = $currentPath.TrimEnd(";") + ";$pathEntry"
-            } else {
-                $newPath = $pathEntry
+        $environmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+        if (-not $environmentKey) { throw "Could not open the user environment registry key" }
+        try {
+            $currentPath = ""
+            $pathKind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+            if ($environmentKey.GetValueNames() -contains "Path") {
+                $currentPath = [string]$environmentKey.GetValue(
+                    "Path",
+                    "",
+                    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+                )
+                $pathKind = $environmentKey.GetValueKind("Path")
             }
-            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-            $env:Path += ";$pathEntry"
-            Write-Host "Added $pathEntry to user PATH" -ForegroundColor Green
-            $pathModified = $true
+            $pathEntries = $currentPath -split ";" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+            $alreadyInPath = $pathEntries | Where-Object {
+                $_ -ieq $pathEntry -or ([Environment]::ExpandEnvironmentVariables($_) -ieq $pathEntry)
+            }
+
+            if ($alreadyInPath) {
+                Write-Host "PATH already contains $pathEntry" -ForegroundColor DarkGray
+            } else {
+                $newPath = if ($currentPath) { $currentPath.TrimEnd(";") + ";$pathEntry" } else { $pathEntry }
+                $environmentKey.SetValue("Path", $newPath, $pathKind)
+                $env:Path += ";$pathEntry"
+                try { Publish-EnvironmentChange } catch {}
+                Write-Host "Added $pathEntry to user PATH" -ForegroundColor Green
+                $pathModified = $true
+            }
+        } finally {
+            $environmentKey.Close()
         }
     }
 
@@ -919,15 +857,11 @@ try {
         Write-Host 'Install Node.js from https://nodejs.org/ and make sure "node" is available in your PATH.' -ForegroundColor Red
         Write-Host ""
     }
-} catch {
-    $installError = $_
-    Write-Host "[DEVECO_INSTALL_ERROR] $($installError.Exception.Message)"
-    throw $installError
 } finally {
     # Global cleanup: ensure temp files are removed on exception or Ctrl+C
-    if ($tempFile -and (Test-Path $tempFile)) { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
-    if ($stageDir -and (Test-Path $stageDir)) { Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($launcherStage -and (Test-Path $launcherStage)) { Remove-Item $launcherStage -Force -ErrorAction SilentlyContinue }
+    if ($tempFile -and (Test-Path -LiteralPath $tempFile)) { Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue }
+    if ($stageDir -and (Test-Path -LiteralPath $stageDir)) { Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($launcherStage -and (Test-Path -LiteralPath $launcherStage)) { Remove-Item -LiteralPath $launcherStage -Force -ErrorAction SilentlyContinue }
     if ($installMutex) {
         try {
             [void]$installMutex.ReleaseMutex()

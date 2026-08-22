@@ -191,16 +191,22 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
     const upgradeIrm = Effect.fnUntraced(
       function* (target: string) {
-        const response = yield* httpOk.execute(HttpClientRequest.get(INSTALL_PS1_URL))
-        const body = yield* response.text
-        const bodyBytes = new TextEncoder().encode(body)
         const shell = yield* upgradeScriptShell()
         const result = yield* appProcess.run(
-          ChildProcess.make(shell, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-"], {
-            stdin: Stream.make(bodyBytes),
-            env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO },
-            extendEnv: true,
-          }),
+          ChildProcess.make(
+            shell,
+            [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri $env:DEVECO_INSTALL_PS1_URL -Method Get -ErrorAction Stop | Invoke-Expression",
+            ],
+            {
+              env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO, DEVECO_INSTALL_PS1_URL: INSTALL_PS1_URL },
+              extendEnv: true,
+            },
+          ),
         )
         return {
           code: result.exitCode,
@@ -262,7 +268,23 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
       latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
         const detectedMethod = installMethod || (yield* result.method())
 
-        if (detectedMethod === "curl" || detectedMethod === "irm") {
+        if (detectedMethod === "irm") {
+          const version = (
+            yield* text(
+              [
+                yield* upgradeScriptShell(),
+                "-NoProfile",
+                "-Command",
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (Invoke-RestMethod -Uri $env:DEVECO_GITCODE_LATEST_URL -Method Get -ErrorAction Stop).tag_name",
+              ],
+              { env: { DEVECO_GITCODE_LATEST_URL: `${GITCODE_API}/releases/latest` } },
+            )
+          ).trim().replace(/^v/, "")
+          if (semver.valid(version) && !semver.prerelease(version)) return version
+          return yield* Effect.fail(new Error("Could not determine the latest version from GitCode"))
+        }
+
+        if (detectedMethod === "curl") {
           const response = yield* httpOk.execute(
             HttpClientRequest.get(`${GITCODE_API}/releases/latest`).pipe(HttpClientRequest.acceptJson),
           )
