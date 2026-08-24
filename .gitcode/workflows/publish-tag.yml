@@ -46,7 +46,6 @@ jobs:
           echo "DEVECO_VERSION=${TAG#v}" >> "$ATOMGIT_ENV"
           BRANCH=$(git for-each-ref --format='%(refname:short)' --points-at HEAD refs/remotes/origin/ | head -1 | sed 's|origin/||')
           [ -z "$BRANCH" ] && BRANCH="$ATOMGIT_REF_NAME"
-          echo "DEVECO_BRANCH=$BRANCH" >> "$ATOMGIT_ENV"
 
           echo "## 版本信息" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
@@ -193,34 +192,3 @@ jobs:
             cnpm sync "$name"
           done
         continue-on-error: true
-
-      - name: 设置通知输出
-        id: notify-outputs
-        run: |
-          PACKAGES=""
-          for pkgjson in packages/opencode/dist/deveco-*/package.json; do
-            name=$(jq -r '.name' "$pkgjson")
-            [ -n "$PACKAGES" ] && PACKAGES="${PACKAGES}"$'\n'
-            PACKAGES="${PACKAGES}• [${name}@${DEVECO_VERSION}](https://www.npmjs.com/package/${name})"
-          done
-
-          NOTIFY_DATA=$(jq -n \
-            --arg tag "v${DEVECO_VERSION}" \
-            --arg scope "${DEVECO_SCOPE}" \
-            --arg channel "${DEVECO_CHANNEL}" \
-            --arg branch "${DEVECO_BRANCH}" \
-            --arg packages "$PACKAGES" \
-            '{tag:$tag, scope:$scope, channel:$channel, branch:$branch, packages:$packages}'
-          )
-
-          echo "notify_data=$(printf '%s' "$NOTIFY_DATA" | base64 -w0)" >> "$ATOMGIT_OUTPUT"
-
-  notify:
-    name: 飞书通知
-    needs: release
-    uses: ./.gitcode/workflows/feishu-notify.yml
-    with:
-      command: release
-      data: ${{ jobs.release.outputs.notify_data }}
-    secrets:
-      feishu_webhook: ${{ secrets.FEISHU_WEBHOOK }}

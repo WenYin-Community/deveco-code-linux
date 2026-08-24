@@ -1,6 +1,6 @@
 ---
 name: gitcode-pr
-description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 推送、上游 Issue/PR 关联及 CI 触发。仅当用户明确要求推送到 GitCode、创建或更新 GitCode PR、关联 GitCode Issue 或触发 GitCode CI 时使用。仅创建本地 commit 且不需要推送或 PR 时不使用。所有 GitCode API 操作通过 .gitcode/scripts/gitcode-api.sh 完成，无需 MCP。功能分支基于父仓库目标分支创建，推送到 origin，不验证 Fork 关系。
+description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 推送、上游 Issue/PR 关联及 CI 触发。仅当用户明确要求推送到 GitCode、创建或更新 GitCode PR、关联 GitCode Issue 或触发 GitCode CI 时使用。仅创建本地 commit 且不需要推送或 PR 时不使用。所有 GitCode API 操作通过 gitcode CLI 完成，无需 MCP。功能分支基于父仓库目标分支创建，推送到 origin，不验证 Fork 关系。
 ---
 
 # DevEco Code GitCode 提交流程
@@ -9,27 +9,41 @@ description: 按仓库 DEV-WORKFLOW.md 完成 DevEco Code 的 GitCode 推送、�
 
 **目标分支**：从用户指令中提取目标分支名（如 `develop`、`master`）。未指定时使用 `question` 工具询问用户。确定后在后续步骤中使用，记为 `<target_branch>`。
 
-## 0. Token 门禁
+## 0. CLI 与 Token 门禁
 
-触发本 skill 后，使用执行环境中已配置的 `GITCODE_TOKEN` 并验证。不得从 Git remote URL 提取 Token，也不得在对话中回显 Token。该方式兼容 SSH 和 HTTPS clone。
-
-```bash
-if [ -z "${GITCODE_TOKEN:-}" ]; then
-  echo "TOKEN MISSING"
-  exit 1
-fi
-```
-
-- Token 为空或验证失败：停止，告知用户需在执行环境中配置 `GITCODE_TOKEN`。
-- 不得修改 remote URL、安装依赖、索取 Token 或以其他方式获取 Token。
-
-验证方式：用执行环境中的 Token 调用 `gitcode-api.sh get-issue 1` 检查 HTTP 响应非 401。
+触发本 skill 后，验证 `gitcode` CLI 已安装并认证。CLI 自动读取执行环境中已配置的 `GITCODE_TOKEN`。不得从 Git remote URL 提取 Token，也不得在对话中回显 Token。该方式兼容 SSH 和 HTTPS clone。
 
 ```bash
-export GITCODE_API=https://api.gitcode.com/api/v5
-export GITCODE_REPO=openharmony-sig/deveco-code
-bash .gitcode/scripts/gitcode-api.sh get-issue 1 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('AUTH OK' if 'error_code' not in d or d.get('error_code')!=401 else 'AUTH FAIL')"
+gitcode auth status
 ```
+
+- 输出包含 `Logged in` 且退出码为 0：门禁通过。
+- 未登录或命令失败：停止，告知用户需在执行环境中配置 `GITCODE_TOKEN`（如写入 `~/.zshenv`）或运行 `gitcode auth login`。
+- `gitcode` 命令不存在：按下方安装说明安装后重试。
+- 不得修改 remote URL、索取 Token 或以其他方式获取 Token。
+
+### CLI 安装（命令不存在时）
+
+安装文档：https://atomgit.com/gitcode-cli/cli#安装 。推荐只保留一个全局安装渠道提供 `gc`/`gitcode` 命令。
+
+已安装 Node.js/npm 时优先使用官方 npm bootstrap（安装平台二进制到全局 bin 目录）：
+
+```bash
+npx --yes --ignore-scripts --registry=https://registry.npmjs.org --@gitcode-cli:registry=https://registry.npmjs.org @gitcode-cli/cli@latest install
+gitcode version
+```
+
+无 Node.js 的 macOS/Linux 可用 Homebrew（同时提供 gc 与 gitcode，自动配置 shell 补全）：
+
+```bash
+brew install gitcode-cli/homebrew-tap/gc
+```
+
+注意：
+
+- 不要用 `npm i @gitcode-cli/cli` 安装，那只会写入当前项目 node_modules，不会更新 PATH 中的 gitcode。
+- 安装或升级后可用 `gitcode doctor install` 离线检查实际命令来源与 PATH 候选。
+- Windows PowerShell 中使用 `gitcode` 而非 `gc`（后者被内置 Get-Content 别名占用）。
 
 ## 1. 仓库与规则门禁
 
@@ -48,7 +62,7 @@ bash .gitcode/scripts/gitcode-api.sh get-issue 1 2>/dev/null | python3 -c "impor
 - 父项目 URL：`https://gitcode.com/openharmony-sig/deveco-code.git`
 - 分支基线和 PR 目标：父项目 `<target_branch>`（默认 `develop`，由用户指定或询问）
 - 推送目标：`origin`；不得验证或推断其 Fork 关系，不得向父项目推送
-- 所有 GitCode API 操作通过 `bash .gitcode/scripts/gitcode-api.sh` 完成，环境变量 `GITCODE_API`、`GITCODE_REPO`、`GITCODE_TOKEN` 在 Step 0 设置
+- 所有 GitCode API 操作通过 `gitcode` CLI 完成，仓库参数统一用 `-R openharmony-sig/deveco-code`；脚本中调用时附加 `--no-interactive --no-update-check`
 
 ## 2. 基线与分支
 
@@ -74,11 +88,10 @@ hook、检查、提交验证或推送失败时停止后续流程。
 
 ## 4. Issue 与 PR
 
-1. 查询 `<origin_owner>:<feature_branch>` → `<target_branch>` 的开放 PR：
+1. 查询 `<feature_branch>` → `<target_branch>` 的开放 PR：
 
    ```bash
-   ORIGIN_OWNER=$(git remote get-url origin | sed -n 's|.*\.com/\([^/]*\)/.*|\1|p')
-   bash .gitcode/scripts/gitcode-api.sh list-prs open "${ORIGIN_OWNER}:${feature_branch}" <target_branch>
+   gitcode pr list -R openharmony-sig/deveco-code --state open --head <feature_branch> --base <target_branch> --json --no-interactive --no-update-check
    ```
 
    返回非空数组时复用，不重复创建。
@@ -100,13 +113,13 @@ hook、检查、提交验证或推送失败时停止后续流程。
    | 其他 | `refactor.yml` | `[Refactor]` | 代码重构描述、代码重构涉及内容与验证、DevEco Code 版本 |
 
 3. 优先使用 `.gitcode/ISSUE_TEMPLATE/`，其次使用 `.github/ISSUE_TEMPLATE/`。读取所选模板的 YAML，按其字段 `label` 逐项生成 body：用 commit 信息填入必填字段，选填字段有内容则填、无则省略。不得使用模板中不存在的字段名。每个字段格式为 `### <label>\n\n<内容>`，末尾附检查清单（所有项勾选 `[x]`）。缺失的版本/系统信息写 `未提供`。
-4. 创建 Issue：
+4. 创建 Issue（body 从 stdin 读取，`--json` 便于提取编号）：
 
    ```bash
-   echo "$ISSUE_BODY" | bash .gitcode/scripts/gitcode-api.sh create-issue "$ISSUE_TITLE"
+   echo "$ISSUE_BODY" | gitcode issue create -R openharmony-sig/deveco-code --title "$ISSUE_TITLE" --body-file - --json --no-interactive --no-update-check
    ```
 
-   从响应中提取 Issue 编号。
+   从 JSON 响应的 `number` 字段提取 Issue 编号。
 
 5. 创建 PR，body 中包含 `Closes #<issue_number>` 以自动关联。根据 commit type 自动勾选 "Type of change" 选项：
    - `feat` → `[x] New feature`
@@ -115,15 +128,22 @@ hook、检查、提交验证或推送失败时停止后续流程。
    - `refactor` → `[x] Refactor / code improvement`
    - 其他类型 → `[x] Refactor / code improvement`
 
+   跨仓库 PR 用 `--fork` 指定 origin 仓库（从 origin remote URL 提取 `<owner>/<repo>`）：
+
    ```bash
-   echo "$PR_BODY" | bash .gitcode/scripts/gitcode-api.sh create-pr "$PR_TITLE" "${ORIGIN_OWNER}:${feature_branch}" <target_branch>
+   ORIGIN_REPO=$(git remote get-url origin | sed -n 's|.*[:/]\([^/]*/[^/]*\)\.git$|\1|p; s|.*[:/]\([^/]*/[^/]*\)$|\1|p')
+   echo "$PR_BODY" | gitcode pr create -R openharmony-sig/deveco-code --fork "$ORIGIN_REPO" --head <feature_branch> --base <target_branch> --title "$PR_TITLE" --body-file - --json --no-interactive --no-update-check
    ```
+
+   从 JSON 响应的 `number` 字段提取 PR 编号。
 
 6. 验证关联：
 
    ```bash
-   bash .gitcode/scripts/gitcode-api.sh list-linked-issues "$PR_NUMBER"
+   gitcode pr issues <PR_NUMBER> -R openharmony-sig/deveco-code --json --no-interactive --no-update-check
    ```
+
+   返回列表中包含目标 Issue 编号即关联成功。
 
 模板、创建或关联验证失败时停止。
 
@@ -134,14 +154,14 @@ hook、检查、提交验证或推送失败时停止后续流程。
 1. 创建 PR 后立即查询评论；之后每 30 秒查询一次，最多等待 3 分钟。
 
    ```bash
-   GITCODE_TYPE=pulls bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER"
+   gitcode pr comments <PR_NUMBER> -R openharmony-sig/deveco-code --json --no-interactive --no-update-check
    ```
 
-2. 仅接受作者为 `openharmony_ci` 且正文包含 `感谢提交 Pull Requests` 的评论。
+2. 仅接受作者 `user.login` 为 `openharmony_ci` 且正文 `body` 包含 `感谢提交 Pull Requests` 的评论。
 3. 评论出现后，若认证用户尚未发送正文精确等于 `start build` 的评论，则发送一次：
 
    ```bash
-   echo "start build" | GITCODE_TYPE=pulls bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+   gitcode pr comment <PR_NUMBER> -R openharmony-sig/deveco-code --body "start build" --no-interactive --no-update-check
    ```
 
 4. 等待超时不得发送构建指令。
