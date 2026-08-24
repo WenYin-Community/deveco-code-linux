@@ -614,6 +614,7 @@
   "tool": {
     "writing_command": "正在写入命令…",
     "preparing_write": "正在准备写入…",
+    "line_unit": "行",
     "finding_files": "正在查找文件…",
     "reading_file": "正在读取文件…",
     "searching_content": "正在搜索内容…",

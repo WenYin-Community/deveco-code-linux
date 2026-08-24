@@ -83,7 +83,7 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
-import { countStreamedEditChars, countStreamedChars } from "../../util/count-streamed-edit-chars"
+import { countStreamedEditLines, countStreamedLines } from "../../util/count-streamed-edit-lines"
 import { DEVECO_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 import { useI18n } from "../../i18n"
@@ -2475,11 +2475,12 @@ function Write(props: ToolProps) {
     if (props.part.state.status !== "pending") return t("tool.preparing_write")
     const raw = props.part.state.raw as string | undefined
     if (!raw) return t("tool.preparing_write")
-    const added = countStreamedChars(raw, "content")
+    const added = countStreamedLines(raw, "content")
     if (added === 0) return t("tool.preparing_write")
     return <>
       <text fg={theme.text}>{t("tool.preparing_write")} </text>
       <text fg={theme.diffHighlightAdded}>+{added}</text>
+      <text fg={theme.textMuted}> {t("tool.line_unit")}</text>
     </>
   })
 
@@ -2733,13 +2734,14 @@ function Edit(props: ToolProps) {
     if (props.part.state.status !== "pending") return t("tool.preparing_edit")
     const raw = props.part.state.raw as string | undefined
     if (!raw) return t("tool.preparing_edit")
-    const { added, removed } = countStreamedEditChars(raw)
+    const { added, removed } = countStreamedEditLines(raw)
     if (added === 0 && removed === 0) return t("tool.preparing_edit")
     return <>
       <text fg={theme.text}>{t("tool.preparing_edit")} </text>
       <text fg={theme.diffHighlightAdded}>+{added}</text>
       <text fg={theme.text}> </text>
       <text fg={theme.diffHighlightRemoved}>-{removed}</text>
+      <text fg={theme.textMuted}> {t("tool.line_unit")}</text>
     </>
   })
 

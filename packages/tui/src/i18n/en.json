@@ -614,6 +614,7 @@
   "tool": {
     "writing_command": "Writing command...",
     "preparing_write": "Preparing write...",
+    "line_unit": "lines",
     "finding_files": "Finding files...",
     "reading_file": "Reading file...",
     "searching_content": "Searching content...",
