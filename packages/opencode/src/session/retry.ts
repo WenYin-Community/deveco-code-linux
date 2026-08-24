@@ -27,15 +27,17 @@ export type Retryable = {
 
 export const RETRY_INITIAL_DELAY = 2000
 export const RETRY_BACKOFF_FACTOR = 2
+export const RETRY_JITTER_FACTOR = 0.25
 export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
+export const RETRY_MAX_RETRIES = 5
 export const QUEUE_RETRY_DELAY = 5000
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
 }
 
-export function delay(attempt: number, error?: SessionV1.APIError, isQueue?: boolean) {
+export function delay(attempt: number, error?: SessionV1.APIError, random = Math.random(), isQueue?: boolean) {
   if (isQueue) return QUEUE_RETRY_DELAY
   if (error) {
     const headers = error.data.responseHeaders
@@ -52,21 +54,24 @@ export function delay(attempt: number, error?: SessionV1.APIError, isQueue?: boo
       if (retryAfter) {
         const parsedSeconds = Number.parseFloat(retryAfter)
         if (!Number.isNaN(parsedSeconds)) {
-          // convert seconds to milliseconds
           return cap(Math.ceil(parsedSeconds * 1000))
         }
-        // Try parsing as HTTP date format
         const parsed = Date.parse(retryAfter) - Date.now()
         if (!Number.isNaN(parsed) && parsed > 0) {
           return cap(Math.ceil(parsed))
         }
       }
 
-      return cap(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1))
+      return cap(exponential(attempt, random))
     }
   }
 
-  return cap(Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS))
+  return cap(Math.min(exponential(attempt, random), RETRY_MAX_DELAY_NO_HEADERS))
+}
+
+function exponential(attempt: number, random: number) {
+  const base = RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1)
+  return Math.ceil(base + base * RETRY_JITTER_FACTOR * random)
 }
 
 export function retryable(error: Err, provider: string) {
@@ -105,6 +110,8 @@ export function retryable(error: Err, provider: string) {
     if (error.data.responseBody?.includes("FreeUsageLimitError")) {
       return {
         message: GO_UPSELL_MESSAGE,
+        maxAttempts: 1,
+        delays: [5_000],
         action: {
           reason: "free_tier_limit",
           provider,
@@ -138,6 +145,8 @@ export function retryable(error: Err, provider: string) {
       const link = `https://opencode.ai/workspace/${workspace}/go`
       return {
         message: `${message} - ${link}`,
+        maxAttempts: 3,
+        delays: [10_000, 30_000, 60_000],
         action: {
           reason: "account_rate_limit",
           provider,
@@ -215,6 +224,8 @@ function getRetryCategory(error: Err): string {
         return "403_user_rate_limit"
       }
     }
+    if (error.data.responseBody?.includes("FreeUsageLimitError")) return "free_tier_limit"
+    if (error.data.responseBody?.includes("GoUsageLimitError")) return "go_usage_limit"
     return `api_${status ?? "unknown"}`
   }
   return "unknown"
@@ -233,6 +244,7 @@ export function policy(opts: {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
+      if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
 
       const category = getRetryCategory(error)
       if (category !== lastCategory) {
@@ -251,7 +263,7 @@ export function policy(opts: {
         const effectiveAttempt = retry.maxAttempts !== undefined ? categoryAttempt : meta.attempt
         const wait = retry.delays
           ? (retry.delays[effectiveAttempt - 1] ?? retry.delays[retry.delays.length - 1]!)
-          : delay(effectiveAttempt, SessionV1.APIError.isInstance(error) ? error : undefined, isQueue)
+          : delay(effectiveAttempt, SessionV1.APIError.isInstance(error) ? error : undefined, Math.random(), isQueue)
         const now = yield* Clock.currentTimeMillis
         yield* Effect.logError("retryable error matched", {
           service: "session.retry",

@@ -35,8 +35,16 @@ function wrap(message: unknown): ReturnType<NamedError["toObject"]> {
 describe("session.retry.delay", () => {
   test("caps delay at 30 seconds when headers missing", () => {
     const error = apiError()
-    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error))
+    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error, 0))
     expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
+  })
+
+  test("adds jitter to exponential delays", () => {
+    const error = apiError()
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 1)).toBe(2500)
+    expect(SessionRetry.delay(4, error, 1)).toBe(20000)
+    expect(SessionRetry.delay(5, error, 1)).toBe(30000)
   })
 
   test("prefers retry-after-ms when shorter than exponential", () => {
@@ -59,18 +67,18 @@ describe("session.retry.delay", () => {
 
   test("ignores invalid retry hints", () => {
     const error = apiError({ "retry-after": "not-a-number" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("ignores malformed date retry hints", () => {
     const error = apiError({ "retry-after": "Invalid Date String" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("ignores past date retry hints", () => {
     const pastDate = new Date(Date.now() - 5000).toUTCString()
     const error = apiError({ "retry-after": pastDate })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("uses retry-after values even when exceeding 10 minutes with headers", () => {
@@ -114,6 +122,124 @@ describe("session.retry.delay", () => {
         message: "boom",
       })
     }),
+  )
+
+  it.instance("policy stops after RETRY_MAX_RETRIES attempts", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = apiError({ "retry-after-ms": "0" })
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+        }),
+      )
+
+      yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_RETRIES + 1 }), () =>
+        Effect.ignore(step(error)),
+      )
+
+      expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
+    }),
+  )
+
+  it.live("policy stops FreeUsageLimitError after 1 retry", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const attempts: number[] = []
+        const sessionID = SessionID.make("session-retry-free-tier-test")
+        const status = yield* SessionStatus.Service
+        const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+          new SessionV1.APIError({
+            message: "Free usage exceeded",
+            isRetryable: true,
+            statusCode: 429,
+            responseBody: JSON.stringify({
+              type: "error",
+              error: { type: "FreeUsageLimitError", message: "Free usage exceeded" },
+            }),
+          }).toObject(),
+        )
+        const step = yield* Schedule.toStep(
+          SessionRetry.policy({
+            provider: "test",
+            parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+            set: (info) =>
+              Effect.gen(function* () {
+                attempts.push(info.attempt)
+                yield* status.set(sessionID, {
+                  type: "retry",
+                  attempt: info.attempt,
+                  message: info.message,
+                  next: info.next,
+                })
+              }),
+          }),
+        )
+        const now = Date.now()
+        const r1 = yield* step(now, error)
+        expect(r1[0]).toBe(1)
+        expect(Duration.toMillis(r1[1])).toBe(5_000)
+        const r2 = yield* Effect.exit(step(now + 5_000, error))
+        expect(Exit.isFailure(r2)).toBe(true)
+        expect(attempts).toStrictEqual([1])
+      }),
+    ),
+  )
+
+  it.live("policy stops GoUsageLimitError after 3 retries", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const attempts: number[] = []
+        const sessionID = SessionID.make("session-retry-go-limit-test")
+        const status = yield* SessionStatus.Service
+        const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+          new SessionV1.APIError({
+            message: "Quota exceeded",
+            isRetryable: true,
+            statusCode: 429,
+            responseBody: JSON.stringify({
+              type: "error",
+              error: { type: "GoUsageLimitError", message: "Quota exceeded" },
+              metadata: { workspace: "wrk_test", limitName: "5 hour" },
+            }),
+          }).toObject(),
+        )
+        const step = yield* Schedule.toStep(
+          SessionRetry.policy({
+            provider: "test",
+            parse: Schema.decodeUnknownSync(SessionV1.APIError.Schema),
+            set: (info) =>
+              Effect.gen(function* () {
+                attempts.push(info.attempt)
+                yield* status.set(sessionID, {
+                  type: "retry",
+                  attempt: info.attempt,
+                  message: info.message,
+                  next: info.next,
+                })
+              }),
+          }),
+        )
+        const now = Date.now()
+        const r1 = yield* step(now, error)
+        expect(r1[0]).toBe(1)
+        expect(Duration.toMillis(r1[1])).toBe(10_000)
+        const r2 = yield* step(now + 10_000, error)
+        expect(r2[0]).toBe(2)
+        expect(Duration.toMillis(r2[1])).toBe(30_000)
+        const r3 = yield* step(now + 40_000, error)
+        expect(r3[0]).toBe(3)
+        expect(Duration.toMillis(r3[1])).toBe(60_000)
+        const r4 = yield* Effect.exit(step(now + 100_000, error))
+        expect(Exit.isFailure(r4)).toBe(true)
+        expect(attempts).toStrictEqual([1, 2, 3])
+      }),
+    ),
   )
 
 it.live("policy gives each error category its own retry budget (QueueError → 403)", () =>
@@ -344,6 +470,8 @@ describe("session.retry.retryable", () => {
 
     expect(SessionRetry.retryable(error, "opencode")).toEqual({
       message: SessionRetry.GO_UPSELL_MESSAGE,
+      maxAttempts: 1,
+      delays: [5_000],
       action: {
         reason: "free_tier_limit",
         provider: "opencode",
@@ -381,6 +509,8 @@ describe("session.retry.retryable", () => {
     expect(SessionRetry.retryable(error, "opencode-go")).toEqual({
       message:
         "5 hour usage limit reached. It will reset in 5 hours 23 minutes. To continue using this model now, enable usage from your available balance - https://opencode.ai/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
+      maxAttempts: 3,
+      delays: [10_000, 30_000, 60_000],
       action: {
         reason: "account_rate_limit",
         provider: "opencode-go",
@@ -516,23 +646,23 @@ describe("session.message-v2.fromError", () => {
 
 describe("session.retry.delay edge cases", () => {
   test("returns queue retry delay when isQueue is true", () => {
-    const d = SessionRetry.delay(1, undefined, true)
+    const d = SessionRetry.delay(1, undefined, 0, true)
     expect(d).toBe(SessionRetry.QUEUE_RETRY_DELAY)
   })
 
   test("returns queue delay even with error and headers present", () => {
     const error = apiError({ "retry-after-ms": "100" })
-    const d = SessionRetry.delay(1, error, true)
+    const d = SessionRetry.delay(1, error, 0, true)
     expect(d).toBe(SessionRetry.QUEUE_RETRY_DELAY)
   })
 
   test("computes exponential backoff when no error provided", () => {
-    expect(SessionRetry.delay(1)).toBe(2000)
-    expect(SessionRetry.delay(2)).toBe(4000)
-    expect(SessionRetry.delay(3)).toBe(8000)
-    expect(SessionRetry.delay(4)).toBe(16000)
-    expect(SessionRetry.delay(5)).toBe(30000)
-    expect(SessionRetry.delay(6)).toBe(30000)
+    expect(SessionRetry.delay(1, undefined, 0)).toBe(2000)
+    expect(SessionRetry.delay(2, undefined, 0)).toBe(4000)
+    expect(SessionRetry.delay(3, undefined, 0)).toBe(8000)
+    expect(SessionRetry.delay(4, undefined, 0)).toBe(16000)
+    expect(SessionRetry.delay(5, undefined, 0)).toBe(30000)
+    expect(SessionRetry.delay(6, undefined, 0)).toBe(30000)
   })
 
   test("uses retry-after-ms when retry-after-ms and retry-after both present", () => {
@@ -542,12 +672,12 @@ describe("session.retry.delay edge cases", () => {
 
   test("falls back to exponential when retry-after-ms is garbage and no retry-after", () => {
     const error = apiError({ "retry-after-ms": "garbage" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("falls back to exponential when retry-after is garbage", () => {
     const error = apiError({ "retry-after": "garbage" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
   })
 
   test("caps retry-after seconds based delay to max int32", () => {
