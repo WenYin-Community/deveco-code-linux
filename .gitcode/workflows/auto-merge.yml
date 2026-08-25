@@ -30,6 +30,7 @@ stages:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           GITCODE_TYPE: pulls
+          COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -42,6 +43,18 @@ stages:
               PR_NUMBER_INPUT: ${{ inputs.pr_number }}
               ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
+              if [ -n "$COMMENT_USER" ]; then
+                LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "${{ atomgit.event.pull_request.number || atomgit.event.issue.number }}" | jq -r 'sort_by(.created_at) | last | .body // ""')
+                TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "$TRIMMED" in
+                  '/merge'*) ;;
+                  *)
+                    echo "最新评论不是 /merge 命令,跳过合入"
+                    exit 0
+                    ;;
+                esac
+              fi
+
               check_and_merge() {
                 NUMBER="$1"
                 PR_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \

@@ -1,0 +1,84 @@
+name: PR Guide
+
+on:
+  pull_request_target:
+    types: [open, reopen]
+    branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "指定要发布指南的 PR 编号"
+        required: true
+        type: string
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  post-guide:
+    name: 发布命令指南
+    jobs:
+      post-guide:
+        name: 发布 PR 命令使用指南
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+              ref: ${{ atomgit.sha }}
+
+          - name: 发布指南评论
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              GITCODE_TYPE: pulls
+            run: |
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number }}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "No PR number found"
+                exit 1
+              fi
+
+              echo "Posting guide comment on PR #$PR_NUMBER"
+
+              COMMENTS=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER")
+              if echo "$COMMENTS" | jq -r '.[].body' 2>/dev/null | grep -q '<!-- pr-guide -->'; then
+                echo "Guide comment already exists, skipping"
+                exit 0
+              fi
+
+              {
+                echo '<!-- pr-guide -->'
+                echo '## 🤖 PR 助手使用指南'
+                echo ''
+                echo '在 PR 评论中使用**以下命令**即可触发：'
+                echo ''
+                echo '| 功能 | 命令 | 说明 |'
+                echo '|------|------|------|'
+                echo '| 重新检查 | `/recheck` | 重新运行 PR 标题、模板与 Issue 关联检查 |'
+                echo '| 合入 PR | `/merge` | CI 与审批全部通过后立即合入 |'
+                echo '| AI 代码审查 | `/ai review` | 触发 AI 审查代码质量与潜在问题 |'
+                echo ''
+                echo '**其他说明：**'
+                echo '- PR 检查全部通过后会**自动合入**，无需手动操作'
+                echo '- 不合规的 PR 需在 **2 小时内**按要求修改，逾期将被自动关闭'
+                echo ''
+                echo '**合入前还需要：**'
+                echo '- 至少一个**审查人**通过'
+                echo '- **openharmony_ci** 测试通过'
+                echo '- **deveco-agent** 测试通过'
+                echo '- **Test / Typecheck CI** 通过'
+                echo ''
+                echo '如对自动检查结果有异议，请联系维护者。'
+                echo ''
+                echo '详见[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。'
+              } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
+              echo "## PR 指南" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "✅ 已在 PR #$PR_NUMBER 发布命令指南" >> "$ATOMGIT_STEP_SUMMARY"

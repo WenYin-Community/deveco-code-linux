@@ -1,31 +1,38 @@
-name: AI Review Trigger
+name: AI Router
 
-# 仅当 PR 评论为 /review 时触发,转发到 Multica autopilot → 代码审查 agent。
-# 其他评论(含 agent 自己发的行内评论)不触发,无自激、无 throwaway issue。
 on:
   pull_request_comment:
     types: [created]
     comments:
-      - '/review'
+      - '/ai review'
 
 permissions:
   repository: read
 
 stages:
   trigger:
-    name: 转发 /review 到 Multica
+    name: 路由 /ai 命令
     jobs:
       forward:
-        name: forward-to-multica
+        name: route-ai-command
         runs-on: ubuntu-latest
         env:
           MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
           REPO: ${{ atomgit.repository }}
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+          GITCODE_TYPE: pulls
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
           HEAD_REF: ${{ atomgit.event.pull_request.head.ref || atomgit.head_ref }}
           BASE_REF: ${{ atomgit.event.pull_request.base.ref || atomgit.base_ref }}
           GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+              ref: ${{ atomgit.sha }}
+
           - name: 转发 review 请求
             run: |
               set -e
@@ -39,6 +46,15 @@ stages:
                 echo "::error::PR_NUMBER 为空(无法从事件上下文解析 PR 编号)"
                 exit 1
               fi
+              LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
+              TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+              case "$TRIMMED" in
+                '/ai review'*) ;;
+                *)
+                  echo "最新评论不是 /ai review 命令,跳过转发"
+                  exit 0
+                  ;;
+              esac
               PR_DATA=""
               if [ -n "$GITCODE_TOKEN" ]; then
                 PR_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
@@ -81,7 +97,7 @@ stages:
                       source: {path_with_namespace: .head.repo.full_name, git_http_url: .head.repo.html_url},
                       target: {path_with_namespace: .base.repo.full_name, git_http_url: .base.repo.html_url}
                     },
-                    object_attributes: {note: "/review", description: "/review", noteable_type: "MergeRequest"},
+                    object_attributes: {note: "/ai review", description: "/ai review", noteable_type: "MergeRequest"},
                     user: {username: (if $comment_user != "" then $comment_user else .user.login end)}
                   }')
               else
@@ -92,7 +108,7 @@ stages:
                       + (if $head != "" then {head:{ref:$head}} else {} end)
                       + (if $base != "" then {base:{ref:$base}} else {} end))}')
               fi
-              echo "转发 PR #$PR_NUMBER 的 /review 到 Multica"
+              echo "转发 PR #$PR_NUMBER 的 /ai review 到 Multica"
               echo "$PAYLOAD" | jq .
               code=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X POST "$MULTICA_WEBHOOK" \
                 -H "Content-Type: application/json" \

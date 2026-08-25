@@ -30,6 +30,7 @@ stages:
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
+          COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -47,6 +48,18 @@ stages:
               if [ -z "$PR_NUMBER" ]; then
                 echo "No PR number found"
                 exit 1
+              fi
+
+              if [ -n "$COMMENT_USER" ]; then
+                LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
+                TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "$TRIMMED" in
+                  '/recheck'*) ;;
+                  *)
+                    echo "最新评论不是 /recheck 命令,跳过检查"
+                    exit 0
+                    ;;
+                esac
               fi
 
               echo "Checking PR #$PR_NUMBER"
@@ -146,6 +159,7 @@ stages:
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
+          COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -163,6 +177,18 @@ stages:
               if [ -z "$PR_NUMBER" ]; then
                 echo "No PR number found"
                 exit 1
+              fi
+
+              if [ -n "$COMMENT_USER" ]; then
+                LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
+                TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "$TRIMMED" in
+                  '/recheck'*) ;;
+                  *)
+                    echo "最新评论不是 /recheck 命令,跳过检查"
+                    exit 0
+                    ;;
+                esac
               fi
 
               echo "Checking PR #$PR_NUMBER compliance"
