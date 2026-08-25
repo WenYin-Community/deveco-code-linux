@@ -106,6 +106,9 @@ type TuiThreadArgs = NetworkOptions & {
   fork?: boolean
   prompt?: string
   agent?: string
+  auto?: boolean
+  yolo?: boolean
+  "dangerously-skip-permissions"?: boolean
 }
 
 type TuiTransport = {
@@ -222,6 +225,7 @@ async function runTuiApp(
         model: args.model,
         prompt,
         fork: args.fork,
+        auto: args.auto || args.yolo || args["dangerously-skip-permissions"],
       },
     }),
   )
@@ -297,6 +301,21 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      .option("auto", {
+        type: "boolean",
+        describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
+        default: false,
+      })
+      .option("yolo", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+      })
+      .option("dangerously-skip-permissions", {
+        type: "boolean",
+        hidden: true,
+        default: false,
       }),
   handler: async (args) => {
     await checkPendingUpgrade()

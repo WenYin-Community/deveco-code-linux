@@ -63,6 +63,7 @@ import { KVProvider, useKV } from "./context/kv"
 import { I18nProvider, useI18n } from "./i18n"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
+import { PermissionProvider } from "./context/permission"
 import open from "open"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider, useTuiConfig, type TuiConfig } from "./config"
@@ -288,6 +289,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           headers={input.headers}
                                           events={input.events}
                                         >
+                                          <PermissionProvider>
                                           <ProjectProvider>
                                             <SyncProvider>
                                               <DataProvider>
@@ -316,6 +318,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                               </DataProvider>
                                             </SyncProvider>
                                           </ProjectProvider>
+                                          </PermissionProvider>
                                         </SDKProvider>
                                       </PluginRuntimeProvider>
                                     </TuiConfigProvider>
@@ -979,6 +982,18 @@ function App(props: {
         run: async () => {
           kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
           await sync.session.refresh()
+          dialog.clear()
+        },
+      },
+      {
+        name: "permission.mode",
+        title:
+          local.permission.mode === "auto"
+            ? t("command.disable_auto_approve")
+            : t("command.enable_auto_approve"),
+        category: t("category.system"),
+        run: () => {
+          local.permission.toggle()
           dialog.clear()
         },
       },

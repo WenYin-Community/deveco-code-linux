@@ -113,6 +113,8 @@
     "enable_paste_summary": "Enable paste summary",
     "disable_session_directory_filter": "Disable session directory filtering",
     "enable_session_directory_filter": "Enable session directory filtering",
+    "enable_auto_approve": "Enable auto-approve permissions",
+    "disable_auto_approve": "Disable auto-approve permissions",
     "enable_notification_sounds": "Enable notification sounds",
     "disable_notification_sounds": "Disable notification sounds",
     "enable_attention_all": "Enable all alerts",

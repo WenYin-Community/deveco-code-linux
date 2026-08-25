@@ -105,7 +105,10 @@ describe("opencode CLI help-text snapshots", () => {
         // The current CLI capture intentionally has no terminal EOL; lock that
         // behavior explicitly so normalization cannot hide a format change.
         expect(topLevel.stderr).not.toMatch(/\r?\n$/)
-        expect(topLevel.stderr).toMatch(/--agent\s+agent to use\s+\[string\]$/)
+        expect(topLevel.stderr).toMatch(
+          /--auto\s+auto-approve permissions that are not explicitly denied \(dangerous!\)/,
+        )
+        expect(topLevel.stderr).toMatch(/\[boolean\] \[default: false\]$/)
 
         const argvs: Array<readonly string[]> = [...TOP_LEVEL.map((c) => [c] as const), ...SUBCOMMANDS]
 

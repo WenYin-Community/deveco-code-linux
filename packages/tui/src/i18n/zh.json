@@ -113,6 +113,8 @@
     "enable_paste_summary": "启用粘贴摘要",
     "disable_session_directory_filter": "禁用会话目录过滤",
     "enable_session_directory_filter": "启用会话目录过滤",
+    "enable_auto_approve": "启用权限自动批准",
+    "disable_auto_approve": "禁用权限自动批准",
     "enable_notification_sounds": "开启提示音",
     "disable_notification_sounds": "关闭提示音",
     "enable_attention_all": "开启所有提醒",
