@@ -60,35 +60,6 @@ function makeProviderInfo(models: ModelsMap): ModelsDev.Provider {
   }
 }
 
-// ============ Default (fallback) config ============
-
-const defaultModels: ModelsMap = {
-  "glm-5": makeModel("glm-5", {
-    reasoning: true,
-    toolcall: true,
-    context: 202752,
-    output: 131072,
-    inputModalities: ["text"],
-  }),
-  "Qwen2.5-VL-72B": makeModel("Qwen2.5-VL-72B", {
-    context: 32768,
-    output: 8192,
-    inputModalities: ["text", "image"],
-  }),
-}
-
-export const DEVECO_DEFAULTS = {
-  provider: makeProviderInfo(defaultModels),
-  taskDefaultModelMap: {
-    small_model: "glm-5",
-    ui_verification: "Qwen3_VL_235B_A22B_Instruct",
-    blacklist: "Qwen2.5-VL-72B",
-  } as Record<string, string>,
-}
-
-/** @deprecated Use getDevecoProviderConfig() for dynamic model fetching */
-export const DEVECO_PROVIDER_CONFIG: ModelsDev.Provider = DEVECO_DEFAULTS.provider
-
 // ============ API response schema ============
 
 const ModelConfigSchema = Schema.Struct({
@@ -145,7 +116,7 @@ function mapModelConfigToInternal(config: Schema.Schema.Type<typeof ModelConfigS
 // ============ Cache ============
 
 let cachedConfig: ModelsDev.Provider | null = null
-let cachedTaskDefaultModelMap: Record<string, string> | null = null
+let cachedTaskDefaultModelMap: Record<string, string> | undefined = undefined
 
 // ============ API fetch ============
 
@@ -216,7 +187,7 @@ export async function getDevecoProviderConfig(accessToken: string): Promise<Mode
     }
 
     cachedConfig = filterBlacklist(models, taskDefaultModelMap?.blacklist?.split(",") ?? [])
-    cachedTaskDefaultModelMap = taskDefaultModelMap ?? DEVECO_DEFAULTS.taskDefaultModelMap
+    cachedTaskDefaultModelMap = taskDefaultModelMap
     return cachedConfig
   } catch (err) {
     await log(Effect.logWarning("Failed to fetch models, no fallback provided", { service: "deveco-models", error: String(err) }))
@@ -224,6 +195,6 @@ export async function getDevecoProviderConfig(accessToken: string): Promise<Mode
   }
 }
 
-export function getTaskDefaultModelMap(): Record<string, string> {
-  return cachedTaskDefaultModelMap ?? DEVECO_DEFAULTS.taskDefaultModelMap
+export function getTaskDefaultModelMap(): Record<string, string> | undefined {
+  return cachedTaskDefaultModelMap
 }

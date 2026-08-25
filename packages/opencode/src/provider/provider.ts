@@ -1923,7 +1923,8 @@ export const layer = Layer.effect(
       // For deveco provider, use small_model from dynamically fetched task_default_model_map (already cached)
       if (providerID === "deveco") {
         const { getTaskDefaultModelMap } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
-        const smallModel = getTaskDefaultModelMap().small_model
+        const smallModel = getTaskDefaultModelMap()?.small_model
+        if (!smallModel) return undefined
         return yield* getModel(ProviderV2.ID.make("deveco"), ModelV2.ID.make(smallModel)).pipe(
           Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
         )

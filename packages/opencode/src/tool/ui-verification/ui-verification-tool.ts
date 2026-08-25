@@ -259,7 +259,7 @@ export async function resolveUIVerifyParams(worktree: string): Promise<UiVerifyP
         return {
           baseURL: DEVECO_API_URL + "/no-stream",
           apiKey: auth.access,
-          modelName: getTaskDefaultModelMap()["ui_verification"] ?? "Qwen3_VL_235B_A22B_Instruct",
+          modelName: getTaskDefaultModelMap()?.["ui_verification"] ?? "Qwen3_VL_235B_A22B_Instruct",
         }
       }
     }

@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
-import {
-  DEVECO_API_URL,
-  DEVECO_DEFAULTS,
-  DEVECO_PROVIDER_CONFIG,
-} from "../../src/plugin/deveco-models"
+import "../../src/plugin/deveco-models"
 
-const DEVECO_NPM = "@ai-sdk/openai-compatible"
 const DEVECO_PROVIDER_ID = "deveco"
 
 function makeApiModelConfig(m: {
@@ -102,43 +97,6 @@ async function loadFresh() {
   freshModule = (await import(`../../src/plugin/deveco-models?fresh=${++testCounter}`)) as typeof freshModule
   return freshModule
 }
-
-describe("static exports", () => {
-  test("DEVECO_DEFAULTS provider metadata and model entries", () => {
-    const provider = DEVECO_DEFAULTS.provider
-    expect(provider.id).toBe(DEVECO_PROVIDER_ID)
-    expect(provider.name).toBe("DevEco Code")
-    expect(provider.npm).toBe(DEVECO_NPM)
-    expect(provider.api).toBe(DEVECO_API_URL)
-    expect(provider.env).toEqual([])
-
-    const glm5 = provider.models["glm-5"]!
-    expect(glm5.id).toBe("glm-5")
-    expect(glm5.reasoning).toBe(true)
-    expect(glm5.tool_call).toBe(true)
-    expect(glm5.limit.context).toBe(202752)
-    expect(glm5.limit.output).toBe(131072)
-    expect(glm5.modalities!.input).toEqual(["text"])
-    expect(glm5.cost!.input).toBe(0)
-    expect(glm5.provider!.npm).toBe(DEVECO_NPM)
-
-    const qwen = provider.models["Qwen2.5-VL-72B"]!
-    expect(qwen.reasoning).toBe(false)
-    expect(qwen.modalities!.input).toEqual(["text", "image"])
-    expect(qwen.limit.context).toBe(32768)
-  })
-
-  test("DEVECO_DEFAULTS.taskDefaultModelMap has expected entries", () => {
-    const map = DEVECO_DEFAULTS.taskDefaultModelMap
-    expect(map.small_model).toBe("glm-5")
-    expect(map.ui_verification).toBe("Qwen3_VL_235B_A22B_Instruct")
-    expect(map.blacklist).toBe("Qwen2.5-VL-72B")
-  })
-
-  test("DEVECO_PROVIDER_CONFIG equals DEVECO_DEFAULTS.provider", () => {
-    expect(DEVECO_PROVIDER_CONFIG).toBe(DEVECO_DEFAULTS.provider)
-  })
-})
 
 describe("getDevecoProviderConfig", () => {
   let originalFetch: typeof globalThis.fetch
@@ -286,7 +244,7 @@ describe("getDevecoProviderConfig", () => {
     expect(result).not.toBeNull()
     expect(result!.models["model-x"]).toBeDefined()
     const map = mod.getTaskDefaultModelMap()
-    expect(map.small_model).toBe("model-x")
+    expect(map?.small_model).toBe("model-x")
   })
 
   test("caches result and skips API on subsequent calls", async () => {
@@ -327,11 +285,10 @@ describe("getTaskDefaultModelMap", () => {
     globalThis.fetch = originalFetch
   })
 
-  test("returns DEVECO_DEFAULTS.taskDefaultModelMap when cache is empty", async () => {
+  test("returns undefined when cache is empty", async () => {
     const mod = await loadFresh()
     const map = mod.getTaskDefaultModelMap()
-    expect(map.small_model).toBe("glm-5")
-    expect(map.blacklist).toBe("Qwen2.5-VL-72B")
+    expect(map).toBeUndefined()
   })
 
   test("returns cached map after successful API fetch", async () => {
@@ -343,7 +300,7 @@ describe("getTaskDefaultModelMap", () => {
     )
     await mod.getDevecoProviderConfig("token")
     const map = mod.getTaskDefaultModelMap()
-    expect(map.small_model).toBe("api-model")
-    expect(map.blacklist).toBe("bad-model")
+    expect(map?.small_model).toBe("api-model")
+    expect(map?.blacklist).toBe("bad-model")
   })
 })
