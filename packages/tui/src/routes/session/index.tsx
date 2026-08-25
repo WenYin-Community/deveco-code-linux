@@ -42,6 +42,8 @@ import type {
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
+import { matchSkillExpansion } from "../../util/skill-match"
+import { useData } from "../../context/data"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
 import { useEditorContext } from "../../context/editor"
@@ -1442,6 +1444,8 @@ function UserMessage(props: {
   })
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
+  const data = useData()
+  const skillMatch = createMemo(() => matchSkillExpansion(text(), data.location.skill.list()))
   const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending !== undefined && props.index > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))
@@ -1476,7 +1480,21 @@ function UserMessage(props: {
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
-            <text fg={theme.text}>{text()}</text>
+            <Show when={skillMatch()} fallback={<text fg={theme.text}>{text()}</text>}>
+              {(match) => (
+                <text>
+                  <span style={{ bg: theme.syntaxKeyword, fg: selectedForeground(theme, theme.syntaxKeyword), bold: true }}>
+                    {" "}
+                    SKILL{" "}
+                  </span>
+                  <span style={{ fg: theme.text }}>
+                    {" "}
+                    {match().skill.name}
+                    {match().args ? ` ${match().args}` : ""}
+                  </span>
+                </text>
+              )}
+            </Show>
             <Show when={files().length}>
               <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
                 <For each={files()}>

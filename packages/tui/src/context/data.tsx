@@ -1,6 +1,7 @@
 import { useEvent } from "./event"
 import type {
   AgentV2Info,
+  AppSkillsResponse,
   CommandV2Info,
   IntegrationInfo,
   Event,
@@ -17,7 +18,6 @@ import type {
   SessionMessageAssistantText,
   SessionMessageAssistantTool,
   SessionV2Info,
-  SkillV2Info,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
@@ -31,7 +31,7 @@ type LocationData = {
   model?: ModelV2Info[]
   provider?: ProviderV2Info[]
   reference?: ReferenceInfo[]
-  skill?: SkillV2Info[]
+  skill?: AppSkillsResponse
 }
 
 type Data = {
@@ -566,9 +566,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return store.location[locationKey(location ?? defaultLocation())]?.skill
           },
           async refresh(ref?: LocationRef) {
-            const result = await sdk.client.v2.skill.list({ location: locationQuery(ref) }, { throwOnError: true })
-            const key = locationKey(result.data.location)
-            setStore("location", key, "skill", result.data.data)
+            const location = (await sdk.client.v2.location.get({ location: locationQuery(ref) }, { throwOnError: true }))
+              .data
+            const result = await sdk.client.app.skills(
+              { directory: location.directory, workspace: location.workspaceID },
+              { throwOnError: true },
+            )
+            setStore("location", locationKey(location), "skill", result.data)
           },
         },
       },
