@@ -546,7 +546,7 @@
     "collect_uploading": "Uploading",
     "collect_footer_navigate": "navigate",
     "collect_footer_navigate_key": "up/down",
-    "collect_footer_click": "click",
+    "collect_footer_click": "toggle",
     "collect_footer_click_key": "space",
     "collect_footer_view_privacy": "view privacy policy",
     "collect_footer_view_privacy_key": "v"

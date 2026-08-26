@@ -546,9 +546,9 @@
     "collect_uploading": "上传中",
     "collect_footer_navigate": "导航",
     "collect_footer_navigate_key": "上/下",
-    "collect_footer_click": "点击",
+    "collect_footer_click": "切换",
     "collect_footer_click_key": "空格",
-    "collect_footer_view_privacy": "隐私政策",
+    "collect_footer_view_privacy": "查看隐私政策",
     "collect_footer_view_privacy_key": "v"
   },
   "permission": {

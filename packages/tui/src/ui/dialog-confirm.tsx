@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core"
-import { useTheme } from "../context/theme"
+import { selectedForeground, useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
@@ -10,12 +10,16 @@ import { useI18n } from "../i18n"
 export type DialogConfirmProps = {
   title: string
   message: string
+} & DialogConfirmButtonsProps
+
+export type DialogConfirmButtonsProps = {
   onConfirm?: () => void
   onCancel?: () => void
   label?: string
   confirmLabel?: string
   cancelLabel?: string
   initialActive?: "confirm" | "cancel"
+  closeOnSelect?: boolean
 }
 
 export type DialogConfirmResult = boolean | undefined
@@ -24,9 +28,39 @@ export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
   const { t } = useI18n()
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          {props.title}
+        </text>
+        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          {t("dialog.esc")}
+        </text>
+      </box>
+      <box paddingBottom={1}>
+        <text fg={theme.textMuted}>{props.message}</text>
+      </box>
+      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
+        <DialogConfirmButtons {...props} />
+      </box>
+    </box>
+  )
+}
+
+export function DialogConfirmButtons(props: DialogConfirmButtonsProps) {
+  const dialog = useDialog()
+  const { theme } = useTheme()
+  const { t } = useI18n()
   const [store, setStore] = createStore({
     active: props.initialActive ?? ("confirm" as "confirm" | "cancel"),
   })
+
+  function select(key: "confirm" | "cancel") {
+    if (key === "confirm") props.onConfirm?.()
+    if (key === "cancel") props.onCancel?.()
+    if (props.closeOnSelect !== false) dialog.clear()
+  }
 
   useBindings(() => ({
     bindings: [
@@ -34,11 +68,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
         key: "return",
         desc: t("dialog.confirm_selection"),
         group: t("category.dialog"),
-        cmd: () => {
-          if (store.active === "confirm") props.onConfirm?.()
-          if (store.active === "cancel") props.onCancel?.()
-          dialog.clear()
-        },
+        cmd: () => select(store.active),
       },
       {
         key: "left",
@@ -58,44 +88,26 @@ export function DialogConfirm(props: DialogConfirmProps) {
       },
     ],
   }))
+
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          {props.title}
-        </text>
-        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          {t("dialog.esc")}
-        </text>
-      </box>
-      <box paddingBottom={1}>
-        <text fg={theme.textMuted}>{props.message}</text>
-      </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
-        <For each={["cancel", "confirm"] as const}>
-          {(key) => (
-            <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={key === store.active ? theme.primary : undefined}
-              onMouseUp={() => {
-                if (key === "confirm") props.onConfirm?.()
-                if (key === "cancel") props.onCancel?.()
-                dialog.clear()
-              }}
-            >
-              <text fg={key === store.active ? theme.selectedListItemText : theme.textMuted}>
-                {Locale.titlecase(
-                  key === "cancel"
-                    ? (props.cancelLabel ?? props.label ?? t("dialog.cancel"))
-                    : (props.confirmLabel ?? t("dialog.confirm")),
-                )}
-              </text>
-            </box>
-          )}
-        </For>
-      </box>
-    </box>
+    <For each={["cancel", "confirm"] as const}>
+      {(key) => (
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={key === store.active ? theme.primary : undefined}
+          onMouseUp={() => select(key)}
+        >
+          <text fg={key === store.active ? selectedForeground(theme) : theme.textMuted}>
+            {Locale.titlecase(
+              key === "cancel"
+                ? (props.cancelLabel ?? props.label ?? t("dialog.cancel"))
+                : (props.confirmLabel ?? t("dialog.confirm")),
+            )}
+          </text>
+        </box>
+      )}
+    </For>
   )
 }
 

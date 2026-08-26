@@ -1,10 +1,11 @@
 import { TextAttributes, ScrollBoxRenderable } from '@opentui/core';
-import { useTheme } from '@opencode-ai/tui/context/theme';
+import { selectedForeground, useTheme } from '@opencode-ai/tui/context/theme';
 import { useDialog } from '@opencode-ai/tui/ui/dialog';
+import { DialogConfirmButtons } from '@opencode-ai/tui/ui/dialog-confirm';
 import { useToast } from '@opencode-ai/tui/ui/toast';
 import { useI18n } from '@opencode-ai/tui/i18n';
 import { createStore } from 'solid-js/store';
-import { onMount, Show, createSignal, createMemo, For } from 'solid-js';
+import { onMount, Show, createSignal, createMemo, createEffect, For } from 'solid-js';
 import { useBindings } from '@opencode-ai/tui/keymap';
 import { useTerminalDimensions } from '@opentui/solid';
 import open from 'open';
@@ -20,8 +21,7 @@ interface LogFile {
 
 type Field =
   | { type: 'group'; group: string; label: string }
-  | { type: 'file'; index: number }
-  | { type: 'upload' };
+  | { type: 'file'; index: number };
 
 export function DialogCollect(props: { triggerType?: string }) {
   const dialog = useDialog();
@@ -44,16 +44,11 @@ export function DialogCollect(props: { triggerType?: string }) {
   const [errorMsg, setErrorMsg] = createSignal('');
   let scroll: ScrollBoxRenderable | undefined;
 
-  const scrollMaxHeight = createMemo(() => {
-    const h = dimensions().height;
-    return Math.max(5, Math.floor(h / 3));
-  });
-
   onMount(() => {
     dialog.setSize('large');
   });
 
-  // Build the list of navigable fields: group headers + files + agree + upload
+  // Build the list of navigable fields: group headers + files
   const fields = createMemo<Field[]>(() => {
     const files = logFiles();
     const result: Field[] = [];
@@ -73,23 +68,27 @@ export function DialogCollect(props: { triggerType?: string }) {
         fileIdx++;
       }
     }
-    result.push({ type: 'upload' });
     return result;
   });
 
-  const groupChecked = createMemo(() => {
+  const scrollMaxHeight = createMemo(() => {
+    return Math.min(fields().length, Math.max(1, Math.floor(dimensions().height / 2) - 6));
+  });
+
+  const groupState = createMemo(() => {
     const files = logFiles();
-    const map: Record<string, boolean> = {};
+    const map: Record<string, 'checked' | 'partial' | 'unchecked'> = {};
     for (const g of ['deveco', 'mcp']) {
       const groupFiles = files.filter((f) => f.group === g);
       if (groupFiles.length > 0) {
-        map[g] = groupFiles.every((f) => checked[files.indexOf(f)] === true);
+        const selected = groupFiles.filter((f) => checked[files.indexOf(f)] === true).length;
+        map[g] = selected === 0 ? 'unchecked' : selected === groupFiles.length ? 'checked' : 'partial';
       }
     }
     return map;
   });
 
-  const isGroupAllChecked = (group: string) => groupChecked()[group] === true;
+  const isGroupAllChecked = (group: string) => groupState()[group] === 'checked';
 
   const toggleGroup = (group: string) => {
     const files = logFiles();
@@ -116,6 +115,11 @@ export function DialogCollect(props: { triggerType?: string }) {
       scroll.scrollBy(y - scroll.height + 1);
     }
   };
+
+  createEffect(() => {
+    scrollMaxHeight();
+    setTimeout(scrollToActive, 0);
+  });
 
   useBindings(() => ({
     bindings: [
@@ -183,12 +187,6 @@ export function DialogCollect(props: { triggerType?: string }) {
           open(AGREEMENT_DEFAULTS.privacy_url).catch(() => {});
         },
       },
-      {
-        key: 'return',
-        desc: 'Upload',
-        group: 'Dialog',
-        cmd: () => void doUpload(),
-      },
     ],
   }));
 
@@ -226,48 +224,61 @@ export function DialogCollect(props: { triggerType?: string }) {
   }
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
+    <box gap={1} paddingBottom={1} flexGrow={1}>
+      <box paddingLeft={4} paddingRight={4} flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {t('dialog.collect_title')}
         </text>
         <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          {'esc'}
+          {t('dialog.esc')}
         </text>
       </box>
 
       <Show when={logFiles().length === 0}>
-        <text fg={theme.textMuted}>No log files found</text>
+        <box paddingLeft={4} paddingRight={4}>
+          <text fg={theme.textMuted}>No log files found</text>
+        </box>
       </Show>
 
       <Show when={logFiles().length > 0}>
         <scrollbox
           ref={(r: ScrollBoxRenderable) => (scroll = r)}
           maxHeight={scrollMaxHeight()}
-          verticalScrollbarOptions={{ visible: true }}
-          horizontalScrollbarOptions={{ visible: false }}
+          paddingLeft={1}
+          paddingRight={1}
+          scrollbarOptions={{ visible: false }}
         >
-          <For each={fields().filter((f) => f.type !== 'upload')}>
-            {(field, fi) => {
+          <For each={fields()}>
+            {(field) => {
               const allFields = fields();
               const realIdx = allFields.indexOf(field);
 
               if (field.type === 'group') {
+                const state = () => groupState()[field.group];
                 return (
                   <box
                     flexDirection="row"
-                    gap={2}
-                    paddingLeft={1}
-                    backgroundColor={active() === realIdx ? theme.backgroundElement : undefined}
+                    gap={1}
+                    paddingLeft={3}
+                    paddingRight={3}
+                    backgroundColor={active() === realIdx ? theme.primary : undefined}
                     onMouseUp={() => {
                       setActive(realIdx);
                       toggleGroup(field.group);
                     }}
                   >
-                    <text fg={active() === realIdx ? theme.primary : theme.textMuted}>
-                      {groupChecked()[field.group] === true ? '[✓]' : '[ ]'}
+                    <text
+                      fg={
+                        active() === realIdx
+                          ? selectedForeground(theme)
+                          : state() === 'unchecked'
+                            ? theme.textMuted
+                            : theme.text
+                      }
+                    >
+                      {state() === 'checked' ? '[✓]' : state() === 'partial' ? '[-]' : '[ ]'}
                     </text>
-                    <text fg={active() === realIdx ? theme.primary : theme.textMuted} attributes={TextAttributes.BOLD}>
+                    <text fg={active() === realIdx ? selectedForeground(theme) : theme.text} attributes={TextAttributes.BOLD}>
                       {field.label}
                     </text>
                   </box>
@@ -279,18 +290,32 @@ export function DialogCollect(props: { triggerType?: string }) {
               return (
                 <box
                   flexDirection="row"
-                  gap={2}
-                  paddingLeft={3}
-                  backgroundColor={active() === realIdx ? theme.backgroundElement : undefined}
+                  gap={1}
+                  paddingLeft={5}
+                  paddingRight={3}
+                  backgroundColor={active() === realIdx ? theme.primary : undefined}
                   onMouseUp={() => {
                     setActive(realIdx);
                     setChecked(field.index, !checked[field.index]);
                   }}
                 >
-                  <text fg={active() === realIdx ? theme.primary : theme.textMuted}>
+                  <text
+                    fg={
+                      active() === realIdx
+                        ? selectedForeground(theme)
+                        : checked[field.index] === true
+                          ? theme.text
+                          : theme.textMuted
+                    }
+                  >
                     {checked[field.index] === true ? '[✓]' : '[ ]'}
                   </text>
-                  <text fg={active() === realIdx ? theme.primary : theme.text}>{file.label}</text>
+                  <text
+                    fg={active() === realIdx ? selectedForeground(theme) : theme.text}
+                    attributes={active() === realIdx ? TextAttributes.BOLD : undefined}
+                  >
+                    {file.label}
+                  </text>
                 </box>
               );
             }}
@@ -299,12 +324,12 @@ export function DialogCollect(props: { triggerType?: string }) {
       </Show>
 
       <Show when={errorMsg()}>
-        <box paddingLeft={1}>
+        <box paddingLeft={4} paddingRight={4}>
           <text fg={theme.error}>{errorMsg()}</text>
         </box>
       </Show>
 
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0} paddingBottom={1}>
+      <box paddingLeft={4} paddingRight={2} flexDirection="row" justifyContent="space-between" flexShrink={0}>
         <box flexDirection="row" gap={2}>
           <text>
             <span style={{ fg: theme.text }}><b>{t('dialog.collect_footer_navigate')}</b></span>
@@ -320,28 +345,17 @@ export function DialogCollect(props: { triggerType?: string }) {
           </text>
         </box>
         <box flexDirection="row">
-          <box
-            paddingLeft={1}
-            paddingRight={1}
-            onMouseUp={() => {
+          <DialogConfirmButtons
+            initialActive="confirm"
+            cancelLabel={t('dialog.collect_skip')}
+            confirmLabel={uploading() ? t('dialog.collect_uploading') : t('dialog.collect_upload')}
+            closeOnSelect={false}
+            onCancel={() => {
               deleteCrashedFlag();
               dialog.clear();
             }}
-          >
-            <text fg={theme.textMuted}>
-              {t('dialog.collect_skip')}
-            </text>
-          </box>
-          <box
-            paddingLeft={1}
-            paddingRight={1}
-            backgroundColor={theme.primary}
-            onMouseUp={() => void doUpload()}
-          >
-            <text fg={theme.selectedListItemText}>
-              {uploading() ? t('dialog.collect_uploading') : t('dialog.collect_upload')}
-            </text>
-          </box>
+            onConfirm={() => void doUpload()}
+          />
         </box>
       </box>
     </box>
