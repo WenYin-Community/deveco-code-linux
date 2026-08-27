@@ -31,6 +31,7 @@ stages:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
+          COMMENT_BODY: ${{ atomgit.event.comment.body }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -51,12 +52,13 @@ stages:
               fi
 
               if [ -n "$COMMENT_USER" ]; then
-                LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
-                TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
+                COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
+                TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
                 case "$TRIMMED" in
                   '/recheck'*) ;;
                   *)
-                    echo "最新评论不是 /recheck 命令,跳过检查"
+                    echo "触发评论不是 /recheck 命令,跳过检查"
                     exit 0
                     ;;
                 esac
@@ -160,6 +162,7 @@ stages:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
+          COMMENT_BODY: ${{ atomgit.event.comment.body }}
         steps:
           - name: 检出代码
             uses: checkout
@@ -180,12 +183,13 @@ stages:
               fi
 
               if [ -n "$COMMENT_USER" ]; then
-                LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
-                TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
+                COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
+                TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
                 case "$TRIMMED" in
                   '/recheck'*) ;;
                   *)
-                    echo "最新评论不是 /recheck 命令,跳过检查"
+                    echo "触发评论不是 /recheck 命令,跳过检查"
                     exit 0
                     ;;
                 esac

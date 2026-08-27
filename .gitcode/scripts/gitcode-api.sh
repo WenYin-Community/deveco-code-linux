@@ -23,7 +23,7 @@ Commands:
   close-issue <number>            Close an issue or PR
   reopen-issue <number>           Reopen an issue or PR
   get-issue <number>              Get details (JSON)
-  list-comments <number>           List comments (JSON)
+  list-comments <number>           List comments (JSON, paginated)
   list-linked-issues <number>     List issues linked to a PR (JSON)
   list-issues [state]             List issues (JSON, paginated)
   list-prs [state] [head] [base]  List pull requests (JSON)
@@ -155,7 +155,33 @@ case "$CMD" in
     ;;
   list-comments)
     NUMBER="$1"
-    curl -sS -H "Authorization: Bearer $TOKEN" "$API/repos/$REPO/$TYPE/$NUMBER/comments"
+    PAGE=1
+    PER_PAGE=100
+    RESULTS="[]"
+    while true; do
+      PAGE_JSON=$(curl -sS -H "Authorization: Bearer $TOKEN" \
+        "$API/repos/$REPO/$TYPE/$NUMBER/comments?page=${PAGE}&per_page=${PER_PAGE}")
+      PAGE_COUNT=$(printf '%s' "$PAGE_JSON" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if not isinstance(d, list):
+    sys.exit(1)
+print(len(d))
+") || { echo "list-comments: unexpected API response on page $PAGE: $(printf '%s' "$PAGE_JSON" | head -c 200)" >&2; exit 1; }
+      if [ "$PAGE_COUNT" -eq 0 ]; then break; fi
+      RESULTS=$(python3 -c "
+import json, sys
+a = json.loads(sys.argv[1], strict=False)
+b = json.loads(sys.stdin.read(), strict=False)
+print(json.dumps(a + b, ensure_ascii=False))
+" "$RESULTS" <<< "$PAGE_JSON")
+      if [ "$PAGE_COUNT" -lt "$PER_PAGE" ]; then break; fi
+      PAGE=$((PAGE + 1))
+    done
+    printf '%s' "$RESULTS"
     ;;
   list-linked-issues)
     NUMBER="$1"

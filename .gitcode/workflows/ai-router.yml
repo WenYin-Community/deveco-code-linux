@@ -23,6 +23,7 @@ stages:
           GITCODE_REPO: ${{ atomgit.repository }}
           GITCODE_TYPE: pulls
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
+          COMMENT_BODY: ${{ atomgit.event.comment.body }}
           HEAD_REF: ${{ atomgit.event.pull_request.head.ref || atomgit.head_ref }}
           BASE_REF: ${{ atomgit.event.pull_request.base.ref || atomgit.base_ref }}
           GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -46,12 +47,13 @@ stages:
                 echo "::error::PR_NUMBER 为空(无法从事件上下文解析 PR 编号)"
                 exit 1
               fi
-              LATEST=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')
-              TRIMMED=$(printf '%s' "$LATEST" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+              # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
+              COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
+              TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
               case "$TRIMMED" in
                 '/ai review'*) ;;
                 *)
-                  echo "最新评论不是 /ai review 命令,跳过转发"
+                  echo "触发评论不是 /ai review 命令,跳过转发"
                   exit 0
                   ;;
               esac
