@@ -39,6 +39,17 @@ const BACKGROUND_UPDATED = [
   "DO NOT sleep, poll for progress, ask the task for status, or duplicate this task's work — avoid working with the same files or topics it is using.",
   "Work on non-overlapping tasks, or briefly tell the user what you sent and end your response.",
 ].join("\n")
+const BACKGROUND_OUTCOMES: Partial<
+  Record<BackgroundJob.Status, { verb: string; failed: boolean; body: (job: BackgroundJob.Info) => string }>
+> = {
+  completed: { verb: "completed", failed: false, body: (job) => job.output ?? "" },
+  error: { verb: "failed", failed: true, body: (job) => job.error ?? "" },
+  cancelled: {
+    verb: "cancelled",
+    failed: true,
+    body: () => "The background task was cancelled and produced no result.",
+  },
+}
 
 const BaseParameterFields = {
   description: Schema.String.annotate({ description: "A short (3-5 words) description of the task" }),
@@ -63,11 +74,11 @@ export const Parameters = Schema.Struct({
 
 function renderOutput(input: {
   sessionID: SessionID
-  state: "running" | "completed" | "error"
+  state: BackgroundJob.Status
   summary?: string
   text: string
 }) {
-  const tag = input.state === "error" ? "task_error" : "task_result"
+  const tag = BACKGROUND_OUTCOMES[input.state]?.failed ? "task_error" : "task_result"
   return [
     `<task id="${input.sessionID}" state="${input.state}">`,
     ...(input.summary ? [`<summary>${input.summary}</summary>`] : []),
@@ -202,10 +213,9 @@ export const TaskTool = Tool.define(
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
       })
 
-      const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
-        state: "completed" | "error",
-        text: string,
-      ) {
+      const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (job: BackgroundJob.Info | undefined) {
+        const spec = job && BACKGROUND_OUTCOMES[job.status]
+        if (!spec) return
         const currentParent = yield* sessions.get(ctx.sessionID)
         yield* ops
           .prompt({
@@ -218,12 +228,9 @@ export const TaskTool = Tool.define(
                 synthetic: true,
                 text: renderOutput({
                   sessionID: nextSession.id,
-                  state,
-                  summary:
-                    state === "completed"
-                      ? `Background task completed: ${params.description}`
-                      : `Background task failed: ${params.description}`,
-                  text,
+                  state: job.status,
+                  summary: `Background task ${spec.verb}: ${params.description}`,
+                  text: spec.body(job),
                 }),
               },
             ],
@@ -233,11 +240,7 @@ export const TaskTool = Tool.define(
 
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {
         yield* background.wait({ id: jobID }).pipe(
-          Effect.flatMap((result) => {
-            if (result.info?.status === "completed") return inject("completed", result.info.output ?? "")
-            if (result.info?.status === "error") return inject("error", result.info.error ?? "")
-            return Effect.void
-          }),
+          Effect.flatMap((result) => inject(result.info)),
           Effect.forkIn(scope, { startImmediately: true }),
         )
       })

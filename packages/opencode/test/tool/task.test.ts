@@ -768,6 +768,62 @@ describe("tool.task", () => {
     }),
   )
 
+  background.instance("cancelling a background task notifies the parent session", () =>
+    Effect.gen(function* () {
+      const jobs = yield* BackgroundJob.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const injected = defer<SessionPrompt.PromptInput>()
+      const started = defer<void>()
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+          background: true,
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: {
+            promptOps: {
+              ...stubOps(),
+              prompt: (input) => {
+                if (input.sessionID === chat.id) {
+                  injected.resolve(input)
+                  return Effect.succeed(reply(input, "done"))
+                }
+                started.resolve()
+                return Effect.never
+              },
+            } satisfies TaskPromptOps,
+          },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      yield* Effect.promise(() => started.promise)
+      yield* jobs.cancel(result.metadata.sessionId)
+      const waited = yield* jobs.wait({ id: result.metadata.sessionId, timeout: 1_000 })
+      expect(waited.timedOut).toBe(false)
+      expect(waited.info?.status).toBe("cancelled")
+
+      const notification = yield* Effect.promise(() => injected.promise)
+      expect(notification.parts[0]?.type).toBe("text")
+      if (notification.parts[0]?.type === "text") {
+        expect(notification.parts[0].text).toContain('state="cancelled"')
+        expect(notification.parts[0].text).toContain("Background task cancelled: inspect bug")
+        expect(notification.parts[0].text).toContain("The background task was cancelled")
+      }
+    }),
+  )
+
   background.instance("removing the child task session cancels its running background task", () =>
     Effect.gen(function* () {
       const jobs = yield* BackgroundJob.Service
