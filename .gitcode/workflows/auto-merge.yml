@@ -44,9 +44,11 @@ stages:
               PR_NUMBER_INPUT: ${{ inputs.pr_number }}
               ISSUE_NUMBER: ${{ atomgit.event.issue.number }}
             run: |
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
+
               if [ -n "$COMMENT_USER" ]; then
                 # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
-                COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "${{ atomgit.event.pull_request.number || atomgit.event.issue.number }}" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
+                COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
                 TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
                 case "$TRIMMED" in
                   '/merge'*) ;;
@@ -134,8 +136,6 @@ stages:
                 echo "PR #$NUMBER merged successfully"
                 return 0
               }
-
-              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
 
               if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
                 echo "Schedule mode: scanning open PRs"
