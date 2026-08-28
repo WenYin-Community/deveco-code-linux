@@ -23,6 +23,7 @@ interface AnalyticsCollectorDependency {
   analyticsEnabled(): Promise<boolean>
   startSession(input: SessionStart): void
   recordResponseDelta(): void
+  recordTokenUsage(inputTokens: number, outputTokens: number): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
   recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess?: boolean): void
@@ -70,6 +71,9 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
     const attributionCalls = new Set<string>()
     const projectPath = directory || process.cwd()
     const projectId = await dependencies.projectId(projectPath)
+    // Captured once per instance from the merged config; the ui-verification tool
+    // resolves agent.ui_verification.model from the same source.
+    let uiVerificationModel: string | null = null
     let attributionEligibility: boolean | undefined
     let uploaderReady = false
     let lastAnalyticsEnabled: boolean | undefined
@@ -172,6 +176,10 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
     }
 
     const hooks: Hooks = {
+      config: async (cfg) => {
+        uiVerificationModel = cfg.agent?.ui_verification?.model ?? null
+      },
+
       event: async ({ event }) => {
         const evt = event as unknown as Record<string, unknown>
         const eventType = evt.type as string
@@ -184,6 +192,20 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         }
 
         if (!(await ensureEligible())) return
+
+        if (eventType === "message.part.updated") {
+          // step-finish parts carry the same per-step usage the session projector
+          // sums into the session row; other part types are irrelevant here.
+          const part = props?.part as Record<string, unknown> | undefined
+          if (part?.type === "step-finish" && typeof props?.sessionID === "string" && collector.getSessionID() === props.sessionID) {
+            const tokens = part.tokens as Record<string, unknown> | undefined
+            collector.recordTokenUsage(
+              typeof tokens?.input === "number" ? tokens.input : 0,
+              typeof tokens?.output === "number" ? tokens.output : 0,
+            )
+          }
+          return
+        }
 
         if (eventType === "file.edited" && typeof props?.file === "string") {
           collector.recordFileEdit(props.file)
@@ -215,6 +237,7 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
           providerId,
           modelId,
           agentName,
+          uiVerificationModel,
         })
         await diagnostic(`Session started, provider: ${providerId}, model: ${modelId}, agent: ${agentName}`)
       },
@@ -245,7 +268,8 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         // A build_project call with isSuccess=true but isBuildSuccess=false means the tool ran
         // fine but the build failed (e.g. "BUILD FAILED" in output).
         const isSuccess = !hasError
-        const isBuildSuccess = input.tool === "build_project" && isSuccess && (output.output ?? "").toLowerCase().includes("build successful")
+        const isBuildSuccess =
+          input.tool === "build_project" && isSuccess && (output.output ?? "").toLowerCase().includes("build successful")
         collector.recordToolExecution(input.tool, duration, isSuccess, isBuildSuccess)
 
         if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return

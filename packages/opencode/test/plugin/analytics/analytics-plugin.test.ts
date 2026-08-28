@@ -27,6 +27,11 @@ const builtEvent: AiSessionEvent = {
   firstResultElapsed: 5,
   isFirstBuildSuccess: null,
   isFinalBuildSuccess: null,
+  uiVerificationModel: null,
+  inputTokens: 0,
+  outputTokens: 0,
+  firstBuildElapsed: null,
+  finalBuildElapsed: null,
 }
 
 function createHarness() {
@@ -38,6 +43,7 @@ function createHarness() {
   const startSession = mock((_input: SessionStart) => {
     active = true
   })
+  const recordTokenUsage = mock((_inputTokens: number, _outputTokens: number) => undefined)
   const recordToolExecution = mock((_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess: boolean) => undefined)
   const buildEvent = mock(async () => builtEvent)
   const upload = mock(async (_submission: AnalyticsSubmission) => true)
@@ -71,6 +77,7 @@ function createHarness() {
       analyticsEnabled,
       startSession,
       recordResponseDelta: () => undefined,
+      recordTokenUsage,
       recordFileEdit: () => undefined,
       recordFileDiff: () => undefined,
       recordToolExecution,
@@ -102,6 +109,7 @@ function createHarness() {
   return {
     plugin,
     startSession,
+    recordTokenUsage,
     recordToolExecution,
     buildEvent,
     upload,
@@ -164,6 +172,7 @@ test("starts ai_session for non-Huawei providers without collecting prompt conte
     providerId: "openai",
     modelId: "model-1",
     agentName: "build",
+    uiVerificationModel: null,
   })
   expect(JSON.stringify(harness.startSession.mock.calls[0]?.[0])).not.toContain("private prompt")
 })
@@ -407,4 +416,73 @@ test("still flags non-build tools whose output contains error text", async () =>
   )
 
   expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, false)
+})
+
+test("captures the ui_verification model from the config hook and starts sessions with it", async () => {
+  const harness = createHarness()
+  // Drive chat.message on the same hooks object: the helper would call plugin()
+  // again and produce a fresh closure with uiVerificationModel reset to null.
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  await hooks.config?.({ agent: { ui_verification: { model: "myprovider/qwen3-vl-plus" } } } as never)
+
+  await hooks["chat.message"]!(
+    { sessionID: "session-1", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
+    { message: { id: "message-1" }, parts: [] } as never,
+  )
+
+  expect(harness.startSession.mock.calls[0]?.[0]?.uiVerificationModel).toBe("myprovider/qwen3-vl-plus")
+})
+
+test("starts sessions with a null ui_verification model when the config hook sees no agent entry", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  await hooks.config?.({} as never)
+
+  await hooks["chat.message"]!(
+    { sessionID: "session-1", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
+    { message: { id: "message-1" }, parts: [] } as never,
+  )
+
+  expect(harness.startSession.mock.calls[0]?.[0]?.uiVerificationModel).toBe(null)
+})
+
+test("accumulates step-finish token usage only for the tracked session", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: { sessionID: "session-1", part: { type: "step-finish", tokens: { input: 120, output: 45 } } },
+    } as never,
+  })
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: { sessionID: "session-2", part: { type: "step-finish", tokens: { input: 7, output: 7 } } },
+    } as never,
+  })
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: { sessionID: "session-1", part: { type: "text", text: "irrelevant" } },
+    } as never,
+  })
+
+  expect(harness.recordTokenUsage).toHaveBeenCalledTimes(1)
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(120, 45)
+})
+
+test("defaults step-finish token usage to zero when the part carries no tokens", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: { sessionID: "session-1", part: { type: "step-finish" } },
+    } as never,
+  })
+
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(0, 0)
 })

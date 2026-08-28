@@ -121,6 +121,11 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
       'firstResultElapsed',
       'isFirstBuildSuccess',
       'isFinalBuildSuccess',
+      'uiVerificationModel',
+      'inputTokens',
+      'outputTokens',
+      'firstBuildElapsed',
+      'finalBuildElapsed',
     ])
   ) {
     return false;
@@ -161,7 +166,12 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
     typeof value.totalElapsed === 'number' &&
     typeof value.firstResultElapsed === 'number' &&
     (value.isFirstBuildSuccess === null || typeof value.isFirstBuildSuccess === 'boolean') &&
-    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === 'boolean')
+    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === 'boolean') &&
+    (value.uiVerificationModel === null || typeof value.uiVerificationModel === 'string') &&
+    typeof value.inputTokens === 'number' &&
+    typeof value.outputTokens === 'number' &&
+    (value.firstBuildElapsed === null || typeof value.firstBuildElapsed === 'number') &&
+    (value.finalBuildElapsed === null || typeof value.finalBuildElapsed === 'number')
   );
 }
 

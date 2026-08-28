@@ -15,6 +15,7 @@ export type SessionStart = {
   providerId: string
   modelId: string
   agentName: string
+  uiVerificationModel: string | null
 }
 
 interface SessionCollectorDependencies {
@@ -105,17 +106,35 @@ export class SessionCollector {
       providerId: input.providerId,
       modelId: input.modelId,
       agentName: input.agentName,
+      uiVerificationModel: input.uiVerificationModel,
       startTime: Date.now(),
       firstResponseTime: null,
+      inputTokens: 0,
+      outputTokens: 0,
       modifiedFiles: new Map(),
       toolExecutions: [],
       toolCounts: new Map(),
-      buildResults: { isFirstBuildSuccess: null, isFinalBuildSuccess: null, buildCount: 0 },
+      buildResults: {
+        isFirstBuildSuccess: null,
+        isFinalBuildSuccess: null,
+        buildCount: 0,
+        firstBuildElapsed: null,
+        finalBuildElapsed: null,
+      },
     }
   }
 
   recordResponseDelta(): void {
     if (this.context?.firstResponseTime === null) this.context.firstResponseTime = Date.now()
+  }
+
+  // Accumulates the same step-finish parts the session projector sums into
+  // SessionTable.tokens_input/tokens_output, so both stay comparable. The plugin
+  // boundary filters events by the tracked sessionID before calling this.
+  recordTokenUsage(inputTokens: number, outputTokens: number): void {
+    if (!this.context) return
+    this.context.inputTokens += inputTokens
+    this.context.outputTokens += outputTokens
   }
 
   // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
@@ -130,13 +149,18 @@ export class SessionCollector {
     })
     this.context.toolCounts.set(toolName, (this.context.toolCounts.get(toolName) || 0) + 1)
     // Skip build result tracking when the tool execution itself failed — no build actually ran.
-    if (toolName === "build_project" && isSuccess) this.updateBuildResults(this.context.buildResults, isBuildSuccess)
+    if (toolName === "build_project" && isSuccess)
+      this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
   }
 
-  private updateBuildResults(results: BuildResults, isBuildSuccess: boolean): void {
+  private updateBuildResults(results: BuildResults, isBuildSuccess: boolean, elapsed: number): void {
     results.buildCount++
-    if (results.isFirstBuildSuccess === null) results.isFirstBuildSuccess = isBuildSuccess
+    if (results.isFirstBuildSuccess === null) {
+      results.isFirstBuildSuccess = isBuildSuccess
+      results.firstBuildElapsed = elapsed
+    }
     results.isFinalBuildSuccess = isBuildSuccess
+    results.finalBuildElapsed = elapsed
   }
 
   recordFileDiff(filePath: string, additions: number, deletions: number): void {
@@ -193,6 +217,11 @@ export class SessionCollector {
       firstResultElapsed,
       isFirstBuildSuccess: this.context.buildResults.isFirstBuildSuccess,
       isFinalBuildSuccess: this.context.buildResults.isFinalBuildSuccess,
+      uiVerificationModel: this.context.uiVerificationModel,
+      inputTokens: this.context.inputTokens,
+      outputTokens: this.context.outputTokens,
+      firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
+      finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
     }
   }
 

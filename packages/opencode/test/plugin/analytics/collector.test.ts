@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, setSystemTime, test } from "bun:test"
 import { SessionCollector } from "@/plugin/analytics/collector"
 
 test("ai_session contains only approved aggregate fields", async () => {
@@ -11,6 +11,7 @@ test("ai_session contains only approved aggregate fields", async () => {
     providerId: "openai",
     modelId: "model-1",
     agentName: "build",
+    uiVerificationModel: null,
   })
   collector.recordResponseDelta()
   collector.recordFileEdit("/Users/alice/private/src/a.ts")
@@ -68,6 +69,7 @@ test("tracks build_project first/final results", async () => {
     providerId: "deveco",
     modelId: "deepseek-chat",
     agentName: "build",
+    uiVerificationModel: null,
   })
   collector.recordToolExecution("build_project", 5000, true, false)
   collector.recordToolExecution("build_project", 3000, true, true)
@@ -87,6 +89,7 @@ test("does not count build_project when tool execution fails", async () => {
     providerId: "deveco",
     modelId: "deepseek-chat",
     agentName: "build",
+    uiVerificationModel: null,
   })
   collector.recordToolExecution("build_project", 5000, false, false)
   collector.recordToolExecution("build_project", 3000, true, true)
@@ -94,6 +97,76 @@ test("does not count build_project when tool execution fails", async () => {
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.isFirstBuildSuccess).toBe(true)
   expect(event?.isFinalBuildSuccess).toBe(true)
+})
+
+test("accumulates token usage and passes the configured ui_verification model through", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-tokens",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+    uiVerificationModel: "myprovider/qwen3-vl-plus",
+  })
+  collector.recordTokenUsage(120, 45)
+  collector.recordTokenUsage(80, 15)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.inputTokens).toBe(200)
+  expect(event?.outputTokens).toBe(60)
+  expect(event?.uiVerificationModel).toBe("myprovider/qwen3-vl-plus")
+})
+
+test("records first/final build elapsed from prompt submission, not build duration", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  setSystemTime(new Date("2026-01-01T00:00:00Z"))
+  collector.startSession({
+    sessionID: "session-build",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+  // Prompt submitted at 00:00:00; first build finishes 60s later and fails, final build finishes 180s later.
+  setSystemTime(new Date("2026-01-01T00:01:00Z"))
+  collector.recordToolExecution("build_project", 5000, true, false)
+  setSystemTime(new Date("2026-01-01T00:03:00Z"))
+  collector.recordToolExecution("build_project", 3000, true, true)
+  setSystemTime(new Date())
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.firstBuildElapsed).toBe(60_000)
+  expect(event?.finalBuildElapsed).toBe(180_000)
+  // Elapsed pairs with the success flags even when the first build failed.
+  expect(event?.isFirstBuildSuccess).toBe(false)
+  expect(event?.isFinalBuildSuccess).toBe(true)
+})
+
+test("keeps build elapsed null and token counts zero when no build or llm step ran", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-empty",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+  collector.recordToolExecution("bash", 100, true)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.firstBuildElapsed).toBe(null)
+  expect(event?.finalBuildElapsed).toBe(null)
+  expect(event?.inputTokens).toBe(0)
+  expect(event?.outputTokens).toBe(0)
 })
 
 test("collection still requires login and the analytics switch", async () => {

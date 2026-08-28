@@ -29,6 +29,11 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
       firstResultElapsed: 5,
       isFirstBuildSuccess: null,
       isFinalBuildSuccess: null,
+      uiVerificationModel: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      firstBuildElapsed: null,
+      finalBuildElapsed: null,
     },
   }
 

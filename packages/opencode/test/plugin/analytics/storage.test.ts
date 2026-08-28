@@ -42,6 +42,11 @@ function event(): AiSessionEvent {
     firstResultElapsed: 5,
     isFirstBuildSuccess: null,
     isFinalBuildSuccess: null,
+    uiVerificationModel: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    firstBuildElapsed: null,
+    finalBuildElapsed: null,
   }
 }
 

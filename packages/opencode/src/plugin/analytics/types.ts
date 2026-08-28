@@ -36,6 +36,12 @@ export interface BuildResults {
   isFinalBuildSuccess: boolean | null
   // number of build_project calls where the tool execution succeeded (actual build attempts)
   buildCount: number
+  // null until the first successful build_project tool execution; then fixed to that call's elapsed time.
+  // Elapsed measures prompt submission (startSession) to that build call's completion — not the build's own
+  // duration, which toolExecutions already tracks — and pairs with isFirstBuildSuccess (build may have failed).
+  firstBuildElapsed: number | null
+  // null until the first successful build_project tool execution; then always overwritten by the latest call's elapsed time
+  finalBuildElapsed: number | null
 }
 
 export interface AiSessionEvent extends AnalyticsEnvironmentFields {
@@ -55,6 +61,16 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   firstResultElapsed: number
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
+  // Multimodal model configured via agent.ui_verification.model ("provider/model"), null when unset.
+  // Cross-reference toolExecutions verify_ui entries to distinguish configured-but-unused from active use.
+  uiVerificationModel: string | null
+  // Sum of step-finish input/output tokens for this session turn; matches the session row's
+  // tokens_input/tokens_output accumulation (projector sums the same step-finish parts). output excludes reasoning.
+  inputTokens: number
+  outputTokens: number
+  // Prompt submission to first/final executed build_project completion, in ms; null when no build ran
+  firstBuildElapsed: number | null
+  finalBuildElapsed: number | null
 }
 
 export interface AiCodeAttributionEvent {
@@ -101,8 +117,11 @@ export interface SessionContext {
   providerId: string
   modelId: string
   agentName: string
+  uiVerificationModel: string | null
   startTime: number
   firstResponseTime: number | null
+  inputTokens: number
+  outputTokens: number
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
   toolCounts: Map<string, number>
