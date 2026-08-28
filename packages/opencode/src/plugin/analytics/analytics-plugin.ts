@@ -233,7 +233,13 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         if (startTime === undefined) return
         toolStartTimes.delete(input.callID)
         const metadata = output.metadata as Record<string, unknown> | undefined
-        const hasError = metadata?.error || output.output?.includes("Error") || output.output?.includes("Failed")
+        // build_project reports compile failures as a normal tool result (exitCode in
+        // metadata, "ArkTS Compiler Error"/"BUILD FAILED" in output). The generic output
+        // substring check would misclassify those as tool failures and silently drop them
+        // from build result tracking, so it only applies to other tools.
+        const hasError =
+          metadata?.error ||
+          (input.tool !== "build_project" && (output.output?.includes("Error") || output.output?.includes("Failed")))
         const duration = Date.now() - startTime
         // isSuccess tracks tool execution success; isBuildSuccess tracks build result success.
         // A build_project call with isSuccess=true but isBuildSuccess=false means the tool ran

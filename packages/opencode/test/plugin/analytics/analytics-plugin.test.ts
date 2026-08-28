@@ -374,3 +374,37 @@ test("records build_project failure when output indicates BUILD FAILED", async (
 
   expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false)
 })
+
+test("records build_project compile failure as a successful tool execution", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  // Real-world shape: mixed-case "ArkTS Compiler Error" plus the appended status line.
+  // The substring check used to misclassify this as a tool failure (isSuccess=false),
+  // silently dropping compile failures from build result tracking.
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      output:
+        "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)",
+      metadata: { exitCode: 1 },
+    },
+  )
+
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false)
+})
+
+test("still flags non-build tools whose output contains error text", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "bash-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "bash-1", args: {} },
+    { title: "", output: "npm ERR! Error: missing script", metadata: {} },
+  )
+
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, false)
+})
