@@ -12,6 +12,7 @@ Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui
 
 ### `devecocli emulator`
 Manage local emulator instances and system images.
+- **Studio requirement**: DevEco Studio `>= 6.1.0`.
 - `list`: Show instances (status, serial, device type). Opt: `--format <table|json>` (default: `table`).
 - `start <names...>`: Start instances. Quote names with spaces. (See Troubleshooting if blocked).
 - `stop <names...>`: Stop by name or serial (`127.0.0.1:<port>`).
@@ -36,8 +37,8 @@ Inspect UI on a connected physical device or running emulator.
 *Ex*: `devecocli ui screenshot --device Phone --path ./screenshots/phone.png`
 
 ### `devecocli device`
-- `list`: Show active real devices and running emulators.
-- `view`: Detailed info. Req `-t <name|serial>` on multi-device hosts.
+- `list`: Show active real devices and running emulators. Opt: `--format <table|json>` (default: `table`).
+- `view`: Detailed info. Req `-t <name|serial>` on multi-device hosts. Opt: `--format <table|json>` (default: `table`).
 
 ### `devecocli signature generate` `[Outside sandbox]`
 Auto-generate HarmonyOS signing materials (local p12/csr + cloud cert + test profile) and write signing config to `build-profile.json5`.
@@ -83,9 +84,32 @@ Manage HarmonyOS skills in AI agents/projects.
 - `add (--all | --skill <name>) [--agent <a,b…>] [--project <path>] [--path <path>] [-f]`: Install.
 - `remove --skill <name> [...]`: Uninstall.
 
+### `devecocli check compat` `[Outside sandbox]`
+Scan source code for breaking API changes between two SDK versions. Built on top of DevEco Studio's `arkanalyzer-apiscan` plugin.
+- `versions`: List available target SDK versions. Opts: `--format <default|json>` (default: `default`).
+- Default (no args): project-level scan.
+- `--modules <m1> [m2...]`: Module-level scan.
+- `<file1> [file2...]`: File-level scan (`.ets`/`.c`/`.cpp` only).
+- `--source-version <v>` (Req) / `--target-version <v>` (Req): SDK version pair. Run `devecocli check compat versions` first; on zsh, **quote the value** (e.g. `"<source_version>"`, `"<target_version>"`).
+- `--format <default|csv|json>` (default: `default`): Console output accepts `default` (text) or `json`; file output (via `--output-path`) accepts `default` (csv), `csv`, or `json`. `csv` requires `--output-path`.
+- `--output-path <path>`: Directory (writes `apiChange-*.csv`/`apiChange-*.json`) or explicit file (extension must match `--format`).
+- `--limit <n>` (default `100`): Max records shown on console when no `--output-path`.
+
+Validation order: `files` + `--modules` mutually exclusive → `--source-version`/`--target-version` required → `csv` requires `--output-path` → project dir valid → modules exist → files exist + extension valid → versions in catalog + `target > source` → format/extension match → output target writable.
+
+*Ex*: `devecocli check compat --source-version "<source_version>" --target-version "<target_version>" --output-path ./report`
+
 ## Troubleshooting
 
-- **`image download` asks to clear a non-empty directory**: Ask the user whether to force a fresh download. If confirmed, rerun the original command with `--force` to skip the interactive prompt. Do NOT use `--force` without user confirmation.
-- **`image download` failure / timeout**: Do NOT auto-retry. Ask the user to install `devecocli` first, then give them the command to run manually in their terminal.
+- **"Product / Build mode `<x>` not found"**: Check `build-profile.json5`.
+- **"Multiple entry modules" / "No entry module"**: Pass `--modules` (build) or `--module` (run).
+- **"No active devices" / "Multiple devices connected"**: Connect/start emulator. Pass `-t <serial>` (device view) or `--device <name|serial>` (run/log).
+- **`error:install sign info inconsistent`**: Signing key changed. Run `devecocli run --uninstall` or `devecocli signature generate --force`.
+- **`Not logged in. Run devecocli auth login first`**: Run `devecocli auth login` to authenticate.
+- **`Provision number exceeds limit`**: Test provision quota is full. Delete old test provisions in DevEco Studio (Signing Configs) or AGC console, then retry `devecocli signature generate`.
+- **`Invalid AccessToken. Sign in and try again`**: Token expired. Run `devecocli auth login` again.
+- **`emulator start` / `image download` blocked on agreement**: User MUST accept agreements. Interactive: `devecocli emulator license` (requires TTY). Non-interactive (CI/scripts): `devecocli emulator license accept`. Agents cannot run the interactive form; suggest the user run it, or use `license accept` if a non-TTY flow is acceptable. Do not retry until accepted.
+- **`image download` failure / timeout**: Do NOT auto-retry. Give the command to the user to run manually in their terminal.
 - **`emulator create` timeout**: Treat as user-action step. Ask user to open DevEco Studio -> Device Manager. Check `emulator list` after user confirms. Do NOT auto-retry or edit SDK files.
 - **`image list` duplicate OS rows**: `phone`/`foldable`/`widefold`/`triplefold` share the same image. Download/remove ONCE per OS version.
+**`ui layout` missing expected node**: `layout` only returns on-screen nodes. The user must scroll the target into view on the device before retrying (no CLI input subcommands in this build).
