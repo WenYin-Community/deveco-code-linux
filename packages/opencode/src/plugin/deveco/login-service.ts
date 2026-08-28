@@ -1,5 +1,6 @@
 import crypto from "crypto"
-import open from "open"
+import { exec } from "node:child_process"
+import { promisify } from "node:util"
 import { logInfo, logWarn, logError } from "./log"
 import { LoginCancelledError, UnsupportedRegionError } from "./errors"
 import { httpClient } from "./http-client"
@@ -9,6 +10,8 @@ import { saveAuthToDisk } from "./storage"
 import type { AccountRegionStatus, JwtPayload, LoginConfig, LoginResult, TokenCheckResponse, UserInfo } from "./types"
 import { DEFAULT_CONFIG } from "./types"
 import { CHINA_ACCOUNT_ONLY_MESSAGE } from "./region-policy"
+
+const execAsync = promisify(exec)
 
 export class LoginService {
   private config: LoginConfig
@@ -128,8 +131,9 @@ export class LoginService {
     const loginUrl = `${this.config.baseUrl}/${this.config.authUrl}?port=${port}&appid=${this.config.appId}&code=${loginState}`
     const safeUrl = loginUrl.replace(/code=[^&]*/g, "code=***")
 
-    // Allowlist the canonicalized href: `new URL` leaves `$`/backtick, which
-    // stay active in the Windows launcher's PowerShell `Start "..."` string.
+    // Allowlist the canonicalized href so the URL is safe to embed in a shell
+    // command below: it rejects `"`, `|`, `$`, backtick, and other characters
+    // that would break out of the surrounding double quotes.
     let parsed: URL
     try {
       parsed = new URL(loginUrl)
@@ -146,8 +150,19 @@ export class LoginService {
       throw new Error("Login URL contains disallowed characters")
     }
 
+    // The allowlist above neutralizes shell metacharacters, so wrapping the URL
+    // in double quotes is sufficient. Use `cmd start` / `open` / `xdg-open` rather
+    // than the `open` npm package, which spawns PowerShell and is blocked by EDR /
+    // AppLocker on hardened machines (regression from #531).
+    const command =
+      process.platform === "win32"
+        ? `start "" "${parsed.href}"`
+        : process.platform === "darwin"
+          ? `open "${parsed.href}"`
+          : `xdg-open "${parsed.href}"`
+
     try {
-      await open(parsed.href)
+      await execAsync(command)
     } catch (err) {
       logError("failed to open login page in browser", {
         service: "deveco",
