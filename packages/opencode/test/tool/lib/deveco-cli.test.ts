@@ -14,6 +14,7 @@ import {
   ensureDevecoCliShim,
   isolatedShellPath,
   resolveBundledDevecoCliEntry,
+  resolveDevecoCodeProxyLauncher,
   resolveInstalledDevecoCliEntry,
   resolveInstalledDevecoCliEntryFromExecutable,
   resolveLocalBuildDevecoCliEntry,
@@ -36,6 +37,24 @@ afterEach(async () => {
 })
 
 describe("deveco-cli runtime", () => {
+  test("resolveDevecoCodeProxyLauncher() invokes a compiled executable directly", () => {
+    expect(resolveDevecoCodeProxyLauncher("/$bunfs/root/src/index.js", "/app/deveco")).toEqual(["/app/deveco"])
+  })
+
+  test("resolveDevecoCodeProxyLauncher() runs a source entry through Bun", async () => {
+    await using tmp = await tmpdir()
+    const main = path.join(tmp.path, "src", "index.ts")
+    await fs.mkdir(path.dirname(main), { recursive: true })
+    await Bun.write(main, "console.log('ok')\n")
+
+    expect(resolveDevecoCodeProxyLauncher(main, "/bin/bun")).toEqual([
+      "/bin/bun",
+      "run",
+      "--conditions=browser",
+      main,
+    ])
+  })
+
   test("resolveBundledDevecoCliEntry() uses test entry override", async () => {
     await using tmp = await tmpdir()
     const cli = path.join(tmp.path, "dist", "cli.js")
@@ -287,8 +306,10 @@ describe("deveco-cli runtime", () => {
 
     if (process.platform === "win32") {
       expect(await Bun.file(path.join(binDir, "devecocli.cmd")).exists()).toBe(true)
+      expect(await Bun.file(path.join(binDir, "devecocli.cmd")).text()).toContain("__devecocli-proxy -- %*")
     } else {
       expect(await Bun.file(path.join(binDir, "devecocli")).exists()).toBe(true)
+      expect(await Bun.file(path.join(binDir, "devecocli")).text()).toContain('__devecocli-proxy -- "$@"')
     }
 
     __resetDevecoCliShellEnvCache()
@@ -384,7 +405,7 @@ describe("deveco-cli runtime", () => {
     ])
   })
 
-  test("runBundledDevecoCli() invokes bundled shim instead of global devecocli", async () => {
+  test("runBundledDevecoCli() invokes the bundled entry instead of global devecocli", async () => {
     await using tmp = await tmpdir()
     const binDir = path.join(tmp.path, "bin")
     const cli = path.join(tmp.path, "dist", "cli.js")
@@ -409,7 +430,7 @@ console.log("disable-update:" + process.env.DEVECO_CLI_DISABLE_UPDATE)
     expect(result.stdout).toContain("disable-update:all")
   })
 
-  test("runBundledDevecoCli() propagates non-zero exit code through shim", async () => {
+  test("runBundledDevecoCli() propagates the bundled entry exit code", async () => {
     await using tmp = await tmpdir()
     const binDir = path.join(tmp.path, "bin")
     const cli = path.join(tmp.path, "dist", "cli.js")

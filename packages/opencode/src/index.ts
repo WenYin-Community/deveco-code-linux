@@ -34,6 +34,12 @@ import { checkOnStartup as crashCheckOnStartup, cleanupOnExit as crashCleanupOnE
 
 const args = hideBin(process.argv)
 
+if (args[0] === "__devecocli-proxy") {
+  const proxyArgs = args[1] === "--" ? args.slice(2) : args.slice(1)
+  const { runDevecoCliProxy } = await import("./deveco-cli/router")
+  process.exit(await runDevecoCliProxy(proxyArgs, process.cwd()))
+}
+
 function show(out: string) {
   const text = out.trimStart()
   if (!text.startsWith("deveco ")) {

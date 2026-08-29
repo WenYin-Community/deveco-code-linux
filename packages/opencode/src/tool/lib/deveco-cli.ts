@@ -122,19 +122,34 @@ export function isolatedShellPath(current: string | undefined, shimDir: string) 
   return filtered.join(sep)
 }
 
-function unixShimContents() {
+function unixArg(input: string) {
+  return `'${input.replaceAll("'", `'"'"'`)}'`
+}
+
+function windowsArg(input: string) {
+  return `"${input.replaceAll('"', '""')}"`
+}
+
+export function resolveDevecoCodeProxyLauncher(main = Bun.main, executable = process.execPath) {
+  // Bun exposes an embedded entry under /$bunfs in compiled binaries; the executable must re-enter itself directly.
+  if (main.startsWith("/$bunfs/")) return [executable]
+  if (exists(main) && /\.[cm]?[jt]s$/i.test(main)) {
+    return [executable, "run", "--conditions=browser", main]
+  }
+  return [executable]
+}
+
+function unixShimContents(launcher: readonly string[]) {
   return `#!/usr/bin/env sh
-DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
-CLI="$(cat "$DIR/${PATH_MARKER}")"
-exec node "$CLI" "$@"
+exec ${launcher.map(unixArg).join(" ")} __devecocli-proxy -- "$@"
 `
 }
 
-function windowsShimContents() {
-  return `@ECHO OFF\r\nSETLOCAL\r\nSET /P CLI=<"%~dp0${PATH_MARKER}"\r\nnode "%CLI%" %*\r\nENDLOCAL & exit /b %ERRORLEVEL%\r\n`
+function windowsShimContents(launcher: readonly string[]) {
+  return `@ECHO OFF\r\nSETLOCAL\r\n${launcher.map(windowsArg).join(" ")} __devecocli-proxy -- %*\r\nENDLOCAL & exit /b %ERRORLEVEL%\r\n`
 }
 
-async function shimNeedsUpdate(binDir: string, entry: string) {
+async function shimNeedsUpdate(binDir: string, entry: string, launcher: readonly string[]) {
   const marker = path.join(binDir, PATH_MARKER)
   try {
     const current = (await fs.readFile(marker, "utf8")).trim()
@@ -144,7 +159,7 @@ async function shimNeedsUpdate(binDir: string, entry: string) {
   }
 
   const shimPath = path.join(binDir, process.platform === "win32" ? `${SHIM_NAME}.cmd` : SHIM_NAME)
-  const expected = process.platform === "win32" ? windowsShimContents() : unixShimContents()
+  const expected = process.platform === "win32" ? windowsShimContents(launcher) : unixShimContents(launcher)
   try {
     const current = await fs.readFile(shimPath, "utf8")
     return current !== expected
@@ -156,20 +171,21 @@ async function shimNeedsUpdate(binDir: string, entry: string) {
 export async function ensureDevecoCliShim(binDir = Global.Path.bin): Promise<string | undefined> {
   const entry = resolveBundledDevecoCliEntry()
   if (!entry) return undefined
+  const launcher = resolveDevecoCodeProxyLauncher()
 
   await fs.mkdir(binDir, { recursive: true })
 
-  if (!(await shimNeedsUpdate(binDir, entry))) {
+  if (!(await shimNeedsUpdate(binDir, entry, launcher))) {
     return binDir
   }
 
   await fs.writeFile(path.join(binDir, PATH_MARKER), `${entry}\n`, "utf8")
 
   if (process.platform === "win32") {
-    await fs.writeFile(path.join(binDir, `${SHIM_NAME}.cmd`), windowsShimContents(), "utf8")
+    await fs.writeFile(path.join(binDir, `${SHIM_NAME}.cmd`), windowsShimContents(launcher), "utf8")
   } else {
     const shimPath = path.join(binDir, SHIM_NAME)
-    await fs.writeFile(shimPath, unixShimContents(), "utf8")
+    await fs.writeFile(shimPath, unixShimContents(launcher), "utf8")
     await fs.chmod(shimPath, 0o755)
   }
 
@@ -213,6 +229,17 @@ async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliS
   }
 
   return { cli: devecoCliShimPath(shimDir), env }
+}
+
+function devecoCliEnv(): DevecoCliShellEnv {
+  const pathValue = process.env.PATH || process.env.Path || ""
+  const env: DevecoCliShellEnv = {
+    PATH: pathValue,
+    DEVECO_CLI_AUTH_SOURCE: "deveco-code",
+    DEVECO_CODE_AUTH_DIR: Global.Path.config,
+  }
+  if (process.platform === "win32") env.Path = pathValue
+  return env
 }
 
 export function buildDevecoCliBuildArgs(input: {
@@ -295,16 +322,21 @@ export function buildDevecoCliLogArgs(input: {
 export async function runBundledDevecoCli(
   args: string[],
   cwd: string,
+  options: { skipVersionCheck?: boolean } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const prepared = await prepareBundledDevecoCli()
-  if (!prepared) {
+  const entry = resolveBundledDevecoCliEntry()
+  if (!entry) {
     throw new Error("Local deveco-cli dependency is not available. Reinstall deveco-code.")
   }
 
   const proc = Bun.spawn({
-    cmd: [prepared.cli, ...args],
+    cmd: ["node", entry, ...args],
     cwd,
-    env: { ...process.env, ...prepared.env },
+    env: {
+      ...process.env,
+      ...devecoCliEnv(),
+      ...(options.skipVersionCheck ? { DEVECO_CLI_SKIP_VERSION_CHECK: "1" } : {}),
+    },
     stdout: "pipe",
     stderr: "pipe",
   })
