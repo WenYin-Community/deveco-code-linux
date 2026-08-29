@@ -1,15 +1,21 @@
 #!/usr/bin/env bun
 /**
- * Download ripgrep to .build-cache/.
+ * Download vendored ripgrep binaries to .build-cache/.
  *
  * Run automatically via `bun install` (postinstall hook),
  * or manually: `bun run script/postinstall.ts`
  *
- * Idempotent — skips download if the binary already exists in .build-cache.
+ * Idempotent — skips download when the binary already exists in .build-cache.
+ *
+ * Ripgrep is fetched from the npm registry as the per-platform
+ * `@vscode/ripgrep-<platform>` packages, so it follows NPM_CONFIG_REGISTRY
+ * (CI sets the Huawei mirror, which is already reachable for `bun install`)
+ * and never depends on GitHub or a third-party GitHub proxy.
  *
  * Environment:
+ * - NPM_CONFIG_REGISTRY — npm registry base (default: https://registry.npmjs.org).
+ * - RIPGREP_NPM_VERSION — @vscode/ripgrep package version (default: 1.18.0, bundles rg 15.0.0).
  * - HTTPS_PROXY / HTTP_PROXY — when set, download uses `undici` + EnvHttpProxyAgent.
- * - RIPGREP_DOWNLOAD_BASE — override ripgrep release URL prefix (default: ghproxy.net mirror).
  */
 
 import fs from "fs"
@@ -24,19 +30,21 @@ const dir = path.resolve(__dirname, "..")
 
 // --- Config ---
 
-const RG_VERSION = "15.1.0"
-const DEFAULT_RG_BASE = `https://ghproxy.net/https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}`
-const RG_BASE = (process.env.RIPGREP_DOWNLOAD_BASE ?? DEFAULT_RG_BASE).replace(/\/$/, "")
+// @vscode/ripgrep publishes one npm package per platform; each tarball ships
+// `package/bin/rg` (or `package/bin/rg.exe` on Windows). 1.18.0 bundles ripgrep 15.0.0.
+const RG_NPM_VERSION = process.env.RIPGREP_NPM_VERSION || "1.18.0"
+const registryBase = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org").replace(/\/$/, "")
 
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
 
 const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
-const rgArchiveMap: Record<string, { archive: string; binary: string }> = {
-  "darwin-arm64": { archive: `ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz`, binary: "rg" },
-  "darwin-x64":   { archive: `ripgrep-${RG_VERSION}-x86_64-apple-darwin.tar.gz`, binary: "rg" },
-  "win32-x64":    { archive: `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`, binary: "rg.exe" },
+// npm package + binary name per platform. Tarball layout: package/bin/<binary>.
+const rgNpmMap: Record<string, { pkg: string; binary: string }> = {
+  "darwin-arm64": { pkg: "@vscode/ripgrep-darwin-arm64", binary: "rg" },
+  "darwin-x64":   { pkg: "@vscode/ripgrep-darwin-x64",   binary: "rg" },
+  "win32-x64":    { pkg: "@vscode/ripgrep-win32-x64",    binary: "rg.exe" },
 }
 
 // --- Download helpers ---
@@ -61,15 +69,22 @@ async function fetchWithProxy(url: string): Promise<Response> {
 async function downloadBuffer(url: string): Promise<Buffer> {
   const response = await fetchWithProxy(url)
   if (!response.ok) {
-    throw new Error(`Download failed: ${response.status} ${response.statusText}`)
+    throw new Error(`Download failed: ${response.status} ${response.statusText} (${url})`)
   }
   return Buffer.from(await response.arrayBuffer())
+}
+
+// Tarball URL for a scoped npm package, e.g.
+// <registry>/@vscode/ripgrep-darwin-arm64/-/ripgrep-darwin-arm64-1.18.0.tgz
+function npmTarballUrl(pkgName: string, version: string): string {
+  const unscoped = pkgName.replace(/^@[^/]+\//, "")
+  return `${registryBase}/${pkgName}/-/${unscoped}-${version}.tgz`
 }
 
 // --- Ripgrep ---
 
 async function downloadRipgrep(platform: string) {
-  const info = rgArchiveMap[platform]
+  const info = rgNpmMap[platform]
   if (!info) return
 
   const cachePath = path.join(rgCacheDir, platform, info.binary)
@@ -77,8 +92,8 @@ async function downloadRipgrep(platform: string) {
     return
   }
 
-  const url = `${RG_BASE}/${info.archive}`
-  console.log(`  Downloading rg for ${platform}...`)
+  const url = npmTarballUrl(info.pkg, RG_NPM_VERSION)
+  console.log(`  Downloading rg for ${platform} from npm...`)
 
   const cacheSubDir = path.join(rgCacheDir, platform)
   mkdirSync(cacheSubDir, { recursive: true })
@@ -86,51 +101,25 @@ async function downloadRipgrep(platform: string) {
   const buffer = await downloadBuffer(url)
   console.log(`  Downloaded ${Math.round(buffer.length / 1024)} KB`)
 
-  if (info.archive.endsWith(".tar.gz")) {
-    const tmpDir = path.join(cacheSubDir, ".tmp-download")
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-    mkdirSync(tmpDir, { recursive: true })
-    try {
-      const archivePath = path.join(tmpDir, info.archive)
-      writeFileSync(archivePath, buffer)
-      const result = spawnSync("tar", ["xzf", archivePath, "-C", tmpDir, "--strip-components=1"], { stdio: "pipe" })
-      if (result.status !== 0) {
-        throw new Error(`tar extract failed: ${result.stderr?.toString()}`)
-      }
-      renameSync(path.join(tmpDir, info.binary), cachePath)
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
+  const tmpDir = path.join(cacheSubDir, ".tmp-download")
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+  mkdirSync(tmpDir, { recursive: true })
+  try {
+    const archivePath = path.join(tmpDir, "ripgrep.tgz")
+    writeFileSync(archivePath, buffer)
+    // npm tarballs are gzip+tar and always lay out the binary at package/bin/<binary>.
+    const result = spawnSync("tar", ["xzf", archivePath, "-C", tmpDir], { stdio: "pipe" })
+    if (result.status !== 0) {
+      throw new Error(`tar extract failed: ${result.stderr?.toString()}`)
     }
-  } else {
-    // zip — use system unzip
-    const tmpDir = path.join(cacheSubDir, ".tmp-download")
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-    mkdirSync(tmpDir, { recursive: true })
-    try {
-      const archivePath = path.join(tmpDir, info.archive)
-      writeFileSync(archivePath, buffer)
-      const result = spawnSync("unzip", ["-o", archivePath, "-d", tmpDir], { stdio: "pipe" })
-      if (result.status !== 0) {
-        throw new Error(`unzip failed: ${result.stderr?.toString()}`)
-      }
-      const findBinary = (d: string): string | null => {
-        for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-          const full = path.join(d, entry.name)
-          if (entry.isDirectory()) {
-            const found = findBinary(full)
-            if (found) return found
-          } else if (entry.name === info.binary) {
-            return full
-          }
-        }
-        return null
-      }
-      const binaryPath = findBinary(tmpDir)
-      if (!binaryPath) throw new Error(`Binary ${info.binary} not found in zip`)
-      renameSync(binaryPath, cachePath)
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
+    const extracted = path.join(tmpDir, "package", "bin", info.binary)
+    if (!fs.existsSync(extracted)) {
+      throw new Error(`Binary ${info.binary} not found in npm tarball`)
     }
+    fs.rmSync(cachePath, { force: true })
+    renameSync(extracted, cachePath)
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
   }
 
   if (!platform.startsWith("win32")) {
@@ -143,7 +132,7 @@ async function downloadRipgrep(platform: string) {
 
 const platforms = Array.from(supportedPlatforms)
 
-console.log(`Downloading vendored binaries... (${platforms.join(", ")})`)
+console.log(`Downloading vendored binaries from npm... (${platforms.join(", ")})`)
 for (const platform of platforms) {
   await downloadRipgrep(platform).catch((e) => console.log(`  Failed to download rg for ${platform}: ${e.message}`))
 }

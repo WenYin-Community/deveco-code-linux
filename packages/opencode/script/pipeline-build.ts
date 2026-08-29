@@ -177,44 +177,46 @@ console.log("\n[4/5] Installing dependencies...")
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
 
-const RG_VERSION = "15.1.0"
+// @vscode/ripgrep publishes one npm package per platform; each tarball ships
+// package/bin/rg (or package/bin/rg.exe on Windows). 1.18.0 bundles ripgrep 15.0.0.
+const RG_NPM_VERSION = process.env.RIPGREP_NPM_VERSION || "1.18.0"
+const npmRegistry = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org").replace(/\/$/, "")
 const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
-const rgArchiveMap: Record<string, { archive: string; binary: string }> = {
-  "darwin-arm64": { archive: `ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz`, binary: "rg" },
-  "darwin-x64":   { archive: `ripgrep-${RG_VERSION}-x86_64-apple-darwin.tar.gz`, binary: "rg" },
-  "win32-x64":    { archive: `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`, binary: "rg.exe" },
+const rgNpmMap: Record<string, { pkg: string; binary: string }> = {
+  "darwin-arm64": { pkg: "@vscode/ripgrep-darwin-arm64", binary: "rg" },
+  "darwin-x64":   { pkg: "@vscode/ripgrep-darwin-x64",   binary: "rg" },
+  "win32-x64":    { pkg: "@vscode/ripgrep-win32-x64",    binary: "rg.exe" },
 }
 
 if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
 
-  // Download ripgrep for each needed platform
+  // Download ripgrep for each needed platform from npm (follows NPM_CONFIG_REGISTRY,
+  // e.g. the Huawei mirror, instead of GitHub / a third-party proxy).
   const neededPlatforms = new Set(targets.map((t) => `${t.os}-${t.arch}`))
-  const rgBase = process.env.RIPGREP_MIRROR_BASE || `https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}`
 
   for (const platform of neededPlatforms) {
     if (!supportedPlatforms.has(platform)) continue
-    const info = rgArchiveMap[platform]
+    const info = rgNpmMap[platform]
     if (!info) continue
     const cachePath = path.join(rgCacheDir, platform, info.binary)
     if (fs.existsSync(cachePath)) {
       console.log(`  rg for ${platform} already cached`)
       continue
     }
-    const url = `${rgBase}/${info.archive}`
-    console.log(`  Downloading rg for ${platform}...`)
+    const unscoped = info.pkg.replace(/^@[^/]+\//, "")
+    const url = `${npmRegistry}/${info.pkg}/-/${unscoped}-${RG_NPM_VERSION}.tgz`
+    console.log(`  Downloading rg for ${platform} from npm...`)
     const cacheSubDir = path.join(rgCacheDir, platform)
     await $`mkdir -p ${cacheSubDir}`
-    const archivePath = path.join(rgCacheDir, info.archive)
-    await $`curl -sSfL --http1.1 --retry 3 --retry-delay 5 -o ${archivePath} ${url}`
-    if (info.archive.endsWith(".tar.gz")) {
-      await $`tar -xzf ${archivePath} -C ${cacheSubDir} --strip-components=1`
-    } else {
-      await $`unzip -o -j ${archivePath} "*/${info.binary}" -d ${cacheSubDir}`
-    }
-    await $`rm -f ${archivePath}`
+    const archivePath = path.join(rgCacheDir, `${unscoped}.tgz`)
+    await $`curl -sSfL --retry 3 --retry-delay 5 -o ${archivePath} ${url}`
+    // npm tarballs are gzip+tar; the binary lives at package/bin/<binary>.
+    await $`tar -xzf ${archivePath} -C ${cacheSubDir}`
+    await $`mv -f ${path.join(cacheSubDir, "package", "bin", info.binary)} ${cachePath}`
+    await $`rm -rf ${path.join(cacheSubDir, "package")} ${archivePath}`
     if (!platform.startsWith("win32")) {
       await fs.promises.chmod(cachePath, 0o755)
     }
@@ -305,7 +307,7 @@ for (const item of targets) {
 
   // Copy ripgrep from cache
   const rgKey = `${item.os}-${item.arch}`
-  const rgInfo = rgArchiveMap[rgKey]
+  const rgInfo = rgNpmMap[rgKey]
   if (rgInfo) {
     const cachePath = path.join(rgCacheDir, rgKey, rgInfo.binary)
     if (fs.existsSync(cachePath)) {
