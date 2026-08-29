@@ -25,16 +25,6 @@ function parseEvents(stdout: string): Array<Record<string, unknown>> {
     })
 }
 
-function extractProjectInfo(output: string): Record<string, unknown> | undefined {
-  const match = output.match(/\{[\s\S]*\}/)
-  if (!match) return undefined
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-}
-
 const testCase: LiveTestCase = {
   id: CASE_ID,
   title: "参数完整，无自定义apiLevel",
@@ -44,20 +34,19 @@ const testCase: LiveTestCase = {
   stallMs: 120_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证通过自然语言指令创建鸿蒙工程时，参数完整且不指定自定义 apiLevel，系统能自动检测 SDK apiLevel，成功创建工程、输出完整信息、生成 build-profile.json5 并切换 cwd。",
+    "验证自然语言创建工程时 Agent 直接调用 devecocli create，不指定自定义 API Level，并在成功后切换 Session cwd。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送创建 HelloWorld 鸿蒙应用的 prompt（不指定 apiLevel）。",
     "解析 stdout 中的 JSON line events（容忍因超时截断的末尾行）。",
-    "查找执行 copy-template 脚本的 bash 工具事件，校验命令中不含 --api-level。",
-    "解析 copy-template 输出，校验包含完整工程信息（projectRoot、appName、bundleName、apiLevel、source 等）。",
-    "校验 source 为 sdk_pkg（自动检测），verified 为 true。",
+    "查找执行 devecocli create 的 bash 工具事件，校验命令中不含 --api-level。",
+    "解析 CLI 输出中的 Project root。",
     "校验 build-profile.json5 文件存在于 projectRoot。",
-    "校验已切换 cwd（copy-template 输出包含 auto-switched 信息或存在 switch_cwd 工具事件）。",
+    "校验已切换 cwd（Shell 输出包含 auto-switched 信息或存在 switch_cwd 工具事件）。",
   ],
   expected: [
-    "成功创建工程，copy-template 脚本执行成功且 verified 为 true。",
-    "输出完整信息，包含 projectRoot、appName、bundleName、apiLevel、source 等字段。",
+    "成功通过 devecocli create 创建工程。",
+    "输出包含 Project root。",
     "build-profile.json5 文件存在于工程目录。",
     "已切换 cwd，输出包含 Session directory auto-switched 或存在 switch_cwd 工具事件。",
   ],
@@ -80,7 +69,7 @@ const testCase: LiveTestCase = {
       const events = parseEvents(result.stdout)
       await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((event) => JSON.stringify(event)).join("\n"))
 
-      // Find the bash event that ran copy-template.mjs with completed status
+      // Find the completed bash event that ran devecocli create.
       const copyTemplateEvent = events.find((event) => {
         if (event.type !== "tool_use") return false
         const part = partOf(event)
@@ -91,11 +80,11 @@ const testCase: LiveTestCase = {
         if (stateRecord.status !== "completed") return false
         const input = stateRecord.input as Record<string, unknown> | undefined
         if (!input || typeof input.command !== "string") return false
-        return input.command.includes("copy-template")
+        return /(?:^|\s)devecocli\s+create(?:\s|$)/.test(input.command)
       })
 
       if (!copyTemplateEvent) {
-        throw new Error("No completed copy-template bash tool event found - project was not created successfully")
+        throw new Error("No completed devecocli create bash tool event found")
       }
 
       const copyTemplateState = partOf(copyTemplateEvent)!.state as Record<string, unknown>
@@ -103,36 +92,14 @@ const testCase: LiveTestCase = {
 
       // Verify no custom apiLevel was passed (auto-detection expected)
       if (command.includes("--api-level")) {
-        throw new Error("copy-template command contains --api-level, expected auto-detection without custom apiLevel")
+        throw new Error("devecocli create command contains --api-level, expected CLI default selection")
       }
 
-      // Parse the copy-template output to get project info
       const output = copyTemplateState.output as string
-      const projectInfo = extractProjectInfo(output)
-
-      if (!projectInfo) {
-        throw new Error("Failed to parse copy-template output for project info")
-      }
-
-      // Verify complete info output (all required fields present)
-      const requiredFields = ["projectRoot", "appName", "bundleName", "apiLevel", "source"]
-      const missingFields = requiredFields.filter((field) => !(field in projectInfo))
-      if (missingFields.length > 0) {
-        throw new Error(`copy-template output missing fields: ${missingFields.join(", ")}`)
-      }
-
-      // Verify auto-detected apiLevel (source = sdk_pkg, not user_input)
-      if (projectInfo.source !== "sdk_pkg") {
-        throw new Error(`Expected source=sdk_pkg (auto-detected), got source=${projectInfo.source}`)
-      }
-
-      // Verify the script confirmed build-profile.json5 exists
-      if (projectInfo.verified !== true) {
-        throw new Error("copy-template output indicates project was not verified (verified !== true)")
-      }
+      const projectRoot = output.match(/Project root:\s*(.+)/)?.[1]?.trim()
+      if (!projectRoot) throw new Error(`devecocli create output is missing Project root:\n${output}`)
 
       // Verify build-profile.json5 exists on disk
-      const projectRoot = projectInfo.projectRoot as string
       const buildProfilePath = path.join(projectRoot, "build-profile.json5")
       try {
         const stat = await fs.stat(buildProfilePath)
@@ -175,9 +142,6 @@ const testCase: LiveTestCase = {
           commandDurationMs: result.durationMs,
           projectRoot,
           buildProfilePath,
-          apiLevel: projectInfo.apiLevel,
-          sdkVersion: projectInfo.sdkVersion,
-          source: projectInfo.source,
           autoSwitched,
           hasSwitchCwdEvent,
         },

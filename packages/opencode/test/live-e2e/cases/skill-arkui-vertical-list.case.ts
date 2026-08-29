@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 import { execFileSync } from "node:child_process"
+import { opencodeRoot } from "../env"
 
 const CASE_ID = "SKILL_ARKUI_VERTICAL_LIST"
 
@@ -10,11 +11,9 @@ const SKILL_NAME = "arkui-knowledge"
 const OPENCODE_SKILLS_DIR = path.join(os.homedir(), ".config", "opencode", "skills", SKILL_NAME)
 const DEVECO_SKILLS_DIR = path.join(os.homedir(), ".local", "share", "deveco", "skills", SKILL_NAME)
 
-// Pre-create project constants: the test scaffolds the ArkTS project directly
-// via copy-template.mjs so the model can focus on writing UI code instead of
-// spending ~40s exploring skill paths to locate the script.
-const DEVECO_DATA_SKILLS_DIR = path.join(os.homedir(), ".local", "share", "deveco", "skills")
-const COPY_TEMPLATE_SCRIPT = path.join(DEVECO_DATA_SKILLS_DIR, "deveco-create-project", "scripts", "copy-template.mjs")
+// Pre-create the ArkTS project directly with the bundled CLI so the model can
+// focus on writing UI code.
+const DEVECO_CLI_ENTRY = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
 const APP_NAME = "UserList"
 const BUNDLE_NAME = "com.example.userlist"
 
@@ -79,22 +78,14 @@ async function cleanupArkuiSkill(copied: boolean) {
   }
 }
 
-// Pre-create the ArkTS project by calling copy-template.mjs directly, so the
-// model starts in a ready-made project and can focus on UI implementation
-// without exploring skill paths to locate the scaffolding script.
 async function preCreateProject(workspace: string): Promise<string> {
-  const exists = await fs.stat(COPY_TEMPLATE_SCRIPT).then(() => true).catch(() => false)
-  if (!exists) {
-    throw new Error(
-      `copy-template.mjs not found at ${COPY_TEMPLATE_SCRIPT}. Ensure deveco-create-project skill is installed.`,
-    )
-  }
-  execFileSync("node", [COPY_TEMPLATE_SCRIPT, "--project-path", workspace, "--app-name", APP_NAME, "--bundle-name", BUNDLE_NAME], {
+  const projectRoot = path.join(workspace, APP_NAME)
+  execFileSync(process.execPath, [DEVECO_CLI_ENTRY, "create", "--project-path", projectRoot, "--app-name", APP_NAME, "--bundle-name", BUNDLE_NAME], {
     timeout: 60_000,
     stdio: "pipe",
     encoding: "utf-8",
   })
-  return path.join(workspace, APP_NAME)
+  return projectRoot
 }
 
 const testCase: LiveTestCase = {
@@ -108,7 +99,7 @@ const testCase: LiveTestCase = {
     "验证在预创建的 ArkTS 工程中输入垂直列表布局指令（如用户列表页面，包含头像、昵称和状态，垂直排列），AI 能自动加载 arkui-knowledge skill 并返回使用 List 或 ForEach+Column 实现垂直方向排列的代码。工程由测试直接预创建，避免模型浪费时间探索 skill 路径。",
   steps: [
     "确保 arkui-knowledge skill 在 deveco skills 数据目录可用（从 opencode 配置目录复制）。",
-    "创建临时工作目录，并通过 copy-template.mjs 预创建 ArkTS 工程。",
+    "创建临时工作目录，并通过 bundled devecocli create 预创建 ArkTS 工程。",
     "执行 deveco run --format json --dir <projectPath>，发送垂直列表布局实现请求。",
     "解析 stdout 中的 JSON line events。",
     "校验 text event 中包含 List 或 ForEach+Column 垂直布局组件，以及 Image 和 Text 内容组件。",
@@ -122,12 +113,12 @@ const testCase: LiveTestCase = {
   code: "packages/opencode/test/live-e2e/cases/skill-arkui-vertical-list.case.ts",
   parallel: false,
   cleanup:
-    "用例创建临时工作目录并通过 copy-template.mjs 预创建工程，可能复制 arkui-knowledge skill 到 deveco 数据目录；执行结束后删除临时目录和复制的 skill。真实 auth/config 只读不清理。",
+    "用例创建临时工作目录并通过 bundled devecocli create 预创建工程，可能复制 arkui-knowledge skill 到 deveco 数据目录；执行结束后删除临时目录和复制的 skill。真实 auth/config 只读不清理。",
   async run(ctx) {
     const skillCopied = await ensureArkuiSkillAvailable()
     const workspace = await ctx.createTempWorkspace("skill-arkui-vertical-list-")
     // Pre-create the ArkTS project so the model can focus on UI implementation
-    // without exploring skill paths to locate copy-template.mjs.
+    // without spending a model turn on project scaffolding.
     const projectPath = await preCreateProject(workspace)
     const sentMessage = "在当前 ArkTS 工程中，修改 Index.ets 实现一个用户列表页面，包含头像、昵称和状态，垂直排列"
 

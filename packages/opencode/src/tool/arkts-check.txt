@@ -3,8 +3,12 @@ Run ArkTS strict-mode static syntax/type check on .ets files.
 Detects compiler-level violations such as `arkts-no-standalone-this`, `arkts-no-obj-literals-as-types`, and other ArkTS spec issues. Returns structured diagnostics by file, line, column, and rule.
 
 Call this tool:
-- After writing or editing any `.ets` file, before running `build_project`. Catches most ArkTS errors faster than a full build.
+- Once after finishing a round of edits, immediately before `devecocli build`. Catches most ArkTS errors faster than a full build.
 - When debugging compilation problems isolated to a specific page or component.
+
+Do NOT call this tool again between a failed `devecocli build` and its retry — fix the reported errors and re-run `devecocli build` directly.
+
+A clean result here does NOT mean the work is verified: this checker does not produce build artifacts. Always run `devecocli build` afterwards.
 
 Do NOT call this tool:
 - For non-`.ets` source files (use `lsp` or read the build output instead).

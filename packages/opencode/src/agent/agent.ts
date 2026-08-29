@@ -180,9 +180,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 todowrite: "allow",
-                build_project: "allow",
-                start_app: "allow",
-                hdc_log: "allow",
                 debug_exit: "allow",
               }),
               user,
@@ -222,8 +219,6 @@ export const layer = Layer.effect(
               defaults,
               Permission.fromConfig({
                 question: "allow",
-                build_project: "deny",
-                start_app: "deny",
               }),
               user,
             ),
@@ -266,9 +261,6 @@ export const layer = Layer.effect(
                   general: "deny",
                 },
                 bash: "deny",
-                build_project: "deny",
-                start_app: "deny",
-                hdc_log: "deny",
                 switch_cwd: "deny",
                 external_directory: {
                   [path.join(Global.Path.data, "plans", "*")]: "allow",

@@ -1,17 +1,8 @@
 import type { LiveTestCase } from "../types"
-import { opencodeRoot } from "../env"
+import { createHarmonyProject } from "../env"
 import fs from "fs/promises"
-import path from "path"
 
 const CASE_ID = "PLAN_TO_BUILD"
-
-const TEMPLATE_PROJECT = path.join(
-  opencodeRoot,
-  "resources",
-  "skills",
-  "deveco-create-project",
-  "application",
-)
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
@@ -43,14 +34,13 @@ const testCase: LiveTestCase = {
     const workspace = await ctx.createTempWorkspace("plan-to-build-")
 
     try {
-      // Copy template HarmonyOS project to workspace
-      await fs.cp(TEMPLATE_PROJECT, workspace, { recursive: true })
+      const projectRoot = await createHarmonyProject(workspace, "PlanBuild", "com.example.planbuild")
 
       // ========================================================
       // Step 1: Plan mode — create a refactoring plan
       // ========================================================
       const planMessage = "请帮我制定一下重构计划"
-      const planArgs = ["run", "--format", "json", "--dir", workspace, "--agent", "plan", planMessage]
+      const planArgs = ["run", "--format", "json", "--dir", projectRoot, "--agent", "plan", planMessage]
       const planResult = await ctx.runDeveco(planArgs, { timeoutMs: 180_000 })
 
       await ctx.writeArtifact(CASE_ID, "step1-stdout.log", planResult.stdout)

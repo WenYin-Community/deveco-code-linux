@@ -4,6 +4,7 @@ import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import os from "os"
 import path from "path"
+import fs from "fs/promises"
 import { Config } from "@/config/config"
 import { Shell } from "@opencode-ai/core/shell"
 import {
@@ -24,6 +25,7 @@ import { testEffect } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceStore } from "@/project/instance-store"
+import { clearSessionCwd, getSessionCwd, setSessionCwd } from "@/tool/lib/session-cwd"
 
 const shellLayer = Layer.mergeAll(
   CrossSpawnSpawner.defaultLayer,
@@ -820,6 +822,72 @@ describe("tool.shell permissions", () => {
           expect(extDirReq!.patterns).toContain(glob(path.join(os.tmpdir(), "*")))
         }),
       )
+    }),
+  )
+
+  it.live("uses session cwd by default and lets explicit workdir override it", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const sessionDir = path.join(tmp, "session")
+      const explicitDir = path.join(tmp, "explicit")
+      yield* Effect.promise(() => Promise.all([fs.mkdir(sessionDir), fs.mkdir(explicitDir)]))
+      const next = { ...ctx, sessionID: SessionID.make("ses_shell_cwd") }
+      setSessionCwd(next.sessionID, sessionDir)
+
+      try {
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const command = `${bin} -e ${evalarg("console.log(process.cwd())")}`
+            expect((yield* run({ command, description: "Print session cwd" }, next)).output).toContain(sessionDir)
+            expect((yield* run({ command, workdir: explicitDir, description: "Print explicit cwd" }, next)).output).toContain(explicitDir)
+          }),
+        )
+      } finally {
+        clearSessionCwd(next.sessionID)
+      }
+    }),
+  )
+
+  it.live("switches session cwd only for a successful devecocli create event", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const projectRoot = path.join(tmp, "created project")
+      yield* Effect.promise(() => fs.mkdir(projectRoot))
+      const next = { ...ctx, sessionID: SessionID.make("ses_shell_create") }
+
+      try {
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const event = JSON.stringify({ command: "create", exitCode: 0, durationMs: 1, projectRoot })
+            const code = `await Bun.write(process.env.DEVECO_CODE_CLI_EVENT_FILE, ${JSON.stringify(`${event}\n`)}); console.log(${JSON.stringify(`Project root: ${projectRoot}`)})`
+            const result = yield* run({ command: `${bin} -e ${evalarg(code)}`, description: "Simulate CLI create" }, next)
+            expect(result.output).toContain("Session directory auto-switched")
+            expect(getSessionCwd(next.sessionID)).toBe(projectRoot)
+          }),
+        )
+      } finally {
+        clearSessionCwd(next.sessionID)
+      }
+    }),
+  )
+
+  it.live("does not switch session cwd from unrelated Project root output", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const next = { ...ctx, sessionID: SessionID.make("ses_shell_fake_root") }
+      yield* runIn(
+        tmp,
+        run(
+          {
+            command: `${bin} -e ${evalarg(`console.log(${JSON.stringify(`Project root: ${path.join(tmp, "fake")}`)})`)}`,
+            description: "Print unrelated project root",
+          },
+          next,
+        ),
+      )
+      expect(getSessionCwd(next.sessionID)).toBeUndefined()
     }),
   )
 

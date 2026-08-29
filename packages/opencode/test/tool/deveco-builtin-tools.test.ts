@@ -11,7 +11,7 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
 
-const DEVECO_REGISTRY_TOOL_NAMES = ["hdc_log", "switch_cwd", "build_project", "start_app"] as const
+const REMOVED_DEVECO_TOOL_NAMES = ["hdc_log", "build_project", "start_app"] as const
 
 const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".deveco")])),
@@ -37,9 +37,8 @@ describe("deveco builtin tools", () => {
         const registry = yield* ToolRegistry.Service
         const ids = yield* registry.ids()
 
-        for (const name of DEVECO_REGISTRY_TOOL_NAMES) {
-          expect(ids).toContain(name)
-        }
+        expect(ids).toContain("switch_cwd")
+        for (const name of REMOVED_DEVECO_TOOL_NAMES) expect(ids).not.toContain(name)
         expect(ids).toContain("skill")
       }),
     30_000,

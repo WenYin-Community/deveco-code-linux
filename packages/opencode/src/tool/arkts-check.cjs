@@ -208,7 +208,7 @@ function validateModelVersion(projectPath) {
 // wrongly reports `Cannot find name '$...'`. Two legal forms trigger this:
 //   A) `$$this.x` two-way binding (e.g. bindSheet($$this.foo), Refresh({ refreshing: $$this.bar }))
 //   B) `$varName` @Link / @Builder argument passing (e.g. Child({ items: $items }))
-// build_project (the real compiler) accepts both. We silently drop these
+// devecocli build (the real compiler) accepts both. We silently drop these
 // false positives here. Rule B only fires when `varName` is actually declared
 // as a state-decorated field in the same source file, so genuinely-undefined
 // `$foo` references are still reported.

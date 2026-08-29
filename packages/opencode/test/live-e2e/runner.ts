@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { cases } from "./registry"
-import { collectEnvironment, ensureBundledSkillScriptsAvailable, makeContext, resetReportDir, latestReportDir } from "./env"
+import { collectEnvironment, makeContext, resetReportDir, latestReportDir } from "./env"
 import { writeReports, writeJUnitXml } from "./report"
 import type { ExecutedCase, LiveTestCase, SuiteReport } from "./types"
 
@@ -230,7 +230,6 @@ async function main() {
   }
 
   await resetReportDir()
-  const syncedSkills = await ensureBundledSkillScriptsAvailable()
   const suiteStart = Date.now()
   const startedAt = new Date().toISOString()
   const environment = await collectEnvironment()
@@ -241,7 +240,6 @@ async function main() {
   console.log(`  DevEco home: ${environment.deveco.home ?? "(not found)"}`)
   console.log(`  Emulators:   ${environment.deveco.emulators.length}`)
   console.log(`  Auth:        ${environment.auth.hasDevecoOAuth ? "OK" : "MISSING"}`)
-  if (syncedSkills) console.log("  Synced deveco-create-project skill scripts to config directory")
   if (!environment.liveEnabled) console.log("  WARNING: DEVECO_LIVE_LLM=1 not set — real-llm cases will be skipped")
   if (!environment.auth.hasDevecoOAuth) console.log("  WARNING: DevEco OAuth not found — huawei-auth cases will be skipped")
   console.log("")

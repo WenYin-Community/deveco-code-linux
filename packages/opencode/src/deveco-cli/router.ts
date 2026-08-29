@@ -4,6 +4,7 @@ import stripAnsi from "strip-ansi"
 import { Global } from "@opencode-ai/core/global"
 import { formatBuildProjectOutput, TRUNCATE_NOTICE } from "@/tool/lib/build-project-output"
 import { runBundledDevecoCli } from "@/tool/lib/deveco-cli"
+import { findDevEcoHome, hdcPath } from "@/tool/lib/env"
 
 export type CliResult = {
   stdout: string
@@ -12,6 +13,15 @@ export type CliResult = {
 }
 
 export type CliRunner = (args: string[], cwd: string, options?: { skipVersionCheck?: boolean }) => Promise<CliResult>
+
+export type DevecoCliEvent = {
+  command: "build" | "create"
+  exitCode: number
+  durationMs: number
+  projectRoot?: string
+}
+
+export const DEVECO_CLI_EVENT_FILE = "DEVECO_CODE_CLI_EVENT_FILE"
 
 export const MAX_DOCS_OUTPUT_LENGTH = 5_000
 
@@ -38,7 +48,23 @@ export async function executeDevecoCliProxy(
   args: string[],
   cwd: string,
   runner: CliRunner = runBundledDevecoCli,
+  dependencies: {
+    findHome?: () => Promise<string | undefined>
+    runCommand?: (cmd: string[]) => Promise<CliResult>
+  } = {},
 ): Promise<CliResult & { fullOutput?: string }> {
+  if (args[0] === "log" && args[1] === "clear") {
+    return executeLogClear(args.slice(2), dependencies)
+  }
+  if (args[0] === "log" && !args.some((arg) => arg === "--help" || arg === "-h")) {
+    const invalid = validateLogTail(args.slice(1))
+    if (invalid) return invalid
+    args = enhanceLogArgs(args)
+  }
+  if (args[0] === "create" && !args.some((arg) => arg === "--help" || arg === "-h")) {
+    const conflict = await createConflict(args.slice(1), cwd)
+    if (conflict) return conflict
+  }
   if (args[0] === "docs" && (args[1] === "search" || args[1] === "read")) {
     return truncateDocsOutput(await runner(args, cwd))
   }
@@ -49,6 +75,36 @@ export async function executeDevecoCliProxy(
     return executeRun(args, cwd, runner)
   }
   return runner(args, cwd)
+}
+
+function validateLogTail(args: string[]): CliResult | undefined {
+  const values = args.flatMap((arg, index) => {
+    if (arg === "--tail") return [args[index + 1]]
+    if (arg.startsWith("--tail=")) return [arg.slice("--tail=".length)]
+    return []
+  })
+  if (values.length === 0) return
+  if (values.every((value) => /^[1-9]\d*$/.test(value ?? "") && Number(value) <= 5_000)) return
+  return {
+    stdout: "",
+    stderr: "`tail` must be an integer between 1 and 5000.\n",
+    exitCode: 1,
+  }
+}
+
+// Default keyword applied when `devecocli log` is called without an explicit
+// `--keyword`. App code that instruments debug logs with this prefix is the
+// signal this filter captures; without it a bare `log` would dump the whole
+// hilog buffer. An explicit `--keyword` (space or `=` form) overrides it.
+export const DEFAULT_LOG_KEYWORD = "[DEVECO_DEBUG]"
+
+function hasKeyword(args: string[]) {
+  return args.some((arg) => arg === "--keyword" || arg.startsWith("--keyword="))
+}
+
+function enhanceLogArgs(args: string[]) {
+  if (hasKeyword(args)) return args
+  return [...args, "--keyword", DEFAULT_LOG_KEYWORD]
 }
 
 function truncateDocsOutput(result: CliResult) {
@@ -63,11 +119,112 @@ function truncateDocsOutput(result: CliResult) {
 }
 
 export async function runDevecoCliProxy(args: string[], cwd: string) {
+  const started = Date.now()
   const result = await executeDevecoCliProxy(args, cwd)
+  await writeCliEvent(args, result, Date.now() - started).catch(() => undefined)
   const output = result.fullOutput ? await persistFullOutput(result) : result.stdout
   if (output) process.stdout.write(output.endsWith("\n") ? output : `${output}\n`)
   if (result.stderr) process.stderr.write(result.stderr.endsWith("\n") ? result.stderr : `${result.stderr}\n`)
   return result.exitCode
+}
+
+async function executeLogClear(
+  args: string[],
+  dependencies: {
+    findHome?: () => Promise<string | undefined>
+    runCommand?: (cmd: string[]) => Promise<CliResult>
+  },
+): Promise<CliResult> {
+  const invalid = args.filter((arg, index) => {
+    if (arg === "--device") return false
+    if (index > 0 && args[index - 1] === "--device") return false
+    return !arg.startsWith("--device=")
+  })
+  if (invalid.length > 0 || (args.includes("--device") && !optionValue(args, "--device"))) {
+    return {
+      stdout: "",
+      stderr: "Usage: devecocli log clear [--device <name-or-serial>]\n",
+      exitCode: 1,
+    }
+  }
+
+  const home = await (dependencies.findHome ?? findDevEcoHome)()
+  if (!home) {
+    return {
+      stdout: "",
+      stderr: "DevEco Studio path not found. Set DEVECO_HOME and retry.\n",
+      exitCode: 1,
+    }
+  }
+  const hdc = hdcPath(home)
+  if (!(await Bun.file(hdc).exists())) {
+    return { stdout: "", stderr: `hdc not found: ${hdc}\n`, exitCode: 1 }
+  }
+
+  const device = optionValue(args, "--device")
+  const result = await (dependencies.runCommand ?? runCommand)([
+    hdc,
+    ...(device ? ["-t", device] : []),
+    "shell",
+    "hilog",
+    "-r",
+  ])
+  if (result.exitCode !== 0) return result
+  return {
+    stdout: `Device log buffer cleared.\ndevice: ${device ?? "default"}\n`,
+    stderr: result.stderr,
+    exitCode: 0,
+  }
+}
+
+async function createConflict(args: string[], cwd: string): Promise<CliResult | undefined> {
+  const appName = optionValue(args, "--app-name")
+  if (!appName) return
+  const target = path.resolve(cwd, optionValue(args, "--project-path") ?? appName)
+  const stat = await fs.stat(target).catch(() => undefined)
+  if (!stat?.isDirectory()) return
+  if ((await fs.readdir(target)).length === 0) return
+  return {
+    stdout: "",
+    stderr: `${JSON.stringify({
+      code: "PROJECT_EXISTS",
+      message: `Target "${target}" already exists and is not empty.`,
+      hint: "Ask the user whether to overwrite, rename, or cancel. Never overwrite without explicit confirmation.",
+      details: { targetRoot: target },
+    }, null, 2)}\n`,
+    exitCode: 2,
+  }
+}
+
+async function runCommand(cmd: string[]): Promise<CliResult> {
+  const proc = Bun.spawn({ cmd, stdout: "pipe", stderr: "pipe" })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    proc.stdout ? Bun.readableStreamToText(proc.stdout) : Promise.resolve(""),
+    proc.stderr ? Bun.readableStreamToText(proc.stderr) : Promise.resolve(""),
+    proc.exited,
+  ])
+  return { stdout, stderr, exitCode }
+}
+
+async function writeCliEvent(args: string[], result: CliResult, durationMs: number) {
+  const file = process.env[DEVECO_CLI_EVENT_FILE]
+  if (!file || (args[0] !== "build" && args[0] !== "create")) return
+  const projectRoot = args[0] === "create" && result.exitCode === 0 ? readProjectRoot(result.stdout) : undefined
+  const event: DevecoCliEvent = {
+    command: args[0],
+    exitCode: result.exitCode,
+    durationMs,
+    ...(projectRoot ? { projectRoot } : {}),
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.appendFile(file, `${JSON.stringify(event)}\n`, "utf8")
+}
+
+function readProjectRoot(output: string) {
+  return stripAnsi(output)
+    .split(/\r?\n/)
+    .map((line) => line.match(/^Project root:\s*(.+)\s*$/)?.[1]?.trim())
+    .find((item): item is string => Boolean(item))
 }
 
 async function executeBuild(args: string[], cwd: string, runner: CliRunner) {
@@ -91,23 +248,34 @@ async function executeRun(args: string[], cwd: string, runner: CliRunner): Promi
   if (target && active.some((device) => matches(device, target))) return runner(args, cwd)
 
   const emulatorList = await runner(["emulator", "list", "--format", "json"], cwd, { skipVersionCheck: true })
-  if (emulatorList.exitCode !== 0) return target ? runner(args, cwd) : selectionRequired(active)
+  if (emulatorList.exitCode !== 0) return runner(args, cwd)
 
   const emulators = parseEmulators(emulatorList.stdout)
   if (!emulators) return runner(args, cwd)
-  if (!target) return selectionRequired(mergeDevices(active, emulators))
+  if (!target) {
+    const devices = mergeDevices(active, emulators)
+    if (devices.length !== 1) return selectionRequired(devices)
+    const device = devices[0]
+    const runArgs = [...args, "--device", device.serial ?? device.name]
+    if (device.status === "running") return runner(runArgs, cwd)
+    return startEmulatorAndRun(device, runArgs, cwd, runner)
+  }
 
   const emulator = emulators.find((device) => matches(device, target))
   if (!emulator) return runner(args, cwd)
   if (emulator.status === "running") return runner(args, cwd)
 
-  const start = await runner(["emulator", "start", emulator.name], cwd, { skipVersionCheck: true })
+  return startEmulatorAndRun(emulator, args, cwd, runner)
+}
+
+async function startEmulatorAndRun(device: Device, args: string[], cwd: string, runner: CliRunner) {
+  const start = await runner(["emulator", "start", device.name], cwd, { skipVersionCheck: true })
   if (start.exitCode !== 0) {
-    return { stdout: commandOutput(["emulator", "start", emulator.name], start), stderr: "", exitCode: start.exitCode }
+    return { stdout: commandOutput(["emulator", "start", device.name], start), stderr: "", exitCode: start.exitCode }
   }
   const run = await runner(args, cwd)
   return {
-    stdout: [commandOutput(["emulator", "start", emulator.name], start), commandOutput(args, run)]
+    stdout: [commandOutput(["emulator", "start", device.name], start), commandOutput(args, run)]
       .filter(Boolean)
       .join("\n\n"),
     stderr: "",

@@ -26,15 +26,15 @@ export interface AnalyticsEnvironmentFields {
   os_version: string
 }
 
-// Build result tracking for build_project tool calls.
+// Build result tracking for devecocli build executions.
 // Only counts calls where the tool execution itself succeeded (isSuccess=true),
 // so environment failures (DevEco not found, hvigor misconfigured) are excluded.
 export interface BuildResults {
-  // null until the first successful build_project tool execution; then fixed to that call's build result
+  // null until the first devecocli build execution; then fixed to that result
   isFirstBuildSuccess: boolean | null
-  // null until the first successful build_project tool execution; then always overwritten by the latest call's build result
+  // null until the first devecocli build execution; then always overwritten by the latest result
   isFinalBuildSuccess: boolean | null
-  // number of build_project calls where the tool execution succeeded (actual build attempts)
+  // number of devecocli build executions
   buildCount: number
   // null until the first successful build_project tool execution; then fixed to that call's elapsed time.
   // Elapsed measures prompt submission (startSession) to that build call's completion — not the build's own

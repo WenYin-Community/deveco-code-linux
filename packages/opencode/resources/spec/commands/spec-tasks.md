@@ -86,7 +86,7 @@ Every task MUST strictly follow this format:
 5. **Final Phase: Verification** (Build, deploy and optional UI verification — populated based on the user's verification choice from the parent SDD workflow)
     - **MUST include**: at minimum, a build task and a deploy task to validate compilation and deployability.
         - Example: `- [ ] TXXX Build project and fix any compilation errors`
-        - Example: `- [ ] TXXX Deploy application to device/emulator via start_app`
+        - Example: `- [ ] TXXX Deploy application to device/emulator via devecocli run --skip-build`
     - **Conditionally include** (only if the parent SDD workflow's verification choice is `Run verification + UI verification`): an additional UI verification task.
         - Example: `- [ ] TXXX Run UI verification against deployed application`
     - **If the parent SDD workflow selected `Run verification` (build-only)**: DO NOT include any UI verification task in this phase.

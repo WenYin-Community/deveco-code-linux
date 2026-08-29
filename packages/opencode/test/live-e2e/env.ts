@@ -9,6 +9,7 @@ export const repoRoot = path.resolve(opencodeRoot, "../..")
 export const cliEntry = path.join(opencodeRoot, "src/index.ts")
 export const latestReportDir = path.join(repoRoot, "reports", "live-e2e", "latest")
 export const artifactDir = path.join(latestReportDir, "artifacts")
+const bundledDevecoCliEntry = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
 
 export function realUserEnv() {
   const env = { ...process.env }
@@ -36,35 +37,28 @@ export async function resetReportDir() {
   await fs.mkdir(artifactDir, { recursive: true })
 }
 
-// The deveco-create-project skill may be partially installed in the user's
-// config directory (~/.config/deveco/skills/) — SKILL.md is present but the
-// scripts/ and application/ template directories are empty. The skill system
-// discovers the skill from the config directory and resolves script paths
-// relative to that base, so the AI gets MODULE_NOT_FOUND when it tries to
-// run copy-template.mjs following the skill's instructions.
-//
-// This syncs the missing files from the bundled resources directory before
-// running live tests so the AI can reliably find and execute the script.
-export async function ensureBundledSkillScriptsAvailable() {
-  const configSkillDir = path.join(os.homedir(), ".config", "deveco", "skills", "deveco-create-project")
-  const configScript = path.join(configSkillDir, "scripts", "copy-template.mjs")
-
-  // Scripts already present — no sync needed
-  const scriptExists = await fs.stat(configScript).then(() => true).catch(() => false)
-  if (scriptExists) return false
-
-  // Only sync if the config dir has a partial install (SKILL.md present)
-  const skillMdExists = await fs.stat(path.join(configSkillDir, "SKILL.md")).then(() => true).catch(() => false)
-  if (!skillMdExists) return false
-
-  // Copy complete skill from bundled resources, overwriting the partial install
-  const resourcesSkillDir = path.join(opencodeRoot, "resources", "skills", "deveco-create-project")
-  await fs.cp(resourcesSkillDir, configSkillDir, { recursive: true, force: true })
-  return true
-}
-
 export async function createTempWorkspace(prefix = "deveco-live-e2e-") {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix))
+}
+
+export async function createHarmonyProject(
+  workspace: string,
+  appName: string,
+  bundleName: string,
+  env: Record<string, string | undefined> = realUserEnv(),
+) {
+  const projectRoot = path.join(workspace, appName)
+  const proc = Bun.spawn(
+    [process.execPath, bundledDevecoCliEntry, "create", "--project-path", projectRoot, "--app-name", appName, "--bundle-name", bundleName],
+    { cwd: workspace, env, stdout: "pipe", stderr: "pipe" },
+  )
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ])
+  if (exitCode !== 0) throw new Error(`devecocli create exited with ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`)
+  return projectRoot
 }
 
 export async function runDeveco(
@@ -191,8 +185,8 @@ function isEmulatorTarget(target: string) {
 
 // DevEco Studio persists installed (not running) emulator definitions under
 // <user-local-data>/Huawei/Emulator/deployed/. Each emulator has a `.ini` file
-// whose basename is the emulator name (e.g. `Pura 90.ini`). The start_app tool
-// reads this directory to list startable emulators; we replicate the lookup
+// whose basename is the emulator name (e.g. `Pura 90.ini`). The CLI Router reads
+// this directory to list startable emulators; we replicate the lookup
 // here so the runner can skip emulator-dependent cases when none are installed.
 function emulatorDeployedDir() {
   if (process.platform === "darwin") {

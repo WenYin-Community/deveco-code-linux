@@ -73,6 +73,7 @@ function createHarness() {
   const recordTokenUsage = mock((_inputTokens: number, _outputTokens: number) => undefined)
   const recordBuildProjectInfo = mock((_entry: BuildProjectInfo) => undefined)
   const recordToolExecution = mock((_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess: boolean) => undefined)
+  const recordBuildExecution = mock((_isBuildSuccess: boolean) => undefined)
   const buildEvent = mock(async () => builtEvent)
   const buildProjectEvent = mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent)
   const upload = mock(async (_submission: AnalyticsSubmission) => true)
@@ -114,6 +115,7 @@ function createHarness() {
       recordFileEdit: () => undefined,
       recordFileDiff: () => undefined,
       recordToolExecution,
+      recordBuildExecution,
       getSessionID: () => (active ? "session-1" : null),
       buildEvent,
       buildProjectEvent,
@@ -148,6 +150,7 @@ function createHarness() {
     recordTokenUsage,
     recordBuildProjectInfo,
     recordToolExecution,
+    recordBuildExecution,
     buildEvent,
     buildProjectEvent,
     upload,
@@ -401,30 +404,39 @@ test("rechecks privacy before shutdown and purges pending attribution data", asy
   expect(harness.purgeAttribution).toHaveBeenCalledTimes(1)
 })
 
-test("records build_project tool execution for build result tracking", async () => {
+test("records successful devecocli build metadata", async () => {
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "build-1" }, { args: {} })
   await hooks["tool.execute.after"]!(
-    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
-    { title: "Build", output: "BUILD SUCCESSFUL", metadata: {} },
+    { tool: "bash", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      output: "Build completed successfully (exitCode=0)",
+      metadata: { devecoCliEvents: [{ command: "build", exitCode: 0, durationMs: 10 }] },
+    },
   )
 
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true)
+  expect(harness.recordBuildExecution).toHaveBeenCalledWith(true)
 })
 
-test("records build_project failure when output indicates BUILD FAILED", async () => {
+test("records failed devecocli build metadata", async () => {
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "build-1" }, { args: {} })
   await hooks["tool.execute.after"]!(
-    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
-    { title: "Build", output: "> hvigor ERROR: BUILD FAILED in 3 s 326 ms", metadata: {} },
+    { tool: "bash", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      output: "> hvigor ERROR: BUILD FAILED in 3 s 326 ms",
+      metadata: { devecoCliEvents: [{ command: "build", exitCode: 1, durationMs: 10 }] },
+    },
   )
 
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false)
+  expect(harness.recordBuildExecution).toHaveBeenCalledWith(false)
 })
 
 test("records build_project compile failure as a successful tool execution", async () => {

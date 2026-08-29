@@ -29,6 +29,7 @@ interface AnalyticsCollectorDependency {
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
   recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess?: boolean): void
+  recordBuildExecution(isBuildSuccess: boolean): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
   buildProjectEvent(): BuildProjectAnalyticsEvent | null
@@ -346,6 +347,16 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
               .join("\n"),
             truncated: metadata?.truncated === true,
           })
+        } else {
+          collector.recordToolExecution(input.tool, duration, isSuccess)
+        }
+
+        const devecoCliEvents = Array.isArray(metadata?.devecoCliEvents) ? metadata.devecoCliEvents : []
+        for (const event of devecoCliEvents) {
+          if (!event || typeof event !== "object") continue
+          const value = event as Record<string, unknown>
+          if (value.command !== "build" || typeof value.exitCode !== "number") continue
+          collector.recordBuildExecution(value.exitCode === 0)
         }
 
         if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return

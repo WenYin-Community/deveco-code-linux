@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import fs from "fs/promises"
+import path from "path"
 import { executeDevecoCliProxy, type CliResult } from "../../src/deveco-cli/router"
+import { hdcPath } from "../../src/tool/lib/env"
+import { tmpdir } from "../fixture/fixture"
 
 function runner(outputs: Record<string, Partial<CliResult>>) {
   const calls: string[][] = []
@@ -127,6 +131,35 @@ describe("devecocli proxy router", () => {
     expect(result.stdout).toBe("started")
   })
 
+  test("auto-selects the only available device", async () => {
+    const cli = runner({
+      "device list --format json": { stdout: JSON.stringify([{ name: "Mate 60", serial: "FMR0223", kind: "device" }]) },
+      "emulator list --format json": { stdout: "[]" },
+      "run --skip-build --device FMR0223": { stdout: "started" },
+    })
+    const result = await executeDevecoCliProxy(["run", "--skip-build"], "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([
+      ["device", "list", "--format", "json"],
+      ["emulator", "list", "--format", "json"],
+      ["run", "--skip-build", "--device", "FMR0223"],
+    ])
+    expect(result.stdout).toBe("started")
+  })
+
+  test("starts and selects the only stopped emulator", async () => {
+    const cli = runner({
+      "device list --format json": { stdout: "[]" },
+      "emulator list --format json": { stdout: JSON.stringify([{ name: "Pura 90", status: "stopped", serial: "-" }]) },
+      "emulator start Pura 90": { stdout: "emulator started" },
+      "run --skip-build --device Pura 90": { stdout: "app started" },
+    })
+    const result = await executeDevecoCliProxy(["run", "--skip-build"], "C:\\project", cli.run)
+
+    expect(cli.calls.at(-1)).toEqual(["run", "--skip-build", "--device", "Pura 90"])
+    expect(result.stdout).toContain("app started")
+  })
+
   test("starts a stopped emulator before preserving the original run arguments", async () => {
     const cli = runner({
       "device list --format json": { stdout: DEVICES },
@@ -176,5 +209,141 @@ describe("devecocli proxy router", () => {
 
     expect(cli.calls).toEqual([["device", "list", "--format", "json"], args])
     expect(result.stdout).toBe("native fallback")
+  })
+
+  test("falls back to the real run command when emulator discovery fails", async () => {
+    const args = ["run", "--skip-build"]
+    const cli = runner({
+      "device list --format json": { stdout: "[]" },
+      "emulator list --format json": { stderr: "discovery failed", exitCode: 1 },
+      "run --skip-build": { stdout: "native fallback" },
+    })
+    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+
+    expect(cli.calls.at(-1)).toEqual(args)
+    expect(result.stdout).toBe("native fallback")
+  })
+
+  test("returns PROJECT_EXISTS without invoking create for a non-empty explicit target", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "Project With Spaces")
+    await fs.mkdir(target)
+    await Bun.write(path.join(target, "existing.txt"), "keep")
+    const args = ["create", `--project-path=${target}`, "--app-name", "Demo"]
+    const cli = runner({})
+    const result = await executeDevecoCliProxy(args, tmp.path, cli.run)
+
+    expect(cli.calls).toEqual([])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('"code": "PROJECT_EXISTS"')
+    expect(result.stderr).toContain(target)
+  })
+
+  test("uses cwd/app-name for create conflict checks when project path is omitted", async () => {
+    await using tmp = await tmpdir()
+    await fs.mkdir(path.join(tmp.path, "Demo"))
+    await Bun.write(path.join(tmp.path, "Demo", "existing.txt"), "keep")
+    const cli = runner({})
+    const result = await executeDevecoCliProxy(["create", "--app-name", "Demo"], tmp.path, cli.run)
+
+    expect(cli.calls).toEqual([])
+    expect(result.exitCode).toBe(2)
+  })
+
+  test("passes create through for an empty target directory", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "Demo")
+    await fs.mkdir(target)
+    const args = ["create", "--project-path", target, "--app-name", "Demo"]
+    const cli = runner({ [args.join(" ")]: { stdout: `Project root: ${target}` } })
+    const result = await executeDevecoCliProxy(args, tmp.path, cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result.exitCode).toBe(0)
+  })
+
+  test("accepts log tail values from 1 through 5000", async () => {
+    const lower = ["log", "--tail", "1", "--keyword", "DEBUG"]
+    const upper = ["log", "--tail=5000"]
+    const upperEnhanced = [...upper, "--keyword", "[DEVECO_DEBUG]"]
+    const cli = runner({
+      [lower.join(" ")]: { stdout: "lower" },
+      [upperEnhanced.join(" ")]: { stdout: "upper" },
+    })
+
+    expect((await executeDevecoCliProxy(lower, "C:\\project", cli.run)).stdout).toBe("lower")
+    expect((await executeDevecoCliProxy(upper, "C:\\project", cli.run)).stdout).toBe("upper")
+    expect(cli.calls).toEqual([lower, upperEnhanced])
+  })
+
+  test("injects the default DEVECO_DEBUG keyword when none is given", async () => {
+    const args = ["log", "--device", "Phone"]
+    const enhanced = [...args, "--keyword", "[DEVECO_DEBUG]"]
+    const cli = runner({ [enhanced.join(" ")]: { stdout: "logs" } })
+
+    expect((await executeDevecoCliProxy(args, "C:\\project", cli.run)).stdout).toBe("logs")
+    expect(cli.calls).toEqual([enhanced])
+  })
+
+  test("does not override an explicit --keyword= form", async () => {
+    const args = ["log", "--keyword=CRASH"]
+    const cli = runner({ [args.join(" ")]: { stdout: "crash" } })
+
+    expect((await executeDevecoCliProxy(args, "C:\\project", cli.run)).stdout).toBe("crash")
+    expect(cli.calls).toEqual([args])
+  })
+
+  test("rejects invalid log tail values before invoking the CLI", async () => {
+    const cli = runner({})
+    const invalid = [
+      ["log", "--tail", "0"],
+      ["log", "--tail", "5001"],
+      ["log", "--tail=1.5"],
+      ["log", "--tail"],
+      ["log", "--tail=5000", "--tail", "5001"],
+    ]
+
+    for (const args of invalid) {
+      const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain("between 1 and 5000")
+    }
+    expect(cli.calls).toEqual([])
+  })
+
+  test("passes log help through without tail validation", async () => {
+    const args = ["log", "--help", "--tail", "5001"]
+    const cli = runner({ [args.join(" ")]: { stdout: "help" } })
+    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result.stdout).toBe("help")
+  })
+
+  test("clears the default or selected device log buffer", async () => {
+    await using tmp = await tmpdir()
+    await fs.mkdir(path.dirname(hdcPath(tmp.path)), { recursive: true })
+    await Bun.write(hdcPath(tmp.path), "hdc")
+    const commands: string[][] = []
+    const dependencies = {
+      findHome: async () => tmp.path,
+      runCommand: async (cmd: string[]) => {
+        commands.push(cmd)
+        return { stdout: "", stderr: "", exitCode: 0 }
+      },
+    }
+
+    const selected = await executeDevecoCliProxy(
+      ["log", "clear", "--device=Phone"],
+      tmp.path,
+      runner({}).run,
+      dependencies,
+    )
+    const defaultDevice = await executeDevecoCliProxy(["log", "clear"], tmp.path, runner({}).run, dependencies)
+
+    expect(commands[0]).toEqual([hdcPath(tmp.path), "-t", "Phone", "shell", "hilog", "-r"])
+    expect(commands[1]).toEqual([hdcPath(tmp.path), "shell", "hilog", "-r"])
+    expect(selected.stdout).toContain("device: Phone")
+    expect(defaultDevice.stdout).toContain("device: default")
   })
 })

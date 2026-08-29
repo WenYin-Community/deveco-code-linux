@@ -59,15 +59,14 @@ function makeCtx(): { ctx: Tool.Context; requests: Array<Omit<PermissionV1.Reque
 describe("arkts-error-fixes DevEcoRequiredSkills guard", () => {
   // Tests lines 35-39 of src/tool/skill.ts:
   // DevEcoRequiredSkills = { arkts-error-fixes, arkts-grammar-standards,
-  //   arkts-runtime-fix, deveco-create-project }
+  //   hmos-runtime-fix-skill }
   // Guard: if (DevEcoRequiredSkills.has(info.name) && !process.env.DEVECO_HOME?.trim())
   //   throw new Error("DEVECO_HOME ... is not configured ...")
 
   const DEV_ECO_REQUIRED = [
     "arkts-error-fixes",
     "arkts-grammar-standards",
-    "arkts-runtime-fix",
-    "deveco-create-project",
+    "hmos-runtime-fix-skill",
   ] as const
 
   for (const skillName of DEV_ECO_REQUIRED) {
@@ -117,7 +116,6 @@ describe("arkts-error-fixes DevEcoRequiredSkills guard", () => {
       60_000,
     )
   }
-
   it.instance(`throws when DEVECO_HOME is empty string`, () =>
     Effect.gen(function* () {
       const dir = (yield* TestInstance).directory

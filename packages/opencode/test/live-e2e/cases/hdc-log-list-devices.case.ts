@@ -7,24 +7,23 @@ const CASE_ID = "HDC_LOG_LIST_DEVICES"
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
-  title: "hdc_log设备列表",
+  title: "devecocli设备列表",
   category: "cli",
   priority: "P1",
   timeoutMs: 120_000,
   requires: ["huawei-auth", "deveco-provider", "deveco-home"],
-  description: "验证 hdc_log 工具可通过 debug agent 调用 list_devices，并稳定处理有设备或无设备输出。",
+  description: "验证 devecocli device list --format json 可通过 Shell 调用，并稳定处理有设备或无设备输出。",
   steps: [
     "发现本机 DevEco Studio 安装路径。",
     "使用与其他 DevEco 工具用例一致的真实用户环境和 buildEnv。",
-    "通过 debug agent 直接调用 hdc_log list_devices。",
+    "通过 debug agent 的 bash 工具直接调用 devecocli device list --format json。",
     "解析 debug tool JSON 输出。",
-    "验证 hdc_log 返回设备数量，并接受有设备和无设备两种结果。",
+    "验证 CLI 返回 JSON 设备数组，并接受有设备和无设备两种结果。",
   ],
   expected: [
-    "hdc_log 工具执行成功。",
-    "返回的 input.action 为 list_devices。",
-    "metadata.deviceCount 是数字。",
-    "无设备时返回 No Devices；有设备时返回 Connected Devices。",
+    "bash 工具执行成功。",
+    "输入命令为 devecocli device list --format json。",
+    "输出包含可解析的 JSON 设备数组。",
   ],
   code: "packages/opencode/test/live-e2e/cases/hdc-log-list-devices.case.ts",
   parallel: false,
@@ -34,7 +33,15 @@ const testCase: LiveTestCase = {
     if (!home) throw new Error("DevEco Studio was not found")
 
     const result = await ctx.runDeveco(
-      ["debug", "agent", "build", "--tool", "hdc_log", "--params", JSON.stringify({ action: "list_devices" })],
+      [
+        "debug",
+        "agent",
+        "build",
+        "--tool",
+        "bash",
+        "--params",
+        JSON.stringify({ command: "devecocli device list --format json", description: "List HarmonyOS devices" }),
+      ],
       { env: makeEnv(home), timeoutMs: 60_000 },
     )
 
@@ -44,7 +51,7 @@ const testCase: LiveTestCase = {
     ])
 
     if (result.exitCode !== 0) {
-      throw new Error(`hdc_log list_devices exited with ${result.exitCode}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`)
+      throw new Error(`devecocli device list exited with ${result.exitCode}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`)
     }
 
     const parsed = parseDebugToolResult(result.stdout)
@@ -57,9 +64,8 @@ const testCase: LiveTestCase = {
         exitCode: result.exitCode,
         commandDurationMs: result.durationMs,
         devecoHome: home,
-        title: output.title,
-        deviceCount: output.deviceCount,
-        hasDevices: output.deviceCount > 0,
+        deviceCount: output.length,
+        hasDevices: output.length > 0,
       },
     }
   },
@@ -90,37 +96,23 @@ function objectOf(value: unknown, label: string) {
 }
 
 function validateListDevicesResult(parsed: { tool?: unknown; input?: unknown; result?: unknown }) {
-  if (parsed.tool !== "hdc_log") {
-    throw new Error(`Expected debug tool result for hdc_log, got ${String(parsed.tool)}`)
+  if (parsed.tool !== "bash") {
+    throw new Error(`Expected debug tool result for bash, got ${String(parsed.tool)}`)
   }
 
-  const input = objectOf(parsed.input, "hdc_log input")
-  if (input.action !== "list_devices") {
-    throw new Error(`Expected hdc_log action list_devices, got ${String(input.action)}`)
+  const input = objectOf(parsed.input, "bash input")
+  if (input.command !== "devecocli device list --format json") {
+    throw new Error(`Unexpected bash command: ${String(input.command)}`)
   }
 
-  const result = objectOf(parsed.result, "hdc_log result")
-  const metadata = objectOf(result.metadata, "hdc_log metadata")
-  if (typeof metadata.deviceCount !== "number" || metadata.deviceCount < 0) {
-    throw new Error(`hdc_log metadata.deviceCount must be a non-negative number, got ${String(metadata.deviceCount)}`)
-  }
-
-  const title = typeof result.title === "string" ? result.title : ""
+  const result = objectOf(parsed.result, "bash result")
   const output = typeof result.output === "string" ? result.output : ""
-
-  if (metadata.deviceCount === 0) {
-    if (title !== "No Devices") throw new Error(`Expected No Devices title, got ${title}`)
-    if (!output.includes("No connected devices detected.")) {
-      throw new Error(`Expected no-device output, got:\n${output}`)
-    }
-    return { title, output, deviceCount: metadata.deviceCount }
-  }
-
-  if (title !== "Connected Devices") throw new Error(`Expected Connected Devices title, got ${title}`)
-  if (!output.includes("Connected devices:")) {
-    throw new Error(`Expected connected-devices output, got:\n${output}`)
-  }
-  return { title, output, deviceCount: metadata.deviceCount }
+  const start = output.indexOf("[")
+  const end = output.lastIndexOf("]")
+  if (start === -1 || end < start) throw new Error(`Expected JSON device array, got:\n${output}`)
+  const devices = JSON.parse(output.slice(start, end + 1)) as unknown
+  if (!Array.isArray(devices)) throw new Error("devecocli device list output must be an array")
+  return devices
 }
 
 export default testCase

@@ -13,7 +13,6 @@ import skillGrammarTsToArkts from "./cases/skill-grammar-ts-to-arkts.case"
 import skillArkuiBasicComponent from "./cases/skill-arkui-basic-component.case"
 import skillArkuiComplexLayout from "./cases/skill-arkui-complex-layout.case"
 import skillDevecoCreateHelloWorld from "./cases/skill-deveco-create-hello-world.case"
-import skillDevecoApi17Fallback from "./cases/skill-deveco-api17-fallback.case"
 import globalCustomSkill from "./cases/global-custom-skill.case"
 import projectCustomSkill from "./cases/project-custom-skill.case"
 import configLocalMcp from "./cases/config-local-mcp.case"
@@ -69,7 +68,6 @@ export const cases: LiveTestCase[] = [
   skillArkuiBasicComponent,
   skillArkuiComplexLayout,
   skillDevecoCreateHelloWorld,
-  skillDevecoApi17Fallback,
   globalCustomSkill,
   projectCustomSkill,
   configLocalMcp,

@@ -24,16 +24,6 @@ function parseEvents(stdout: string): Array<Record<string, unknown>> {
     })
 }
 
-function extractProjectInfo(output: string): Record<string, unknown> | undefined {
-  const match = output.match(/\{[\s\S]*\}/)
-  if (!match) return undefined
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-}
-
 function textFromEvent(event: Record<string, unknown>) {
   const part = event.part
   if (!part || typeof part !== "object") return undefined
@@ -50,20 +40,20 @@ const testCase: LiveTestCase = {
   stallMs: 120_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入生成 hello world 工程并完成编译，AI 能自动加载 deveco-create-project skill，完成初始工程拷贝，正常调用 build project 检查构建结果信息，build project 失败后能够修复问题，最终修复完成无编译报错后流程结束。",
+    "验证输入生成 hello world 工程并完成编译时，AI 直接调用 devecocli create，并按 arkts_check → devecocli build 流程完成构建。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送生成 hello world 工程并编译的 prompt。",
     "解析 stdout 中的 JSON line events（容忍因超时截断的末尾行）。",
-    "查找执行 copy-template 脚本的 bash 工具事件，校验执行成功且 verified 为 true。",
+    "查找执行 devecocli create 的 bash 工具事件，校验执行成功。",
     "校验 build-profile.json5 文件存在于 projectRoot。",
-    "查找 build_project 工具事件，校验构建被调用。",
+    "查找执行 devecocli build 的 bash 工具事件，校验构建被调用。",
     "校验最终无编译报错或 AI 已修复编译问题。",
   ],
   expected: [
-    "成功创建工程，copy-template 脚本执行成功且 verified 为 true。",
+    "devecocli create 执行成功。",
     "build-profile.json5 文件存在于工程目录。",
-    "build_project 工具被调用，构建成功或经修复后无编译报错。",
+    "devecocli build 被调用，构建成功或经修复后无编译报错。",
   ],
   code: "packages/opencode/test/live-e2e/cases/skill-deveco-create-hello-world.case.ts",
   parallel: false,
@@ -92,32 +82,17 @@ const testCase: LiveTestCase = {
         if (stateRecord.status !== "completed") return false
         const input = stateRecord.input as Record<string, unknown> | undefined
         if (!input || typeof input.command !== "string") return false
-        return input.command.includes("copy-template")
+        return /(?:^|\s)devecocli\s+create(?:\s|$)/.test(input.command)
       })
 
       if (!copyTemplateEvent) {
-        throw new Error("No completed copy-template bash tool event found - project was not created successfully")
+        throw new Error("No completed devecocli create bash tool event found")
       }
 
       const copyTemplateState = partOf(copyTemplateEvent)!.state as Record<string, unknown>
       const output = copyTemplateState.output as string
-      const projectInfo = extractProjectInfo(output)
-
-      if (!projectInfo) {
-        throw new Error("Failed to parse copy-template output for project info")
-      }
-
-      const requiredFields = ["projectRoot", "appName", "bundleName", "apiLevel", "source"]
-      const missingFields = requiredFields.filter((field) => !(field in projectInfo))
-      if (missingFields.length > 0) {
-        throw new Error(`copy-template output missing fields: ${missingFields.join(", ")}`)
-      }
-
-      if (projectInfo.verified !== true) {
-        throw new Error("copy-template output indicates project was not verified (verified !== true)")
-      }
-
-      const projectRoot = projectInfo.projectRoot as string
+      const projectRoot = output.match(/Project root:\s*(.+)/)?.[1]?.trim()
+      if (!projectRoot) throw new Error(`devecocli create output is missing Project root:\n${output}`)
       const buildProfilePath = path.join(projectRoot, "build-profile.json5")
       try {
         const stat = await fs.stat(buildProfilePath)
@@ -131,8 +106,10 @@ const testCase: LiveTestCase = {
       const buildEvents = events.filter((event) => {
         if (event.type !== "tool_use") return false
         const part = partOf(event)
-        if (!part || part.tool !== "build_project") return false
-        return true
+        if (!part || part.tool !== "bash") return false
+        const state = part.state as Record<string, unknown> | undefined
+        const input = state?.input as Record<string, unknown> | undefined
+        return typeof input?.command === "string" && /(?:^|\s)devecocli\s+build(?:\s|$)/.test(input.command)
       })
 
       const textEvents = events.filter((event) => event.type === "text")
@@ -141,10 +118,10 @@ const testCase: LiveTestCase = {
 
       const hasBuildAttempt = buildEvents.length > 0 ||
         receivedText.includes("编译") || receivedText.includes("build") ||
-        receivedText.toLowerCase().includes("build_project")
+        receivedText.toLowerCase().includes("devecocli build")
 
       if (!hasBuildAttempt) {
-        throw new Error("No build_project tool call or build-related text found - build was not attempted")
+        throw new Error("No devecocli build call or build-related text found")
       }
 
       const hasBuildSuccess =
@@ -167,7 +144,7 @@ const testCase: LiveTestCase = {
 
       return {
         sentMessage, receivedText, sessionID, stdout: result.stdout, stderr: result.stderr, events,
-        details: { exitCode: result.exitCode, commandDurationMs: result.durationMs, projectRoot, buildProfilePath, apiLevel: projectInfo.apiLevel, source: projectInfo.source, buildEventCount: buildEvents.length, hasBuildSuccess, hasBuildFix },
+        details: { exitCode: result.exitCode, commandDurationMs: result.durationMs, projectRoot, buildProfilePath, buildEventCount: buildEvents.length, hasBuildSuccess, hasBuildFix },
       }
     } finally {
       try {

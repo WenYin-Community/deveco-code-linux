@@ -1,6 +1,8 @@
 import { Effect, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
+import { rm } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -22,7 +24,10 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
-import { setSessionCwd } from "./lib/session-cwd"
+import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
+import { arktsCheckBuildFailureNotice } from "./lib/session-arkts-check"
+import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/router"
+import { Global } from "@opencode-ai/core/global"
 
 export { Parameters } from "./shell/prompt"
 
@@ -266,14 +271,29 @@ function tail(text: string, maxLines: number, maxBytes: number) {
   }
 }
 
-function extractProjectPath(command: string, cwd: string): string | undefined {
-  const match = command.match(
-    /copy-template\.mjs.*--project-path\s+["']([^"']+)["'].*--app-name\s+["']([^"']+)["']/
-  );
-  if (!match) {
-    return undefined;
+async function readDevecoCliEvents(file: string): Promise<DevecoCliEvent[]> {
+  try {
+    const text = await Bun.file(file).text()
+    return text
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const event: unknown = JSON.parse(line)
+          if (!event || typeof event !== "object") return []
+          const value = event as Record<string, unknown>
+          if (value.command !== "build" && value.command !== "create") return []
+          if (typeof value.exitCode !== "number" || typeof value.durationMs !== "number") return []
+          return [event as DevecoCliEvent]
+        } catch {
+          return []
+        }
+      })
+  } catch {
+    return []
+  } finally {
+    await rm(file, { force: true }).catch(() => undefined)
   }
-  return path.resolve(cwd, match[1], match[2]);
 }
 
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
@@ -461,6 +481,7 @@ export const ShellTool = Tool.define(
         env: NodeJS.ProcessEnv
         timeout: number
         description: string
+        devecoCliEventFile: string
       },
       ctx: Tool.Context,
     ) {
@@ -590,6 +611,8 @@ export const ShellTool = Tool.define(
         }),
       ).pipe(Effect.orDie)
 
+      const devecoCliEvents = yield* Effect.promise(() => readDevecoCliEvents(input.devecoCliEventFile))
+
       const meta: string[] = []
       if (expired) {
         meta.push(
@@ -607,6 +630,11 @@ export const ShellTool = Tool.define(
       let output = end.text
       if (!output) output = "(no output)"
 
+      if (devecoCliEvents.some((event) => event.command === "build" && event.exitCode !== 0)) {
+        const notice = arktsCheckBuildFailureNotice(ctx.sessionID)
+        if (notice) output = `${notice}\n\n${output}`
+      }
+
       if (cut && file) {
         output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output
       }
@@ -615,13 +643,13 @@ export const ShellTool = Tool.define(
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
 
-      // Auto-switch session cwd after successful project scaffold
-      if (code === 0) {
-        const projectDir = extractProjectPath(input.command, input.cwd);
-        if (projectDir) {
-          setSessionCwd(ctx.sessionID, projectDir);
-          output += `\n\n[Session directory auto-switched to ${projectDir}]`;
-        }
+      const projectDir = devecoCliEvents.findLast(
+        (event) => event.command === "create" && event.exitCode === 0 && event.projectRoot,
+      )?.projectRoot
+      if (projectDir) {
+        const projectRoot = path.resolve(input.cwd, projectDir)
+        setSessionCwd(ctx.sessionID, projectRoot)
+        output += `\n\n[Session directory auto-switched to ${projectRoot}]`
       }
 
       return {
@@ -631,6 +659,7 @@ export const ShellTool = Tool.define(
           exit: code,
           description: input.description,
           truncated: cut,
+          devecoCliEvents,
           ...(cut && file ? { outputPath: file } : {}),
         },
         output,
@@ -654,7 +683,7 @@ export const ShellTool = Tool.define(
               const instanceCtx = yield* InstanceState.context
               const cwd = params.workdir
                 ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
-                : instanceCtx.directory
+                : (getSessionCwd(ctx.sessionID) ?? instanceCtx.directory)
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
@@ -671,14 +700,23 @@ export const ShellTool = Tool.define(
                 }),
               )
 
+              const devecoCliEventFile = path.join(
+                Global.Path.tmp,
+                "devecocli-events",
+                `${process.pid}-${randomUUID()}.jsonl`,
+              )
               return yield* run(
                 {
                   shell,
                   command: params.command,
                   cwd,
-                  env: yield* shellEnv(ctx, cwd),
+                  env: {
+                    ...(yield* shellEnv(ctx, cwd)),
+                    [DEVECO_CLI_EVENT_FILE]: devecoCliEventFile,
+                  },
                   timeout,
                   description: params.description,
+                  devecoCliEventFile,
                 },
                 ctx,
               )

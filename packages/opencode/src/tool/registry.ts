@@ -16,12 +16,9 @@ import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
-import { HdcLogTool } from "./hdc_log"
 import { SwitchCwdTool } from "./switch-cwd"
 import { ArktsCheckTool } from "./arkts_check"
 import { GetUiVerificationLogTool, SaveUiScreenshotTool, VerifyUiTool } from "./ui-verification/ui-verification-tool"
-import { BuildProjectTool } from "./build_project"
-import { StartAppTool } from "./start_app"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -117,11 +114,8 @@ export const layer = Layer.effect(
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const specwrite = yield* SpecWriteTool
-    const hdclog = yield* HdcLogTool
     const switchcwd = yield* SwitchCwdTool
     const arktscheck = yield* ArktsCheckTool
-    const buildproject = yield* BuildProjectTool
-    const startapp = yield* StartAppTool
     const debugexit = yield* DebugExitTool
     const verifyui = yield* VerifyUiTool
     const getuilog = yield* GetUiVerificationLogTool
@@ -237,11 +231,8 @@ export const layer = Layer.effect(
           planwrite: Tool.init(planwrite),
           planenter: Tool.init(planenter),
           spec_write: Tool.init(specwrite),
-          hdclog: Tool.init(hdclog),
           switchcwd: Tool.init(switchcwd),
           arktscheck: Tool.init(arktscheck),
-          buildproject: Tool.init(buildproject),
-          startapp: Tool.init(startapp),
           verify_ui: Tool.init(verifyui),
           get_ui_verification_log: Tool.init(getuilog),
           save_ui_screenshot: Tool.init(saveuiscreenshot),
@@ -269,10 +260,7 @@ export const layer = Layer.effect(
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.client === "cli" ? [tool.plan, tool.planwrite, tool.planenter] : []),
             // HarmonyOS tools
-            tool.hdclog,
             tool.switchcwd,
-            tool.buildproject,
-            tool.startapp,
             tool.arktscheck,
             tool.verify_ui,
             tool.get_ui_verification_log,

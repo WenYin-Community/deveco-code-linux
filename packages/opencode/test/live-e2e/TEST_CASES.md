@@ -7,8 +7,8 @@ This document is the case map for live end-to-end tests. These tests may use the
 | `LLM_BASIC_TEXT`                   | 真实登录态下普通消息返回文本           | `llm`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/llm-basic-text.case.ts`                   |
 | `PLAN_MODE_ENTER`                  | 切换到plan模式                         | `slash`  | `P0`     | `huawei-auth`, `real-llm`                                   | `cases/plan-mode-enter.case.ts`                  |
 | `PROJECT_CREATE_DEFAULT_API`       | 参数完整，无自定义apiLevel             | `skill`  | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/project-create-default-api.case.ts`       |
-| `START_APP_DEPLOY`                 | start_app推包启动                      | `cli`    | `P0`     | `huawei-auth`, `deveco-provider`, `deveco-home`             | `cases/start-app-deploy.case.ts`                 |
-| `HDC_LOG_LIST_DEVICES`             | hdc_log设备列表                        | `cli`    | `P1`     | `huawei-auth`, `deveco-provider`, `deveco-home`             | `cases/hdc-log-list-devices.case.ts`             |
+| `START_APP_DEPLOY`                 | devecocli run推包启动                   | `cli`    | `P0`     | `huawei-auth`, `deveco-provider`, `deveco-home`             | `cases/start-app-deploy.case.ts`                 |
+| `HDC_LOG_LIST_DEVICES`             | devecocli设备列表                       | `cli`    | `P1`     | `huawei-auth`, `deveco-provider`, `deveco-home`             | `cases/hdc-log-list-devices.case.ts`             |
 | `COMMAND_EXECUTION`                | 指令执行                               | `llm`    | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/command-execution.case.ts`                |
 | `CONFIG_THIRD_PARTY_MODELS`        | 在deveco.jsonc中配置三方模型           | `cli`    | `P1`     | `huawei-auth`                                               | `cases/config-third-party-models.case.ts`        |
 | `CONFIG_THIRD_PARTY_MODEL_REQUEST` | 全局配置三方模型并发起请求             | `llm`    | `P1`     | `real-llm`                                                  | `cases/config-third-party-model-request.case.ts` |
@@ -28,8 +28,7 @@ This document is the case map for live end-to-end tests. These tests may use the
 | `SKILL_ARKUI_BASIC_COMPONENT`      | 基础组件使用                           | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-arkui-basic-component.case.ts`      |
 | `SKILL_ARKUI_COMPLEX_LAYOUT`       | 复杂布局实现                           | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-arkui-complex-layout.case.ts`       |
 | `SKILL_DEVECO_CREATE_HELLO_WORLD`  | 0-1构建项目                            | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-deveco-create-hello-world.case.ts`  |
-| `SKILL_DEVECO_API17_FALLBACK`      | SDK选择推荐                            | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/skill-deveco-api17-fallback.case.ts`      |
-| `INCREMENTAL_DEV_BUILD_PROJECT`    | 增量开发触发build_project              | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`, `deveco-home` | `cases/incremental-dev-build-project.case.ts`    |
+| `INCREMENTAL_DEV_BUILD_PROJECT`    | 增量开发触发devecocli build             | `skill`  | `P1`     | `huawei-auth`, `real-llm`, `deveco-provider`, `deveco-home` | `cases/incremental-dev-build-project.case.ts`    |
 | `SWITCH_CWD_BUILD`                 | 指定目录不存在项目代码构建switch_cwd   | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/switch-cwd-build.case.ts`                 |
 | `SWITCH_CWD_PROJECT_BUILD`         | 支持指定目录项目代码构建switch_cwd     | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/switch-cwd-project-build.case.ts`         |
 | `BUILD_PROJECT`                    | 支持鸿蒙项目代码构建build project      | `cli`    | `P0`     | `huawei-auth`, `real-llm`, `deveco-provider`                | `cases/build-project.case.ts`                    |
@@ -86,48 +85,47 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that a minimal HarmonyOS project template can be built into local debug artifacts with `build_project`, deployed with `start_app`, and observed as installed on a running or startable HarmonyOS emulator.
+Verify that a project created by `devecocli create` can be built with `devecocli build`, deployed with `devecocli run`, and observed as installed on an emulator.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Generate a minimal project from the built-in `deveco-create-project/application` template.
-3. Run `deveco debug agent build --tool build_project --params '{"build_mode":"debug"}'` from the generated project.
-4. Run `deveco debug agent build --tool start_app --params '{"module":"entry","target":"default","ability":"EntryAbility","hvd":"<first emulator target>"}'` when an emulator is already connected; otherwise omit `hvd` and let `start_app` start an available emulator.
-5. Run `hdc -t <target> shell bm dump -n com.example.livee2estartapp` against the running emulator target observed after `start_app`.
+2. Generate a project with bundled `devecocli create`.
+3. Invoke `devecocli build --build-mode debug` through the debug agent's `bash` tool.
+4. Invoke `devecocli run --module entry --ability EntryAbility --skip-build` through `bash`; the Router starts a selected stopped emulator when needed.
+5. Run `hdc -t <target> shell bm dump -n com.example.livee2estartapp` against the running emulator target.
 6. Verify the package query output contains the expected bundle name.
 
 Expected result:
 
-1. The project template is copied successfully and reports `verified: true`.
-2. `build_project` exits with code `0` and does not return a failure marker.
-3. `start_app` exits with code `0` and does not return a failure marker.
+1. `devecocli create` creates the project successfully.
+2. `devecocli build` exits with code `0` and does not return a failure marker.
+3. `devecocli run` exits with code `0` and does not return a failure marker.
 4. `bm dump` confirms `com.example.livee2estartapp` is installed on the emulator target.
 
 Cleanup:
 
-The temporary workspace is deleted after execution. The user's real DevEco installation, auth, and config files are read-only and are not cleaned or modified by this case. If `start_app` starts an emulator, the case does not stop it.
+The temporary workspace is deleted after execution. The user's real DevEco installation, auth, and config files are read-only and are not cleaned or modified by this case. If the Router starts an emulator, the case does not stop it.
 
 ## HDC_LOG_LIST_DEVICES
 
 Purpose:
 
-Verify that the `hdc_log` tool can be invoked through the debug agent with `list_devices`, and that it handles both connected-device and no-device states.
+Verify that `devecocli device list --format json` can be invoked through the debug agent's `bash` tool and handles both connected-device and no-device states.
 
 Steps:
 
 1. Discover the local DevEco Studio installation.
 2. Build the same real-user DevEco environment used by other DevEco tool live e2e cases.
-3. Run `deveco debug agent build --tool hdc_log --params '{"action":"list_devices"}'`.
+3. Invoke `devecocli device list --format json` through `deveco debug agent build --tool bash`.
 4. Parse the debug tool JSON output.
-5. Verify `tool`, `input.action`, `result.metadata.deviceCount`, and the expected title/output for either connected devices or no devices.
+5. Verify the tool input and parse the JSON device array.
 
 Expected result:
 
 1. The command exits with code `0`.
-2. The debug result is for `hdc_log` with `action: "list_devices"`.
-3. `metadata.deviceCount` is a non-negative number.
-4. No-device output returns `No Devices`; connected-device output returns `Connected Devices`.
+2. The debug result is for `bash` with the expected CLI command.
+3. The CLI output contains a valid JSON array.
 
 Cleanup:
 
@@ -390,23 +388,23 @@ The temporary workspace and any copied skill files are deleted after execution. 
 
 Purpose:
 
-Verify that selecting the deveco-create-project skill via /skill and requesting a hello world project with compilation loads the create-project skill, copies the initial project template, calls build_project, and fixes any build issues until compilation succeeds.
+Verify that requesting a hello world project makes the agent call `devecocli create`, then follow `arkts_check` → `devecocli build` and fix build issues when needed.
 
 Steps:
 
 1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command deveco-create-project` with the prompt "帮我生成一个hello world工程，并完成编译".
+2. Run `deveco run --format json --dir <tmp>` with the prompt "帮我生成一个hello world工程，并完成编译".
 3. Parse JSON-line events from stdout (tolerating truncated lines).
-4. Find the `bash` tool event that ran `copy-template` with `status: "completed"` and `verified: true`.
+4. Find the completed `bash` tool event that ran `devecocli create`.
 5. Verify `build-profile.json5` exists on disk at the `projectRoot`.
-6. Find `build_project` tool events and verify build was attempted.
+6. Find the `bash` event that ran `devecocli build` and verify build was attempted.
 7. Verify build succeeded or errors were fixed.
 
 Expected result:
 
-1. `copy-template` script executed successfully with `verified: true`.
+1. `devecocli create` executed successfully.
 2. `build-profile.json5` exists in the project directory.
-3. `build_project` was called and build succeeded or was fixed.
+3. `devecocli build` was called and the build succeeded or was fixed.
 
 Cleanup:
 
@@ -416,12 +414,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that `switch_cwd` can switch to a directory that contains no HarmonyOS project, and `build_project` reports that no project exists.
+Verify that `switch_cwd` can switch to a directory that contains no HarmonyOS project, and `devecocli build` reports that no project exists.
 
 Steps:
 
 1. Create an empty temporary workspace (no `build-profile.json5`, no `oh-package.json5`, no `entry/` directory).
-2. Run `deveco run --format json --dir <tmp>` with a prompt instructing the agent to first use `switch_cwd` to switch to the empty directory, then use `build_project` to compile.
+2. Run `deveco run --format json --dir <tmp>` with a prompt instructing the agent to first use `switch_cwd` to switch to the empty directory, then run `devecocli build`.
 3. Parse JSON-line events from stdout.
 4. Verify the agent's text response mentions the switch and indicates no project / build failure.
 
@@ -439,12 +437,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that `switch_cwd` can switch to a directory containing a valid HarmonyOS project, and `build_project` completes the compilation build successfully.
+Verify that `switch_cwd` can switch to a directory containing a valid HarmonyOS project, and `devecocli build` completes the compilation successfully.
 
 Steps:
 
-1. Create a temporary workspace and copy the HarmonyOS project template to it.
-2. Run `deveco run --format json --dir <tmp>` with a prompt instructing the agent to first use `switch_cwd` to switch to the project directory, then use `build_project` to compile.
+1. Create a temporary workspace and scaffold a HarmonyOS project with bundled `devecocli create`.
+2. Run `deveco run --format json --dir <tmp>` with a prompt instructing the agent to first use `switch_cwd` to switch to the project directory, then run `devecocli build`.
 3. Parse JSON-line events from stdout.
 4. Verify the agent's text response mentions the switch and indicates build success (no failure keywords).
 
@@ -462,12 +460,12 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that the `build_project` tool can compile and build a HarmonyOS project. The user inputs "帮我用build project工具构建当前项目工程" and the agent calls `build_project` to successfully complete the build and return build results.
+Verify that the agent can compile a HarmonyOS project by invoking `devecocli build` through `bash` and return build results.
 
 Steps:
 
-1. Create a temporary workspace and copy the HarmonyOS project template to it.
-2. Run `deveco run --format json --dir <tmp>` with the prompt "帮我用build project工具构建当前项目工程".
+1. Create a temporary workspace and scaffold a project with bundled `devecocli create`.
+2. Run `deveco run --format json --dir <project>` and request `arkts_check` followed by `devecocli build`.
 3. Parse JSON-line events from stdout.
 4. Verify the agent's text response indicates build success with no failure keywords.
 
@@ -485,13 +483,13 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-Verify that `build_project` returns failure check results when building a project with compilation errors. The project's `Index.ets` is overwritten with a version containing `any` type usage and a type mismatch, causing ArkTS compilation failure.
+Verify that `devecocli build` returns failure results for a project with compilation errors and retains the ArkTS Session guidance.
 
 Steps:
 
-1. Create a temporary workspace and copy the HarmonyOS project template to it.
+1. Create a temporary workspace and scaffold a project with bundled `devecocli create`.
 2. Overwrite `entry/src/main/ets/pages/Index.ets` with an erroneous version (uses `any` type, type mismatch).
-3. Run `deveco run --format json --dir <tmp>` with the prompt "帮我用build project工具构建当前项目工程".
+3. Run `deveco run --format json --dir <project>` and request `arkts_check` followed by `devecocli build`.
 4. Parse JSON-line events from stdout.
 5. Verify the agent's text response contains build failure keywords.
 
@@ -500,32 +498,6 @@ Expected result:
 1. The process exits with code `0`.
 2. At least one `text` event is emitted.
 3. The received text contains failure keywords (失败/fail/错误/error/报错/异常).
-
-Cleanup:
-
-The temporary workspace is deleted after execution. The user's real DevEco auth and config files are read-only and are not cleaned or modified by this case.
-
-## SKILL_DEVECO_API17_FALLBACK
-
-Purpose:
-
-Verify that selecting the deveco-create-project skill (supporting API18-22) via /skill and specifying API17 for project creation, the system recognizes API17 is not in the supported range, queries the SDK directory for a corresponding version, and if not found defaults to API22.
-
-Steps:
-
-1. Create a temporary workspace.
-2. Run `deveco run --format json --dir <tmp> --command deveco-create-project` with the prompt specifying API 17.
-3. Parse JSON-line events from stdout (tolerating truncated lines).
-4. Find the `bash` tool event that ran `copy-template`.
-5. Parse the `copy-template` output and verify API level info.
-6. If API17 was rejected, verify the system fell back to SDK default or API22.
-7. Verify `build-profile.json5` exists on disk at the `projectRoot`.
-
-Expected result:
-
-1. `copy-template` script was executed.
-2. If API17 was out of range, the system fell back to SDK default or API22.
-3. `build-profile.json5` exists in the project directory.
 
 Cleanup:
 
@@ -839,7 +811,7 @@ The temporary workspace and any copied skill files are deleted after execution. 
 
 Purpose:
 
-Verify that the source CLI can create a HarmonyOS project from a natural-language prompt without specifying a custom apiLevel. The system should auto-detect the SDK apiLevel, create the project, emit complete output, generate `build-profile.json5`, and switch the session cwd to the new project directory.
+Verify that the agent creates a HarmonyOS project with `devecocli create` without specifying a custom API level, generates `build-profile.json5`, and switches the Session cwd to the new project directory.
 
 Steps:
 
@@ -847,16 +819,15 @@ Steps:
 2. Run `deveco run --format json --dir <tmp>`.
 3. Send the prompt: "请在当前工作目录从0到1生成一个名为HelloWorld的鸿蒙应用，提供一个简洁的HelloWorld页面，最后完成编译并尝试运行，如受环境限制请明确说明原因".
 4. Parse JSON-line events from stdout (tolerating truncated lines from a process killed mid-stream).
-5. Find the `bash` tool event that ran `copy-template` with `status: "completed"`, and verify the command does not contain `--api-level`.
-6. Parse the `copy-template` output JSON and verify it contains complete project info (`projectRoot`, `appName`, `bundleName`, `apiLevel`, `source`).
-7. Verify `source` is `sdk_pkg` (auto-detected) and `verified` is `true`.
-8. Verify `build-profile.json5` exists on disk at the `projectRoot`.
-9. Verify cwd was switched: either the `copy-template` output contains `Session directory auto-switched` or a `switch_cwd` tool event with `status: "completed"` exists.
+5. Find the completed `bash` tool event that ran `devecocli create`, and verify the command does not contain `--api-level`.
+6. Parse the CLI output and verify it contains `Project root:`.
+7. Verify `build-profile.json5` exists on disk at the project root.
+8. Verify cwd was switched: the Shell output contains `Session directory auto-switched` or a `switch_cwd` tool event with `status: "completed"` exists.
 
 Expected result:
 
-1. A completed `copy-template` bash tool event is found, with `verified: true` in the output.
-2. The output contains complete project info including `projectRoot`, `appName`, `bundleName`, `apiLevel`, and `source`.
+1. A completed `devecocli create` bash tool event is found.
+2. The output contains `Project root:`.
 3. `build-profile.json5` exists in the project directory.
 4. cwd was switched (auto-switch message or `switch_cwd` tool event).
 
@@ -868,22 +839,22 @@ The temporary workspace is deleted after execution. The user's real DevEco auth 
 
 Purpose:
 
-验证在已有鸿蒙工程上进行增量开发：先使用 copy-template 生成最小工程，然后通过 AI 对话创建"我的"页面并增量添加"清除缓存"菜单项，最后直接调用 build_project 验证工程可编译通过。
+验证在已有鸿蒙工程上进行增量开发：先使用 bundled `devecocli create` 生成最小工程，然后通过 AI 对话创建"我的"页面并增量添加"清除缓存"菜单项，最后通过 Shell 调用 `devecocli build` 验证工程可编译通过。
 
 Steps:
 
 1. 创建临时工作目录。
-2. 使用内置 copy-template 脚本生成最小 HarmonyOS 工程。
+2. 使用 bundled `devecocli create` 生成最小 HarmonyOS 工程。
 3. 在工程目录下运行 `deveco run --format json --dir <projectRoot>`，发送组合 prompt：先添加"我的"页面，再在"我的"页面里添加"清除缓存"菜单项。
 4. 解析 stdout 中的 JSON line events。
 5. 验证相关页面文件存在代码修改（包含"清除缓存"相关代码）。
-6. 直接调用 `deveco debug agent build --tool build_project --params '{"build_mode":"debug"}'`。
+6. 直接调用 `deveco debug agent build --tool bash` 执行 `devecocli build --build-mode debug`。
 7. 验证编译通过且无 failure marker。
 
 Expected result:
 
 1. 相关页面文件被修改，包含"清除缓存"相关代码。
-2. build_project 工具执行完成。
+2. `devecocli build` 命令执行完成。
 3. 编译通过，无编译失败信号。
 
 Cleanup:
@@ -902,13 +873,13 @@ Steps:
 2. 使用真实用户环境和 buildEnv 构建环境变量。
 3. 执行 `deveco debug agent build`（不带 `--tool` 参数）。
 4. 解析输出的 JSON 结果。
-5. 验证 tools 字段包含所有预期工具且值均为 true（启用）：build_project, start_app, hdc_log, switch_cwd, arkts_knowledge_search, plan_enter。
+5. 验证 tools 字段包含 `switch_cwd`、`arkts_check`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
 
 Expected result:
 
 1. 命令退出码为 0。
 2. 输出为合法 JSON，包含 tools 字段。
-3. tools 中包含 build_project, start_app, hdc_log, switch_cwd, arkts_knowledge_search, plan_enter 且值均为 true。
+3. tools 中包含 `switch_cwd`、`arkts_check`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
 
 Cleanup:
 

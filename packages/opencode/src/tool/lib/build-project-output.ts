@@ -50,7 +50,7 @@ export function formatBuildStatusLine(exitCode: number): string {
 
 /**
  * Truncate a single merged log (kept for tests / callers that already joined streams).
- * Prefer {@link formatBuildProjectOutput} for build_project, which truncates per stream.
+ * Prefer {@link formatBuildProjectOutput} for devecocli build, which truncates per stream.
  */
 export function truncateOutput(text: string) {
   const lines = splitLines(text)

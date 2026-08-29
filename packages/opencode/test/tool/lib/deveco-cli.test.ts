@@ -5,12 +5,7 @@ import { Global } from "@opencode-ai/core/global"
 import {
   __resetDevecoCliShellEnvCache,
   __setTestDevecoCliEntry,
-  buildDevecoCliBuildArgs,
-  buildDevecoCliLogArgs,
-  buildDevecoCliRunArgs,
-  buildDevecoCliStartAppCommands,
   buildDevecoCliShellEnv,
-  devecoCliListContainsTarget,
   ensureDevecoCliShim,
   isolatedShellPath,
   resolveBundledDevecoCliEntry,
@@ -319,90 +314,6 @@ describe("deveco-cli runtime", () => {
     expect(env?.DEVECO_CLI_AUTH_SOURCE).toBe("deveco-code")
     expect(env?.DEVECO_CODE_AUTH_DIR).toBe(Global.Path.config)
     expect(env?.DEVECO_CLI_DISABLE_UPDATE).toBe("all")
-  })
-
-  test("buildDevecoCliBuildArgs() maps skill-aligned build options", () => {
-    expect(buildDevecoCliBuildArgs({})).toEqual(["build"])
-    expect(buildDevecoCliBuildArgs({ clean: true })).toEqual(["build", "clean"])
-    expect(buildDevecoCliBuildArgs({ modules: ["entry", "library@phone"] })).toEqual([
-      "build",
-      "--modules",
-      "entry",
-      "library@phone",
-    ])
-    expect(buildDevecoCliBuildArgs({ product: "oversea", build_mode: "release" })).toEqual([
-      "build",
-      "--product",
-      "oversea",
-      "--build-mode",
-      "release",
-    ])
-  })
-
-  test("buildDevecoCliRunArgs() maps start_app options and always skips build", () => {
-    expect(buildDevecoCliRunArgs({ device: " 127.0.0.1:5555 " })).toEqual([
-      "run",
-      "--skip-build",
-      "--device",
-      "127.0.0.1:5555",
-    ])
-    expect(
-      buildDevecoCliRunArgs({
-        device: "Phone",
-        module: "entry",
-        target: "default",
-        ability: "EntryAbility",
-      }),
-    ).toEqual([
-      "run",
-      "--skip-build",
-      "--device",
-      "Phone",
-      "--module",
-      "entry@default",
-      "--ability",
-      "EntryAbility",
-    ])
-    expect(buildDevecoCliRunArgs({ device: "Phone", target: "tablet" })).toContain("entry@tablet")
-  })
-
-  test("buildDevecoCliStartAppCommands() prepares device discovery", () => {
-    expect(buildDevecoCliStartAppCommands({})).toEqual([
-      ["device", "list"],
-      ["emulator", "list"],
-    ])
-    expect(buildDevecoCliStartAppCommands({ hvd: "   " })).toEqual([
-      ["device", "list"],
-      ["emulator", "list"],
-    ])
-    expect(buildDevecoCliStartAppCommands({ hvd: "Phone", module: "entry" })).toEqual([["device", "list"]])
-  })
-
-  test("devecoCliListContainsTarget() detects device and emulator names", () => {
-    const output = ["Name                Status", "HarmonyOS Phone     stopped", "127.0.0.1:5555      running"].join("\n")
-    expect(devecoCliListContainsTarget(output, "HarmonyOS Phone")).toBe(true)
-    expect(devecoCliListContainsTarget(output, "127.0.0.1:5555")).toBe(true)
-    expect(devecoCliListContainsTarget(output, "Missing Phone")).toBe(false)
-    expect(devecoCliListContainsTarget(output, "   ")).toBe(false)
-  })
-
-  test("buildDevecoCliLogArgs() maps hdc_log collection options", () => {
-    expect(buildDevecoCliLogArgs({})).toEqual(["log"])
-    expect(
-      buildDevecoCliLogArgs({
-        device: " 127.0.0.1:5555 ",
-        keyword: " [DEBUG] ",
-        tail: 2000,
-      }),
-    ).toEqual([
-      "log",
-      "--device",
-      "127.0.0.1:5555",
-      "--keyword",
-      "[DEBUG]",
-      "--tail",
-      "2000",
-    ])
   })
 
   test("runBundledDevecoCli() invokes the bundled entry instead of global devecocli", async () => {

@@ -1,17 +1,8 @@
 import type { LiveTestCase } from "../types"
-import { opencodeRoot } from "../env"
+import { createHarmonyProject } from "../env"
 import fs from "fs/promises"
-import path from "path"
 
 const CASE_ID = "SWITCH_CWD_PROJECT_BUILD"
-
-const TEMPLATE_PROJECT = path.join(
-  opencodeRoot,
-  "resources",
-  "skills",
-  "deveco-create-project",
-  "application",
-)
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
@@ -22,10 +13,10 @@ const testCase: LiveTestCase = {
   stallMs: 120_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证使用switch_cwd工具切换到包含完整鸿蒙工程的目录后，调用build_project工具能够正常切换并完成编译构建。",
+    "验证使用 switch_cwd 切换到完整鸿蒙工程后，调用 devecocli build 能够完成编译构建。",
   steps: [
     "创建临时工作目录，复制鸿蒙工程模板。",
-    "执行deveco run，发送prompt指示agent先使用switch_cwd工具切换到该工程目录，再使用build_project工具进行编译构建。",
+    "执行 deveco run，指示 Agent 先使用 switch_cwd 切换目录，再执行 devecocli build。",
     "解析stdout中的JSON line events。",
     "校验agent正常切换到指定路径，并完成编译构建。",
   ],
@@ -41,13 +32,12 @@ const testCase: LiveTestCase = {
     const workspace = await ctx.createTempWorkspace("switch-cwd-project-build-")
 
     try {
-      // Copy template HarmonyOS project to workspace
-      await fs.cp(TEMPLATE_PROJECT, workspace, { recursive: true })
+      const projectRoot = await createHarmonyProject(workspace, "SwitchBuild", "com.example.switchbuild")
 
       const sentMessage =
         `请按以下步骤操作：\n` +
-        `1. 使用 switch_cwd 工具，将构建项目路径切换到 ${workspace}（该目录包含一个完整的鸿蒙工程）\n` +
-        `2. 使用 build_project 工具进行编译构建\n` +
+        `1. 使用 switch_cwd 工具，将构建项目路径切换到 ${projectRoot}（该目录包含一个完整的鸿蒙工程）\n` +
+        `2. 先使用 arkts_check 检查，再执行 devecocli build 进行编译构建\n` +
         `请告诉我每一步的执行结果和具体输出。`
 
       const args = ["run", "--format", "json", "--dir", workspace, sentMessage]

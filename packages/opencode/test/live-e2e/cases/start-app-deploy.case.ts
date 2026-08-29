@@ -18,25 +18,25 @@ type StartRun = {
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
-  title: "start_app推包启动",
+  title: "devecocli run推包启动",
   category: "cli",
   priority: "P0",
   timeoutMs: 900_000,
   stallMs: 300_000,
   requires: ["huawei-auth", "deveco-provider", "deveco-home", "harmony-emulator-installed"],
   description:
-    "验证预置最小 HarmonyOS 工程模板可通过 build_project 生成本机 debug 产物，并通过 start_app 推包到运行中或可启动的模拟器。",
+    "验证 devecocli create 创建的 HarmonyOS 工程可通过 devecocli build 生成 debug 产物，并通过 devecocli run 推包到模拟器。",
   steps: [
     "创建临时工作目录。",
-    "使用内置 deveco-create-project 最小工程模板生成测试工程。",
-    "通过 debug agent 直接调用 build_project 生成 debug 产物。",
-    "通过 debug agent 直接调用 start_app：优先指定已连接的首个模拟器 hdc target；没有运行中模拟器时让 start_app 自动启动可用模拟器。",
+    "使用 bundled devecocli create 生成测试工程。",
+    "通过 debug agent 的 bash 工具调用 devecocli build 生成 debug 产物。",
+    "通过 debug agent 的 bash 工具调用 devecocli run；指定停止的模拟器时由 Router 自动拉起。",
     "使用 hdc 查询 bundleName，验证应用包已安装到目标模拟器。",
   ],
   expected: [
-    "copy-template 成功生成最小工程。",
-    "build_project 执行成功并未返回构建失败信号。",
-    "start_app 执行成功并未返回推包或启动失败信号。",
+    "devecocli create 成功生成最小工程。",
+    "devecocli build 执行成功并未返回构建失败信号。",
+    "devecocli run 执行成功并未返回推包或启动失败信号。",
     "目标模拟器的包管理查询结果包含测试应用 bundleName。",
   ],
   code: "packages/opencode/test/live-e2e/cases/start-app-deploy.case.ts",
@@ -104,19 +104,20 @@ async function prepareProject(ctx: CaseContext, workspace: string) {
   const hdc = hdcPath(home)
   const emulatorsBefore = await listEmulators(hdc)
   const emulatorBefore = targetID(emulatorsBefore[0])
-  const copyTemplate = await runCopyTemplate(workspace, env)
+  const create = await runCreate(workspace, env)
   await Promise.all([
-    ctx.writeArtifact(CASE_ID, "copy-template-stdout.log", copyTemplate.stdout),
-    ctx.writeArtifact(CASE_ID, "copy-template-stderr.log", copyTemplate.stderr),
+    ctx.writeArtifact(CASE_ID, "create-stdout.log", create.stdout),
+    ctx.writeArtifact(CASE_ID, "create-stderr.log", create.stderr),
   ])
-  if (copyTemplate.exitCode !== 0) {
-    throw new Error(`copy-template exited with ${copyTemplate.exitCode}\nstderr: ${copyTemplate.stderr}`)
+  if (create.exitCode !== 0) {
+    throw new Error(`devecocli create exited with ${create.exitCode}\nstderr: ${create.stderr}`)
   }
-
-  const projectInfo = parseProjectInfo(copyTemplate.stdout)
-  const projectRoot = String(projectInfo.projectRoot)
+  const projectRoot = path.join(workspace, APP_NAME)
+  if (!(await Bun.file(path.join(projectRoot, "build-profile.json5")).exists())) {
+    throw new Error(`devecocli create did not create ${projectRoot}`)
+  }
   const entry = await createProjectCliEntry(projectRoot)
-  return { home, env, hdc, emulatorsBefore, emulatorBefore, copyTemplate, projectRoot, entry }
+  return { home, env, hdc, emulatorsBefore, emulatorBefore, copyTemplate: create, projectRoot, entry }
 }
 
 function makeEnv(home: string) {
@@ -126,13 +127,14 @@ function makeEnv(home: string) {
   }
 }
 
-async function runCopyTemplate(workspace: string, env: Record<string, string | undefined>) {
+async function runCreate(workspace: string, env: Record<string, string | undefined>) {
   return runProcess(
     [
-      "bun",
-      path.join(opencodeRoot, "resources", "skills", "deveco-create-project", "scripts", "copy-template.mjs"),
+      process.execPath,
+      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+      "create",
       "--project-path",
-      workspace,
+      path.join(workspace, APP_NAME),
       "--app-name",
       APP_NAME,
       "--bundle-name",
@@ -145,14 +147,14 @@ async function runCopyTemplate(workspace: string, env: Record<string, string | u
 
 async function runBuild(ctx: CaseContext, env: Record<string, string | undefined>, entry: string) {
   const build = await ctx.runDeveco(
-    ["debug", "agent", "build", "--tool", "build_project", "--params", JSON.stringify({ build_mode: "debug" })],
+    ["debug", "agent", "build", "--tool", "bash", "--params", JSON.stringify({ command: "devecocli build --build-mode debug", description: "Build HarmonyOS project" })],
     { env, timeoutMs: 600_000, entry },
   )
   await Promise.all([
     ctx.writeArtifact(CASE_ID, "build-stdout.log", build.stdout),
     ctx.writeArtifact(CASE_ID, "build-stderr.log", build.stderr),
   ])
-  assertNoFailure("build_project", requireToolOutput(build, "build_project"))
+  assertNoFailure("devecocli build", requireToolOutput(build, "bash"))
   return build
 }
 
@@ -181,19 +183,7 @@ async function runStartApp(
 ): Promise<StartRun> {
   if (emulatorBefore) return runStartAppWithTarget(ctx, env, entry, emulatorBefore)
 
-  const discovery = await ctx.runDeveco(startAppArgs(), { env, timeoutMs: 240_000, entry })
-  await Promise.all([
-    ctx.writeArtifact(CASE_ID, "start-app-discovery-stdout.log", discovery.stdout),
-    ctx.writeArtifact(CASE_ID, "start-app-discovery-stderr.log", discovery.stderr),
-  ])
-  const discoveryOutput = requireToolOutput(discovery, "start_app")
-  assertNoFailure("start_app", discoveryOutput)
-  const startableEmulator = chooseStartableEmulator(discoveryOutput)
-  if (!startableEmulator) {
-    await writeStartArtifacts(ctx, discovery)
-    return { result: discovery, discovery }
-  }
-  return { ...(await runStartAppWithTarget(ctx, env, entry, startableEmulator)), discovery }
+  return runStartAppWithTarget(ctx, env, entry, "")
 }
 
 async function runStartAppWithTarget(
@@ -220,23 +210,13 @@ function startAppArgs(hvd?: string) {
     "agent",
     "build",
     "--tool",
-    "start_app",
+    "bash",
     "--params",
-    JSON.stringify(
-      hvd
-        ? { module: "entry", target: "default", ability: "EntryAbility", hvd }
-        : { module: "entry", target: "default", ability: "EntryAbility" },
-    ),
+    JSON.stringify({
+      command: `devecocli run --module entry --ability EntryAbility --skip-build${hvd ? ` --device ${JSON.stringify(hvd)}` : ""}`,
+      description: "Run HarmonyOS application",
+    }),
   ]
-}
-
-function chooseStartableEmulator(output: string) {
-  const names = output
-    .split(/\r?\n/)
-    .filter((line) => !line.includes("请使用 hvd"))
-    .map((line) => line.trim().match(/^-\s+(.+)$/)?.[1]?.trim())
-    .filter((item): item is string => Boolean(item))
-  return names.find((name) => /pura|phone/i.test(name)) ?? names[0]
 }
 
 async function verifyInstalledPackage(
@@ -246,10 +226,10 @@ async function verifyInstalledPackage(
   emulatorBefore: string | undefined,
   startRun: StartRun,
 ) {
-  assertNoFailure("start_app", requireToolOutput(startRun.result, "start_app"))
+  assertNoFailure("devecocli run", requireToolOutput(startRun.result, "bash"))
   const emulatorsAfter = await listEmulators(hdc)
   const emulator = emulatorBefore ?? targetID(emulatorsAfter.find((item) => !emulatorsBefore.includes(item)) ?? emulatorsAfter[0])
-  if (!emulator) throw new Error("start_app completed, but hdc did not report a running HarmonyOS emulator target")
+  if (!emulator) throw new Error("devecocli run completed, but hdc did not report a running HarmonyOS emulator target")
 
   const packageProbe = await runProcess([hdc, "-t", emulator, "shell", "bm", "dump", "-n", BUNDLE_NAME], 30_000)
   await Promise.all([
@@ -286,15 +266,6 @@ function isEmulatorTarget(target: string) {
 
 function targetID(line: string | undefined) {
   return line?.split(/\s+/)[0]?.trim()
-}
-
-function parseProjectInfo(stdout: string) {
-  const match = stripAnsi(stdout).match(/\{[\s\S]*\}/)
-  if (!match) throw new Error("copy-template stdout did not contain project info JSON")
-  const info = JSON.parse(match[0]) as Record<string, unknown>
-  if (typeof info.projectRoot !== "string") throw new Error("copy-template project info is missing projectRoot")
-  if (info.verified !== true) throw new Error("copy-template project info is not verified")
-  return info
 }
 
 function requireToolOutput(result: RunCommandResult, tool: string) {

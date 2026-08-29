@@ -167,8 +167,8 @@ Examples of foundational tasks (adjust based on your project):
 
 **Purpose**: Build, deploy, and (optionally) UI-verify the implemented feature
 
-- [ ] TXXX Build project and fix any compilation errors (invoke build_project; iterate fix → build until success)
-- [ ] TXXX Deploy application to device/emulator (invoke start_app)
+- [ ] TXXX Build project and fix any compilation errors (invoke `devecocli build`; iterate fix → build until success)
+- [ ] TXXX Deploy application to device/emulator (invoke `devecocli run --skip-build`)
 - [ ] TXXX Run UI verification against deployed application (invoke verify_ui)  <!-- include ONLY when verification_scope == build+ui -->
 
 ---

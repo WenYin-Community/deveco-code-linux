@@ -1,7 +1,7 @@
 ---
 name: deveco-cli
 description: >-
-  **REQUIRED** and **MANDATORY** when building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation. For creating or scaffolding a project, load `deveco-create-project` instead.
+  **REQUIRED** and **MANDATORY** when creating, building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation.
 ---
 
 # DevEco CLI
@@ -13,7 +13,13 @@ Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui
 Run `devecocli <command> -h` when an option is uncertain. Commands return a non-zero exit code and an actionable error when validation or execution fails.
 
 ### Project creation
-Load `deveco-create-project` when creating or scaffolding a HarmonyOS application. Its private script validates the inputs, invokes `devecocli create`, verifies the generated project, and sets the session context. Do not invoke `devecocli create` directly for project-creation requests.
+Create or scaffold HarmonyOS applications directly with `devecocli create`.
+- `--app-name <name>` is required.
+- `--bundle-name <bundle>` is optional and defaults from the app name.
+- `--api-level <level>` is optional; omit it to use CLI SDK detection.
+- `--project-path <path>` is the final project root when supplied. When omitted, the CLI creates `<app-name>` under the current directory.
+- If the command returns `PROJECT_EXISTS` (exit 2), ask the user whether to overwrite, rename, or cancel. Never remove or overwrite the target without explicit confirmation. For overwrite, clear only the exact `details.targetRoot` after confirmation and rerun the same command. For rename, rerun with the new final `--project-path`. For cancel, stop.
+- A successful command automatically switches the session context to the reported `Project root:`.
 
 ### `devecocli build`
 Build from the project root.
@@ -34,9 +40,12 @@ Obtain device logs. Output contains the log timestamp and application identity w
 - `--device <device>`: Device name or serial.
 - `--crash`: Return the latest crash log; combine with `--bundle-name` for the target app.
 - `--bundle-name <bundle-name>`, `--level <D|I|W|E|F>`, `--keyword <keyword>`: Filters.
-- `--tail <num>`: Latest N lines.
+- `--tail <num>`: Latest N lines; must be an integer from 1 to 5000.
 - `--from <offset>`, `--to <offset>`: Relative time range such as `30s` or `5m`.
 - `--follow`: Stream logs.
+- `clear [--device <device>]`: Clear the device hilog buffer before reproducing a debug scenario.
+
+When no `--keyword` is given, `devecocli log` filters by the default prefix `[DEVECO_DEBUG]` — set this tag in app debug logs so a bare `log` surfaces only the relevant app output instead of the whole hilog buffer. Pass an explicit `--keyword` to override.
 
 ### `devecocli emulator`
 Manage local emulator instances and system images.

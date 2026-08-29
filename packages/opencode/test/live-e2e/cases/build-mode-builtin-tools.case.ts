@@ -6,13 +6,12 @@ import type { LiveTestCase } from "../types"
 const CASE_ID = "BUILD_MODE_BUILTIN_TOOLS"
 
 const EXPECTED_TOOLS = [
-  "build_project",
-  "start_app",
-  "hdc_log",
+  "bash",
   "switch_cwd",
-  "arkts_knowledge_search",
+  "arkts_check",
   "plan_enter",
 ]
+const REMOVED_TOOLS = ["build_project", "start_app", "hdc_log"]
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
@@ -27,12 +26,12 @@ const testCase: LiveTestCase = {
     "使用真实用户环境和 buildEnv 构建环境变量。",
     "执行 deveco debug agent build（不带 --tool 参数）。",
     "解析输出的 JSON 结果。",
-    "验证 tools 字段包含所有预期工具且值均为 true（启用）：build_project, start_app, hdc_log, switch_cwd, arkts_knowledge_search, plan_enter。",
+    "验证 tools 字段包含 bash、switch_cwd、arkts_check、plan_enter，且不再包含旧构建、运行和日志工具。",
   ],
   expected: [
     "命令退出码为 0。",
     "输出为合法 JSON，包含 tools 字段。",
-    "tools 中包含 build_project, start_app, hdc_log, switch_cwd, arkts_knowledge_search, plan_enter 且值均为 true。",
+    "CLI 相关能力通过 bash 暴露，旧 Tool 不再存在。",
   ],
   code: "packages/opencode/test/live-e2e/cases/build-mode-builtin-tools.case.ts",
   parallel: false,
@@ -58,6 +57,9 @@ const testCase: LiveTestCase = {
     const agentInfo = parseAgentOutput(result.stdout)
     const tools = validateToolsField(agentInfo)
     verifyEnabled(tools)
+    for (const name of REMOVED_TOOLS) {
+      if (name in tools) throw new Error(`Removed tool is still exposed: ${name}`)
+    }
 
     return {
       stdout: result.stdout,

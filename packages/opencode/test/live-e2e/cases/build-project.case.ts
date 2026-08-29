@@ -5,29 +5,21 @@ import path from "path"
 
 const CASE_ID = "BUILD_PROJECT"
 
-const TEMPLATE_PROJECT = path.join(
-  opencodeRoot,
-  "resources",
-  "skills",
-  "deveco-create-project",
-  "application",
-)
-
 const testCase: LiveTestCase = {
   id: CASE_ID,
-  title: "支持鸿蒙项目代码构建build project",
+  title: "支持devecocli build构建鸿蒙项目",
   category: "cli",
   priority: "P0",
   timeoutMs: 360_000,
   stallMs: 180_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证通过build_project工具对鸿蒙项目工程进行编译构建，输入构建指令后agent调用build_project工具成功完成构建并返回构建结果。",
+    "验证 Agent 通过 Shell 调用 devecocli build，成功完成鸿蒙工程构建并返回构建结果。",
   steps: [
-    "创建临时工作目录，复制鸿蒙工程模板。",
-    "执行deveco run，输入'帮我用build project工具构建当前项目工程'。",
+    "创建临时工作目录，通过 bundled devecocli create 创建工程。",
+    "执行deveco run，要求使用 devecocli build 构建当前工程。",
     "解析stdout中的JSON line events。",
-    "校验agent调用了build_project工具，成功完成构建并返回构建结果。",
+    "校验agent通过 bash 调用了 devecocli build，成功完成构建并返回构建结果。",
   ],
   expected: [
     "进程退出码为0。",
@@ -41,13 +33,25 @@ const testCase: LiveTestCase = {
     const workspace = await ctx.createTempWorkspace("build-project-")
 
     try {
-      // Copy template HarmonyOS project to workspace
-      await fs.cp(TEMPLATE_PROJECT, workspace, { recursive: true })
+      const projectRoot = path.join(workspace, "BuildProject")
+      const create = Bun.spawn([
+        process.execPath,
+        path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+        "create",
+        "--project-path",
+        projectRoot,
+        "--app-name",
+        "BuildProject",
+        "--bundle-name",
+        "com.example.buildproject",
+      ], { stdout: "pipe", stderr: "pipe" })
+      const [createExit, createError] = await Promise.all([create.exited, new Response(create.stderr).text()])
+      if (createExit !== 0) throw new Error(`devecocli create exited with ${createExit}: ${createError}`)
 
       // Use the exact prompt specified by the user
-      const sentMessage = "帮我用build project工具构建当前项目工程"
+      const sentMessage = "请先使用 arkts_check 检查，再执行 devecocli build 构建当前项目工程"
 
-      const args = ["run", "--format", "json", "--dir", workspace, sentMessage]
+      const args = ["run", "--format", "json", "--dir", projectRoot, sentMessage]
       const result = await ctx.runDeveco(args, { timeoutMs: 340_000 })
 
       await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
@@ -87,18 +91,20 @@ const testCase: LiveTestCase = {
         throw new Error("No text event was emitted")
       }
 
-      // Verify build_project tool was called and completed (not keyword-matching LLM text)
+      // Verify bash invoked devecocli build and completed.
       const buildToolEvents = events.filter((event) => {
         if (event.type !== "tool_use") return false
         const part = event.part
         if (!part || typeof part !== "object") return false
         const partRecord = part as Record<string, unknown>
-        if (typeof partRecord.tool !== "string") return false
-        return partRecord.tool.includes("build_project")
+        if (partRecord.tool !== "bash") return false
+        const state = partRecord.state as Record<string, unknown> | undefined
+        const input = state?.input as Record<string, unknown> | undefined
+        return typeof input?.command === "string" && /(?:^|\s)devecocli\s+build(?:\s|$)/.test(input.command)
       })
 
       if (buildToolEvents.length === 0) {
-        throw new Error("build_project tool was not called by the agent")
+        throw new Error("devecocli build was not called by the agent")
       }
 
       const completedBuild = buildToolEvents.find((event) => {
@@ -108,7 +114,7 @@ const testCase: LiveTestCase = {
       })
 
       if (!completedBuild) {
-        throw new Error("build_project tool was called but did not complete")
+        throw new Error("devecocli build was called but did not complete")
       }
 
       // Check the TOOL OUTPUT (not LLM text) for failure indicators.
@@ -119,7 +125,7 @@ const testCase: LiveTestCase = {
       const lowerOutput = buildOutput.toLowerCase()
       const outputFailureMarkers = ["失败", "failed", "failure"]
       if (outputFailureMarkers.some((kw) => lowerOutput.includes(kw.toLowerCase()))) {
-        throw new Error(`build_project tool output indicates failure: ${buildOutput.substring(0, 400)}...`)
+        throw new Error(`devecocli build output indicates failure: ${buildOutput.substring(0, 400)}...`)
       }
 
       // Also check LLM text for success indicators (relaxed — no failure keyword check on text)
@@ -140,7 +146,7 @@ const testCase: LiveTestCase = {
           exitCode: result.exitCode,
           commandDurationMs: result.durationMs,
           textEventCount: textEvents.length,
-          workspace,
+          workspace: projectRoot,
         },
       }
     } finally {

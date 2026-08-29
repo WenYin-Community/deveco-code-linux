@@ -1,22 +1,14 @@
 import type { LiveTestCase } from "../types"
-import { opencodeRoot } from "../env"
+import { createHarmonyProject } from "../env"
 import fs from "fs/promises"
 import path from "path"
 
 const CASE_ID = "BUILD_FAILURE_CHECK"
 
-const TEMPLATE_PROJECT = path.join(
-  opencodeRoot,
-  "resources",
-  "skills",
-  "deveco-create-project",
-  "application",
-)
-
 // Erroneous Index.ets based on the template, with multiple compilation errors:
 // 1. `any` type usage — violates arkts-no-any-unknown rule
 // 2. Type mismatch — assigning string to number variable
-// Both errors cause ArkTS compilation failure, making build_project fail.
+// Both errors cause ArkTS compilation failure, making devecocli build fail.
 const ERRONEOUS_INDEX_ETS = `@Entry
 @Component
 struct Index {
@@ -53,7 +45,7 @@ const testCase: LiveTestCase = {
   stallMs: 180_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证对包含编译错误的鸿蒙项目调用build_project工具进行编译构建时，能够返回失败检查结果。",
+    "验证对包含编译错误的鸿蒙项目调用 devecocli build 时，能够返回失败检查结果。",
   steps: [
     "创建临时工作目录，复制鸿蒙工程模板。",
     "覆盖Index.ets为包含编译错误的版本（使用any类型、类型不匹配）。",
@@ -71,19 +63,17 @@ const testCase: LiveTestCase = {
   cleanup: "用例只创建临时工作目录；执行结束后删除临时目录。真实auth/config只读不清理。",
   async run(ctx) {
     const workspace = await ctx.createTempWorkspace("build-failure-check-")
-    const etsPath = path.join(workspace, "entry", "src", "main", "ets", "pages", "Index.ets")
-
     try {
-      // Copy template HarmonyOS project to workspace
-      await fs.cp(TEMPLATE_PROJECT, workspace, { recursive: true })
+      const projectRoot = await createHarmonyProject(workspace, "BuildFailure", "com.example.buildfailure")
+      const etsPath = path.join(projectRoot, "entry", "src", "main", "ets", "pages", "Index.ets")
 
       // Overwrite Index.ets with erroneous version (any type + type mismatch)
       await fs.writeFile(etsPath, ERRONEOUS_INDEX_ETS)
 
       // Use the same prompt as the success case
-      const sentMessage = "帮我用build project工具构建当前项目工程"
+      const sentMessage = "请使用 arkts_check 检查后执行 devecocli build 构建当前项目工程"
 
-      const args = ["run", "--format", "json", "--dir", workspace, sentMessage]
+      const args = ["run", "--format", "json", "--dir", projectRoot, sentMessage]
       const result = await ctx.runDeveco(args, { timeoutMs: 220_000 })
 
       await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)

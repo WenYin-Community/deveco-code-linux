@@ -1,5 +1,0 @@
-Compile and package a HarmonyOS project or modules.
-
-Defaults when omitted: `--product default`, `--build-mode debug`.
-
-Run `switch_cwd` first if the session directory is not the HarmonyOS project root.

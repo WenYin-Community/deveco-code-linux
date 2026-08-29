@@ -44,13 +44,14 @@ function makeEnv(home: string) {
   }
 }
 
-async function runCopyTemplate(workspace: string, env: Record<string, string | undefined>) {
+async function runCreate(workspace: string, env: Record<string, string | undefined>) {
   return runProcess(
     [
-      "bun",
-      path.join(opencodeRoot, "resources", "skills", "deveco-create-project", "scripts", "copy-template.mjs"),
+      process.execPath,
+      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+      "create",
       "--project-path",
-      workspace,
+      path.join(workspace, APP_NAME),
       "--app-name",
       APP_NAME,
       "--bundle-name",
@@ -165,15 +166,6 @@ function outputOf(result: unknown) {
   return JSON.stringify(result, null, 2)
 }
 
-function parseProjectInfo(stdout: string) {
-  const match = stripAnsi(stdout).match(/\{[\s\S]*\}/)
-  if (!match) throw new Error("copy-template stdout did not contain project info JSON")
-  const info = JSON.parse(match[0]) as Record<string, unknown>
-  if (typeof info.projectRoot !== "string") throw new Error("copy-template project info is missing projectRoot")
-  if (info.verified !== true) throw new Error("copy-template project info is not verified")
-  return info
-}
-
 function requireToolOutput(result: RunCommandResult, tool: string) {
   if (result.exitCode !== 0) {
     throw new Error(`${tool} exited with ${result.exitCode}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`)
@@ -202,25 +194,25 @@ async function createProjectCliEntry(project: string) {
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
-  title: "增量开发触发build_project",
+  title: "增量开发触发devecocli build",
   category: "skill",
   priority: "P1",
   timeoutMs: 900_000,
   stallMs: 180_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider", "deveco-home"],
   description:
-    "验证在已有鸿蒙工程上进行增量开发：先创建最小工程，再让 AI 添加'我的'页面和'清除缓存'菜单项，随后用 build_project 编译通过。",
+    "验证在已有鸿蒙工程上进行增量开发：先用 devecocli create 创建工程，再让 AI 添加'我的'页面和'清除缓存'菜单项，随后用 devecocli build 编译通过。",
   steps: [
     "创建临时工作目录，使用 copy-template 生成最小鸿蒙工程。",
     "在工程目录下启动 AI 对话，发送组合 prompt：先添加'我的'页面，再在'我的'页面里添加'清除缓存'菜单项。",
     "解析 stdout 中的 JSON line events。",
     "验证相关页面文件存在代码修改（包含'清除缓存'相关代码）。",
-    "直接调用 build_project 工具编译工程。",
-    "验证 build_project 编译通过且无 failure marker。",
+    "直接通过 bash 调用 devecocli build 编译工程。",
+    "验证 devecocli build 编译通过且无 failure marker。",
   ],
   expected: [
     "相关页面文件被修改，包含'清除缓存'相关代码。",
-    "build_project 工具执行完成。",
+    "devecocli build 命令执行完成。",
     "编译通过，无编译失败信号。",
   ],
   code: "packages/opencode/test/live-e2e/cases/incremental-dev-build-project.case.ts",
@@ -269,17 +261,16 @@ async function prepareProject(ctx: CaseContext, workspace: string) {
   const home = await findDevEcoHome()
   if (!home) throw new Error("DevEco Studio was not found")
   const env = makeEnv(home)
-  const copyTemplate = await runCopyTemplate(workspace, env)
+  const create = await runCreate(workspace, env)
   await Promise.all([
-    ctx.writeArtifact(CASE_ID, "copy-template-stdout.log", copyTemplate.stdout),
-    ctx.writeArtifact(CASE_ID, "copy-template-stderr.log", copyTemplate.stderr),
+    ctx.writeArtifact(CASE_ID, "create-stdout.log", create.stdout),
+    ctx.writeArtifact(CASE_ID, "create-stderr.log", create.stderr),
   ])
-  if (copyTemplate.exitCode !== 0) {
-    throw new Error(`copy-template exited with ${copyTemplate.exitCode}\nstderr: ${copyTemplate.stderr}`)
+  if (create.exitCode !== 0) {
+    throw new Error(`devecocli create exited with ${create.exitCode}\nstderr: ${create.stderr}`)
   }
 
-  const projectInfo = parseProjectInfo(copyTemplate.stdout)
-  const projectRoot = String(projectInfo.projectRoot)
+  const projectRoot = path.join(workspace, APP_NAME)
   const entry = await createProjectCliEntry(projectRoot)
   const buildProfilePath = path.join(projectRoot, "build-profile.json5")
   await requireBuildProfile(buildProfilePath)
@@ -355,14 +346,14 @@ async function runBuild(
   entry: string,
 ) {
   const build = await ctx.runDeveco(
-    ["debug", "agent", "build", "--tool", "build_project", "--params", JSON.stringify({ build_mode: "debug" })],
+    ["debug", "agent", "build", "--tool", "bash", "--params", JSON.stringify({ command: "devecocli build --build-mode debug", description: "Build HarmonyOS project" })],
     { env, timeoutMs: 600_000, entry },
   )
   await Promise.all([
     ctx.writeArtifact(CASE_ID, "build-stdout.log", build.stdout),
     ctx.writeArtifact(CASE_ID, "build-stderr.log", build.stderr),
   ])
-  assertNoFailure("build_project", requireToolOutput(build, "build_project"))
+  assertNoFailure("devecocli build", requireToolOutput(build, "bash"))
   return build
 }
 

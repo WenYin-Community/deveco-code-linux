@@ -168,6 +168,11 @@ export class SessionCollector {
       this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
   }
 
+  recordBuildExecution(isBuildSuccess: boolean): void {
+    if (!this.context) return
+    this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
+  }
+
   private updateBuildResults(results: BuildResults, isBuildSuccess: boolean, elapsed: number): void {
     results.buildCount++
     if (results.isFirstBuildSuccess === null) {
