@@ -268,6 +268,13 @@ print(d.get('head',{}).get('ref',''))
       echo "CI 检查失败"
       exit 1
     fi
+    CI_STATE=$(echo "$PR_DATA" | python3 -c "
+import json,sys,re
+raw = sys.stdin.read()
+clean = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', raw)
+d = json.loads(clean)
+print('1' if d.get('mergeable_state',{}).get('ci_state_passed', False) else '0')
+" 2>/dev/null)
     ACTIONS_API="${API%/v5}/v8"
     curl -sS -H "Authorization: Bearer $TOKEN" \
       "$ACTIONS_API/repos/$REPO/actions/runs?per_page=100&branch=$HEAD_BRANCH" 2>/dev/null \
@@ -276,11 +283,13 @@ import json,sys
 data = json.load(sys.stdin)
 runs = data.get('workflow_runs', [])
 sha = '$HEAD_SHA'
+ci_passed = '$CI_STATE' == '1'
 result = []
 for name in ['Test', 'Typecheck']:
     matching = [r for r in runs if r.get('workflow_name') == name and r.get('head_sha') == sha]
     if not matching:
-        result.append(f'{name} CI 未运行')
+        if not ci_passed:
+            result.append(f'{name} CI 未运行')
     else:
         status = matching[0].get('status', '')
         if status == 'COMPLETED':
