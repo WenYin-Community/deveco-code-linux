@@ -12,6 +12,13 @@ Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui
 
 Run `devecocli <command> -h` when an option is uncertain. Commands return a non-zero exit code and an actionable error when validation or execution fails.
 
+### `devecocli docs`
+
+Search or read HarmonyOS documentation with `docs search` and `docs read`.
+- Responses are limited to a 5,000-character preview. When truncated, the beginning of the response includes `Full output saved to:` with a local file containing the complete result.
+- Run the docs command without `grep`, `sed`, or `head` first so the recovery path stays visible. To find an API or search result beyond the preview, use Grep on the saved file or Read with offset/limit. Do not read the whole file into context.
+- Piping `docs read` into `grep` searches only the preview; an empty match does not mean the API is absent from the full document. Redirecting the command to a file also saves only the preview; use the provided full-output file instead.
+
 ### Project creation
 Create or scaffold HarmonyOS applications directly with `devecocli create`.
 - `--app-name <name>` is required.

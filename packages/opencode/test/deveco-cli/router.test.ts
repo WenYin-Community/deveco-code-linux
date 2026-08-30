@@ -59,25 +59,49 @@ describe("devecocli proxy router", () => {
     expect(result.stdout).toBe("content")
   })
 
-  test("truncates docs search output longer than 5000 characters and preserves success", async () => {
+  test("keeps search results beyond the 5000 character preview in the saved file", async () => {
     const args = ["docs", "search", "@State", "--limit", "10"]
-    const cli = runner({ "docs search @State --limit 10": { stdout: "x".repeat(5_001) } })
+    const output = `${"Earlier search result\n".repeat(300)}guides/late-result\n  Title: Final search result\n`
+    const cli = runner({ "docs search @State --limit 10": { stdout: output } })
     const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
 
     expect(cli.calls).toEqual([args])
     expect(result.stdout.length + result.stderr.length).toBe(5_000)
-    expect(result.stdout).toEndWith("[Documentation output truncated to 5000 characters.]\n")
+    expect(result.stdout).toStartWith("[Documentation output truncated to 5000 characters.]\nFull output saved to: ")
+    expect(result.stdout).not.toContain("guides/late-result")
+    const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+    expect(file).toBeDefined()
+    expect(await Bun.file(file!).text()).toBe(output)
     expect(result.exitCode).toBe(0)
   })
 
-  test("preserves docs output at the 5000 character boundary", async () => {
+  test("preserves docs output at the 5000 character boundary without a trailing newline", async () => {
     const args = ["docs", "read", "document-id"]
-    const output = `${"x".repeat(4_999)}\n`
+    const output = "x".repeat(5_000)
     const cli = runner({ "docs read document-id": { stdout: output } })
     const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
 
     expect(cli.calls).toEqual([args])
     expect(result.stdout).toBe(output)
+  })
+
+  test("keeps API definitions beyond the docs read preview recoverable without another CLI call", async () => {
+    const output = `${"文档介绍\n".repeat(1_100)}\n## onDateAccept\nonDateAccept(value: Date): void\n`
+    const cli = runner({ "docs read date-picker": { stdout: output } })
+    const result = await executeDevecoCliProxy(["docs", "read", "date-picker"], "C:\\project", cli.run)
+
+    expect(result.stdout.length).toBe(5_000)
+    expect(result.stdout).not.toContain("onDateAccept")
+    expect(result.stdout).toContain("Read with offset/limit")
+    const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+    expect(file).toBeDefined()
+    const content = await Bun.file(file!).text()
+    expect(content).toBe(output)
+    expect(content.split("\n").find((line) => line.startsWith("onDateAccept("))).toBe("onDateAccept(value: Date): void")
+    expect(cli.calls).toEqual([["docs", "read", "date-picker"]])
+
+    const repeated = await executeDevecoCliProxy(["docs", "read", "date-picker"], "C:\\project", cli.run)
+    expect(repeated.stdout).toBe(result.stdout)
   })
 
   test("truncates combined docs stdout and stderr to 5000 characters", async () => {
@@ -87,9 +111,25 @@ describe("devecocli proxy router", () => {
 
     expect(cli.calls).toEqual([args])
     expect(result.stdout.length + result.stderr.length).toBe(5_000)
-    expect(result.stdout).toEndWith("[Documentation output truncated to 5000 characters.]\n")
+    expect(result.stdout).toStartWith("[Documentation output truncated to 5000 characters.]\n")
     expect(result.stderr).toBe("")
     expect(result.exitCode).toBe(0)
+    const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+    expect(file).toBeDefined()
+    expect(await Bun.file(file!).text()).toBe(`${"x".repeat(4_000)}\n${"y".repeat(2_000)}`)
+  })
+
+  test("preserves the exit code and recovers truncated stderr-only docs failures", async () => {
+    const output = `${"Documentation service error\n".repeat(300)}Final error detail\n`
+    const cli = runner({ "docs read broken": { stderr: output, exitCode: 2 } })
+    const result = await executeDevecoCliProxy(["docs", "read", "broken"], "C:\\project", cli.run)
+
+    expect(result.stdout).toBe("")
+    expect(result.stderr.length).toBe(5_000)
+    expect(result.exitCode).toBe(2)
+    const file = result.stderr.match(/^Full output saved to: (.+)$/m)?.[1]
+    expect(file).toBeDefined()
+    expect(await Bun.file(file!).text()).toBe(output)
   })
 
   test("formats build output and preserves the real exit code", async () => {

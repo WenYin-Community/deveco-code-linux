@@ -42,7 +42,6 @@ const KNOWN_RUN_FLAGS = new Set([
   "--uninstall",
   "--skip-build",
 ])
-const DOCS_TRUNCATE_NOTICE = `\n\n[Documentation output truncated to ${MAX_DOCS_OUTPUT_LENGTH} characters.]\n`
 
 export async function executeDevecoCliProxy(
   args: string[],
@@ -107,13 +106,22 @@ function enhanceLogArgs(args: string[]) {
   return [...args, "--keyword", DEFAULT_LOG_KEYWORD]
 }
 
-function truncateDocsOutput(result: CliResult) {
+async function truncateDocsOutput(result: CliResult) {
+  if (result.stdout.length + result.stderr.length <= MAX_DOCS_OUTPUT_LENGTH) return result
   const output = [result.stdout, result.stderr]
     .filter(Boolean)
-    .map((text) => (text.endsWith("\n") ? text : `${text}\n`))
-    .join("")
-  if (output.length <= MAX_DOCS_OUTPUT_LENGTH) return result
-  const truncated = `${output.slice(0, MAX_DOCS_OUTPUT_LENGTH - DOCS_TRUNCATE_NOTICE.length)}${DOCS_TRUNCATE_NOTICE}`
+    .join(result.stdout.endsWith("\n") ? "" : "\n")
+  // Keep the complete response available: grep/sed after the CLI only see this preview.
+  // Identical responses reuse a path so repeated lookups do not add changing paths to context.
+  const file = path.join(
+    Global.Path.tmp,
+    "devecocli",
+    `docs-${new Bun.CryptoHasher("sha256").update(output).digest("hex")}.txt`,
+  )
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await Bun.write(file, output)
+  const notice = `[Documentation output truncated to ${MAX_DOCS_OUTPUT_LENGTH} characters.]\nFull output saved to: ${file}\nSearch the saved file with Grep, or use Read with offset/limit. Do not pipe this preview to grep/sed to search the full document.\n\n`
+  const truncated = `${notice}${output.slice(0, MAX_DOCS_OUTPUT_LENGTH - notice.length - 1)}\n`
   if (!result.stdout) return { ...result, stderr: truncated }
   return { ...result, stdout: truncated, stderr: "" }
 }
