@@ -53,7 +53,7 @@ export async function executeDevecoCliProxy(
   } = {},
 ): Promise<CliResult & { fullOutput?: string }> {
   if (args[0] === "log" && args[1] === "clear") {
-    return executeLogClear(args.slice(2), dependencies)
+    return executeLogClear(args.slice(2), cwd, runner, dependencies)
   }
   if (args[0] === "log" && !args.some((arg) => arg === "--help" || arg === "-h")) {
     const invalid = validateLogTail(args.slice(1))
@@ -138,17 +138,20 @@ export async function runDevecoCliProxy(args: string[], cwd: string) {
 
 async function executeLogClear(
   args: string[],
+  cwd: string,
+  runner: CliRunner,
   dependencies: {
     findHome?: () => Promise<string | undefined>
     runCommand?: (cmd: string[]) => Promise<CliResult>
   },
 ): Promise<CliResult> {
-  const invalid = args.filter((arg, index) => {
-    if (arg === "--device") return false
-    if (index > 0 && args[index - 1] === "--device") return false
-    return !arg.startsWith("--device=")
-  })
-  if (invalid.length > 0 || (args.includes("--device") && !optionValue(args, "--device"))) {
+  const target = optionValue(args, "--device")
+  const valid =
+    args.length === 0 ||
+    (target &&
+      !target.startsWith("-") &&
+      ((args.length === 2 && args[0] === "--device") || (args.length === 1 && args[0].startsWith("--device="))))
+  if (!valid) {
     return {
       stdout: "",
       stderr: "Usage: devecocli log clear [--device <name-or-serial>]\n",
@@ -169,17 +172,46 @@ async function executeLogClear(
     return { stdout: "", stderr: `hdc not found: ${hdc}\n`, exitCode: 1 }
   }
 
-  const device = optionValue(args, "--device")
-  const result = await (dependencies.runCommand ?? runCommand)([
-    hdc,
-    ...(device ? ["-t", device] : []),
-    "shell",
-    "hilog",
-    "-r",
-  ])
+  const discovery = await runner(["device", "list", "--format", "json"], cwd, { skipVersionCheck: true })
+  if (discovery.exitCode !== 0) return discovery
+  const devices = parseDevices(discovery.stdout)
+  if (!devices) {
+    return { stdout: "", stderr: "Unable to parse connected devices. No logs were cleared.\n", exitCode: 1 }
+  }
+  // Prefer an exact serial over a display name, and never clear an ambiguous/default target.
+  const candidates = !target
+    ? devices
+    : devices.some((device) => device.serial === target)
+      ? devices.filter((device) => device.serial === target)
+      : devices.filter((device) => device.name === target)
+  if (candidates.length !== 1) {
+    return {
+      stdout: "",
+      stderr: `${[
+        candidates.length > 1 ? "DEVICE_SELECTION_REQUIRED" : target ? "DEVICE_NOT_FOUND" : "NO_DEVICE_AVAILABLE",
+        "No logs were cleared. Connect a device and select a unique serial.",
+        ...devices.map((device) => `- ${device.name}${device.serial ? ` (${device.serial})` : ""}`),
+        "Retry with `devecocli log clear --device <serial>`.",
+      ].join("\n")}\n`,
+      exitCode: 1,
+    }
+  }
+  const device = candidates[0]
+  if (!device.serial) {
+    return {
+      stdout: "",
+      stderr: "DEVICE_SERIAL_UNAVAILABLE\nNo logs were cleared. Refresh the device list and retry.\n",
+      exitCode: 1,
+    }
+  }
+  const result = await (dependencies.runCommand ?? runCommand)([hdc, "-t", device.serial, "shell", "hilog", "-r"])
   if (result.exitCode !== 0) return result
+  // HDC can report transport failures in stdout while exiting successfully.
+  if (/\[(?:fail|error)\]|\bfail(?:ed|ure)?\b|^\s*error\b/im.test(stripAnsi(`${result.stdout}\n${result.stderr}`))) {
+    return { ...result, exitCode: 1 }
+  }
   return {
-    stdout: `Device log buffer cleared.\ndevice: ${device ?? "default"}\n`,
+    stdout: `Device log buffer cleared.\ndevice: ${device.name} (${device.serial})\n`,
     stderr: result.stderr,
     exitCode: 0,
   }

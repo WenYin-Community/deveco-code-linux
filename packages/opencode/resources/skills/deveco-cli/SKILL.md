@@ -50,7 +50,7 @@ Obtain device logs. Output contains the log timestamp and application identity w
 - `--tail <num>`: Latest N lines; must be an integer from 1 to 5000.
 - `--from <offset>`, `--to <offset>`: Relative time range such as `30s` or `5m`.
 - `--follow`: Stream logs.
-- `clear [--device <device>]`: Clear the device hilog buffer before reproducing a debug scenario.
+- `clear [--device <name-or-serial>]`: Clear the connected device's hilog buffer before reproducing a debug scenario. Without `--device`, exactly one connected device is required. If multiple devices share a name, select a serial. Empty selectors and discovery/hdc failures return an error without reporting successful cleanup.
 
 When no `--keyword` is given, `devecocli log` filters by the default prefix `[DEVECO_DEBUG]` — set this tag in app debug logs so a bare `log` surfaces only the relevant app output instead of the whole hilog buffer. Pass an explicit `--keyword` to override.
 

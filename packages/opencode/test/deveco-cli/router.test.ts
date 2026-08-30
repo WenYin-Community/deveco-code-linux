@@ -360,7 +360,7 @@ describe("devecocli proxy router", () => {
     expect(result.stdout).toBe("help")
   })
 
-  test("clears the default or selected device log buffer", async () => {
+  test("resolves device names and serials before clearing logs", async () => {
     await using tmp = await tmpdir()
     await fs.mkdir(path.dirname(hdcPath(tmp.path)), { recursive: true })
     await Bun.write(hdcPath(tmp.path), "hdc")
@@ -373,17 +373,153 @@ describe("devecocli proxy router", () => {
       },
     }
 
-    const selected = await executeDevecoCliProxy(
+    const cli = runner({ "device list --format json": { stdout: DEVICES } })
+    for (const args of [["--device=Phone"], ["--device", "127.0.0.1:5555"], ["--device", "Mate 60"]]) {
+      const result = await executeDevecoCliProxy(["log", "clear", ...args], tmp.path, cli.run, dependencies)
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain("Device log buffer cleared.")
+    }
+    expect(commands).toEqual([
+      [hdcPath(tmp.path), "-t", "127.0.0.1:5555", "shell", "hilog", "-r"],
+      [hdcPath(tmp.path), "-t", "127.0.0.1:5555", "shell", "hilog", "-r"],
+      [hdcPath(tmp.path), "-t", "FMR0223", "shell", "hilog", "-r"],
+    ])
+    expect(cli.calls).toEqual(Array.from({ length: 3 }, () => ["device", "list", "--format", "json"]))
+  })
+
+  test("pins the only connected device when clearing logs without a selector", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(hdcPath(tmp.path), "hdc")
+    const cli = runner({
+      "device list --format json": { stdout: '[{"name":"Pura 90 Pro","serial":"127.0.0.1:5555"}]' },
+    })
+    const commands: string[][] = []
+    const result = await executeDevecoCliProxy(["log", "clear"], tmp.path, cli.run, {
+      findHome: async () => tmp.path,
+      runCommand: async (cmd) => {
+        commands.push(cmd)
+        return { stdout: "Log buffer cleared successfully\n", stderr: "", exitCode: 0 }
+      },
+    })
+
+    expect(commands).toEqual([[hdcPath(tmp.path), "-t", "127.0.0.1:5555", "shell", "hilog", "-r"]])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("127.0.0.1:5555")
+  })
+
+  test("rejects empty, missing, repeated or unsupported log clear arguments before discovery", async () => {
+    const cli = runner({})
+    const invalid = [
+      ["--device="],
+      ["--device=   "],
+      ["--device"],
+      ["--device", ""],
+      ["--device", "   "],
+      ["--device", "--unknown"],
+      ["--device=Phone", "--device="],
+      ["--device", "Phone", "--device", "Other"],
+      ["--unknown"],
+      ["Phone"],
+    ]
+    for (const args of invalid) {
+      const result = await executeDevecoCliProxy(["log", "clear", ...args], "/unused", cli.run, {
+        findHome: async () => {
+          throw new Error("Invalid arguments must not reach device operations")
+        },
+      })
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain("Usage:")
+    }
+    expect(cli.calls).toEqual([])
+  })
+
+  test("never clears logs when the target cannot be uniquely resolved", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(hdcPath(tmp.path), "hdc")
+    const scenarios = [
+      { args: [], stdout: DEVICES, error: "DEVICE_SELECTION_REQUIRED" },
+      { args: [], stdout: "[]", error: "NO_DEVICE_AVAILABLE" },
+      { args: ["--device=Missing"], stdout: DEVICES, error: "DEVICE_NOT_FOUND" },
+      {
+        args: ["--device=Phone"],
+        stdout: '[{"name":"Phone","serial":"A"},{"name":"Phone","serial":"B"}]',
+        error: "DEVICE_SELECTION_REQUIRED",
+      },
+      { args: ["--device=Phone"], stdout: '[{"name":"Phone","serial":"-"}]', error: "DEVICE_SERIAL_UNAVAILABLE" },
+      { args: [], stdout: "not JSON", error: "Unable to parse" },
+    ]
+    for (const scenario of scenarios) {
+      const result = await executeDevecoCliProxy(
+        ["log", "clear", ...scenario.args],
+        tmp.path,
+        runner({ "device list --format json": { stdout: scenario.stdout } }).run,
+        {
+          findHome: async () => tmp.path,
+          runCommand: async () => {
+            throw new Error("An unresolved target must not be cleared")
+          },
+        },
+      )
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(scenario.error)
+      expect(result.stdout).not.toContain("Device log buffer cleared.")
+    }
+  })
+
+  test("preserves discovery failures without attempting log clear", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(hdcPath(tmp.path), "hdc")
+    const failure = { stdout: "device discovery failed\n", stderr: "connection unavailable\n", exitCode: 7 }
+    const result = await executeDevecoCliProxy(
       ["log", "clear", "--device=Phone"],
       tmp.path,
-      runner({}).run,
-      dependencies,
+      runner({ "device list --format json": failure }).run,
+      {
+        findHome: async () => tmp.path,
+        runCommand: async () => {
+          throw new Error("Failed discovery must not clear logs")
+        },
+      },
     )
-    const defaultDevice = await executeDevecoCliProxy(["log", "clear"], tmp.path, runner({}).run, dependencies)
+    expect(result).toEqual(failure)
+  })
 
-    expect(commands[0]).toEqual([hdcPath(tmp.path), "-t", "Phone", "shell", "hilog", "-r"])
-    expect(commands[1]).toEqual([hdcPath(tmp.path), "shell", "hilog", "-r"])
-    expect(selected.stdout).toContain("device: Phone")
-    expect(defaultDevice.stdout).toContain("device: default")
+  test("preserves hdc failures even when hdc exits with zero", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(hdcPath(tmp.path), "hdc")
+    const cli = runner({ "device list --format json": { stdout: DEVICES } })
+    const failures = [
+      { stdout: "[Fail]Not match target founded, check connect-key please\n", stderr: "", exitCode: 0 },
+      { stdout: "", stderr: "\u001b[31m[Fail]device offline\u001b[0m\n", exitCode: 0 },
+      { stdout: "error: permission denied\n", stderr: "", exitCode: 0 },
+      { stdout: "Clear log buffer failed\n", stderr: "", exitCode: 0 },
+      { stdout: "hdc output\n", stderr: "connection closed\n", exitCode: 9 },
+    ]
+    for (const failure of failures) {
+      const result = await executeDevecoCliProxy(["log", "clear", "--device=Phone"], tmp.path, cli.run, {
+        findHome: async () => tmp.path,
+        runCommand: async () => failure,
+      })
+      expect(result).toEqual({ ...failure, exitCode: failure.exitCode || 1 })
+      expect(result.stdout).not.toContain("Device log buffer cleared.")
+    }
+  })
+
+  test.skipIf(process.platform === "win32")("detects failure output from an actual hdc subprocess", async () => {
+    await using tmp = await tmpdir()
+    const failure = "[Fail]Not match target founded, check connect-key please\n"
+    // Use a local executable fixture: never clear a real device's logs in tests.
+    await Bun.write(hdcPath(tmp.path), `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(failure)})\n`)
+    await fs.chmod(hdcPath(tmp.path), 0o755)
+    const result = await executeDevecoCliProxy(
+      ["log", "clear", "--device=Phone"],
+      tmp.path,
+      runner({ "device list --format json": { stdout: DEVICES } }).run,
+      {
+        findHome: async () => tmp.path,
+      },
+    )
+
+    expect(result).toEqual({ stdout: failure, stderr: "", exitCode: 1 })
   })
 })
