@@ -112,7 +112,7 @@ const testCase: LiveTestCase = {
         )
       }
 
-      // Verify cwd was switched: either auto-switched by copy-template or explicit switch_cwd tool call
+      // Verify cwd was switched: either auto-switched by devecocli create or explicit switch_cwd tool call
       const autoSwitched = output.includes("Session directory auto-switched")
       const hasSwitchCwdEvent = events.some((event) => {
         if (event.type !== "tool_use") return false

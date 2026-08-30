@@ -203,7 +203,7 @@ const testCase: LiveTestCase = {
   description:
     "验证在已有鸿蒙工程上进行增量开发：先用 devecocli create 创建工程，再让 AI 添加'我的'页面和'清除缓存'菜单项，随后用 devecocli build 编译通过。",
   steps: [
-    "创建临时工作目录，使用 copy-template 生成最小鸿蒙工程。",
+    "创建临时工作目录，使用 devecocli create 生成最小鸿蒙工程。",
     "在工程目录下启动 AI 对话，发送组合 prompt：先添加'我的'页面，再在'我的'页面里添加'清除缓存'菜单项。",
     "解析 stdout 中的 JSON line events。",
     "验证相关页面文件存在代码修改（包含'清除缓存'相关代码）。",
