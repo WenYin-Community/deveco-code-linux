@@ -21,6 +21,12 @@ function runner(outputs: Record<string, Partial<CliResult>>) {
   }
 }
 
+function optionValue(args: string[], option: string) {
+  const index = args.indexOf(option)
+  if (index >= 0) return args[index + 1]
+  return args.find((arg) => arg.startsWith(`${option}=`))?.slice(option.length + 1)
+}
+
 const DEVICES = JSON.stringify([
   { name: "Mate 60", serial: "FMR0223", kind: "device", deviceType: "phone" },
   { name: "Phone", serial: "127.0.0.1:5555", kind: "emulator", deviceType: "phone" },
@@ -290,16 +296,130 @@ describe("devecocli proxy router", () => {
     expect(result.exitCode).toBe(2)
   })
 
-  test("passes create through for an empty target directory", async () => {
+  test("stages create beside an empty target directory before promoting it", async () => {
     await using tmp = await tmpdir()
     const target = path.join(tmp.path, "Demo")
     await fs.mkdir(target)
     const args = ["create", "--project-path", target, "--app-name", "Demo"]
-    const cli = runner({ [args.join(" ")]: { stdout: `Project root: ${target}` } })
+    const cli = runner({})
     const result = await executeDevecoCliProxy(args, tmp.path, cli.run)
 
-    expect(cli.calls).toEqual([args])
+    expect(cli.calls).toHaveLength(1)
+    const staging = optionValue(cli.calls[0], "--project-path")
+    expect(staging).toStartWith(path.join(tmp.path, ".Demo.deveco-create-"))
+    expect(staging).not.toBe(target)
+    expect(await fs.readdir(target)).toEqual([])
+    expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
     expect(result.exitCode).toBe(0)
+  })
+
+  test("atomically promotes a staged project with missing parent directories", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "workspace", "apps", "Demo")
+    const run = async (args: string[]) => {
+      const staging = optionValue(args, "--project-path")!
+      await fs.mkdir(staging, { recursive: true })
+      await Bun.write(path.join(staging, "build-profile.json5"), "generated")
+      return { stdout: `Project root: ${staging}\n`, stderr: "", exitCode: 0 }
+    }
+
+    const result = await executeDevecoCliProxy(
+      ["create", "--project-path", target, "--app-name", "Demo"],
+      tmp.path,
+      run,
+    )
+
+    expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("generated")
+    expect(await fs.readdir(tmp.path)).toEqual(["workspace"])
+    expect(result.stdout).toBe(`Project root: ${target}\n`)
+  })
+
+  test("merges a generated project into a non-empty target without changing existing content", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "Demo")
+    await fs.mkdir(path.join(target, ".spec"), { recursive: true })
+    await Bun.write(path.join(target, ".spec", "sdd.md"), "design")
+    const calls: string[][] = []
+    const run = async (args: string[]) => {
+      calls.push(args)
+      const staging = optionValue(args, "--project-path")!
+      await fs.mkdir(path.join(staging, "entry"), { recursive: true })
+      await Bun.write(path.join(staging, "build-profile.json5"), "generated")
+      await Bun.write(path.join(staging, "entry", "oh-package.json5"), "generated")
+      return { stdout: `Project root: ${staging}\n`, stderr: "", exitCode: 0 }
+    }
+
+    const result = await executeDevecoCliProxy(
+      ["create", "--project-path", target, "--app-name", "Demo", "--merge"],
+      tmp.path,
+      run,
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).not.toContain("--merge")
+    expect(optionValue(calls[0], "--project-path")).toStartWith(path.join(tmp.path, ".Demo.deveco-create-"))
+    expect(await Bun.file(path.join(target, ".spec", "sdd.md")).text()).toBe("design")
+    expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("generated")
+    expect(await Bun.file(path.join(target, "entry", "oh-package.json5")).text()).toBe("generated")
+    expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
+    expect(result.stdout).toContain(`Project root: ${target}`)
+    expect(result.stdout).toContain(`Preserved existing content in: ${target}`)
+    expect(result.exitCode).toBe(0)
+  })
+
+  test("reports all create merge conflicts before changing the target", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "Demo")
+    await fs.mkdir(target)
+    await Bun.write(path.join(target, "build-profile.json5"), "existing")
+    const run = async (args: string[]) => {
+      const staging = optionValue(args, "--project-path")!
+      await Bun.write(path.join(staging, "build-profile.json5"), "generated")
+      await Bun.write(path.join(staging, "new-file.txt"), "generated")
+      return { stdout: `Project root: ${staging}\n`, stderr: "", exitCode: 0 }
+    }
+
+    const result = await executeDevecoCliProxy(
+      ["create", "--project-path", target, "--app-name", "Demo", "--merge"],
+      tmp.path,
+      run,
+    )
+
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('"code": "PROJECT_FILE_CONFLICT"')
+    expect(result.stderr).toContain('"build-profile.json5"')
+    expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("existing")
+    expect(await Bun.file(path.join(target, "new-file.txt")).exists()).toBe(false)
+    expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
+  })
+
+  test("cleans create staging when project generation fails", async () => {
+    await using tmp = await tmpdir()
+    const target = path.join(tmp.path, "Demo")
+    const run = async (args: string[]) => {
+      const staging = optionValue(args, "--project-path")!
+      await Bun.write(path.join(staging, "partial.txt"), "partial")
+      return { stdout: "", stderr: `Failed in ${staging}\n`, exitCode: 1 }
+    }
+
+    const result = await executeDevecoCliProxy(
+      ["create", "--project-path", target, "--app-name", "Demo"],
+      tmp.path,
+      run,
+    )
+
+    expect(result.stderr).toBe(`Failed in ${target}\n`)
+    expect(await Bun.file(target).exists()).toBe(false)
+    expect(await fs.readdir(tmp.path)).toEqual([])
+  })
+
+  test("adds the proxy merge option to create help", async () => {
+    const cli = runner({ "create --help": { stdout: "Usage: devecocli create [options]\n" } })
+    const result = await executeDevecoCliProxy(["create", "--merge", "--help"], "/project", cli.run)
+
+    expect(cli.calls).toEqual([["create", "--help"]])
+    expect(result.stdout).toContain("--merge")
+    expect(result.stdout).toContain("fail on generated file conflicts")
   })
 
   test("accepts log tail values from 1 through 5000", async () => {

@@ -25,7 +25,9 @@ Create or scaffold HarmonyOS applications directly with `devecocli create`.
 - `--bundle-name <bundle>` is optional and defaults from the app name.
 - `--api-level <level>` is optional; omit it to use CLI SDK detection.
 - `--project-path <path>` is the final project root when supplied. When omitted, the CLI creates `<app-name>` under the current directory.
-- If the command returns `PROJECT_EXISTS` (exit 2), ask the user whether to overwrite, rename, or cancel. Never remove or overwrite the target without explicit confirmation. For overwrite, clear only the exact `details.targetRoot` after confirmation and rerun the same command. For rename, rerun with the new final `--project-path`. For cancel, stop.
+- `--merge` allows creation in a non-empty project root. It preserves all existing content and fails with `PROJECT_FILE_CONFLICT` before changing the target if any generated file path conflicts. Use it when specifications or other project inputs already exist in the target directory.
+- If the command returns `PROJECT_EXISTS` (exit 2), use `--merge` only when the user intends the existing directory to become the project root. Otherwise ask whether to overwrite, rename, or cancel. Never remove or overwrite the target without explicit confirmation. For overwrite, clear only the exact `details.targetRoot` after confirmation and rerun the same command. For rename, rerun with the new final `--project-path`. For cancel, stop.
+- If the command returns `PROJECT_FILE_CONFLICT` (exit 2), report `details.conflicts` and ask the user to rename those paths, choose another project root, or cancel. Never overwrite conflicting files automatically.
 - A successful command automatically switches the session context to the reported `Project root:`.
 
 ### `devecocli build`

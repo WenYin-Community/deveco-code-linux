@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import { constants } from "fs"
 import path from "path"
 import stripAnsi from "strip-ansi"
 import { Global } from "@opencode-ai/core/global"
@@ -24,6 +25,19 @@ export type DevecoCliEvent = {
 export const DEVECO_CLI_EVENT_FILE = "DEVECO_CODE_CLI_EVENT_FILE"
 
 export const MAX_DOCS_OUTPUT_LENGTH = 5_000
+
+type CreateTargetState = "missing" | "empty" | "non-empty" | "invalid"
+
+type CreateStaging = {
+  root: string
+  projectRoot: string
+  promotionTarget: string
+}
+
+type ProjectEntry = {
+  relative: string
+  kind: "directory" | "file"
+}
 
 type Device = {
   name: string
@@ -60,9 +74,16 @@ export async function executeDevecoCliProxy(
     if (invalid) return invalid
     args = enhanceLogArgs(args)
   }
-  if (args[0] === "create" && !args.some((arg) => arg === "--help" || arg === "-h")) {
-    const conflict = await createConflict(args.slice(1), cwd)
-    if (conflict) return conflict
+  if (args[0] === "create") {
+    if (args.some((arg) => arg === "--help" || arg === "-h")) {
+      return enhanceCreateHelp(
+        await runner(
+          args.filter((arg) => arg !== "--merge"),
+          cwd,
+        ),
+      )
+    }
+    return executeCreate(args.slice(1), cwd, runner).catch((error) => projectCreateFailed(error))
   }
   if (args[0] === "docs" && (args[1] === "search" || args[1] === "read")) {
     return truncateDocsOutput(await runner(args, cwd))
@@ -217,22 +238,218 @@ async function executeLogClear(
   }
 }
 
-async function createConflict(args: string[], cwd: string): Promise<CliResult | undefined> {
+async function executeCreate(args: string[], cwd: string, runner: CliRunner): Promise<CliResult> {
+  const merge = args.includes("--merge")
+  const forwarded = args.filter((arg) => arg !== "--merge")
   const appName = optionValue(args, "--app-name")
-  if (!appName) return
+  if (!appName) return runner(["create", ...forwarded], cwd)
   const target = path.resolve(cwd, optionValue(args, "--project-path") ?? appName)
-  const stat = await fs.stat(target).catch(() => undefined)
-  if (!stat?.isDirectory()) return
-  if ((await fs.readdir(target)).length === 0) return
+  const state = await createTargetState(target)
+  if (state === "invalid" || (state === "non-empty" && !merge)) return projectExists(target, merge)
+
+  const staging = await createStaging(target, state)
+  try {
+    const result = replaceCreatePath(
+      await runner(["create", ...setOption(forwarded, "--project-path", staging.projectRoot)], cwd),
+      staging.projectRoot,
+      target,
+    )
+    if (result.exitCode !== 0) return result
+
+    if (state === "non-empty") {
+      const conflicts = await mergeProject(staging.projectRoot, target)
+      if (conflicts.length > 0) return projectFileConflict(target, conflicts)
+      return {
+        ...result,
+        stdout: `${[result.stdout.trimEnd(), `Preserved existing content in: ${target}`].filter(Boolean).join("\n")}\n`,
+      }
+    }
+
+    if (!(await promoteProject(staging, target, state))) return projectExists(target, false)
+    return result
+  } finally {
+    await fs.rm(staging.root, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+async function createTargetState(target: string): Promise<CreateTargetState> {
+  const stat = await fs.lstat(target).catch(() => undefined)
+  if (!stat) return "missing"
+  if (!stat.isDirectory()) return "invalid"
+  return (await fs.readdir(target)).length === 0 ? "empty" : "non-empty"
+}
+
+async function createStaging(target: string, state: CreateTargetState): Promise<CreateStaging> {
+  if (state !== "missing") {
+    const root = await fs.mkdtemp(path.join(path.dirname(target), `.${path.basename(target)}.deveco-create-`))
+    await fs.chmod(root, 0o700)
+    return { root, projectRoot: root, promotionTarget: target }
+  }
+
+  const missing = await missingPath(target)
+  const root = await fs.mkdtemp(path.join(path.dirname(missing), `.${path.basename(missing)}.deveco-create-`))
+  const projectRoot = path.join(root, path.relative(missing, target))
+  await fs.chmod(root, 0o700)
+  await fs.mkdir(path.dirname(projectRoot), { recursive: true })
+  return { root, projectRoot, promotionTarget: missing }
+}
+
+async function missingPath(target: string): Promise<string> {
+  const parent = path.dirname(target)
+  const stat = await fs.lstat(parent).catch(() => undefined)
+  if (stat?.isDirectory()) return target
+  if (stat) throw new Error(`Project parent is not a directory: ${parent}`)
+  return missingPath(parent)
+}
+
+async function promoteProject(staging: CreateStaging, target: string, state: CreateTargetState) {
+  if (state === "missing" && (await fs.lstat(staging.promotionTarget).catch(() => undefined))) return false
+  if (state === "empty" && (await createTargetState(target)) !== "empty") return false
+
+  const mode = state === "empty" ? (await fs.stat(target)).mode & 0o777 : 0o777 & ~process.umask()
+  await fs.chmod(staging.root, mode)
+  if (state === "empty") await fs.rmdir(target)
+  await fs.rename(staging.root, staging.promotionTarget)
+  return true
+}
+
+async function mergeProject(source: string, target: string) {
+  const entries = await listProjectEntries(source)
+  const conflicts = (
+    await Promise.all(
+      entries.map(async (entry) => {
+        const stat = await fs.lstat(path.join(target, entry.relative)).catch(() => undefined)
+        if (!stat || (entry.kind === "directory" && stat.isDirectory())) return []
+        return [entry.relative]
+      }),
+    )
+  ).flat()
+  if (conflicts.length > 0) return conflicts.sort()
+
+  const createdFiles: string[] = []
+  const createdDirectories: string[] = []
+  for (const entry of entries.filter((entry) => entry.kind === "directory")) {
+    const destination = path.join(target, entry.relative)
+    const stat = await fs.lstat(destination).catch(() => undefined)
+    if (stat?.isDirectory()) continue
+    const created = await fs.mkdir(destination).then(
+      () => true,
+      () => false,
+    )
+    if (!created) {
+      await rollbackMerge(createdFiles, createdDirectories)
+      return [entry.relative]
+    }
+    createdDirectories.push(destination)
+  }
+
+  for (const entry of entries.filter((entry) => entry.kind === "file")) {
+    const destination = path.join(target, entry.relative)
+    const created = await fs.copyFile(path.join(source, entry.relative), destination, constants.COPYFILE_EXCL).then(
+      () => true,
+      () => false,
+    )
+    if (!created) {
+      await rollbackMerge(createdFiles, createdDirectories)
+      return [entry.relative]
+    }
+    createdFiles.push(destination)
+  }
+  return []
+}
+
+async function listProjectEntries(root: string, directory = root): Promise<ProjectEntry[]> {
+  return (
+    await Promise.all(
+      (await fs.readdir(directory, { withFileTypes: true })).map(async (entry) => {
+        const absolute = path.join(directory, entry.name)
+        const relative = path.relative(root, absolute)
+        if (entry.isDirectory()) {
+          return [{ relative, kind: "directory" as const }, ...(await listProjectEntries(root, absolute))]
+        }
+        if (entry.isFile()) return [{ relative, kind: "file" as const }]
+        throw new Error(`Unsupported generated project entry: ${relative}`)
+      }),
+    )
+  ).flat()
+}
+
+async function rollbackMerge(files: string[], directories: string[]) {
+  await Promise.all(files.map((file) => fs.rm(file, { force: true }).catch(() => undefined)))
+  for (const directory of directories.reverse()) await fs.rmdir(directory).catch(() => undefined)
+}
+
+function projectExists(target: string, merge: boolean): CliResult {
   return {
     stdout: "",
-    stderr: `${JSON.stringify({
-      code: "PROJECT_EXISTS",
-      message: `Target "${target}" already exists and is not empty.`,
-      hint: "Ask the user whether to overwrite, rename, or cancel. Never overwrite without explicit confirmation.",
-      details: { targetRoot: target },
-    }, null, 2)}\n`,
+    stderr: `${JSON.stringify(
+      {
+        code: "PROJECT_EXISTS",
+        message: `Target "${target}" already exists and is not empty.`,
+        hint: merge
+          ? "Choose a directory target before retrying with --merge."
+          : "Retry with --merge to preserve existing content, or ask the user whether to overwrite, rename, or cancel.",
+        details: { targetRoot: target },
+      },
+      null,
+      2,
+    )}\n`,
     exitCode: 2,
+  }
+}
+
+function projectFileConflict(target: string, conflicts: string[]): CliResult {
+  return {
+    stdout: "",
+    stderr: `${JSON.stringify(
+      {
+        code: "PROJECT_FILE_CONFLICT",
+        message: "Generated project files conflict with existing content.",
+        hint: "Rename the conflicting files, choose another project path, or cancel. No existing files were changed.",
+        details: { targetRoot: target, conflicts },
+      },
+      null,
+      2,
+    )}\n`,
+    exitCode: 2,
+  }
+}
+
+function projectCreateFailed(error: unknown): CliResult {
+  return {
+    stdout: "",
+    stderr: `${JSON.stringify(
+      {
+        code: "PROJECT_CREATE_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      null,
+      2,
+    )}\n`,
+    exitCode: 1,
+  }
+}
+
+function setOption(args: string[], option: string, value: string) {
+  const index = args.findIndex((arg) => arg === option || arg.startsWith(`${option}=`))
+  if (index < 0) return [...args, option, value]
+  if (args[index] === option) return args.map((arg, current) => (current === index + 1 ? value : arg))
+  return args.map((arg, current) => (current === index ? `${option}=${value}` : arg))
+}
+
+function replaceCreatePath(result: CliResult, source: string, target: string): CliResult {
+  return {
+    ...result,
+    stdout: result.stdout.replaceAll(source, target),
+    stderr: result.stderr.replaceAll(source, target),
+  }
+}
+
+function enhanceCreateHelp(result: CliResult): CliResult {
+  if (result.exitCode !== 0 || result.stdout.includes("--merge")) return result
+  return {
+    ...result,
+    stdout: `${result.stdout.trimEnd()}\n  --merge                  Preserve existing content and fail on generated file conflicts\n`,
   }
 }
 
