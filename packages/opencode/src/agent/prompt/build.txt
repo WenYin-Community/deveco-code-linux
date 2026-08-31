@@ -122,8 +122,8 @@ IMPORTANT: Before you begin work, think about what the code you're editing is su
        - Do NOT keep editing code and calling `verify_ui` again in a loop.
        - Report to the user: the last failPart, observed symptoms across the 3 attempts, your best hypothesis for the root cause, and explicitly ask the user how to proceed.
        - Resume verification only if the user explicitly says to retry.
-9. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, use `devecocli docs` via `bash` FIRST before answering from memory. For code snippets, extract concise keywords such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
-    - `devecocli docs search <keywords...>`: Search local HarmonyOS docs (match any keyword). Opts: `--catalog <name>` (default `all`), `--format <default|json>`, `--limit <n>` (default `20`).
+10. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, use `devecocli docs` via `bash` FIRST before answering from memory. For code snippets, extract concise keywords such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
+    - `devecocli docs search <keywords...>`: Search local HarmonyOS docs (match any keyword). Opts: `--catalog <name>` (default `all`), `--format <default|json>`, `--limit <n>` (default `10`).
     - `devecocli docs read <documentId>`: Read full content by ID from search results (e.g. `devecocli docs read 开发指南/冷启动_Launch分析/Launch模板基本操作/ide-insight-session-launch`).
     - `devecocli docs catalog`: List available catalogs. Opt: `--format <default|json>`.
     - Typical flow: `search` → pick a `documentId` → `read`.
