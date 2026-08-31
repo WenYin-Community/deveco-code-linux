@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  repository: write
+  repository: read
   pr: read
 
 stages:
@@ -39,28 +39,6 @@ stages:
           - name: 构建 CLI 二进制
             id: build
             run: cd packages/opencode && bun run script/build.ts
-          - name: 清理旧制品
-            # 命名空间制品配额 1 GiB，完整 dist 制品压缩后约 463MB，上传前清理旧制品
-            # fork MR 的 ATOMGIT_TOKEN 仅有读权限（平台安全限制），删除失败不阻断构建
-            continue-on-error: true
-            run: |
-              ids=$(curl -sS -H "Authorization: Bearer $ATOMGIT_TOKEN" \
-                "https://api.gitcode.com/api/v8/repos/openharmony-sig/deveco-code/actions/artifacts?per_page=100" \
-                | jq -r '.artifacts[] | select(.name == "deveco-code-dist") | .id')
-              for id in $ids; do
-                echo "Deleting old artifact $id"
-                curl -sS -X DELETE -H "Authorization: Bearer $ATOMGIT_TOKEN" \
-                  "https://api.gitcode.com/api/v8/repos/openharmony-sig/deveco-code/actions/artifacts/$id" \
-                  -o /dev/null -w "HTTP %{http_code}\n"
-              done
-          - name: 上传制品
-            id: upload
-            # 配额不足时上传可能失败，但二进制构建已完成，不阻断 PR 检查
-            continue-on-error: true
-            uses: upload-artifact
-            with:
-              name: deveco-code-dist
-              path: packages/opencode/dist/
           - name: 步骤摘要
             if: always()
             env:
@@ -75,19 +53,10 @@ stages:
               echo "| 分支 | \`$SUMMARY_BRANCH\` |" >> "$ATOMGIT_STEP_SUMMARY"
               echo "| 触发 | \`$ATOMGIT_EVENT_NAME\` |" >> "$ATOMGIT_STEP_SUMMARY"
               echo "| 构建 | \`$BUILD_RESULT\` |" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "| 上传 | \`${{ steps.upload.outcome }}\` |" >> "$ATOMGIT_STEP_SUMMARY"
               echo "" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "### 构建产物" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "### 构建目标" >> "$ATOMGIT_STEP_SUMMARY"
               echo "" >> "$ATOMGIT_STEP_SUMMARY"
               for dir in packages/opencode/dist/deveco-*/; do
                 [ -d "$dir" ] || continue
                 echo "- \`$(basename "$dir")\`" >> "$ATOMGIT_STEP_SUMMARY"
               done
-              echo "" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "### macOS 使用提示" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "CI 产物未做开发者签名，浏览器下载后 macOS 会提示已损坏，请在解压目录执行以下命令移除隔离标记：" >> "$ATOMGIT_STEP_SUMMARY"
-              echo "" >> "$ATOMGIT_STEP_SUMMARY"
-              echo '```bash' >> "$ATOMGIT_STEP_SUMMARY"
-              echo 'xattr -dr com.apple.quarantine deveco-*/bin/deveco' >> "$ATOMGIT_STEP_SUMMARY"
-              echo '```' >> "$ATOMGIT_STEP_SUMMARY"
