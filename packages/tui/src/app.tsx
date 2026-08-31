@@ -42,6 +42,7 @@ import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
+import { DialogUsage } from "./component/dialog-usage"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogLanguage } from "./component/dialog-language"
 import { DEVECO_FEEDBACK_URL, DEVECO_README_URL } from "./deveco-links"
@@ -758,6 +759,7 @@ function App(props: {
             },
           ]
         : []),
+
       {
         name: "opencode.status",
         title: t("command.view_status"),
@@ -766,6 +768,23 @@ function App(props: {
           dialog.replace(() => <DialogStatus />)
         },
         category: t("category.system"),
+      },
+      {
+        name: "opencode.usage",
+        title: t("command.view_usage"),
+        slashName: "usage",
+        run: () => {
+          dialog.replace(() => <DialogUsage initialTab="usage" tabs={["usage", "stats"]} />)
+        },
+        category: t("category.system"),
+      },
+      {
+        name: "opencode.stats",
+        title: t("command.view_stats"),
+        slashName: "stats",
+        run: () => {
+          dialog.replace(() => <DialogUsage initialTab="stats" tabs={["usage", "stats"]} />)
+        },
       },
       {
         name: "theme.switch",

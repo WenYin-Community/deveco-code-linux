@@ -223,6 +223,10 @@ import type {
   SessionUnshareResponses,
   SessionUpdateErrors,
   SessionUpdateResponses,
+  StatsQuotaErrors,
+  StatsQuotaResponses,
+  StatsUsageErrors,
+  StatsUsageResponses,
   SubtaskPartInput,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
@@ -4469,6 +4473,54 @@ export class Part extends HeyApiClient {
   }
 }
 
+export class Stats extends HeyApiClient {
+  /**
+   * Usage statistics
+   *
+   * Aggregated token and cost usage: totals and per-model breakdown computed from assistant messages (optionally limited to the last `days` days), daily counts for the heatmap, and optional per-session usage.
+   */
+  public usage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sessionID?: string
+      days?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "days" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<StatsUsageResponses, StatsUsageErrors, ThrowOnError>({
+      url: "/stats/usage",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Usage quota
+   *
+   * Token quota windows (hourly/weekly/monthly) with remaining amounts and reset times from the deveco gateway.
+   */
+  public quota<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<StatsQuotaResponses, StatsQuotaErrors, ThrowOnError>({
+      url: "/stats/quota",
+      ...options,
+    })
+  }
+}
+
 export class History extends HeyApiClient {
   /**
    * List sync events
@@ -4550,6 +4602,7 @@ export class Sync extends HeyApiClient {
     parameters?: {
       query_directory?: string
       workspace?: string
+      ticket?: string
       body_directory?: string
       events?: Array<{
         id: string
@@ -4574,6 +4627,7 @@ export class Sync extends HeyApiClient {
               map: "directory",
             },
             { in: "query", key: "workspace" },
+            { in: "query", key: "ticket" },
             {
               in: "body",
               key: "body_directory",
@@ -4605,6 +4659,7 @@ export class Sync extends HeyApiClient {
     parameters?: {
       directory?: string
       workspace?: string
+      ticket?: string
       sessionID?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -4616,6 +4671,7 @@ export class Sync extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "query", key: "ticket" },
             { in: "body", key: "sessionID" },
           ],
         },
@@ -6901,6 +6957,11 @@ export class OpencodeClient extends HeyApiClient {
   private _part?: Part
   get part(): Part {
     return (this._part ??= new Part({ client: this.client }))
+  }
+
+  private _stats?: Stats
+  get stats(): Stats {
+    return (this._stats ??= new Stats({ client: this.client }))
   }
 
   private _sync?: Sync

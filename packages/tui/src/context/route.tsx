@@ -2,6 +2,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../prompt/history"
 import { useTuiStartup } from "./runtime"
+import { enterSession, leaveSession } from "./session-timer"
 
 export type HomeRoute = {
   type: "home"
@@ -33,11 +34,23 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
           : initialRoute(startup.initialRoute) ?? { type: "home" }),
     )
 
+    // Session timer: the initial route (restored from startup) may already be
+    // a session — start its timer without waiting for the first navigate().
+    if (store.type === "session" && "sessionID" in store) {
+      enterSession(store.sessionID)
+    }
+
     return {
       get data() {
         return store
       },
       navigate(route: Route) {
+        // Session timer: close out the old session, start the new one.
+        if (route.type === "session" && "sessionID" in route) {
+          enterSession(route.sessionID)
+        } else {
+          leaveSession()
+        }
         setStore(reconcile(route))
       },
     }

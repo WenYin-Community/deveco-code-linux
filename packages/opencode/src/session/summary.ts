@@ -116,6 +116,21 @@ export const layer = Layer.effect(
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       if (!all.length) return
 
+      // Session-wide code-change totals: diff the whole session from its first
+      // snapshot to the latest and replace the placeholder zeros above. This is
+      // recomputed per summarize call, so retries regenerate instead of accumulate.
+      const sessionDiffs = yield* computeDiff({ messages: all })
+      if (sessionDiffs.length > 0) {
+        yield* sessions.setSummary({
+          sessionID: input.sessionID,
+          summary: {
+            additions: sessionDiffs.reduce((acc, item) => acc + item.additions, 0),
+            deletions: sessionDiffs.reduce((acc, item) => acc + item.deletions, 0),
+            files: sessionDiffs.length,
+          },
+        })
+      }
+
       const messages = all.filter(
         (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
       )

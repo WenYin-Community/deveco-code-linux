@@ -115,3 +115,24 @@ test("provides resolved config through Solid context", async () => {
 test("requires the config provider", () => {
   expect(() => useTuiConfig()).toThrow("TuiConfigProvider is missing")
 })
+
+test("defines dialog.usage keybind defaults and gather wiring", () => {
+  const config = resolve({}, { terminalSuspend: true })
+
+  expect(config.keybinds.has("dialog.usage.tab.prev")).toBe(true)
+  expect(config.keybinds.has("dialog.usage.tab.next")).toBe(true)
+  expect(config.keybinds.has("dialog.usage.focus.sub")).toBe(true)
+  expect(config.keybinds.has("dialog.usage.focus.top")).toBe(true)
+  expect(config.keybinds.has("dialog.usage.dates.cycle")).toBe(true)
+  expect(config.keybinds.has("dialog.usage.stats.copy")).toBe(true)
+  expect(
+    config.keybinds.gather("dialog.usage", [
+      "dialog.usage.tab.prev",
+      "dialog.usage.tab.next",
+      "dialog.usage.focus.sub",
+      "dialog.usage.focus.top",
+      "dialog.usage.dates.cycle",
+      "dialog.usage.stats.copy",
+    ]),
+  ).toHaveLength(6)
+})

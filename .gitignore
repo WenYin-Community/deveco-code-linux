@@ -47,3 +47,5 @@ specs/
 .agents/skills/gitcode-pr/mcp_server/.venv/
 .agents/skills/gitcode-pr/mcp_server/.env
 .agents/skills/gitcode-pr/mcp_server/__pycache__/
+
+packages/tui/.usage-preview/

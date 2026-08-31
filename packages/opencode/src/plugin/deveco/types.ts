@@ -85,6 +85,9 @@ export const ACCESS_TOKEN_EXPIRES_MS = 30 * 60 * 1000 // 30 minutes
 
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
 
+/** Base origin of the deveco gateway services, for external callers. */
+export const gatewayOrigin: string = HuaweiEndpoints.devecoStudio
+
 export const DEFAULT_CONFIG: LoginConfig = {
   baseUrl: HuaweiEndpoints.devecoStudio,
   authUrl: "console/DevEcoIDE/apply",

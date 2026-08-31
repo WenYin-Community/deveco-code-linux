@@ -68,7 +68,14 @@ export type Event =
   | EventTodoUpdated
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
+  | EventQuestionAsked
+  | EventQuestionReplied
+  | EventQuestionRejected
+  | EventSessionStatus
+  | EventSessionIdle
+  | EventSessionCompacted
   | EventLspUpdated
+  | EventSessionDebugState
   | EventBtwStart
   | EventBtwDelta
   | EventBtwComplete
@@ -81,13 +88,6 @@ export type Event =
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
   | EventProjectUpdated
-  | EventSessionStatus
-  | EventSessionIdle
-  | EventQuestionAsked
-  | EventQuestionReplied
-  | EventQuestionRejected
-  | EventSessionCompacted
-  | EventSessionDebugState
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -702,28 +702,6 @@ export type Todo = {
   priority: string
 }
 
-export type SessionStatus =
-  | {
-      type: "idle"
-    }
-  | {
-      type: "retry"
-      attempt: number
-      message: string
-      action?: {
-        reason: string
-        provider: string
-        title: string
-        message: string
-        label: string
-        link?: string
-      }
-      next: number
-    }
-  | {
-      type: "busy"
-    }
-
 export type QuestionOption = {
   /**
    * Display text (1-5 words, concise)
@@ -758,6 +736,28 @@ export type QuestionTool = {
 }
 
 export type QuestionAnswer = Array<string>
+
+export type SessionStatus =
+  | {
+      type: "idle"
+    }
+  | {
+      type: "retry"
+      attempt: number
+      message: string
+      action?: {
+        reason: string
+        provider: string
+        title: string
+        message: string
+        label: string
+        link?: string
+      }
+      next: number
+    }
+  | {
+      type: "busy"
+    }
 
 export type GlobalEvent = {
   directory: string
@@ -1442,9 +1442,72 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "question.asked"
+        properties: {
+          id: string
+          sessionID: string
+          /**
+           * Questions to ask
+           */
+          questions: Array<QuestionInfo>
+          tool?: QuestionTool
+        }
+      }
+    | {
+        id: string
+        type: "question.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          answers: Array<QuestionAnswer>
+        }
+      }
+    | {
+        id: string
+        type: "question.rejected"
+        properties: {
+          sessionID: string
+          requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.status"
+        properties: {
+          sessionID: string
+          status: SessionStatus
+        }
+      }
+    | {
+        id: string
+        type: "session.idle"
+        properties: {
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.compacted"
+        properties: {
+          sessionID: string
+        }
+      }
+    | {
+        id: string
         type: "lsp.updated"
         properties: {
           [key: string]: unknown
+        }
+      }
+    | {
+        id: string
+        type: "session.debug-state"
+        properties: {
+          sessionID: string
+          state: "set" | "cleared"
+          condition: string
+          agent: string
+          mode?: string
         }
       }
     | {
@@ -1582,69 +1645,6 @@ export type GlobalEvent = {
             initialized?: number
           }
           sandboxes: Array<string>
-        }
-      }
-    | {
-        id: string
-        type: "session.status"
-        properties: {
-          sessionID: string
-          status: SessionStatus
-        }
-      }
-    | {
-        id: string
-        type: "session.idle"
-        properties: {
-          sessionID: string
-        }
-      }
-    | {
-        id: string
-        type: "question.asked"
-        properties: {
-          id: string
-          sessionID: string
-          /**
-           * Questions to ask
-           */
-          questions: Array<QuestionInfo>
-          tool?: QuestionTool
-        }
-      }
-    | {
-        id: string
-        type: "question.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          answers: Array<QuestionAnswer>
-        }
-      }
-    | {
-        id: string
-        type: "question.rejected"
-        properties: {
-          sessionID: string
-          requestID: string
-        }
-      }
-    | {
-        id: string
-        type: "session.compacted"
-        properties: {
-          sessionID: string
-        }
-      }
-    | {
-        id: string
-        type: "session.debug-state"
-        properties: {
-          sessionID: string
-          state: "set" | "cleared"
-          condition: string
-          agent: string
-          mode?: string
         }
       }
     | {
@@ -2721,6 +2721,86 @@ export type SessionBusyError = {
   message: string
 }
 
+export type StatsTokens = {
+  input: number
+  output: number
+  reasoning: number
+  cache: {
+    read: number
+    write: number
+  }
+}
+
+export type StatsModelDaily = {
+  date: string
+  tokens: number
+}
+
+export type StatsModelUsage = {
+  providerID: string
+  modelID: string
+  messages: number
+  cost: number
+  tokens: StatsTokens
+  daily: Array<StatsModelDaily>
+}
+
+export type StatsSessionUsage = {
+  sessionID: string
+  title: string
+  timeCreated: number
+  model?: {
+    providerID: string
+    modelID: string
+  }
+  messages: number
+  cost: number
+  durationApi: number
+  durationWall: number
+  additions: number
+  deletions: number
+  tokens: StatsTokens
+}
+
+export type StatsDailyUsage = {
+  date: string
+  messages: number
+  tokens: number
+}
+
+export type StatsUsage = {
+  directory?: string
+  total: {
+    sessions: number
+    messages: number
+    cost: number
+    longestDuration: number
+    tokens: StatsTokens
+  }
+  models: Array<StatsModelUsage>
+  session?: StatsSessionUsage
+  daily: Array<StatsDailyUsage>
+}
+
+export type StatsQuotaWindow = {
+  enabled: boolean
+  periodHours?: number
+  nextResetTime?: string
+  total?: number
+  used?: number
+  remaining?: number
+}
+
+export type StatsQuota = {
+  hourly?: StatsQuotaWindow
+  weekly?: StatsQuotaWindow
+  monthly?: StatsQuotaWindow
+}
+
+export type EffectHttpApiErrorForbidden = {
+  _tag: "Forbidden"
+}
+
 export type EventTuiPromptAppend = {
   type: "tui.prompt.append"
   properties: {
@@ -2802,6 +2882,11 @@ export type UnauthorizedError = {
   message: string
 }
 
+export type ForbiddenError = {
+  _tag: "ForbiddenError"
+  message: string
+}
+
 export type SessionsResponse = {
   data: Array<SessionV2Info>
   cursor: {
@@ -2853,21 +2938,12 @@ export type ProviderNotFoundError = {
   message: string
 }
 
-export type ForbiddenError = {
-  _tag: "ForbiddenError"
-  message: string
-}
-
 export type ProjectCopyError = {
   name: "ProjectCopyError"
   data: {
     message: string
     forceRequired?: boolean
   }
-}
-
-export type EffectHttpApiErrorForbidden = {
-  _tag: "Forbidden"
 }
 
 export type QueueError1 = {
@@ -5075,11 +5151,81 @@ export type EventInstallationUpdateAvailable = {
   }
 }
 
+export type EventQuestionAsked = {
+  id: string
+  type: "question.asked"
+  properties: {
+    id: string
+    sessionID: string
+    /**
+     * Questions to ask
+     */
+    questions: Array<QuestionInfo>
+    tool?: QuestionTool
+  }
+}
+
+export type EventQuestionReplied = {
+  id: string
+  type: "question.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    answers: Array<QuestionAnswer>
+  }
+}
+
+export type EventQuestionRejected = {
+  id: string
+  type: "question.rejected"
+  properties: {
+    sessionID: string
+    requestID: string
+  }
+}
+
+export type EventSessionStatus = {
+  id: string
+  type: "session.status"
+  properties: {
+    sessionID: string
+    status: SessionStatus
+  }
+}
+
+export type EventSessionIdle = {
+  id: string
+  type: "session.idle"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventSessionCompacted = {
+  id: string
+  type: "session.compacted"
+  properties: {
+    sessionID: string
+  }
+}
+
 export type EventLspUpdated = {
   id: string
   type: "lsp.updated"
   properties: {
     [key: string]: unknown
+  }
+}
+
+export type EventSessionDebugState = {
+  id: string
+  type: "session.debug-state"
+  properties: {
+    sessionID: string
+    state: "set" | "cleared"
+    condition: string
+    agent: string
+    mode?: string
   }
 }
 
@@ -5174,76 +5320,6 @@ export type EventProjectUpdated = {
       initialized?: number
     }
     sandboxes: Array<string>
-  }
-}
-
-export type EventSessionStatus = {
-  id: string
-  type: "session.status"
-  properties: {
-    sessionID: string
-    status: SessionStatus
-  }
-}
-
-export type EventSessionIdle = {
-  id: string
-  type: "session.idle"
-  properties: {
-    sessionID: string
-  }
-}
-
-export type EventQuestionAsked = {
-  id: string
-  type: "question.asked"
-  properties: {
-    id: string
-    sessionID: string
-    /**
-     * Questions to ask
-     */
-    questions: Array<QuestionInfo>
-    tool?: QuestionTool
-  }
-}
-
-export type EventQuestionReplied = {
-  id: string
-  type: "question.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    answers: Array<QuestionAnswer>
-  }
-}
-
-export type EventQuestionRejected = {
-  id: string
-  type: "question.rejected"
-  properties: {
-    sessionID: string
-    requestID: string
-  }
-}
-
-export type EventSessionCompacted = {
-  id: string
-  type: "session.compacted"
-  properties: {
-    sessionID: string
-  }
-}
-
-export type EventSessionDebugState = {
-  id: string
-  type: "session.debug-state"
-  properties: {
-    sessionID: string
-    state: "set" | "cleared"
-    condition: string
-    agent: string
-    mode?: string
   }
 }
 
@@ -8802,6 +8878,61 @@ export type SessionBtwResponses = {
 
 export type SessionBtwResponse = SessionBtwResponses[keyof SessionBtwResponses]
 
+export type StatsUsageData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sessionID?: string
+    days?: string
+  }
+  url: "/stats/usage"
+}
+
+export type StatsUsageErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type StatsUsageError = StatsUsageErrors[keyof StatsUsageErrors]
+
+export type StatsUsageResponses = {
+  /**
+   * Aggregated token usage statistics
+   */
+  200: StatsUsage
+}
+
+export type StatsUsageResponse = StatsUsageResponses[keyof StatsUsageResponses]
+
+export type StatsQuotaData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/stats/quota"
+}
+
+export type StatsQuotaErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type StatsQuotaError = StatsQuotaErrors[keyof StatsQuotaErrors]
+
+export type StatsQuotaResponses = {
+  /**
+   * Usage quota windows and allowances
+   */
+  200: StatsQuota
+}
+
+export type StatsQuotaResponse = StatsQuotaResponses[keyof StatsQuotaResponses]
+
 export type SyncStartData = {
   body?: never
   path?: never
@@ -8817,6 +8948,10 @@ export type SyncStartErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
 }
 
 export type SyncStartError = SyncStartErrors[keyof SyncStartErrors]
@@ -8847,6 +8982,7 @@ export type SyncReplayData = {
   query?: {
     directory?: string
     workspace?: string
+    ticket?: string
   }
   url: "/sync/replay"
 }
@@ -8856,6 +8992,14 @@ export type SyncReplayErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Not found
+   */
+  404: NotFoundError
 }
 
 export type SyncReplayError = SyncReplayErrors[keyof SyncReplayErrors]
@@ -8879,6 +9023,7 @@ export type SyncStealData = {
   query?: {
     directory?: string
     workspace?: string
+    ticket?: string
   }
   url: "/sync/steal"
 }
@@ -8888,6 +9033,14 @@ export type SyncStealErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Forbidden
+   */
+  403: EffectHttpApiErrorForbidden
+  /**
+   * Not found
+   */
+  404: NotFoundError
 }
 
 export type SyncStealError = SyncStealErrors[keyof SyncStealErrors]
@@ -8920,6 +9073,10 @@ export type SyncHistoryListErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
 }
 
 export type SyncHistoryListError = SyncHistoryListErrors[keyof SyncHistoryListErrors]
@@ -9608,6 +9765,10 @@ export type V2LocationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2LocationGetError = V2LocationGetErrors[keyof V2LocationGetErrors]
@@ -9642,6 +9803,10 @@ export type V2AgentListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2AgentListError = V2AgentListErrors[keyof V2AgentListErrors]
@@ -10009,6 +10174,10 @@ export type V2ModelListErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -10049,6 +10218,10 @@ export type V2ProviderListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * ServiceUnavailableError
    */
@@ -10092,6 +10265,10 @@ export type V2ProviderGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * ProviderNotFoundError
    */
@@ -10137,6 +10314,10 @@ export type V2IntegrationListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationListError = V2IntegrationListErrors[keyof V2IntegrationListErrors]
@@ -10176,6 +10357,10 @@ export type V2IntegrationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationGetError = V2IntegrationGetErrors[keyof V2IntegrationGetErrors]
@@ -10218,6 +10403,10 @@ export type V2IntegrationConnectKeyErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationConnectKeyError = V2IntegrationConnectKeyErrors[keyof V2IntegrationConnectKeyErrors]
@@ -10260,6 +10449,10 @@ export type V2IntegrationConnectOauthErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationConnectOauthError = V2IntegrationConnectOauthErrors[keyof V2IntegrationConnectOauthErrors]
@@ -10300,6 +10493,10 @@ export type V2IntegrationAttemptCancelErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptCancelError = V2IntegrationAttemptCancelErrors[keyof V2IntegrationAttemptCancelErrors]
@@ -10337,6 +10534,10 @@ export type V2IntegrationAttemptStatusErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptStatusError = V2IntegrationAttemptStatusErrors[keyof V2IntegrationAttemptStatusErrors]
@@ -10408,6 +10609,10 @@ export type V2IntegrationAttemptCompleteErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptCompleteError =
@@ -10446,6 +10651,10 @@ export type V2CredentialRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2CredentialRemoveError = V2CredentialRemoveErrors[keyof V2CredentialRemoveErrors]
@@ -10484,6 +10693,10 @@ export type V2CredentialUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2CredentialUpdateError = V2CredentialUpdateErrors[keyof V2CredentialUpdateErrors]
@@ -10518,6 +10731,10 @@ export type V2PermissionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2PermissionRequestListError = V2PermissionRequestListErrors[keyof V2PermissionRequestListErrors]
@@ -10552,6 +10769,10 @@ export type V2PermissionSavedListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2PermissionSavedListError = V2PermissionSavedListErrors[keyof V2PermissionSavedListErrors]
@@ -10585,6 +10806,10 @@ export type V2PermissionSavedRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2PermissionSavedRemoveError = V2PermissionSavedRemoveErrors[keyof V2PermissionSavedRemoveErrors]
@@ -10696,6 +10921,10 @@ export type V2FsReadErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2FsReadError = V2FsReadErrors[keyof V2FsReadErrors]
@@ -10731,6 +10960,10 @@ export type V2FsListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2FsListError = V2FsListErrors[keyof V2FsListErrors]
@@ -10771,6 +11004,10 @@ export type V2FsFindErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2FsFindError = V2FsFindErrors[keyof V2FsFindErrors]
@@ -10808,6 +11045,10 @@ export type V2CommandListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2CommandListError = V2CommandListErrors[keyof V2CommandListErrors]
@@ -10845,6 +11086,10 @@ export type V2SkillListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2SkillListError = V2SkillListErrors[keyof V2SkillListErrors]
@@ -10882,6 +11127,10 @@ export type V2EventSubscribeErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2EventSubscribeError = V2EventSubscribeErrors[keyof V2EventSubscribeErrors]
@@ -10916,6 +11165,10 @@ export type V2PtyListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2PtyListError = V2PtyListErrors[keyof V2PtyListErrors]
@@ -10961,6 +11214,10 @@ export type V2PtyCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2PtyCreateError = V2PtyCreateErrors[keyof V2PtyCreateErrors]
@@ -11001,6 +11258,10 @@ export type V2PtyRemoveErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * PtyNotFoundError
    */
   404: PtyNotFoundError
@@ -11040,6 +11301,10 @@ export type V2PtyGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * PtyNotFoundError
    */
@@ -11089,6 +11354,10 @@ export type V2PtyUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * PtyNotFoundError
    */
@@ -11224,6 +11493,10 @@ export type V2QuestionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2QuestionRequestListError = V2QuestionRequestListErrors[keyof V2QuestionRequestListErrors]
@@ -11370,6 +11643,10 @@ export type V2ReferenceListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2ReferenceListError = V2ReferenceListErrors[keyof V2ReferenceListErrors]
@@ -11408,6 +11685,10 @@ export type V2ProjectCopyRemoveErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2ProjectCopyRemoveError = V2ProjectCopyRemoveErrors[keyof V2ProjectCopyRemoveErrors]
@@ -11444,6 +11725,10 @@ export type V2ProjectCopyCreateErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2ProjectCopyCreateError = V2ProjectCopyCreateErrors[keyof V2ProjectCopyCreateErrors]
@@ -11476,6 +11761,10 @@ export type V2ProjectCopyRefreshErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
 }
 
 export type V2ProjectCopyRefreshError = V2ProjectCopyRefreshErrors[keyof V2ProjectCopyRefreshErrors]

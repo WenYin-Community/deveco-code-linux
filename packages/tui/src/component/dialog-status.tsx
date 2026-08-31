@@ -9,9 +9,29 @@ import { For, Match, Switch, Show, createMemo } from "solid-js"
 export type DialogStatusProps = {}
 
 export function DialogStatus() {
-  const sync = useSync()
   const { theme } = useTheme()
   const dialog = useDialog()
+  const { t } = useI18n()
+
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text fg={theme.text} attributes={TextAttributes.BOLD}>
+          {t("dialog.status_title")}
+        </text>
+        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          {t("dialog.esc")}
+        </text>
+      </box>
+      <StatusBody />
+    </box>
+  )
+}
+
+/** Status content shared by DialogStatus and the Status tab of DialogUsage. */
+export function StatusBody() {
+  const sync = useSync()
+  const { theme } = useTheme()
   const { t } = useI18n()
 
   const enabledFormatters = createMemo(() => sync.data.formatter.filter((f) => f.enabled))
@@ -43,15 +63,7 @@ export function DialogStatus() {
   })
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={theme.text} attributes={TextAttributes.BOLD}>
-          {t("dialog.status_title")}
-        </text>
-        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          {t("dialog.esc")}
-        </text>
-      </box>
+    <box gap={1}>
       <Show when={Object.keys(sync.data.mcp).length > 0} fallback={<text fg={theme.text}>{t("dialog.no_mcp_servers")}</text>}>
         <box>
           <text fg={theme.text}>{t("dialog.mcp_servers_count", { count: Object.keys(sync.data.mcp).length })}</text>
