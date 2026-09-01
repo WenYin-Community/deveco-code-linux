@@ -595,6 +595,33 @@ test("records build success from the authoritative metadata exit code", async ()
   expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true)
 })
 
+test("strips the local full-output path pointer from truncated build logs", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  // Real truncated shape: the tool prepends a pointer to the local full log (build_project.ts).
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      output:
+        "--- The log is too long, only the last 50 lines are kept ---\n\nFull output saved to: /Users/zhuyu/.local/share/deveco/tool-output/tool_abc123\n\n1 ERROR: 10505001 ArkTS Compiler Error\nBUILD FAILED (exitCode=1)",
+      metadata: { exitCode: 1, truncated: true, outputPath: "/Users/zhuyu/.local/share/deveco/tool-output/tool_abc123" },
+    },
+  )
+
+  const entry = harness.recordBuildProjectInfo.mock.calls[0]?.[0]
+  // The pointer line (and the username inside it) never reaches telemetry...
+  expect(entry?.output).not.toContain("Full output saved to")
+  expect(entry?.output).not.toContain("/Users/zhuyu")
+  // ...while the truncation notice, error detail and status line stay intact.
+  expect(entry?.output).toContain("The log is too long, only the last 50 lines are kept")
+  expect(entry?.output).toContain("1 ERROR: 10505001 ArkTS Compiler Error")
+  expect(entry?.output).toContain("BUILD FAILED (exitCode=1)")
+  expect(entry?.exitCode).toBe(10505001)
+})
+
 test("session idle uploads the build project event on a separate flush", async () => {
   const harness = createHarness()
   const hooks = await startSession(harness, "deveco")

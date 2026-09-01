@@ -99,8 +99,10 @@ export interface BuildProjectInfo {
   // back to the tool process exit code when no code is parseable. Numeric form drops the
   // leading zeros of ohpm-style codes: text 00608002 becomes 608002.
   exitCode: number
-  // bounded build log preview exactly as the tool returned it (status line included);
-  // the full log stays local via the tool's outputPath mechanism and is never uploaded
+  // bounded build log preview (status line included). The tool's "Full output saved
+  // to: <local path>" pointer line is stripped before recording — the local path
+  // carries the OS username and the platform cannot read the local file anyway.
+  // The full log itself stays local; only this bounded preview is uploaded.
   output: string
   truncated: boolean
 }

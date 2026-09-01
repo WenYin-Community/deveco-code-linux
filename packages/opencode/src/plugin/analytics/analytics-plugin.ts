@@ -336,7 +336,14 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
                   output.output,
                   typeof metadata?.exitCode === "number" ? metadata.exitCode : 1,
                 ),
-            output: output.output,
+            // Strip the "Full output saved to: <path>" pointer the tool prepends when the
+            // log is truncated (build_project.ts): the local path carries the OS username
+            // and the platform cannot read the local file anyway. The bounded preview and
+            // status line stay intact.
+            output: output.output
+              .split("\n")
+              .filter((line) => !line.startsWith("Full output saved to:"))
+              .join("\n"),
             truncated: metadata?.truncated === true,
           })
         }
