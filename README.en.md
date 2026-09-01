@@ -149,18 +149,23 @@ deveco auth logout
 
 After signing in, you can use the free model channels provided by DevEco Code.
 
-Type `/models` in DevEco Code to open the model configuration UI. The `GLM-5.1` model is currently available for free, with a default limit of 50 requests per minute per account. Press `/connect` to open the Provider selection UI and configure supported third-party models.
+Type `/models` in DevEco Code to open the model configuration UI. The `GLM-5.1` model is currently available for free, with a default limit of 50 requests per minute per account. Type `/connect` to open the Provider selection UI and configure supported third-party models.
 
-You can also configure models in `deveco.jsonc`:
+The built-in free model channel is available automatically after signing in and requires no manual configuration. To connect another model service, configure a third-party Provider in `deveco.jsonc` (all fields below are placeholders — replace them with your provider's details):
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "deveco": {
-      "name": "DevEco Code",
+    // Provider ID, any custom name; reference the model elsewhere as "<provider-id>/<model-id>"
+    "myprovider": {
+      // Optional, defaults to openai-compatible; only needed for providers that are not OpenAI-compatible
+      "npm": "@ai-sdk/openai-compatible",
+      // Display name, customizable
+      "name": "My Provider",
       "models": {
-        "glm-5": {
+        // Replace with the model ID provided by your provider
+        "<your-model-id>": {
           "tool_call": true,
           "limit": {
             "context": 200000,
@@ -169,8 +174,10 @@ You can also configure models in `deveco.jsonc`:
         }
       },
       "options": {
-        "baseURL": "https://api.openbitfun.com/v1",
-        "apiKey": "{env:DEVECO_API_KEY}"
+        // Replace with your provider's API endpoint
+        "baseURL": "https://<your-endpoint>/v1",
+        // Replace with your API key
+        "apiKey": "<your-api-key>"
       }
     }
   }
@@ -181,7 +188,7 @@ You can also configure models in `deveco.jsonc`:
 
 UI verification is an optional capability during the feature verification phase, used to verify whether the interface matches requirement descriptions.
 
-This feature requires a multimodal model (Used only for UI verification, not as the main chat model): when logged in, it defaults to using the built-in Qwen3-VL model; when not logged in, UI verification is skipped.
+This feature requires a multimodal model (used only for UI verification, not as the main chat model): when logged in, it defaults to using the built-in Qwen3-VL model; when not logged in, UI verification is skipped.
 
 To configure a third-party multimodal model (Qwen series only), specify it in the `agent` section of `deveco.jsonc`. Example using qwen3-vl-plus:
 
@@ -194,7 +201,7 @@ To configure a third-party multimodal model (Qwen series only), specify it in th
       "name": "alibaba",
       "options": {
         "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "apiKey": "your-api-key",
+        "apiKey": "<your-api-key>",
       },
       "models": {
         "qwen3-vl-plus": {
@@ -209,7 +216,7 @@ To configure a third-party multimodal model (Qwen series only), specify it in th
   "agent": {
     "ui_verification": {
       "mode": "subagent",
-      "model": "myprovider/qwen3-vl-plus", // Format: <provider-name>/<model-name>
+      "model": "myprovider/qwen3-vl-plus", // Format: <provider-id>/<model-id>
       "hidden": true,
     },
   },

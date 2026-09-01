@@ -151,16 +151,21 @@ deveco auth logout
 
 在 DevEco Code 中输入 `/models` 可进入模型配置界面。当前免费提供 `GLM-5.1` 模型，单账号默认每分钟 50 次请求。也可以通过 `/connect` 进入 Provider 选择界面，配置支持的第三方模型。
 
-也可以通过 `deveco.jsonc` 配置模型：
+内置免费模型通道在登录后自动可用，无需在配置文件中手动配置。如需接入其他模型服务，可以通过 `deveco.jsonc` 配置第三方 Provider（以下字段均为占位符，请替换为你的服务商信息）：
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "deveco": {
-      "name": "DevEco Code",
+    // Provider ID，自定义命名即可，其他配置中通过 "<provider-id>/<model-id>" 引用模型
+    "myprovider": {
+      // 可选，缺省即为 openai-compatible；非 OpenAI 兼容的服务商才需要指定
+      "npm": "@ai-sdk/openai-compatible",
+      // 显示名称，可自定义
+      "name": "My Provider",
       "models": {
-        "glm-5": {
+        // 替换为服务商提供的模型 ID
+        "<your-model-id>": {
           "tool_call": true,
           "limit": {
             "context": 200000,
@@ -169,8 +174,10 @@ deveco auth logout
         }
       },
       "options": {
-        "baseURL": "https://api.openbitfun.com/v1",
-        "apiKey": "{env:DEVECO_API_KEY}"
+        // 替换为服务商的 API 地址
+        "baseURL": "https://<your-endpoint>/v1",
+        // 替换为你的 API Key
+        "apiKey": "<your-api-key>"
       }
     }
   }
@@ -183,7 +190,7 @@ UI 检查是功能验证阶段的可选能力，用于验证界面是否符合�
 
 该功能需调用多模态模型（仅用于 UI 检查，不作为主对话模型）：已登录账号时默认使用内置 Qwen3-VL 模型，未登录时则跳过 UI 检查。
 
-如需配置第三方多模态模型（仅支持 Qwen 系列），可在 `deveco.jsonc` 的 `agent` 中指定，以qwen3-vl-plus为例：
+如需配置第三方多模态模型（仅支持 Qwen 系列），可在 `deveco.jsonc` 的 `agent` 中指定，以 qwen3-vl-plus 为例：
 
 ```jsonc
 {
@@ -194,7 +201,7 @@ UI 检查是功能验证阶段的可选能力，用于验证界面是否符合�
       "name": "alibaba",
       "options": {
         "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "apiKey": "your-api-key",
+        "apiKey": "<your-api-key>",
       },
       "models": {
         "qwen3-vl-plus": {
@@ -209,7 +216,7 @@ UI 检查是功能验证阶段的可选能力，用于验证界面是否符合�
   "agent": {
     "ui_verification": {
       "mode": "subagent",
-      "model": "myprovider/qwen3-vl-plus", // 格式为<provider-name>/<model-name>
+      "model": "myprovider/qwen3-vl-plus", // 格式为 <provider-id>/<model-id>
       "hidden": true,
     },
   },
