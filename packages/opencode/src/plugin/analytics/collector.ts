@@ -5,7 +5,14 @@ import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import { createEnvironmentFields } from "./events"
-import type { AiSessionEvent, BuildResults, Operations, SessionContext } from "./types"
+import type {
+  AiSessionEvent,
+  BuildProjectAnalyticsEvent,
+  BuildProjectInfo,
+  BuildResults,
+  Operations,
+  SessionContext,
+} from "./types"
 import { isBuiltinTool, isMcpTool, isSkillTool } from "./types"
 
 export type SessionStart = {
@@ -114,6 +121,7 @@ export class SessionCollector {
       modifiedFiles: new Map(),
       toolExecutions: [],
       toolCounts: new Map(),
+      buildProjectInfo: [],
       buildResults: {
         isFirstBuildSuccess: null,
         isFinalBuildSuccess: null,
@@ -135,6 +143,13 @@ export class SessionCollector {
     if (!this.context) return
     this.context.inputTokens += inputTokens
     this.context.outputTokens += outputTokens
+  }
+
+  // Per-build sidecar ledger for the DevEcoCodeBuild event; entries carry the log preview
+  // and parsed error code that AiSessionEvent.toolExecutions intentionally omits.
+  recordBuildProjectInfo(entry: BuildProjectInfo): void {
+    if (!this.context) return
+    this.context.buildProjectInfo.push(entry)
   }
 
   // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
@@ -222,6 +237,18 @@ export class SessionCollector {
       outputTokens: this.context.outputTokens,
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
       finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
+    }
+  }
+
+  // DevEcoCodeBuild sidecar: only turns with at least one build_project execution
+  // produce an event; an empty list would be pure noise.
+  buildProjectEvent(): BuildProjectAnalyticsEvent | null {
+    if (!this.context || this.context.buildProjectInfo.length === 0) return null
+    return {
+      ...createEnvironmentFields(this.context.sourceVersion),
+      sessionid: this.context.sessionID,
+      messageId: this.context.messageId,
+      buildProjectInfo: this.context.buildProjectInfo,
     }
   }
 

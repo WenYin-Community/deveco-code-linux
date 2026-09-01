@@ -1,9 +1,36 @@
 import { expect, mock, test } from "bun:test"
-import { createAnalyticsPlugin } from "@/plugin/analytics/analytics-plugin"
+import { createAnalyticsPlugin, extractBuildExitCode } from "@/plugin/analytics/analytics-plugin"
 import type { CodeAttributionTracker, CodeAttributionTrackerOptions } from "@/plugin/analytics/code-attribution"
 import type { SessionStart } from "@/plugin/analytics/collector"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
-import type { AiCodeAttributionEvent, AiSessionEvent, AnalyticsSubmission } from "@/plugin/analytics/types"
+import type {
+  AiCodeAttributionEvent,
+  AiSessionEvent,
+  AnalyticsSubmission,
+  BuildProjectAnalyticsEvent,
+  BuildProjectInfo,
+} from "@/plugin/analytics/types"
+
+const builtBuildProjectEvent: BuildProjectAnalyticsEvent = {
+  sourceType: "DevEco-Code-Cli",
+  sourceVersion: "1.2.3",
+  os_arch: "arm64",
+  os_name: process.platform,
+  os_version: "os-version",
+  sessionid: "session-1",
+  messageId: "message-1",
+  buildProjectInfo: [
+    {
+      toolName: "build_project",
+      duration: 5000,
+      isSuccess: false,
+      timestamp: 1,
+      exitCode: 10505001,
+      output: "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'",
+      truncated: false,
+    },
+  ],
+}
 
 const builtEvent: AiSessionEvent = {
   sourceType: "DevEco-Code-Cli",
@@ -44,8 +71,10 @@ function createHarness() {
     active = true
   })
   const recordTokenUsage = mock((_inputTokens: number, _outputTokens: number) => undefined)
+  const recordBuildProjectInfo = mock((_entry: BuildProjectInfo) => undefined)
   const recordToolExecution = mock((_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess: boolean) => undefined)
   const buildEvent = mock(async () => builtEvent)
+  const buildProjectEvent = mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent)
   const upload = mock(async (_submission: AnalyticsSubmission) => true)
   const projectId = mock(async () => "550e8400-e29b-41d4-a716-446655440000")
   const setAttributionEnabled = mock(async (_enabled: boolean) => undefined)
@@ -56,8 +85,11 @@ function createHarness() {
   const startPeriodicFlush = mock(() => undefined)
   const stopPeriodicFlush = mock(() => undefined)
   const clearQueue = mock(async () => undefined)
+  const flush = mock(async () => ({ success: true }))
   const diagnostics: string[] = []
   const analyticsEnabled = mock(async () => shouldCollect)
+  let improvementEnabled = true
+  const toolImprovementEnabled = mock(async () => improvementEnabled)
   const codeAttribution = mock(
     async (_options: CodeAttributionTrackerOptions): Promise<CodeAttributionTracker> => ({
       setEnabled: setAttributionEnabled,
@@ -78,11 +110,13 @@ function createHarness() {
       startSession,
       recordResponseDelta: () => undefined,
       recordTokenUsage,
+      recordBuildProjectInfo,
       recordFileEdit: () => undefined,
       recordFileDiff: () => undefined,
       recordToolExecution,
       getSessionID: () => (active ? "session-1" : null),
       buildEvent,
+      buildProjectEvent,
       clear: () => {
         active = false
       },
@@ -94,9 +128,11 @@ function createHarness() {
       clearQueue,
       shutdown: async () => undefined,
       upload,
+      flush,
     },
     isLoggedIn: async () => loggedIn,
     isJwtExpired: async () => jwtExpired,
+    toolImprovementEnabled,
     diagnostic: async (message) => {
       if (diagnosticThrows) throw new Error("diagnostic unavailable")
       diagnostics.push(message)
@@ -110,9 +146,13 @@ function createHarness() {
     plugin,
     startSession,
     recordTokenUsage,
+    recordBuildProjectInfo,
     recordToolExecution,
     buildEvent,
+    buildProjectEvent,
     upload,
+    flush,
+    toolImprovementEnabled,
     projectId,
     codeAttribution,
     setAttributionEnabled,
@@ -137,6 +177,9 @@ function createHarness() {
     },
     setShouldCollect: (value: boolean) => {
       shouldCollect = value
+    },
+    setImprovementEnabled: (value: boolean) => {
+      improvementEnabled = value
     },
   }
 }
@@ -485,4 +528,116 @@ test("defaults step-finish token usage to zero when the part carries no tokens",
   })
 
   expect(harness.recordTokenUsage).toHaveBeenCalledWith(0, 0)
+})
+
+test("extractBuildExitCode ignores success markers and keeps the fallback", () => {
+  // Success is decided by metadata.exitCode at the call site, never by this parser;
+  // the substring deliberately does NOT short-circuit to 0.
+  expect(extractBuildExitCode("> hvigor BUILD SUCCESSFUL in 3s\nBuild completed successfully (exitCode=0)", 1)).toBe(1)
+})
+
+test("extractBuildExitCode parses the three real hvigor error shapes", () => {
+  // ArkTS compiler error: code leads the line (arkts-build-cases case02)
+  expect(extractBuildExitCode("10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)", 1)).toBe(10505001)
+  // ArkTS lint error: code followed by colon (case03)
+  expect(extractBuildExitCode('10605008: Use explicit types instead of "any", "unknown" (arkts-no-any-unknown)', 1)).toBe(10605008)
+  // ohpm error: code after "ERROR:" (case07)
+  expect(extractBuildExitCode('ohpm ERROR: 00608002: Missing file "oh-package.json5" in ".../entry2"', 1)).toBe(608002)
+})
+
+test("extractBuildExitCode falls back to the process exit code when nothing parses", () => {
+  expect(extractBuildExitCode("> hvigor ERROR: something went wrong\nBUILD FAILED (exitCode=1)", 1)).toBe(1)
+})
+
+test("records build project info with the parsed exit code on tool.execute.after", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      output: "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)",
+      metadata: { exitCode: 1 },
+    },
+  )
+
+  const entry = harness.recordBuildProjectInfo.mock.calls[0]?.[0]
+  expect(entry?.toolName).toBe("build_project")
+  expect(entry?.exitCode).toBe(10505001)
+  // Build-success semantics: the compile failed, so isSuccess is false even though
+  // the tool itself returned normally.
+  expect(entry?.isSuccess).toBe(false)
+  expect(entry?.truncated).toBe(false)
+  expect(entry?.output).toContain("ArkTS Compiler Error")
+})
+
+test("records build success from the authoritative metadata exit code", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "deveco")
+
+  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
+    {
+      title: "Build",
+      // A lint warning line can share the error-code shape without failing the build;
+      // metadata.exitCode=0 must decide success before any log parsing happens.
+      output: '10605008: Use explicit types instead of "any" (warning)\nhvigor BUILD SUCCESSFUL in 991 ms\nBuild completed successfully (exitCode=0)',
+      metadata: { exitCode: 0 },
+    },
+  )
+
+  const entry = harness.recordBuildProjectInfo.mock.calls[0]?.[0]
+  expect(entry?.isSuccess).toBe(true)
+  expect(entry?.exitCode).toBe(0)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true)
+})
+
+test("session idle uploads the build project event on a separate flush", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "deveco")
+  await finishSession(hooks)
+
+  expect(harness.upload).toHaveBeenCalledTimes(2)
+  expect(harness.upload.mock.calls[0]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION })
+  expect(harness.upload.mock.calls[1]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.BUILD_PROJECT, event: builtBuildProjectEvent })
+  // Session event flushes out first, then the build event flushes separately,
+  // so the two never share one HTTP request.
+  expect(harness.flush).toHaveBeenCalledTimes(2)
+})
+
+test("session idle skips the build project event when no build ran", async () => {
+  const harness = createHarness()
+  harness.buildProjectEvent.mockReturnValue(null)
+  const hooks = await startSession(harness, "deveco")
+  await finishSession(hooks)
+
+  expect(harness.upload).toHaveBeenCalledTimes(1)
+  expect(harness.upload.mock.calls[0]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION })
+})
+
+test("session idle skips the build project event when Improvement is disabled", async () => {
+  const harness = createHarness()
+  harness.setImprovementEnabled(false)
+  const hooks = await startSession(harness, "deveco")
+  await finishSession(hooks)
+
+  expect(harness.upload).toHaveBeenCalledTimes(1)
+  expect(harness.upload.mock.calls[0]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION })
+  expect(harness.toolImprovementEnabled).toHaveBeenCalledTimes(1)
+  expect(harness.diagnostics).toContain("Build project event skipped: Improvement disabled")
+})
+
+test("session idle skips the build project event for non-deveco providers", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+  await finishSession(hooks)
+
+  expect(harness.upload).toHaveBeenCalledTimes(1)
+  expect(harness.upload.mock.calls[0]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION })
+  // Provider gate fails before the privacy read, so Improvement is never consulted.
+  expect(harness.toolImprovementEnabled).toHaveBeenCalledTimes(0)
+  expect(harness.diagnostics).toContain("Build project event skipped: provider=openai")
 })

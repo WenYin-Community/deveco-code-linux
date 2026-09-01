@@ -179,3 +179,59 @@ test("collection still requires login and the analytics switch", async () => {
   enabled = false
   expect(await collector.shouldCollect()).toBe(false)
 })
+
+test("emits a build project event listing every build of the turn", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-build-detail",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+  collector.recordBuildProjectInfo({
+    toolName: "build_project",
+    duration: 5000,
+    isSuccess: false,
+    timestamp: 1,
+    exitCode: 10505001,
+    output: "10505001 ArkTS Compiler Error: ...",
+    truncated: false,
+  })
+  collector.recordBuildProjectInfo({
+    toolName: "build_project",
+    duration: 3000,
+    isSuccess: true,
+    timestamp: 2,
+    exitCode: 0,
+    output: "Build completed successfully (exitCode=0)",
+    truncated: false,
+  })
+
+  const event = collector.buildProjectEvent()
+  expect(event?.sessionid).toBe("session-build-detail")
+  expect(event?.messageId).toBe("message-1")
+  expect(event?.sourceType).toBe("DevEco-Code-Cli")
+  expect(event?.buildProjectInfo).toHaveLength(2)
+  expect(event?.buildProjectInfo[0]?.exitCode).toBe(10505001)
+  expect(event?.buildProjectInfo[1]?.exitCode).toBe(0)
+})
+
+test("returns null build project event when the turn had no build", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-no-build",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+
+  expect(collector.buildProjectEvent()).toBe(null)
+})

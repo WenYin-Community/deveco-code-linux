@@ -3,6 +3,7 @@ import path from "path"
 import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { Global } from "@opencode-ai/core/global"
 import { devecoAuth } from "../deveco"
+import { readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
 import { globalCollector } from "./collector"
 import type { SessionStart } from "./collector"
 import { createCodeAttributionTracker } from "./code-attribution"
@@ -11,7 +12,7 @@ import { getOrCreateProjectId } from "./project-id"
 import { globalUploader } from "./uploader"
 import { getVersion } from "./storage"
 import { ANALYTICS_ACTION } from "./types"
-import type { AiSessionEvent, AnalyticsSubmission } from "./types"
+import type { AiSessionEvent, AnalyticsSubmission, BuildProjectAnalyticsEvent, BuildProjectInfo } from "./types"
 
 const ANALYTICS_DIR = path.join(Global.Path.data, "analytics", "log")
 const LOG_FILE = path.join(ANALYTICS_DIR, "analytics.log")
@@ -24,11 +25,13 @@ interface AnalyticsCollectorDependency {
   startSession(input: SessionStart): void
   recordResponseDelta(): void
   recordTokenUsage(inputTokens: number, outputTokens: number): void
+  recordBuildProjectInfo(entry: BuildProjectInfo): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
   recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess?: boolean): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
+  buildProjectEvent(): BuildProjectAnalyticsEvent | null
   clear(): void
 }
 
@@ -39,6 +42,7 @@ interface AnalyticsUploaderDependency {
   clearQueue(): Promise<void>
   shutdown(): Promise<void>
   upload(submission: AnalyticsSubmission): Promise<boolean>
+  flush(): Promise<{ success: boolean }>
 }
 
 interface AnalyticsPluginDependencies {
@@ -46,6 +50,9 @@ interface AnalyticsPluginDependencies {
   uploader: AnalyticsUploaderDependency
   isLoggedIn(): Promise<boolean>
   isJwtExpired(): Promise<boolean | null>
+  // Privacy switch "Improvement" (kv deveco_tool_improvement_enabled); gates the
+  // DevEcoCodeBuild event the same way the magpie flow gates its own collection.
+  toolImprovementEnabled(): Promise<boolean>
   diagnostic(message: string): void | Promise<void>
   projectId(directory: string): Promise<string>
   codeAttribution(options: CodeAttributionTrackerOptions): Promise<CodeAttributionTracker>
@@ -64,6 +71,21 @@ async function writeLog(message: string): Promise<void> {
   }
 }
 
+// Extracts the build error code from a build_project log preview: the first 6-8 digit
+// standalone number, matching the three real hvigor output shapes: "10505001 ArkTS
+// Compiler Error:", "10605008:", and ohpm's "ERROR: 00608002:". Purely a failure-path
+// parser — the caller decides success via metadata.exitCode before invoking this.
+// Returns the fallback (the tool process exit code) when nothing parses.
+export function extractBuildExitCode(output: string, fallback: number): number {
+  for (const line of output.split("\n")) {
+    const leading = line.match(/^\s*(\d{6,8})\b/)
+    if (leading?.[1]) return Number(leading[1])
+    const afterError = line.match(/ERROR:\s*(\d{6,8})/)
+    if (afterError?.[1]) return Number(afterError[1])
+  }
+  return fallback
+}
+
 export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies): Plugin {
   return async ({ directory }) => {
     const { collector, uploader } = dependencies
@@ -74,6 +96,7 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
     // Captured once per instance from the merged config; the ui-verification tool
     // resolves agent.ui_verification.model from the same source.
     let uiVerificationModel: string | null = null
+    let sessionProviderId = "unknown"
     let attributionEligibility: boolean | undefined
     let uploaderReady = false
     let lastAnalyticsEnabled: boolean | undefined
@@ -218,7 +241,27 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         ) {
           const event = await collector.buildEvent(projectId, projectPath)
           if (event) {
+            // Best-effort flush between the two events so they normally leave in separate
+            // HTTP requests, mirroring how the magpie flow reports on its own stream. If a
+            // flush fails or overlaps an in-flight upload, both events stay queued and may
+            // share a later batched request — data is never lost, only coalesced.
             await uploader.upload({ action: ANALYTICS_ACTION.AI_SESSION, event })
+            await uploader.flush()
+            const buildEvent = collector.buildProjectEvent()
+            if (buildEvent && sessionProviderId === "deveco" && (await dependencies.toolImprovementEnabled())) {
+              await uploader.upload({ action: ANALYTICS_ACTION.BUILD_PROJECT, event: buildEvent })
+              await uploader.flush()
+              await diagnostic(`Build project event queued: ${buildEvent.buildProjectInfo.length} build(s)`)
+            } else if (buildEvent) {
+              // Log the rejection reason so field debugging does not have to guess why
+              // DevEcoCodeBuild is missing. The provider branch fires without reading the
+              // Improvement switch, preserving the short-circuit order above.
+              await diagnostic(
+                sessionProviderId === "deveco"
+                  ? "Build project event skipped: Improvement disabled"
+                  : `Build project event skipped: provider=${sessionProviderId}`,
+              )
+            }
             collector.clear()
           }
         }
@@ -230,6 +273,9 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
         const providerId = input.model?.providerID || "unknown"
         const modelId = input.model?.modelID || "unknown"
         const agentName = input.agent || "unknown"
+        // DevEcoCodeBuild only reports for deveco-provided models; tracked per turn so
+        // model upgrades never need a code change, only the provider matters.
+        sessionProviderId = providerId
         collector.startSession({
           sessionID: input.sessionID,
           messageId: output.message.id,
@@ -264,13 +310,36 @@ export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies)
           metadata?.error ||
           (input.tool !== "build_project" && (output.output?.includes("Error") || output.output?.includes("Failed")))
         const duration = Date.now() - startTime
-        // isSuccess tracks tool execution success; isBuildSuccess tracks build result success.
-        // A build_project call with isSuccess=true but isBuildSuccess=false means the tool ran
-        // fine but the build failed (e.g. "BUILD FAILED" in output).
+        // isSuccess tracks tool execution success; buildSucceeded tracks the build result.
+        // metadata.exitCode is authoritative (the tool always sets it); the hvigor
+        // "BUILD SUCCESSFUL" substring only backfills when metadata is absent. One
+        // predicate feeds both the session event (isBuildSuccess) and the build event
+        // (isSuccess/exitCode), so the two events can never disagree on a build.
         const isSuccess = !hasError
-        const isBuildSuccess =
-          input.tool === "build_project" && isSuccess && (output.output ?? "").toLowerCase().includes("build successful")
-        collector.recordToolExecution(input.tool, duration, isSuccess, isBuildSuccess)
+        const buildSucceeded =
+          typeof metadata?.exitCode === "number"
+            ? metadata.exitCode === 0
+            : (output.output ?? "").toLowerCase().includes("build successful")
+        collector.recordToolExecution(input.tool, duration, isSuccess, input.tool === "build_project" && isSuccess && buildSucceeded)
+
+        if (input.tool === "build_project" && typeof output.output === "string") {
+          collector.recordBuildProjectInfo({
+            toolName: input.tool,
+            duration,
+            // Build outcome, not tool outcome: tool failure never reaches this event
+            // because tool.execute.after only fires when the tool returned normally.
+            isSuccess: buildSucceeded,
+            timestamp: Date.now(),
+            exitCode: buildSucceeded
+              ? 0
+              : extractBuildExitCode(
+                  output.output,
+                  typeof metadata?.exitCode === "number" ? metadata.exitCode : 1,
+                ),
+            output: output.output,
+            truncated: metadata?.truncated === true,
+          })
+        }
 
         if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return
 
@@ -320,6 +389,7 @@ const AnalyticsPlugin = createAnalyticsPlugin({
   uploader: globalUploader,
   isLoggedIn: () => devecoAuth.isLoggedIn(),
   isJwtExpired: () => devecoAuth.isJwtExpired(),
+  toolImprovementEnabled: () => readToolImprovementEnabled(),
   diagnostic: writeLog,
   projectId: getOrCreateProjectId,
   codeAttribution: createCodeAttributionTracker,

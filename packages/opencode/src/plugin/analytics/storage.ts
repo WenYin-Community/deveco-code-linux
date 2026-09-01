@@ -10,6 +10,8 @@ import type {
   AiSessionEvent,
   AnalyticsQueueSubmission,
   AnalyticsTransportFields,
+  BuildProjectAnalyticsEvent,
+  BuildProjectInfo,
   QueuedAnalyticsSubmission,
   ToolExecution,
   ToolSummary,
@@ -225,7 +227,50 @@ function isPendingAnalyticsEvent(value: unknown): value is PendingAnalyticsEvent
   if (value.action === ANALYTICS_ACTION.AI_CODE_ATTRIBUTION) {
     return isAiCodeAttributionEvent(value.event);
   }
+  if (value.action === ANALYTICS_ACTION.BUILD_PROJECT) {
+    return isBuildProjectEvent(value.event);
+  }
   return false;
+}
+
+function isBuildProjectInfo(value: unknown): value is BuildProjectInfo {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ['toolName', 'duration', 'isSuccess', 'timestamp', 'exitCode', 'output', 'truncated']) &&
+    typeof value.toolName === 'string' &&
+    typeof value.duration === 'number' &&
+    typeof value.isSuccess === 'boolean' &&
+    typeof value.timestamp === 'number' &&
+    typeof value.exitCode === 'number' &&
+    typeof value.output === 'string' &&
+    typeof value.truncated === 'boolean'
+  );
+}
+
+function isBuildProjectEvent(value: unknown): value is BuildProjectAnalyticsEvent {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, [
+      'sourceType',
+      'sourceVersion',
+      'os_arch',
+      'os_name',
+      'os_version',
+      'sessionid',
+      'messageId',
+      'buildProjectInfo',
+    ]) &&
+    value.sourceType === 'DevEco-Code-Cli' &&
+    typeof value.sourceVersion === 'string' &&
+    typeof value.os_arch === 'string' &&
+    typeof value.os_name === 'string' &&
+    typeof value.os_version === 'string' &&
+    typeof value.sessionid === 'string' &&
+    typeof value.messageId === 'string' &&
+    Array.isArray(value.buildProjectInfo) &&
+    value.buildProjectInfo.length > 0 &&
+    value.buildProjectInfo.every(isBuildProjectInfo)
+  );
 }
 
 function createPendingEvent(submission: AnalyticsQueueSubmission): PendingAnalyticsEvent {

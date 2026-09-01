@@ -81,9 +81,40 @@ export interface AiCodeAttributionEvent {
   totalGeneratedLines: number
 }
 
+// One build_project execution, collected per turn for the DevEcoCodeBuild sidecar event.
+// Carries the heavy per-build payloads (log preview, error code) that AiSessionEvent's
+// toolExecutions deliberately excludes.
+export interface BuildProjectInfo {
+  // always "build_project"; kept explicit so future build-flavored tools stay self-describing
+  toolName: string
+  duration: number
+  // Build outcome (same predicate as the session event's isFirstBuildSuccess/isFinalBuildSuccess):
+  // true when the build succeeded (exitCode 0). Tool-level failure never reaches this event
+  // because tool.execute.after only fires when the tool returned normally — an entry's
+  // existence already implies the tool itself ran to completion.
+  isSuccess: boolean
+  timestamp: number
+  // 0 when the build succeeded; otherwise the first error code parsed from the build log
+  // (ArkTS "10505001 ArkTS Compiler Error", "10605008:", ohpm "ERROR: 00608002:"), falling
+  // back to the tool process exit code when no code is parseable. Numeric form drops the
+  // leading zeros of ohpm-style codes: text 00608002 becomes 608002.
+  exitCode: number
+  // bounded build log preview exactly as the tool returned it (status line included);
+  // the full log stays local via the tool's outputPath mechanism and is never uploaded
+  output: string
+  truncated: boolean
+}
+
+export interface BuildProjectAnalyticsEvent extends AnalyticsEnvironmentFields {
+  sessionid: string
+  messageId: string
+  buildProjectInfo: BuildProjectInfo[]
+}
+
 export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
+  BUILD_PROJECT: "DevEcoCodeBuild",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -96,6 +127,10 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.AI_CODE_ATTRIBUTION
       event: AiCodeAttributionEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.BUILD_PROJECT
+      event: BuildProjectAnalyticsEvent
     }
 
 export interface AnalyticsTransportFields {
@@ -125,6 +160,7 @@ export interface SessionContext {
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
   toolCounts: Map<string, number>
+  buildProjectInfo: BuildProjectInfo[]
   buildResults: BuildResults
 }
 

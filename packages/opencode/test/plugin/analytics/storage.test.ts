@@ -4,7 +4,7 @@ import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { LocalCrypto } from "@/security/local-crypto"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
-import type { AiCodeAttributionEvent, AiSessionEvent } from "@/plugin/analytics/types"
+import type { AiCodeAttributionEvent, AiSessionEvent, BuildProjectAnalyticsEvent } from "@/plugin/analytics/types"
 import {
   ANALYTICS_SCHEMA_VERSION,
   enqueuePendingEvent,
@@ -166,6 +166,69 @@ test("ai code attribution queue rejects invalid totals and extra local fields", 
           },
           uid: "uid-1",
           queueId: "queue-1",
+          sealed: false,
+        },
+      ],
+      lastFlush: 1,
+    }),
+  )
+  await fs.writeFile(file, JSON.stringify(encrypted))
+
+  expect((await loadStorage()).pendingEvents).toEqual([])
+})
+
+function buildProjectEvent(): BuildProjectAnalyticsEvent {
+  return {
+    sourceType: 'DevEco-Code-Cli',
+    sourceVersion: '1.2.3',
+    os_arch: 'arm64',
+    os_name: process.platform,
+    os_version: 'os-version',
+    sessionid: 'session-build',
+    messageId: 'message-build',
+    buildProjectInfo: [
+      {
+        toolName: 'build_project',
+        duration: 5000,
+        isSuccess: false,
+        timestamp: 1,
+        exitCode: 10505001,
+        output: '10505001 ArkTS Compiler Error: ...',
+        truncated: false,
+      },
+    ],
+  }
+}
+
+test('build project events round-trip through the encrypted pending queue', async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.BUILD_PROJECT, event: buildProjectEvent() })
+  const pending = await getPendingEvents()
+
+  expect(pending).toHaveLength(1)
+  expect(pending[0]?.action).toBe(ANALYTICS_ACTION.BUILD_PROJECT)
+  if (pending[0]?.action === ANALYTICS_ACTION.BUILD_PROJECT) {
+    expect(pending[0].event.buildProjectInfo[0]?.exitCode).toBe(10505001)
+  }
+})
+
+test('build project queue rejects events with unknown fields', async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, 'analytics', 'analytics.json')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const invalid = { ...buildProjectEvent(), outputPath: '/local/full/log.txt' }
+  const encrypted = LocalCrypto.encryptForLocalStorage(
+    JSON.stringify({
+      schemaVersion: ANALYTICS_SCHEMA_VERSION,
+      pendingEvents: [
+        {
+          action: ANALYTICS_ACTION.BUILD_PROJECT,
+          event: invalid,
+          uid: 'uid-1',
+          queueId: 'queue-1',
           sealed: false,
         },
       ],
