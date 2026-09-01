@@ -1,61 +1,48 @@
 ---
 name: deveco-cli
 description: >-
-  **REQUIRED** and **MANDATORY** when creating, building, running, or debugging HarmonyOS projects through devecocli; obtaining device or crash logs; viewing connected devices; managing emulators, signing materials, HarmonyOS skills, or UI inspection and operation.
+  Use 'devecocli' for HarmonyOS apps (scaffold, build, run, debug, devices, emulators, logs, docs, UI inspection, 鸿蒙开发文档, skills). Use it if workspace has build-profile.json5 or oh-package.json5, or user mentions HarmonyOS, 鸿蒙, DevEco, ArkTS, ArkUI, docs, 鸿蒙文档, 知识, 搜索, skills, UI, UI测试, 组件调试. If user explicitly specifies another tool, skill, or workflow, follow that choice; otherwise use 'devecocli'.
 ---
 
 # DevEco CLI
 
-`devecocli` wraps DevEco Studio's `hvigor`, `ohpm`, `hdc`, emulator toolchain, and bundled skills installer. **Prefer `devecocli` over invoking underlying tools directly.**
+`devecocli` wraps DevEco Studio's `hvigor`, `ohpm`, `hdc`, emulator toolchain, and bundled skills installer.
 
 Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui`, `skills`, `log`, `create`, `init`, `serve`, `docs`, `signature`, `auth`.
 
-Run `devecocli <command> -h` when an option is uncertain. Commands return a non-zero exit code and an actionable error when validation or execution fails.
+**Sandbox Rule**: Commands tagged `[Outside sandbox]` must be run outside the sandbox.
 
-### `devecocli docs`
+## 1. Code → Build → Deploy → Run → Debug
 
-Search or read HarmonyOS documentation with `docs search` and `docs read`.
-- `search <keywords...>`: Match any keyword. `--limit <n>` defaults to `10` when omitted; pass another value to change the result count. Example: `devecocli docs search '@State' --limit 10`.
-- Responses are limited to a 5,000-character preview. When truncated, the beginning of the response includes `Full output saved to:` with a local file containing the complete result.
-- Run the docs command without `grep`, `sed`, or `head` first so the recovery path stays visible. To find an API or search result beyond the preview, use Grep on the saved file or Read with offset/limit. Do not read the whole file into context.
-- Piping `docs read` into `grep` searches only the preview; an empty match does not mean the API is absent from the full document. Redirecting the command to a file also saves only the preview; use the provided full-output file instead.
+### `devecocli create`
+Scaffold a new HarmonyOS project.
+- `--app-name <name>` (Req): 1–200 chars, `^[a-zA-Z][a-zA-Z0-9_]*$`
+- `--project-path <path>`: Final project root. Auto-created if omitted (`./<app-name>`) or missing, and populated if empty. A non-empty target returns `PROJECT_EXISTS` unless `--merge` is supplied.
+- `--bundle-name <bundle>`: Default `com.example.<appname-lowercase>`. 7–128 chars, ≥3 segments.
+- `--api-level <level>`: int ≥17 (default: auto or 23).
+- `--merge` allows a non-empty target while preserving existing content. Generated paths are checked before the target changes, and no existing file is overwritten.
+- `PROJECT_EXISTS` (exit 2): use `--merge` only if the existing directory is intended to become the project root. Otherwise ask whether to overwrite, rename, or cancel. Never clear the reported `details.targetRoot` without explicit confirmation.
+- `PROJECT_FILE_CONFLICT` (exit 2): report `details.conflicts` and ask the user to rename those paths, choose another root, or cancel. No existing files were changed; never overwrite the conflicts automatically.
+- On success, the session switches to the reported `Project root:`.
+*Ex*: `devecocli create --app-name MyApp --project-path ./CustomDir --api-level 23`
 
-### Project creation
-Create or scaffold HarmonyOS applications directly with `devecocli create`.
-- `--app-name <name>` is required.
-- `--bundle-name <bundle>` is optional and defaults from the app name.
-- `--api-level <level>` is optional; omit it to use CLI SDK detection.
-- `--project-path <path>` is the final project root when supplied. When omitted, the CLI creates `<app-name>` under the current directory.
-- `--merge` allows creation in a non-empty project root. It preserves all existing content and fails with `PROJECT_FILE_CONFLICT` before changing the target if any generated file path conflicts. Use it when specifications or other project inputs already exist in the target directory.
-- If the command returns `PROJECT_EXISTS` (exit 2), use `--merge` only when the user intends the existing directory to become the project root. Otherwise ask whether to overwrite, rename, or cancel. Never remove or overwrite the target without explicit confirmation. For overwrite, clear only the exact `details.targetRoot` after confirmation and rerun the same command. For rename, rerun with the new final `--project-path`. For cancel, stop.
-- If the command returns `PROJECT_FILE_CONFLICT` (exit 2), report `details.conflicts` and ask the user to rename those paths, choose another project root, or cancel. Never overwrite conflicting files automatically.
-- A successful command automatically switches the session context to the reported `Project root:`.
+### `devecocli build` `[Outside sandbox]`
+Compile and package project/modules. (Defaults: `--product default`, `--build-mode debug`)
+| Goal | Command |
+|---|---|
+| Single-module / single-`entry` | `devecocli build` |
+| Specific modules | `devecocli build --modules <m1> <m2>@<target>` |
+| Whole product bundle (.app) | `devecocli build --product <name>` |
+| Clean build outputs | `devecocli build clean` |
 
-### `devecocli build`
-Build from the project root.
-- `--product <product>`: Product name; default `default`.
-- `--modules <modules...>`: Module or `module@target` values.
-- `--build-mode <mode>`: Build mode; default `debug`.
-- `clean`: Clean build outputs.
+If build output is truncated, the complete log is saved at the path shown after `Full output saved to:`.
 
-### `devecocli run`
-Build, deploy, and launch from the project root.
-- `--module <modules...>`: Module or `module@target` values.
-- `--device <device>`: Device name or serial.
-- `--product <product>`, `--build-mode <mode>`, `--ability <ability>`: Target selection.
-- `--uninstall`, `--skip-build`: Deployment controls.
-
-### `devecocli log`
-Obtain device logs. Output contains the log timestamp and application identity when supplied by the device log.
-- `--device <device>`: Device name or serial.
-- `--crash`: Return the latest crash log; combine with `--bundle-name` for the target app.
-- `--bundle-name <bundle-name>`, `--level <D|I|W|E|F>`, `--keyword <keyword>`: Filters.
-- `--tail <num>`: Latest N lines; must be an integer from 1 to 5000.
-- `--from <offset>`, `--to <offset>`: Relative time range such as `30s` or `5m`.
-- `--follow`: Stream logs.
-- `clear [--device <name-or-serial>]`: Clear the connected device's hilog buffer before reproducing a debug scenario. Without `--device`, exactly one connected device is required. If multiple devices share a name, select a serial. Empty selectors and discovery/hdc failures return an error without reporting successful cleanup.
-
-When no `--keyword` is given, `devecocli log` filters by the default prefix `[DEVECO_DEBUG]` — set this tag in app debug logs so a bare `log` surfaces only the relevant app output instead of the whole hilog buffer. Pass an explicit `--keyword` to override.
+### `devecocli check lint`
+Run DevEco Code Linter checks for TS/ArkTS code.
+- **Studio requirement**: Default lint checks and `--fix`, `--incremental`, `--product`, `--config-path`, and `--limit` support DevEco Studio `>= 6.0.0`; explicitly using `--format` or `--output-path` requires DevEco Studio `>= 6.1.0`. Command Line Tools mode follows the CLT `>= 26.0.0` baseline.
+- `[path]`: File or directory to lint. Defaults to the project root from `build-profile.json5`, otherwise the current directory.
+- Options: `--config-path <file>`, `--fix`, `--incremental`, `--product <name>`, `--format <default|json>`, `--output-path <path>`, `--limit <number>`.
+- Set `DEVECO_CLI_CLT_PATH` to the Command Line Tools root when DevEco Studio is not installed; CLT is not discovered automatically from PATH or default installation directories.
 
 ### `devecocli emulator`
 Manage local emulator instances and system images.
@@ -83,9 +70,37 @@ Inspect UI on a connected physical device or running emulator.
 - Implementation uses `hdc shell snapshot_display` and `hdc file recv`; set `DEVECO_CLI_DEBUG=1` to inspect the actual `hdc` commands.
 *Ex*: `devecocli ui screenshot --device Phone --path ./screenshots/phone.png`
 
+### `devecocli docs`
+Search/read local HarmonyOS docs.
+- `search <keywords...>`: Match any keyword. Opts: `--catalog <name>`, `--format <default|json>`, `--limit <n>`.
+- `read <documentId>`: Read a document by ID (e.g. `devecocli docs read 开发指南/冷启动_Launch分析/Launch模板基本操作/ide-insight-session-launch`).
+- `catalog`: List available catalogs.
+- `search` and `read` responses default to a 5,000-character preview. When truncated, the complete result is saved at the path shown after `Full output saved to:`.
+
 ### `devecocli device`
 - `list`: Show active real devices and running emulators. Opt: `--format <table|json>` (default: `table`).
 - `view`: Detailed info. Req `-t <name|serial>` on multi-device hosts. Opt: `--format <table|json>` (default: `table`).
+### `devecocli run` `[Outside sandbox]`
+Build, install, and launch.
+- `--module <module>`: Target module (auto-selected if only one runnable).
+- `--device <name|serial>`: Target device. For a standard build-and-run deployment, omitting it auto-selects the only available physical device or emulator and starts a stopped emulator before deployment. Multiple targets return `DEVICE_SELECTION_REQUIRED`; no available target returns `NO_DEVICE_AVAILABLE`.
+- `--product <product>` / `--build-mode <mode>`: Defaults: `default` / `debug`.
+- `--ability <ability>`: Default from `module.json5`.
+- `--uninstall`: Uninstall existing app first (Fixes signing key issues).
+- `--skip-build`: Deploy existing artifacts.
+- `--apply <fileName>`: **Fast incremental deploy** — rebuilds only changed files into a signed hqf, installs via `bm quickfix -a -f -o`, then restarts the app. Much faster than a full `devecocli run` for iterating on code changes. Modules are auto-detected from the file paths in `<fileName>` (no `--module` needed).
+  - `<fileName>`: a plain file name (no path separators) under the project's `.hvigor/` directory; the caller writes the changed-file list there. File name is sanitized to prevent path traversal. Content: list of **source file paths changed this round** (one per line, relative to project root or absolute; `#` comments and blank lines ignored; typically `.ets`/`.ts`/`.cpp`/resource files). The changeFileList is **incrementally merged** — only list files changed since the last apply; previously listed files are retained automatically.
+  - **Prereq**: DevEco Studio ≥6.1.1 (hvigor `assembleDevHqf` support; below is rejected with an upgrade hint); run `devecocli run` once first (full build + deploy + generates the `buildConfig.json` cache that `--apply` reuses).
+  - **If changes don't take effect**: check `<module>/build/config/buildConfig.json` has content — empty/missing means `devecocli run` wasn't run; on any apply failure, fall back to a full `devecocli run`.
+*Ex*: `devecocli run` → edit code → write `.hvigor/changes.txt` → `devecocli run --apply changes.txt`
+- `--hotreload [action]`: **Hot-reload watch session** — must be started as a **background process** (the process holds a persistent socket to the hvigor daemon). It builds the hap in hot-reload mode (`hotReload=true debuggable=true`), deploys+launches the app, then the process itself connects a socket to the daemon and sends `CommonBuild assembleHap --hot-reload-build --watch`, **staying connected** so the daemon's watch worker (rollup watch) stays alive for `--hotreload-apply` to reuse. The process stays alive (onBuildOutput streams to its stdout). **Must be stopped (kill the background process) when the hot-reload debug session ends** — otherwise the watch worker/daemon leaks. `--hotreload stop` additionally stops the hvigor daemon.
+  - **Usage**: start `devecocli run --module <m> --hotreload` as a background process; wait for the `.hotreload-mode` marker (or "watch session active" on its stdout) = ready; then run `devecocli run --module <m> --hotreload-apply <file>` (foreground). When done: kill the background process + `devecocli run --hotreload stop`.
+- `--hotreload-apply <fileName>`: **Hot reload without app restart** — reads the changed-file list from `.hvigor/<fileName>` (same format/merge rules as `--apply`), opens a **short socket** to the daemon (kept alive by the background `--hotreload` process) and sends `CommonBuild assembleDevHqf --hot-compile` → the watch worker incrementally hot-compiles changed `.ets`/`.ts` into abc (HotReloadArkTS; output/errors streamed live via WatchLog), then **manually** packs + signs a hqf from that abc (`app_packing_tool.jar` + `hap-sign-tool.jar`, DevEco material password decrypted via `DecipherUtil`), and installs it via `bm quickfix -a -f -o`. The app is **not restarted** — changes take effect immediately.
+  - **Prereq**: the background `devecocli run --hotreload` process must be running (holds the watch session). If `--hotreload-apply` times out, the watch session isn't alive — (re)start the background `--hotreload`.
+  - **Scope (important)**: hot reload targets a **single module** (`--module` required; the target can be entry/hsp/feature; `har` deps are folded in and fine). **`har` dependency changes are auto-routed** to the dependent main module's (entry/feature/hsp) `hotReload/changedFileList.json` — so editing a har's `.ets` and listing it hot-reloads via the target module. Changes in **`feature`/`hsp` dependency modules** (not the target) are NOT hot-reloadable — they're detected and warned (run a full `devecocli run` to redeploy those). `@State`/state-decorator changes are **not** hot-reloadable (state isn't re-initialized); hot-reloadable changes are non-state code: UI property values (`.fontColor`/`.fontSize`), `Text`/`Button` literal labels, method bodies, expressions. Resources/native changes need a full run.
+  - **Compile errors**: ArkTS compile errors from the hot compile are routed (via WatchLog) to the **background `--hotreload` process**, which writes them to **`.hvigor/hotreload-watch.log`** (and its stdout). On failure, `--hotreload-apply` reads that file and prints the errors inline (fast-fail, ~15s timeout if the watch session is dead).
+  - **Artifacts under `.hvigor/`** (shared with `--apply`): `.hvigor/<fileName>` = the changed-file list you write; `.hvigor/hotreload-watch.log` = the watch session's onBuildOutput/compile-errors (written by the background `--hotreload` process; safe to read/delete). The hot-reload marker is `<module>/build/<product>/.hotreload-mode`.
+*Ex*: background `devecocli run --module entry --hotreload` → (ready) → edit `.fontColor` in `entry/src/main/ets/pages/Index.ets` → write path to `.hvigor/changes.txt` → `devecocli run --module entry --hotreload-apply changes.txt` (UI updates without restart). When done: kill the background process + `devecocli run --hotreload stop`.
 
 ### `devecocli signature generate` `[Outside sandbox]`
 Auto-generate HarmonyOS signing materials (local p12/csr + cloud cert + test profile) and write signing config to `build-profile.json5`.
@@ -99,6 +114,18 @@ Auto-generate HarmonyOS signing materials (local p12/csr + cloud cert + test pro
 - Error handling (aligned with DevEco Studio JAR): 401→re-login, 403→no AGC permission, `205389872`→cert limit, `205389904`→not Harmony user, `205389938`→provision limit, invalid `.cer`→retry.
 *Ex*: `devecocli signature generate --product default`
 
+
+### `devecocli log`
+Fetch hilog or crash logs. Req `--device <name|serial>` on multi-device hosts.
+- `--crash`: Dump crash logs.
+- `--level D|I|W|E|F`: Filter by level.
+- `--bundle-name` / `--keyword`: Filter output.
+- `--from <start>` / `--to <end>`: Relative offsets (`30s`, `5m`).
+- `--tail <num>`: Return the latest N matching log lines. Defaults to 2000 when no log range or streaming option is specified.
+- `--follow`: Stream new matching logs until stopped. Cannot be combined with `--to`.
+- `clear [--device <name|serial>]`: Clear hilog before reproducing an issue. Without a selector, exactly one connected device is required. Names must resolve uniquely; prefer a serial when names repeat.
+- Invalid clear selectors, device discovery failures, missing HDC, and HDC failure output return an error without reporting successful cleanup.
+*Ex*: `devecocli log --crash --bundle-name com.example.app`, `devecocli log --level E --from 5m --tail 200`
 
 ### `devecocli ui`
 Inspect UI on a connected device. All subcommands accept `--device <name|serial>` (Req on multi-device hosts).
@@ -125,6 +152,33 @@ Inspect UI on a connected device. All subcommands accept `--device <name|serial>
 - `--mode full`: full layout tree, no filtering.
 - `--mode simplified` (default): folds meaningless wrapper containers (non-root, no `id`, no text, not interactive) by lifting their surviving children up. `--depth` truncates after folding.
 
+
+## 2. Setup
+
+### `devecocli init`
+MUTUALLY EXCLUSIVE modes for setup:
+1. `--skill` (Default): Install `deveco-cli` skill to AI agents.
+2. `--mcp`: Configure `deveco-mcp` server (ArkTS/C++ syntax checking).
+*Options*:
+- `--agent <agents>`: Comma-separated (e.g. `opencode,cursor`). Omitting targets all.
+- `--project <path>`: Project-level config (Abs path for MCP).
+- `--path <path>`: Direct skill install path.
+- `-f, --force`: Overwrite existing config.
+*MCP Rules*: Global MCP (no `--project`) only supports `opencode` and `cursor`. Others require `--project`.
+
+### `devecocli auth login`
+Sign in to your Huawei Developer account. Opens a browser for OAuth authentication. Required before `signature generate`.
+*Ex*: `devecocli auth login`
+
+### `devecocli auth logout`
+Sign out and clear locally stored credentials.
+
+### `devecocli auth status`
+Show the current logged-in user.
+
+### `devecocli auth team list`
+List team accounts the current user has joined.
+
 ### `devecocli skills`
 Manage HarmonyOS skills in AI agents/projects.
 - `list [-l|--long]` / `find <keyword>`: List or search skills.
@@ -146,6 +200,22 @@ Validation order: `files` + `--modules` mutually exclusive → `--source-version
 
 *Ex*: `devecocli check compat --source-version "<source_version>" --target-version "<target_version>" --output-path ./report`
 
+## 3. Maintenance
+
+- **`devecocli update`** `[Outside sandbox]`: Update CLI to latest version.
+- **`devecocli serve mcp`**: Host stdio MCP server (`check` tool for `.ets`/C/C++). Used via `init --mcp`. (Env: `PROJECT_PATH`, `DEVECO_PATH`, `NODE_MAX_OLD_SPACE_SIZE`, `DEBUG=1`).
+
+## Recipes
+
+- **Fresh checkout to emulator**:
+  `devecocli build` -> `devecocli emulator list` -> `devecocli emulator start "Name"` -> `devecocli run`
+- **Diagnose crash**:
+  `devecocli log --crash --bundle-name <bundle>`
+- **Release build**:
+  `devecocli build --product oversea --build-mode release`
+- **First-time signing setup**:
+  `devecocli auth login` -> `devecocli signature generate --product default` -> `devecocli build` -> `devecocli run`
+
 ## Troubleshooting
 
 - **"Product / Build mode `<x>` not found"**: Check `build-profile.json5`.
@@ -155,6 +225,7 @@ Validation order: `files` + `--modules` mutually exclusive → `--source-version
 - **`Not logged in. Run devecocli auth login first`**: Run `devecocli auth login` to authenticate.
 - **`Provision number exceeds limit`**: Test provision quota is full. Delete old test provisions in DevEco Studio (Signing Configs) or AGC console, then retry `devecocli signature generate`.
 - **`Invalid AccessToken. Sign in and try again`**: Token expired. Run `devecocli auth login` again.
+- **`skills add` agent not found**: Valid: `atomcode`, `codebuddy`, `cursor`, `opencode`, `qoder`, `trae-cn`.
 - **`emulator start` / `image download` blocked on agreement**: User MUST accept agreements. Interactive: `devecocli emulator license` (requires TTY). Non-interactive (CI/scripts): `devecocli emulator license accept`. Agents cannot run the interactive form; suggest the user run it, or use `license accept` if a non-TTY flow is acceptable. Do not retry until accepted.
 - **`image download` failure / timeout**: Do NOT auto-retry. Give the command to the user to run manually in their terminal.
 - **`emulator create` timeout**: Treat as user-action step. Ask user to open DevEco Studio -> Device Manager. Check `emulator list` after user confirms. Do NOT auto-retry or edit SDK files.

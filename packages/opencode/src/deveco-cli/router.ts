@@ -104,27 +104,26 @@ function validateLogTail(args: string[]): CliResult | undefined {
     return []
   })
   if (values.length === 0) return
-  if (values.every((value) => /^[1-9]\d*$/.test(value ?? "") && Number(value) <= 5_000)) return
+  if (values.every((value) => /^[1-9]\d*$/.test(value ?? ""))) return
   return {
     stdout: "",
-    stderr: "`tail` must be an integer between 1 and 5000.\n",
+    stderr: "`tail` must be a positive integer.\n",
     exitCode: 1,
   }
 }
 
-// Default keyword applied when `devecocli log` is called without an explicit
-// `--keyword`. App code that instruments debug logs with this prefix is the
-// signal this filter captures; without it a bare `log` would dump the whole
-// hilog buffer. An explicit `--keyword` (space or `=` form) overrides it.
-export const DEFAULT_LOG_KEYWORD = "[DEVECO_DEBUG]"
-
-function hasKeyword(args: string[]) {
-  return args.some((arg) => arg === "--keyword" || arg.startsWith("--keyword="))
-}
+export const DEFAULT_LOG_TAIL = 2_000
 
 function enhanceLogArgs(args: string[]) {
-  if (hasKeyword(args)) return args
-  return [...args, "--keyword", DEFAULT_LOG_KEYWORD]
+  const hasWindow = args.some((arg) =>
+    ["--tail", "--from", "--to", "--follow", "--crash"].some(
+      (option) => arg === option || arg.startsWith(`${option}=`),
+    ),
+  )
+  return [
+    ...args,
+    ...(hasWindow ? [] : ["--tail", String(DEFAULT_LOG_TAIL)]),
+  ]
 }
 
 async function truncateDocsOutput(result: CliResult) {
@@ -132,7 +131,6 @@ async function truncateDocsOutput(result: CliResult) {
   const output = [result.stdout, result.stderr]
     .filter(Boolean)
     .join(result.stdout.endsWith("\n") ? "" : "\n")
-  // Keep the complete response available: grep/sed after the CLI only see this preview.
   // Identical responses reuse a path so repeated lookups do not add changing paths to context.
   const file = path.join(
     Global.Path.tmp,
@@ -141,7 +139,7 @@ async function truncateDocsOutput(result: CliResult) {
   )
   await fs.mkdir(path.dirname(file), { recursive: true })
   await Bun.write(file, output)
-  const notice = `[Documentation output truncated to ${MAX_DOCS_OUTPUT_LENGTH} characters.]\nFull output saved to: ${file}\nSearch the saved file with Grep, or use Read with offset/limit. Do not pipe this preview to grep/sed to search the full document.\n\n`
+  const notice = `[Documentation output truncated to ${MAX_DOCS_OUTPUT_LENGTH} characters.]\nFull output saved to: ${file}\n\n`
   const truncated = `${notice}${output.slice(0, MAX_DOCS_OUTPUT_LENGTH - notice.length - 1)}\n`
   if (!result.stdout) return { ...result, stderr: truncated }
   return { ...result, stdout: truncated, stderr: "" }

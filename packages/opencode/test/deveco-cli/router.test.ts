@@ -98,7 +98,6 @@ describe("devecocli proxy router", () => {
 
     expect(result.stdout.length).toBe(5_000)
     expect(result.stdout).not.toContain("onDateAccept")
-    expect(result.stdout).toContain("Read with offset/limit")
     const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
     expect(file).toBeDefined()
     const content = await Bun.file(file!).text()
@@ -422,51 +421,64 @@ describe("devecocli proxy router", () => {
     expect(result.stdout).toContain("fail on generated file conflicts")
   })
 
-  test("accepts log tail values from 1 through 5000", async () => {
+  test("accepts positive log tail values without a maximum", async () => {
     const lower = ["log", "--tail", "1", "--keyword", "DEBUG"]
-    const upper = ["log", "--tail=5000"]
-    const upperEnhanced = [...upper, "--keyword", "[DEVECO_DEBUG]"]
+    const upper = ["log", "--tail=5001"]
     const cli = runner({
       [lower.join(" ")]: { stdout: "lower" },
-      [upperEnhanced.join(" ")]: { stdout: "upper" },
+      [upper.join(" ")]: { stdout: "upper" },
     })
 
     expect((await executeDevecoCliProxy(lower, "C:\\project", cli.run)).stdout).toBe("lower")
     expect((await executeDevecoCliProxy(upper, "C:\\project", cli.run)).stdout).toBe("upper")
-    expect(cli.calls).toEqual([lower, upperEnhanced])
+    expect(cli.calls).toEqual([lower, upper])
   })
 
-  test("injects the default DEVECO_DEBUG keyword when none is given", async () => {
+  test("injects the default tail when no log window is given", async () => {
     const args = ["log", "--device", "Phone"]
-    const enhanced = [...args, "--keyword", "[DEVECO_DEBUG]"]
+    const enhanced = [...args, "--tail", "2000"]
     const cli = runner({ [enhanced.join(" ")]: { stdout: "logs" } })
 
     expect((await executeDevecoCliProxy(args, "C:\\project", cli.run)).stdout).toBe("logs")
     expect(cli.calls).toEqual([enhanced])
   })
 
-  test("does not override an explicit --keyword= form", async () => {
+  test("preserves an explicit --keyword= form", async () => {
     const args = ["log", "--keyword=CRASH"]
-    const cli = runner({ [args.join(" ")]: { stdout: "crash" } })
+    const enhanced = [...args, "--tail", "2000"]
+    const cli = runner({ [enhanced.join(" ")]: { stdout: "crash" } })
 
     expect((await executeDevecoCliProxy(args, "C:\\project", cli.run)).stdout).toBe("crash")
-    expect(cli.calls).toEqual([args])
+    expect(cli.calls).toEqual([enhanced])
+  })
+
+  test("does not inject default tail for explicit log windows or modes", async () => {
+    const args = [
+      ["log", "--from", "5m"],
+      ["log", "--to", "30s"],
+      ["log", "--follow"],
+      ["log", "--crash"],
+    ]
+    const cli = runner(Object.fromEntries(args.map((item) => [item.join(" "), { stdout: "logs" }])))
+
+    for (const item of args) {
+      expect((await executeDevecoCliProxy(item, "C:\\project", cli.run)).stdout).toBe("logs")
+    }
+    expect(cli.calls).toEqual(args)
   })
 
   test("rejects invalid log tail values before invoking the CLI", async () => {
     const cli = runner({})
     const invalid = [
       ["log", "--tail", "0"],
-      ["log", "--tail", "5001"],
       ["log", "--tail=1.5"],
       ["log", "--tail"],
-      ["log", "--tail=5000", "--tail", "5001"],
     ]
 
     for (const args of invalid) {
       const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
       expect(result.exitCode).toBe(1)
-      expect(result.stderr).toContain("between 1 and 5000")
+      expect(result.stderr).toContain("positive integer")
     }
     expect(cli.calls).toEqual([])
   })
