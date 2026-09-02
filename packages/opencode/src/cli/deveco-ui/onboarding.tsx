@@ -281,12 +281,12 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const [sessionExpired, setSessionExpired] = createSignal(props.sessionExpired ?? false);
   const [entryIndex, setEntryIndex] = createSignal(0);
   const [realnameIndex, setRealnameIndex] = createSignal(0);
-  const [realnameRechecking, setRealnameRechecking] = createSignal(false);
   const [realnameRecheckError, setRealnameRecheckError] = createSignal<string | null>(null);
   const [authMessage, setAuthMessage] = createSignal<string | null>(props.initialAuthError ?? null);
   const [authBusy, setAuthBusy] = createSignal(false);
   const [providerIndex, setProviderIndex] = createSignal(0);
   let authAborted = false;
+  let authReturnStep: 'entry' | 'realname' = 'entry';
   const [providerQuery, setProviderQuery] = createSignal('');
   const [pid, setPid] = createSignal<string | null>(null);
   const [key, setKey] = createSignal('');
@@ -595,14 +595,18 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       }
       if (!result.success) {
         if (result.cancelled) {
-          setStep('entry');
+          setStep(authReturnStep);
           setAuthBusy(false);
           return;
         }
-        // Login failed (e.g. network error, port conflict) → go back to entry so
-        // the user can see both Login and Exit options and retry cleanly
-        setAuthMessage(result.error ?? 'Login failed');
-        setStep('entry');
+        // Login failed (e.g. network error, port conflict) → surface the error on
+        // whichever page we return to and let the user retry
+        if (authReturnStep === 'realname') {
+          setRealnameRecheckError(result.error ?? 'Login failed');
+        } else {
+            setAuthMessage(result.error ?? 'Login failed');
+        }
+        setStep(authReturnStep);
         setAuthBusy(false);
         return;
       }
@@ -620,6 +624,9 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       setAuthBusy(false);
       // Check real-name verification status
       if (result.userInfo && !result.userInfo.isRealName) {
+        if (authReturnStep === 'realname') {
+          toast.show({ variant: 'warning', message: 'Real-name authentication not yet completed.', duration: 3000 });
+        }
         logWarn("login succeeded but real-name verification not completed, blocking entry", { service: "deveco" });
         setStep('realname');
         return;
@@ -752,70 +759,11 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
             logError("failed to open real-name authentication page", { service: "deveco", error: err instanceof Error ? err.message : String(err) });
           });
         } else if (realnameIndex() === 1) {
-          // "Re-check real-name" — call API to re-verify
-          if (realnameRechecking()) return;
-          setRealnameRechecking(true);
+          // "Re-check real-name" — re-login to refresh the JWT, reusing the auth waiting page
           setRealnameRecheckError(null);
-          toast.show({ variant: 'info', message: 'Checking real-name status...', duration: 5000 });
-          try {
-            devecoAuth.checkRealNameWithToken()
-              .then(async (result) => {
-                try {
-                  setRealnameRechecking(false);
-                  if (result === null) {
-                    logWarn("real-name re-check skipped: no stored token found", { service: "deveco" });
-                    setRealnameRecheckError('No active session found. Please sign in first.');
-                    return;
-                  }
-                  if (result.verified) {
-                    // Save refreshed tokens only when verification passes
-                    await saveAuthToDisk('deveco', {
-                      type: 'oauth',
-                      access: result.accessToken,
-                      refresh: result.refreshToken,
-                      expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
-                      isRealName: true,
-                    });
-                    await sdk.client.instance.dispose();
-                    await sync.bootstrap();
-                    setRealnameRecheckError(null);
-                    logInfo("real-name verification passed after re-check", { service: "deveco" });
-                    toast.show({ variant: 'success', message: 'Real-name verification passed!', duration: 1000 });
-                    if (!(await hasConfiguredDevEcoHome())) {
-                      setStep('deveco-home');
-                      void runDevEcoHomeDetection();
-                      return;
-                    }
-                    setStep('privacy');
-                    void checkAgreementStatus();
-                  } else {
-                    logWarn("real-name verification still failed after re-check", { service: "deveco" });
-                    toast.show({ variant: 'warning', message: 'Real-name authentication not yet completed.', duration: 3000 });
-                  }
-                } catch (innerErr) {
-                  logError("real-name re-check handler error", { service: "deveco", error: innerErr instanceof Error ? innerErr.message : String(innerErr) });
-                  setRealnameRecheckError(innerErr instanceof Error ? innerErr.message : String(innerErr));
-                }
-              })
-              .catch(async (err) => {
-                setRealnameRechecking(false);
-                const msg = err instanceof Error ? err.message : String(err);
-                logError("real-name re-check promise error", { service: "deveco", error: msg });
-                const isNetworkError = /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|ECONNRESET|fetch failed/i.test(msg);
-                const isJwtExpired = /401|jwt.*expired|token.*expired|invalid.*jwt|jwt.*invalid/i.test(msg);
-                if (isNetworkError) {
-                  setRealnameRecheckError('Network error. Please try again.');
-                } else if (isJwtExpired) {
-                  setRealnameRecheckError('Session expired. Please sign in again.');
-                } else {
-                  setRealnameRecheckError('Server error. Please try again later.');
-                }
-              });
-          } catch (syncErr) {
-            logError("real-name re-check sync error", { service: "deveco", error: syncErr instanceof Error ? syncErr.message : String(syncErr) });
-            setRealnameRechecking(false);
-            setRealnameRecheckError(syncErr instanceof Error ? syncErr.message : String(syncErr));
-          }
+          authReturnStep = 'realname';
+          setStep('auth');
+          void runBrowserLogin();
         } else {
           void exit();
         }
@@ -900,6 +848,7 @@ if (st === 'entry') {
       if (evt.name === 'return') {
         evt.preventDefault();
         if (entryIndex() === 0) {
+          authReturnStep = 'entry';
           setStep('auth');
           void runBrowserLogin();
         } else {
@@ -923,7 +872,7 @@ if (st === 'entry') {
           devecoAuth.cancel();
           setAuthBusy(false);
         }
-        setStep('entry');
+        setStep(authReturnStep);
         return;
       }
       if (authBusy()) {
