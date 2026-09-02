@@ -23,6 +23,9 @@
 | 单向同步 | 本地修改会被父组件更新覆盖 |
 | 允许本地初始化 | 也可被外部初始化 |
 | 拷贝数据源 | @Prop 装饰的变量在本地拷贝了数据源 |
+| 本地有初始化则可选 | 初始化行为与 @State 一致；可被父组件传入覆盖 |
+| 本地无初始化则必选 | 必须由父组件传入 |
+| 支持父组件常规变量 | 常规变量对 @Prop 只做数值初始化，其变化不触发 UI 刷新；只有状态变量（@State 等）变化才触发刷新 |
 
 ### @Link
 
@@ -31,6 +34,7 @@
 | **必须外部初始化**，禁止本地初始化 | `@Link count: number = 0` 禁止 |
 | 与数据源双向同步 | |
 | 只能被 V1 状态变量初始化 | |
+| 初始化语法 | 推荐 `Comp({ aLink: this.aState })`，不推荐 API9 前 `Comp({ aLink: $aState })` |
 
 ### @ObjectLink
 
@@ -54,10 +58,12 @@
 |------|------|
 | @Consume 不可以被外部初始化 | |
 | @Provide 可被外部初始化，也可本地初始化 | |
+| @Provide key 重复 | key 重复定义时框架抛运行时错误；需重复 key 用 `allowOverride` |
 
 ### @StorageLink / @StorageProp / @LocalStorageLink / @LocalStorageProp
 
 - 不可以被外部初始化，与 AppStorage/LocalStorage 自动绑定
+- V1 storage API不能和@ObservedV2装饰类的实例混用：`AppStorage.setOrCreate`/`set`、`LocalStorage` 都是 V1 观察体系，存入 @ObservedV2 装饰的类对象后会发生运行时crash。@ObservedV2 对象走 `AppStorageV2`/`PersistenceV2`（仅 @ComponentV2 内）
 
 ### @Watch
 

@@ -13,6 +13,7 @@
 | 创建组件不需要 `new` | `Column()`、`Text('x')`；只有控制器类用 `new`（`new NavPathStack()`） | — |
 | 成员函数/变量不建议 `static` | 仅能从组件内部访问，静态声明无意义 | — |
 | V1 不支持静态代码块 | `@Component` 或 `@CustomDialog` 中 `static {}` 不执行（API 22 起告警） | — |
+| `@Component`（V1）禁 getter accessor | 编译转换会丢弃 getter，可能造成运行时崩溃；改用普通成员方法（`@ComponentV2` 不受此限） | — |
 | 生命周期钩子不能 `private` | `aboutToAppear`、`aboutToDisappear` 等生命周期方法**不能标记为 `private`** | — |
 | 成员属性名禁止与链式方法重名 | 见下方"保留名"清单 | **10505001** |
 | 跨文件 interface/class 必须重名校验 | 同一 hap 全局作用域，通用名跨文件碰撞 → `arkts-no-decl-merging` | **arkts-no-decl-merging** |

@@ -143,23 +143,23 @@ animation({ curve: Curve.Smooth })         // 真实成员
 | 规则 | 说明 |
 |------|------|
 | **@Link 源必须是 @State** | 传给子组件 `@Link` 的父属性必须是 `@State`/`@Prop` 等装饰变量，不能是 `private`/普通属性 |
-| **@Link 传值用 `$` 前缀** | `Child({ prop: $prop })` 而非 `Child({ prop: this.prop })`；`$` 等价于 `this.$prop` |
-| **@Prop 传值用 `:` 前缀** | `Child({ prop: this.prop })` 或 `Child({ prop: prop })`（构造器参数形式） |
+| **@Link 传值用 `this.`** | `Child({ aLink: this.aState })`（推荐）；`$aState` 是 API9 前旧写法，不推荐 |
+| **@Prop 传值** | 见 [05-state](05-state.md) @Prop 节：本地有初始化则可选（同 @State），无则必选；支持父组件常规变量但只做数值初始化、不触发刷新 |
 
 ```ets
 // ❌ WRONG — 普通属性传 @Link
 struct Parent {
-  private navStack: NavPathStack = new NavPathStack()
+  private count: number = 0
   build() {
-    Child({ navStack: $navStack })  // Error: regular property cannot be assigned to @Link
+    Child({ count: this.count })  // Error: regular property cannot be assigned to @Link
   }
 }
 
 // ✅ RIGHT — @State 才能传 @Link
 struct Parent {
-  @State navStack: NavPathStack = new NavPathStack()
+  @State count: number = 0
   build() {
-    Child({ navStack: $navStack })
+    Child({ count: this.count })
   }
 }
 ```
@@ -218,7 +218,7 @@ const task: Task = { id: raw.id ?? 0, title: raw.title ?? '' }
 
 ## 显式允许的构造（不要过度限制）
 
-模板字面量、`as T` 断言、`Record<K,V>` + 索引访问、`Partial<T>`/`Required<T>`/`Readonly<T>`、箭头函数、`async/await`、getter/setter、泛型类/接口/函数、数组展开 `[...a]`、表达式上下文 `typeof x`、`new RegExp()`、联合类型/类型别名、`for...of`/`Map`/`Set`——**全部合法，正常使用**。
+模板字面量、`as T` 断言、`Record<K,V>` + 索引访问、`Partial<T>`/`Required<T>`/`Readonly<T>`、箭头函数、`async/await`、泛型类/接口/函数、数组展开 `[...a]`、表达式上下文 `typeof x`、`new RegExp()`、联合类型/类型别名、`for...of`/`Map`/`Set`——**全部合法，正常使用**。**例外：`@Component`（V1）struct 内的 getter accessor 会被编译转换丢弃，禁用，改用普通成员方法**（`@ComponentV2` 不受此限）。
 
 ## 参考
 

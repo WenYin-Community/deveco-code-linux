@@ -13,7 +13,10 @@
 | 无 NavDestination 组件 | Navigation 跳转未包含 NavDestination 的页面 | **100006** |
 | pushPath/pushDestination param 禁内联字面量 | `param: { id: 1 }` 是无类型字面量 → **10605038** | **10605038** |
 | NavDestination 无 titleMode | titleMode 是 Navigation 专属属性，NavDestination 只有 `.title()` | **10505001** |
-| 路由栈读取 | 从 `NavDestinationContext.pathStack` 读取，非 `getPathStack()` | — |
+| 路由栈读取 | 目标页 `NavDestination().onReady((ctx: NavDestinationContext) => { this.navPathStack = ctx.pathStack })` 取栈，`ctx.pathInfo.param` 取参；不推荐 `@Provide`/`@Consume` 传 NavPathStack | — |
+| 目标页根节点为 NavDestination | 目标页 `build()` 首节点必须是 `NavDestination`，否则白屏/挂载失败 | **100006** |
+| 单 navDestination builder | 链式多次 `.navDestination()` 后者覆盖前者，所有路由落到最后一个页面（编译期不报错，运行时白屏） | — |
+| hideNavBar 语义陷阱 | `.hideNavBar(true)` 隐藏导航页（标题+内容+工具栏），栈空时首页显示空白，且失去自适应分栏能力；全屏需求用 NavDestination 的 `.fullScreenOverlay(true)`，只藏标题用 `.hideTitleBar(true)` | — |
 | Dialog 类型 NavDestination 无默认转场 | API 13 前无默认转场动画 | — |
 
 ### 参数传递
@@ -43,7 +46,19 @@ this.stack.pushPath({ name: 'first', param: p })
 
 **不要把所有页面放在一个文件**。`@ComponentV2 export struct` 支持跨文件导出。
 
-### 方案一：自定义路由表（静态 import，简单项目推荐）
+### 方案一（推荐）：系统路由表 router_map.json
+
+无需 import 页面、按需加载、天然跨模块，多页面一律用此方案。
+
+- 配置 `resources/base/profile/router_map.json`（`routerMap` 数组：`name` + `buildMethod` + `pageSourceFile`）
+- `module.json5` 添加 `"routerMap": "$profile:router_map"`
+- 页面文件导出 `@Builder export function XxxBuilder(): void { XxxPage() }`
+- 主文件用 `pushDestination({ name: 'PageName', param })` 跳转：Promise 返回、错误码经 reject 传递（`pushPath`/`pushPathByName` 无错误码返回，不推荐）
+- 目标页在 `NavDestination().onReady((ctx: NavDestinationContext) => { this.navPathStack = ctx.pathStack })` 取栈，`ctx.pathInfo.param` 取参（见上方规则表）
+
+### 方案二（备选）：自定义路由表 .navDestination(builder)
+
+仅限单层简单场景。必须用**单个** builder 内 `if/else` 做 name→page 映射；**链式多次 `.navDestination()` 后者覆盖前者**，所有路由会落到最后一个页面（编译期不报错，运行时白屏）。
 
 ```ts
 // PageA.ets
@@ -66,14 +81,7 @@ import { PageA } from './PageA'
 }
 ```
 
-### 方案二：系统路由表（无需 import，跨模块项目）
-
-- 配置 `resources/base/profile/router_map.json`
-- `module.json5` 添加 `"routerMap": "$profile:router_map"`
-- 页面文件导出 `@Builder export function XxxBuilder(): void { XxxPage() }`
-- 主文件用 `pushPathByName('PageName', param)` 跳转
-
-**V2 传递 navPathStack**：用 `@Param` 接收父组件传入（非 @Consume）。`@Builder pageMap` 中 `if/else if` 做路由映射合法。
+> 页面获取栈：`onReady` 从 NavDestinationContext 取（推荐，可同时取 `pathInfo.param`）；`queryNavigationInfo()`（12+，推荐）任意自定义组件任意时机可取、不依赖生命周期。不推荐 `@Provide`/`@Consume` 或 AppStorage 传栈。
 
 ---
 
