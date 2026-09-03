@@ -49,6 +49,7 @@ describe("bash install script", () => {
     const proc = Bun.spawn(["bash", install, "--binary", binary, "--no-modify-path"], {
       env: {
         ...process.env,
+        DEVECO_TELEMETRY_DISABLED: "1",
         HOME: tmp.path,
         XDG_DATA_HOME: path.join(tmp.path, ".local", "share"),
         SHELL: "/bin/zsh",
@@ -97,6 +98,7 @@ describe("bash install script", () => {
     const proc = Bun.spawn(["bash", install, "--binary", binary, "--no-modify-path"], {
       env: {
         ...process.env,
+        DEVECO_TELEMETRY_DISABLED: "1",
         HOME: tmp.path,
         XDG_DATA_HOME: path.join(tmp.path, ".local", "share"),
         SHELL: "/bin/zsh",
@@ -144,6 +146,7 @@ describe("bash install script", () => {
     const proc = Bun.spawn(["bash", install, "--binary", binary, "--no-modify-path"], {
       env: {
         ...process.env,
+        DEVECO_TELEMETRY_DISABLED: "1",
         HOME: tmp.path,
         XDG_DATA_HOME: path.join(tmp.path, ".local", "share"),
         PATH: `${fakeBin}:${process.env.PATH}`,
@@ -319,7 +322,7 @@ describe("PowerShell install script", () => {
     const cli = path.join(artifact, "vendor", "deveco-cli", "dist", "cli.js")
     const data = path.join(tmp.path, "data")
     const profile = path.join(tmp.path, "profile")
-    const env = { ...process.env, USERPROFILE: profile, XDG_DATA_HOME: data }
+    const env = { ...process.env, DEVECO_TELEMETRY_DISABLED: "1", USERPROFILE: profile, XDG_DATA_HOME: data }
     await fs.mkdir(path.dirname(binary), { recursive: true })
     await fs.mkdir(path.dirname(cli), { recursive: true })
     await fs.copyFile(process.execPath, binary)

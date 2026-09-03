@@ -13,8 +13,212 @@ GITCODE_OWNER=${GITCODE_OWNER:-openharmony-sig}
 GITCODE_REPO=${GITCODE_REPO:-deveco-code}
 GITCODE_API="https://gitcode.com/api/v5/repos/${GITCODE_OWNER}/${GITCODE_REPO}"
 
+# Installation telemetry contract.
+TELEMETRY_ENDPOINT="https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload"
+TELEMETRY_SENDER="deveco-cli"
+TELEMETRY_MAX_EVENTS=200
+TELEMETRY_MAX_BYTES=1782579
+INSTALLER_REVISION="install-telemetry-v1"
+TELEMETRY_ENABLED=false
+TELEMETRY_STARTED=false
+TELEMETRY_FINALIZED=false
+TELEMETRY_EVENTS=""
+TELEMETRY_EVENT_COUNT=0
+TELEMETRY_RESULT="failure"
+TELEMETRY_STAGE="preflight"
+TELEMETRY_ERROR_CODE="unknown"
+TELEMETRY_WARNING_CODE=""
+TELEMETRY_PATH_REACHED=false
+TELEMETRY_PATH_RESULT="not_reached"
+TELEMETRY_SKIP_REASON=""
+TELEMETRY_STARTED_TARGET=""
+TELEMETRY_DOWNLOAD_STARTED=false
+TELEMETRY_DOWNLOAD_SENT=false
+TELEMETRY_DOWNLOAD_ATTEMPTS=0
+TELEMETRY_DOWNLOAD_ROUNDS=0
+TELEMETRY_DOWNLOAD_STARTED_AT=0
+TELEMETRY_DOWNLOAD_BYTES=""
+TELEMETRY_DOWNLOAD_METHOD="curl_fallback"
+TELEMETRY_INSTALL_STARTED_AT=0
+
+json_escape() {
+    local value=${1:-}
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    value=${value//$'\n'/\\n}
+    value=${value//$'\r'/\\r}
+    value=${value//$'\t'/\\t}
+    printf '%s' "$value"
+}
+
+new_uuid() {
+    command -v uuidgen >/dev/null 2>&1 || return 1
+    uuidgen | tr '[:upper:]' '[:lower:]'
+}
+
+telemetry_endpoint() {
+    if [[ "${DEVECO_INSTALLER_TELEMETRY_ENDPOINT:-}" =~ ^http://(127\.0\.0\.1|localhost|\[::1\]):[0-9]+(/.*)?$ ]]; then
+        printf '%s' "$DEVECO_INSTALLER_TELEMETRY_ENDPOINT"
+        return
+    fi
+    printf '%s' "$TELEMETRY_ENDPOINT"
+}
+
+telemetry_add_event() {
+    [ "$TELEMETRY_ENABLED" = true ] || return 0
+    [ "$TELEMETRY_EVENT_COUNT" -lt "$TELEMETRY_MAX_EVENTS" ] || return 0
+    local action=$1
+    local event_detail=$2
+    local event_uuid detail event timestamp
+    event_uuid=$(new_uuid) || return 0
+    detail="{\"trace_uuid\":\"$event_uuid\",\"session_id\":\"$TELEMETRY_SESSION_ID\",\"event_detail\":$event_detail}"
+    timestamp=$(( $(date +%s) * 1000 ))
+    event="{\"action\":\"$(json_escape "$action")\",\"detail\":\"$(json_escape "$detail")\",\"timestamp\":$timestamp}"
+    if [ -n "$TELEMETRY_EVENTS" ]; then
+        TELEMETRY_EVENTS="$TELEMETRY_EVENTS,$event"
+    else
+        TELEMETRY_EVENTS=$event
+    fi
+    TELEMETRY_EVENT_COUNT=$((TELEMETRY_EVENT_COUNT + 1))
+}
+
+telemetry_flush() {
+    [ "$TELEMETRY_ENABLED" = true ] || return 0
+    [ -n "$TELEMETRY_EVENTS" ] || return 0
+    local payload="[$TELEMETRY_EVENTS]"
+    local payload_bytes
+    payload_bytes=$(printf '%s' "$payload" | wc -c | tr -d '[:space:]') || return 0
+    [[ "$payload_bytes" =~ ^[0-9]+$ ]] || return 0
+    [ "$payload_bytes" -le "$TELEMETRY_MAX_BYTES" ] || return 0
+    command curl -q -sS -o /dev/null --connect-timeout 1 --max-time 2 \
+        -H "Content-Type: application/json" \
+        -H "sender: $TELEMETRY_SENDER" \
+        -H "deviceid: $TELEMETRY_DEVICE_ID" \
+        --data-binary "$payload" "$(telemetry_endpoint)" >/dev/null 2>&1 || true
+}
+
+telemetry_add_download_finished() {
+    local result=$1
+    local error_code=${2:-}
+    [ "$TELEMETRY_DOWNLOAD_STARTED" = true ] || return 0
+    [ "$TELEMETRY_DOWNLOAD_SENT" = false ] || return 0
+    TELEMETRY_DOWNLOAD_SENT=true
+    local duration=$(( (SECONDS - TELEMETRY_DOWNLOAD_STARTED_AT) * 1000 ))
+    local detail="{\"schema_version\":1,\"result\":\"$result\""
+    [ -n "$error_code" ] && detail="$detail,\"error_code\":\"$(json_escape "$error_code")\""
+    detail="$detail,\"download\":{\"method\":\"$TELEMETRY_DOWNLOAD_METHOD\",\"attempt_count\":$TELEMETRY_DOWNLOAD_ATTEMPTS,\"round_count\":$TELEMETRY_DOWNLOAD_ROUNDS,\"duration_ms\":$duration"
+    [ -n "$TELEMETRY_DOWNLOAD_BYTES" ] && detail="$detail,\"bytes\":$TELEMETRY_DOWNLOAD_BYTES"
+    detail="$detail}}"
+    telemetry_add_event "DevEcoCodeDownloadFinished" "$detail"
+}
+
+telemetry_complete() {
+    local exit_code=$1
+    [ "$TELEMETRY_STARTED" = true ] || return 0
+    [ "$TELEMETRY_FINALIZED" = false ] || return 0
+    TELEMETRY_FINALIZED=true
+    if [ "$TELEMETRY_DOWNLOAD_STARTED" = true ] && [ "$TELEMETRY_DOWNLOAD_SENT" = false ]; then
+        telemetry_add_download_finished "failure" "download_http_error"
+    fi
+    [ "$exit_code" -eq 0 ] || TELEMETRY_RESULT="failure"
+    local duration=$(( (SECONDS - TELEMETRY_INSTALL_STARTED_AT) * 1000 ))
+    local detail="{\"schema_version\":1,\"result\":\"$TELEMETRY_RESULT\",\"duration_ms\":$duration"
+    if [ -n "${specific_version:-}" ] && [ "${#specific_version}" -le 128 ] && [ "$specific_version" != "$TELEMETRY_STARTED_TARGET" ]; then
+        detail="$detail,\"target_version\":\"$(json_escape "$specific_version")\""
+    fi
+    if [ "$TELEMETRY_RESULT" = "failure" ]; then
+        detail="$detail,\"stage\":\"$(json_escape "$TELEMETRY_STAGE")\",\"error_code\":\"$(json_escape "$TELEMETRY_ERROR_CODE")\""
+    fi
+    [ -n "$TELEMETRY_WARNING_CODE" ] && detail="$detail,\"warning_code\":\"$(json_escape "$TELEMETRY_WARNING_CODE")\""
+    [ "$TELEMETRY_RESULT" = "skipped" ] && detail="$detail,\"skip_reason\":\"$(json_escape "$TELEMETRY_SKIP_REASON")\""
+    if [ "$TELEMETRY_PATH_REACHED" = true ] && [ "$TELEMETRY_PATH_RESULT" != "not_reached" ]; then
+        detail="$detail,\"path_result\":\"$TELEMETRY_PATH_RESULT\""
+    fi
+    detail="$detail}"
+    telemetry_add_event "DevEcoCodeInstallFinished" "$detail"
+    telemetry_flush
+}
+
+telemetry_init() {
+    [ "$no_analytics" = false ] || return 0
+    case "${DEVECO_TELEMETRY_DISABLED:-}" in 1|true|TRUE|True) return 0 ;; esac
+    [ "${DO_NOT_TRACK:-}" != "1" ] || return 0
+
+    local state_file="${XDG_STATE_HOME:-$HOME/.local/state}/deveco/kv.json"
+    if [ -e "$state_file" ]; then
+        command -v plutil >/dev/null 2>&1 || return 0
+        local enabled typed_enabled
+        if enabled=$(plutil -extract analytics_enabled raw -o - "$state_file" 2>/dev/null); then
+            typed_enabled=$(plutil -extract analytics_enabled json -o - "$state_file" 2>/dev/null) || return 0
+            case "$typed_enabled" in
+                false) return 0 ;;
+                true) ;;
+                *) ;;
+            esac
+        elif ! plutil -lint "$state_file" >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    local id_dir="${XDG_DATA_HOME:-$HOME/.local/share}/deveco/analytics"
+    local id_file="$id_dir/installer-install-id"
+    local candidate persisted_id
+    candidate=$(new_uuid) || return 0
+    TELEMETRY_INSTALL_ID=$candidate
+    if mkdir -p "$id_dir" 2>/dev/null; then
+        chmod 700 "$id_dir" 2>/dev/null || true
+        if [ ! -e "$id_file" ]; then
+            ( umask 077; set -C; printf '%s\n' "$candidate" > "$id_file" ) 2>/dev/null || true
+        fi
+        persisted_id=$(tr -d '\r\n' < "$id_file" 2>/dev/null || true)
+        if [[ ! "$persisted_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            ( umask 077; printf '%s\n' "$candidate" > "$id_file.tmp.$$" && mv -f "$id_file.tmp.$$" "$id_file" ) 2>/dev/null || true
+            rm -f "$id_file.tmp.$$" 2>/dev/null || true
+            persisted_id=$(tr -d '\r\n' < "$id_file" 2>/dev/null || true)
+        fi
+        if [[ "$persisted_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            TELEMETRY_INSTALL_ID=$persisted_id
+            chmod 600 "$id_file" 2>/dev/null || true
+        fi
+    fi
+    TELEMETRY_DEVICE_ID=${TELEMETRY_INSTALL_ID//-/}
+    TELEMETRY_SESSION_ID=$(new_uuid) || return 0
+    TELEMETRY_ENABLED=true
+    TELEMETRY_STARTED=true
+    TELEMETRY_INSTALL_STARTED_AT=$SECONDS
+
+    local raw_os_name raw_arch normalized_arch os_version source install_method detail
+    raw_os_name=macOS
+    raw_arch=$(uname -m 2>/dev/null || echo unknown)
+    case "$raw_arch" in arm64|aarch64) normalized_arch=arm64 ;; x86_64) normalized_arch=x64 ;; *) normalized_arch=unknown ;; esac
+    if [ "$normalized_arch" = "x64" ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then
+        normalized_arch=arm64
+    fi
+    os_version=$(sw_vers -productVersion 2>/dev/null || uname -r 2>/dev/null || echo unknown)
+    source=$installer_source
+    case "$source" in direct-script-v1|gitcode-raw-v1|deveco-self-upgrade-v1|unknown) ;; *) source=unknown ;; esac
+    install_method=download
+    if [ -n "$binary_path" ]; then
+        install_method=local_binary
+    fi
+    detail="{\"schema_version\":1,\"os_name\":\"$(json_escape "$raw_os_name")\",\"os_version\":\"$(json_escape "$os_version")\",\"os_arch\":\"$(json_escape "$normalized_arch")\",\"installer\":\"bash\",\"shell_version\":\"$(json_escape "${BASH_VERSION:-unknown}")\",\"installer_revision\":\"$INSTALLER_REVISION\",\"installer_source_id\":\"$source\",\"install_method\":\"$install_method\""
+    if [[ "${node_major:-}" =~ ^[0-9]+$ ]]; then
+        detail="$detail,\"node_major\":$node_major"
+    fi
+    local requested_target=${requested_version#v}
+    if [[ "$requested_target" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] && [ "${#requested_target}" -le 128 ]; then
+        TELEMETRY_STARTED_TARGET=$requested_target
+        detail="$detail,\"target_version\":\"$(json_escape "$TELEMETRY_STARTED_TARGET")\""
+    fi
+    detail="$detail}"
+    telemetry_add_event "DevEcoCodeInstallStarted" "$detail"
+    return 0
+}
+
 # ─── Friendly error helpers ──────────────────────────────────────────────────
 die() {
+    TELEMETRY_STAGE=${3:-$TELEMETRY_STAGE}
+    TELEMETRY_ERROR_CODE=${4:-unknown}
     echo -e "${RED}[ERROR]${NC} $1" >&2
     [ -n "${2:-}" ] && echo -e "${MUTED}  -> $2${NC}" >&2
     exit 1
@@ -22,19 +226,33 @@ die() {
 
 warn() {
     echo -e "${ORANGE}[WARN]${NC} $1" >&2
-    [ -n "${2:-}" ] && echo -e "${MUTED}  -> $2${NC}" >&2
+    if [ -n "${2:-}" ]; then
+        echo -e "${MUTED}  -> $2${NC}" >&2
+    fi
+    return 0
 }
 
 
 # ─── Global cleanup trap ────────────────────────────────────────────────────
-cleanup() {
+on_exit() {
+    local exit_code=$?
+    printf '\033[?25h' 2>/dev/null
+    telemetry_complete "$exit_code" || true
     rm -rf "${TMPDIR:-/tmp}/deveco_install_$$"
     if [ -n "${VERSIONS_DIR:-}" ]; then
         rm -rf "$VERSIONS_DIR"/.staging.*.$$ 2>/dev/null || true
     fi
-    printf '\033[?25h' 2>/dev/null
+    return "$exit_code"
 }
-trap cleanup EXIT
+trap on_exit EXIT
+
+on_signal() {
+    TELEMETRY_RESULT="failure"
+    TELEMETRY_ERROR_CODE="interrupted"
+    exit "$1"
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
 
 usage() {
     cat <<EOF
@@ -47,14 +265,19 @@ Options:
     -v, --version <version> Install a specific version
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
+        --no-analytics      Disable installation telemetry for this run
+        --install-source    Set the installer source identifier
 
 Environment:
     GITCODE_OWNER           GitCode repo owner (default: openharmony-sig)
     GITCODE_REPO            GitCode repo name (default: deveco-code)
     VERSION                 Version to install (overridden by --version)
+    DEVECO_INSTALL_SOURCE   Installer source identifier
+    DEVECO_TELEMETRY_DISABLED
+                            Set to 1 or true to disable installation telemetry
 
 Examples:
-    curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | bash
+    curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | DEVECO_INSTALL_SOURCE=gitcode-raw-v1 bash
     curl -fsSL https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install | bash -s -- --version <version>
     ./install --binary /path/to/deveco
 EOF
@@ -63,6 +286,8 @@ EOF
 requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
+no_analytics=false
+installer_source=${DEVECO_INSTALL_SOURCE:-direct-script-v1}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -90,6 +315,18 @@ while [[ $# -gt 0 ]]; do
             no_modify_path=true
             shift
             ;;
+        --no-analytics)
+            no_analytics=true
+            shift
+            ;;
+        --install-source)
+            if [[ -n "${2:-}" ]]; then
+                installer_source="$2"
+                shift 2
+            else
+                die "--install-source requires an identifier"
+            fi
+            ;;
         *)
             warn "Unknown option '$1', ignoring" "Run install --help to see available options"
             shift
@@ -98,10 +335,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 raw_os=$(uname -s)
+TELEMETRY_STAGE="preflight"
 case "$raw_os" in
   Darwin*) os="darwin" ;;
   *)
-    die "Unsupported OS: $raw_os" "This installer supports macOS only. On Windows, run install.ps1 from PowerShell"
+    die "Unsupported OS: $raw_os" "This installer supports macOS only. On Windows, run install.ps1 from PowerShell" "preflight" "unsupported_os"
     ;;
 esac
 
@@ -117,7 +355,10 @@ else
     node_warning=true
 fi
 
+telemetry_init
+
 # ─── Versioned install directories ──────────────────────────────────────────
+TELEMETRY_STAGE="preflight"
 BIN_DIR="$HOME/.local/bin"
 BIN_LINK="$BIN_DIR/$APP"
 VERSIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/deveco/versions"
@@ -126,17 +367,19 @@ mkdir -p "$VERSIONS_DIR" "$BIN_DIR"
 
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
+    TELEMETRY_STAGE="package_validation"
     if [ ! -f "$binary_path" ]; then
-        die "Binary not found: ${binary_path}" "Please check the path and try again"
+        die "Binary not found: ${binary_path}" "Please check the path and try again" "package_validation" "invalid_argument"
     fi
     binary_path="$(cd "$(dirname "$binary_path")" && pwd)/$(basename "$binary_path")"
     specific_version=$("$binary_path" --version 2>/dev/null || echo "")
     if [[ ! "$specific_version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
-        die "Local binary returned an invalid version: $specific_version" "Use a binary produced by the DevEco Code build"
+        die "Local binary returned an invalid version: $specific_version" "Use a binary produced by the DevEco Code build" "package_validation" "invalid_version"
     fi
 else
+    TELEMETRY_STAGE="version_resolution"
     if ! command -v curl >/dev/null 2>&1; then
-        die "'curl' is required but not installed"
+        die "'curl' is required but not installed" "" "preflight" "missing_dependency"
     fi
 
     arch=$(uname -m)
@@ -160,7 +403,7 @@ else
       darwin-x64|darwin-arm64)
         ;;
       *)
-        die "Unsupported platform: $os/$arch" "Supported: macOS (Apple Silicon / Intel)"
+        die "Unsupported platform: $os/$arch" "Supported: macOS (Apple Silicon / Intel)" "preflight" "unsupported_arch"
         ;;
     esac
     target="$os-$arch"
@@ -168,7 +411,7 @@ else
     filename="$APP-$target.zip"
 
     if ! command -v unzip >/dev/null 2>&1; then
-        die "'unzip' is required but not installed" "Install it with: brew install unzip"
+        die "'unzip' is required but not installed" "Install it with: brew install unzip" "preflight" "missing_dependency"
     fi
 
     if [ -z "$requested_version" ]; then
@@ -176,16 +419,16 @@ else
         # Parse tag_name and prerelease with sed/grep (no jq dependency, matches upstream opencode).
         # Use here-string to avoid macOS `echo` stripping unescaped control chars in the body.
         release_json=$(curl -sS "${GITCODE_API}/releases/latest" 2>/dev/null) || {
-            die "Failed to fetch version info from GitCode" "Check your network, or run: npm install -g @deveco/deveco-code"
+            die "Failed to fetch version info from GitCode" "Check your network, or run: npm install -g @deveco/deveco-code" "version_resolution" "release_query_failed"
         }
         specific_version=$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<< "$release_json" | head -1 | sed 's/^v//')
         if grep -q '"prerelease"[[:space:]]*:[[:space:]]*true' <<< "$release_json"; then is_prerelease="true"; else is_prerelease="false"; fi
 
         if [[ -z "$specific_version" ]]; then
-            die "No release found on GitCode" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions"
+            die "No release found on GitCode" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions" "version_resolution" "release_not_found"
         fi
         if [[ "$is_prerelease" == "true" ]]; then
-            die "Latest GitCode release is marked as prerelease" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions"
+            die "Latest GitCode release is marked as prerelease" "Visit https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases to check available versions" "version_resolution" "release_prerelease"
         fi
         echo -e "${ORANGE}Latest version: ${NC}$specific_version"
     else
@@ -197,11 +440,11 @@ else
         # Verify the release exists
         http_status=$(curl -sS -o /dev/null -w "%{http_code}" "${GITCODE_API}/releases/v${requested_version}" 2>/dev/null || echo "000")
         if [ "$http_status" != "200" ]; then
-            die "Release v${requested_version} not found or unavailable (HTTP ${http_status})" "Available releases: https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases"
+            die "Release v${requested_version} not found or unavailable (HTTP ${http_status})" "Available releases: https://gitcode.com/${GITCODE_OWNER}/${GITCODE_REPO}/releases" "version_resolution" "release_not_found"
         fi
     fi
     if [[ ! "$specific_version" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
-        die "Invalid release version: $specific_version" "Use a valid DevEco Code release version"
+        die "Invalid release version: $specific_version" "Use a valid DevEco Code release version" "version_resolution" "invalid_version"
     fi
     url="${GITCODE_API}/releases/v${specific_version}/attach_files/${filename}/download"
 fi
@@ -221,6 +464,8 @@ check_version() {
         elif installation_complete "$version_dir"; then
             echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping"
             update_symlink "$version_dir"
+            TELEMETRY_RESULT="skipped"
+            TELEMETRY_SKIP_REASON="already_installed"
             return 0
         else
             echo -e "${MUTED}Version ${NC}$specific_version${MUTED} is incomplete, repairing installation"
@@ -389,6 +634,8 @@ download_with_progress() {
 
 # ─── Versioned install helpers ────────────────────────────────────────────────
 update_symlink() {
+    TELEMETRY_STAGE="activate"
+    TELEMETRY_ERROR_CODE="activation_failed"
     local version_dir="$1"
     local tmp_link="$BIN_DIR/.$APP.$$"
     ln -sf "$version_dir/bin/$APP" "$tmp_link"
@@ -421,6 +668,8 @@ cleanup_old_versions() {
 }
 
 download_and_install() {
+    TELEMETRY_STAGE="download"
+    TELEMETRY_ERROR_CODE="download_http_error"
     echo -e "\n${MUTED}Installing ${NC}deveco ${MUTED}version: ${NC}$specific_version"
     local version_dir="$VERSIONS_DIR/$specific_version"
     local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
@@ -434,24 +683,61 @@ download_and_install() {
             echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping download"
             update_symlink "$version_dir"
             cleanup_old_versions
+            TELEMETRY_RESULT="skipped"
+            TELEMETRY_SKIP_REASON="already_installed"
             return
         fi
     fi
 
     mkdir -p "$stage_dir/bin" "$tmp_dir"
 
-    if ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
-        curl -f -# -L -o "$tmp_dir/$filename" "$url"
+    if [ "$TELEMETRY_ENABLED" = true ]; then
+        TELEMETRY_DOWNLOAD_STARTED=true
+        TELEMETRY_DOWNLOAD_STARTED_AT=$SECONDS
+        TELEMETRY_DOWNLOAD_ROUNDS=1
+    fi
+    if [ -t 2 ]; then
+        if [ "$TELEMETRY_ENABLED" = true ]; then
+            TELEMETRY_DOWNLOAD_METHOD="curl_progress"
+            TELEMETRY_DOWNLOAD_ATTEMPTS=$((TELEMETRY_DOWNLOAD_ATTEMPTS + 1))
+        fi
+        if ! download_with_progress "$url" "$tmp_dir/$filename"; then
+            if [ "$TELEMETRY_ENABLED" = true ]; then
+                TELEMETRY_DOWNLOAD_METHOD="curl_fallback"
+                TELEMETRY_DOWNLOAD_ATTEMPTS=$((TELEMETRY_DOWNLOAD_ATTEMPTS + 1))
+            fi
+            if ! curl -f -# -L -o "$tmp_dir/$filename" "$url"; then
+                telemetry_add_download_finished "failure" "download_http_error"
+                die "Download failed" "Try again, or run: npm install -g @deveco/deveco-code" "download" "download_http_error"
+            fi
+        fi
+    else
+        if [ "$TELEMETRY_ENABLED" = true ]; then
+            TELEMETRY_DOWNLOAD_METHOD="curl_fallback"
+            TELEMETRY_DOWNLOAD_ATTEMPTS=$((TELEMETRY_DOWNLOAD_ATTEMPTS + 1))
+        fi
+        if ! curl -f -# -L -o "$tmp_dir/$filename" "$url"; then
+            telemetry_add_download_finished "failure" "download_http_error"
+            die "Download failed" "Try again, or run: npm install -g @deveco/deveco-code" "download" "download_http_error"
+        fi
     fi
 
     if [ ! -f "$tmp_dir/$filename" ] || [ ! -s "$tmp_dir/$filename" ]; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Download failed — file is empty or missing" "Try again, or run: npm install -g @deveco/deveco-code"
+        telemetry_add_download_finished "failure" "download_empty"
+        die "Download failed — file is empty or missing" "Try again, or run: npm install -g @deveco/deveco-code" "download" "download_empty"
     fi
 
+    if [ "$TELEMETRY_ENABLED" = true ]; then
+        TELEMETRY_DOWNLOAD_BYTES=$(wc -c < "$tmp_dir/$filename" | tr -d ' ')
+    fi
+    telemetry_add_download_finished "success"
+
+    TELEMETRY_STAGE="extract"
+    TELEMETRY_ERROR_CODE="extract_failed"
     if ! unzip -q "$tmp_dir/$filename" -d "$tmp_dir" 2>/dev/null; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Failed to extract archive — file may be corrupted" "Try again, or run: npm install -g @deveco/deveco-code"
+        die "Failed to extract archive — file may be corrupted" "Try again, or run: npm install -g @deveco/deveco-code" "extract" "extract_failed"
     fi
 
     # Find the binary - it may be at root or in bin/ subdirectory
@@ -461,7 +747,7 @@ download_and_install() {
     fi
     if [ -z "$binary_src" ] || [ ! -f "$binary_src" ]; then
         rm -rf "$tmp_dir" "$stage_dir"
-        die "Binary '$APP' not found in the archive" "Try again, or run: npm install -g @deveco/deveco-code"
+        die "Binary '$APP' not found in the archive" "Try again, or run: npm install -g @deveco/deveco-code" "package_validation" "binary_missing"
     fi
 
     # Place binary into staging version directory
@@ -488,14 +774,14 @@ download_and_install() {
     if ! installation_complete "$stage_dir"; then
         rm -rf "$stage_dir"
         rm -rf "$tmp_dir"
-        die "Release archive is incomplete" "Try again, or run: npm install -g @deveco/deveco-code"
+        die "Release archive is incomplete" "Try again, or run: npm install -g @deveco/deveco-code" "package_validation" "binary_missing"
     fi
 
     local installed_version
     installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
     if [ "$installed_version" != "$specific_version" ]; then
         rm -rf "$stage_dir" "$tmp_dir"
-        die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}. Try: npm install -g @deveco/deveco-code"
+        die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}. Try: npm install -g @deveco/deveco-code" "package_validation" "version_mismatch"
     fi
 
     # Atomic switch: staging → version directory
@@ -509,6 +795,7 @@ download_and_install() {
 }
 
 install_from_binary() {
+    TELEMETRY_STAGE="package_validation"
     echo -e "\n${MUTED}Installing ${NC}deveco ${MUTED}from: ${NC}$binary_path"
     local version_dir="$VERSIONS_DIR/$specific_version"
     local stage_dir="$VERSIONS_DIR/.staging.$specific_version.$$"
@@ -529,12 +816,12 @@ install_from_binary() {
         cp "$source_root/CHANGELOG.md" "$stage_dir/CHANGELOG.md"
     fi
     if ! installation_complete "$stage_dir"; then
-        die "Local build output is incomplete" "The deveco executable is missing"
+        die "Local build output is incomplete" "The deveco executable is missing" "package_validation" "binary_missing"
     fi
     local installed_version
     installed_version=$("$stage_dir/bin/$APP" --version 2>/dev/null || echo "")
     if [ "$installed_version" != "$specific_version" ]; then
-        die "Local binary version does not match" "Expected $specific_version, got ${installed_version:-no version output}"
+        die "Local binary version does not match" "Expected $specific_version, got ${installed_version:-no version output}" "package_validation" "version_mismatch"
     fi
     if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
     mv "$stage_dir" "$version_dir"
@@ -566,10 +853,16 @@ add_to_path() {
         _path_modified=true
     else
         warn "Cannot write to $config_file — please add PATH manually"
+        TELEMETRY_PATH_RESULT="warning"
+        TELEMETRY_WARNING_CODE="path_config_unwritable"
         echo -e "  $command"
     fi
 }
 
+TELEMETRY_STAGE="path_update"
+TELEMETRY_ERROR_CODE="path_update_failed"
+TELEMETRY_PATH_REACHED=true
+TELEMETRY_PATH_RESULT="failure"
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 
 current_shell=$(basename "$SHELL")
@@ -608,6 +901,8 @@ if [[ "$no_modify_path" != "true" ]]; then
 
     if [[ -z $config_file ]]; then
         warn "No shell config file found for $current_shell" "Please add the following to your shell config manually:"
+        TELEMETRY_PATH_RESULT="warning"
+        TELEMETRY_WARNING_CODE="path_config_missing"
         echo -e "  export PATH=$BIN_DIR:\$PATH"
     elif [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         case $current_shell in
@@ -629,12 +924,23 @@ if [[ "$no_modify_path" != "true" ]]; then
             *)
                 export PATH=$BIN_DIR:$PATH
                 warn "Unrecognized shell — please add PATH manually"
+                TELEMETRY_PATH_RESULT="warning"
+                TELEMETRY_WARNING_CODE="shell_unrecognized"
                 echo -e "  export PATH=$BIN_DIR:\$PATH"
             ;;
         esac
+    else
+        TELEMETRY_PATH_RESULT="already_present"
     fi
 else
+    TELEMETRY_PATH_RESULT="disabled"
     echo -e "${MUTED}Skipping PATH modification (--no-modify-path)${NC}"
+fi
+
+if [ "$_path_modified" = true ]; then
+    TELEMETRY_PATH_RESULT="modified"
+elif [ "$TELEMETRY_PATH_RESULT" = "failure" ]; then
+    TELEMETRY_PATH_RESULT="already_present"
 fi
 
 echo -e ""
@@ -668,9 +974,14 @@ echo -e "deveco        ${MUTED}# Launch DevEco Code${NC}"
 echo -e ""
 
 if [ "$node_warning" = "true" ]; then
+    TELEMETRY_WARNING_CODE=${TELEMETRY_WARNING_CODE:-node_version_unsupported}
     echo -e "${RED}WARNING:${NC}"
     echo -e "${RED}Node.js 22 or later is required.${NC}"
     echo -e "${RED}Without it, some DevEco Code features will not work.${NC}"
     echo -e "${RED}Install Node.js from https://nodejs.org/ and make sure \"node\" is available in your PATH.${NC}"
     echo -e ""
+fi
+
+if [ "$TELEMETRY_RESULT" = "failure" ]; then
+    TELEMETRY_RESULT="success"
 fi

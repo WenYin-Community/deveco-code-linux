@@ -176,7 +176,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         const result = yield* appProcess.run(
           ChildProcess.make(shell, [], {
             stdin: Stream.make(bodyBytes),
-            env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO },
+            env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO, DEVECO_INSTALL_SOURCE: "deveco-self-upgrade-v1" },
             extendEnv: true,
           }),
         )
@@ -203,7 +203,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
               "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-RestMethod -Uri $env:DEVECO_INSTALL_PS1_URL -Method Get -ErrorAction Stop | Invoke-Expression",
             ],
             {
-              env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO, DEVECO_INSTALL_PS1_URL: INSTALL_PS1_URL },
+              env: { VERSION: target, GITCODE_OWNER, GITCODE_REPO, DEVECO_INSTALL_PS1_URL: INSTALL_PS1_URL, DEVECO_INSTALL_SOURCE: "deveco-self-upgrade-v1" },
               extendEnv: true,
             },
           ),

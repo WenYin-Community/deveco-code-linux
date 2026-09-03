@@ -14,6 +14,8 @@ param(
     [switch]$Baseline,
     [string]$Binary = "",
     [switch]$NoModifyPath,
+    [switch]$NoAnalytics,
+    [string]$InstallSource = "",
     [switch]$Help
 )
 
@@ -51,6 +53,219 @@ $BinDir = Join-Path $env:USERPROFILE ".local\bin"
 $BinPath = Join-Path $BinDir "$AppName.exe"
 $VersionRetentionCount = 2
 
+# Installation telemetry contract.
+$TelemetryEndpoint = "https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload"
+$TelemetrySender = "deveco-cli"
+$TelemetryMaxEvents = 200
+$TelemetryMaxBytes = 1782579
+$InstallerRevision = "install-telemetry-v1"
+$script:TelemetryEnabled = $false
+$script:TelemetryStarted = $false
+$script:TelemetryFinalized = $false
+$script:TelemetryEvents = $null
+$script:TelemetryResult = "failure"
+$script:TelemetryStage = "preflight"
+$script:TelemetryErrorCode = "unknown"
+$script:TelemetryWarningCode = $null
+$script:TelemetryPathReached = $false
+$script:TelemetryPathResult = "not_reached"
+$script:TelemetrySkipReason = $null
+$script:TelemetryStartedTarget = $null
+$script:TelemetryDownloadStarted = $false
+$script:TelemetryDownloadSent = $false
+$script:TelemetryDownloadAttempts = 0
+$script:TelemetryDownloadRounds = 0
+$script:TelemetryDownloadDurationMs = 0
+$script:TelemetryDownloadBytes = $null
+$script:TelemetryInstallStopwatch = $null
+
+function Get-InstallTelemetryEndpoint {
+    if ($env:DEVECO_INSTALLER_TELEMETRY_ENDPOINT -match '^http://(127\.0\.0\.1|localhost|\[::1\]):\d+(/.*)?$') {
+        return $env:DEVECO_INSTALLER_TELEMETRY_ENDPOINT
+    }
+    return $TelemetryEndpoint
+}
+
+function Add-InstallTelemetryEvent {
+    param([string]$Action, [hashtable]$EventDetail)
+    if (-not $script:TelemetryEnabled -or $script:TelemetryEvents.Count -ge $TelemetryMaxEvents) { return }
+    $detail = @{
+        trace_uuid = [guid]::NewGuid().ToString("D")
+        session_id = $script:TelemetrySessionID
+        event_detail = $EventDetail
+    } | ConvertTo-Json -Compress -Depth 8
+    [void]$script:TelemetryEvents.Add(@{
+        action = $Action
+        detail = $detail
+        timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    })
+}
+
+function Send-InstallTelemetry {
+    if (-not $script:TelemetryEnabled -or $script:TelemetryEvents.Count -eq 0) { return }
+    $payload = ConvertTo-Json -InputObject @($script:TelemetryEvents) -Compress -Depth 10
+    if ([System.Text.Encoding]::UTF8.GetByteCount($payload) -gt $TelemetryMaxBytes) { return }
+    $client = $null
+    $content = $null
+    try {
+        $endpoint = Get-InstallTelemetryEndpoint
+        $handler = [System.Net.Http.HttpClientHandler]::new()
+        $handler.UseCookies = $false
+        $handler.UseDefaultCredentials = $false
+        if ($handler.PSObject.Properties["ConnectTimeout"]) {
+            $handler.ConnectTimeout = [TimeSpan]::FromSeconds(1)
+        }
+        if ($endpoint -match '^http://(127\.0\.0\.1|localhost|\[::1\]):') { $handler.UseProxy = $false }
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(2)
+        [void]$client.DefaultRequestHeaders.TryAddWithoutValidation("sender", $TelemetrySender)
+        [void]$client.DefaultRequestHeaders.TryAddWithoutValidation("deviceid", $script:TelemetryInstallID)
+        $content = [System.Net.Http.StringContent]::new($payload, [System.Text.Encoding]::UTF8, "application/json")
+        $response = $client.PostAsync($endpoint, $content).GetAwaiter().GetResult()
+        $response.Dispose()
+    } catch {
+        # Telemetry is best effort and must never affect installation.
+    } finally {
+        if ($content) { $content.Dispose() }
+        if ($client) { $client.Dispose() }
+    }
+}
+
+function Add-DownloadFinishedTelemetry {
+    param([string]$Result, [string]$ErrorCode = "")
+    if (-not $script:TelemetryDownloadStarted -or $script:TelemetryDownloadSent) { return }
+    $script:TelemetryDownloadSent = $true
+    $download = @{
+        method = "httpclient"
+        attempt_count = $script:TelemetryDownloadAttempts
+        round_count = $script:TelemetryDownloadRounds
+        duration_ms = [int64]$script:TelemetryDownloadDurationMs
+    }
+    if ($null -ne $script:TelemetryDownloadBytes) { $download.bytes = [int64]$script:TelemetryDownloadBytes }
+    $detail = @{ schema_version = 1; result = $Result; download = $download }
+    if ($ErrorCode) { $detail.error_code = $ErrorCode }
+    Add-InstallTelemetryEvent -Action "DevEcoCodeDownloadFinished" -EventDetail $detail
+}
+
+function Complete-InstallTelemetry {
+    if (-not $script:TelemetryStarted -or $script:TelemetryFinalized) { return }
+    $script:TelemetryFinalized = $true
+    if ($script:TelemetryDownloadStarted -and -not $script:TelemetryDownloadSent) {
+        Add-DownloadFinishedTelemetry -Result "failure" -ErrorCode "download_http_error"
+    }
+    $detail = @{
+        schema_version = 1
+        result = $script:TelemetryResult
+        duration_ms = [int64]$script:TelemetryInstallStopwatch.ElapsedMilliseconds
+    }
+    if ($tag -and $tag.Length -le 128 -and $tag -ne $script:TelemetryStartedTarget) {
+        $detail.target_version = $tag
+    }
+    if ($script:TelemetryResult -eq "failure") {
+        $detail.stage = $script:TelemetryStage
+        $detail.error_code = $script:TelemetryErrorCode
+    }
+    if ($script:TelemetryWarningCode) { $detail.warning_code = $script:TelemetryWarningCode }
+    if ($script:TelemetryResult -eq "skipped") { $detail.skip_reason = $script:TelemetrySkipReason }
+    if ($script:TelemetryPathReached -and $script:TelemetryPathResult -ne "not_reached") {
+        $detail.path_result = $script:TelemetryPathResult
+    }
+    Add-InstallTelemetryEvent -Action "DevEcoCodeInstallFinished" -EventDetail $detail
+    Send-InstallTelemetry
+}
+
+function Start-InstallTelemetry {
+    if ($NoAnalytics) { return }
+    if ($env:DEVECO_TELEMETRY_DISABLED -in @("1", "true") -or $env:DO_NOT_TRACK -eq "1") { return }
+
+    $stateHome = if ($env:XDG_STATE_HOME) { $env:XDG_STATE_HOME } else { Join-Path $env:USERPROFILE ".local\state" }
+    $preferenceFile = Join-Path $stateHome "deveco\kv.json"
+    if (Test-Path -LiteralPath $preferenceFile) {
+        try {
+            $preference = Get-Content -LiteralPath $preferenceFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $analyticsProperty = $preference.PSObject.Properties["analytics_enabled"]
+            if ($analyticsProperty -and $analyticsProperty.Value -is [bool] -and -not $analyticsProperty.Value) { return }
+        } catch { return }
+    }
+
+    $idDir = Join-Path $DataHome "deveco\analytics"
+    $idFile = Join-Path $idDir "installer-install-id"
+    $candidate = [guid]::NewGuid().ToString("D")
+    $telemetryInstallID = $candidate
+    $temporaryIDFile = $null
+    try {
+        New-Item -ItemType Directory -Path $idDir -Force -ErrorAction Stop | Out-Null
+        if (-not (Test-Path -LiteralPath $idFile)) {
+            try {
+                $stream = [System.IO.File]::Open($idFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+                try {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes("$candidate`r`n")
+                    $stream.Write($bytes, 0, $bytes.Length)
+                    $stream.Flush()
+                } finally { $stream.Dispose() }
+            } catch {}
+        }
+        $persistedID = (Get-Content -LiteralPath $idFile -Raw -Encoding UTF8).Trim()
+        if ($persistedID -notmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$') {
+            $temporaryIDFile = "$idFile.$PID.tmp"
+            [System.IO.File]::WriteAllText($temporaryIDFile, "$candidate`r`n", [System.Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $temporaryIDFile -Destination $idFile -Force -ErrorAction Stop
+            $persistedID = $candidate
+        }
+        $telemetryInstallID = $persistedID
+    } catch {} finally {
+        if ($temporaryIDFile -and (Test-Path -LiteralPath $temporaryIDFile)) {
+            Remove-Item -LiteralPath $temporaryIDFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $script:TelemetryInstallID = $telemetryInstallID -replace '-', ''
+
+    $source = if ($InstallSource) { $InstallSource } elseif ($env:DEVECO_INSTALL_SOURCE) { $env:DEVECO_INSTALL_SOURCE } else { "direct-script-v1" }
+    if ($source -notin @("direct-script-v1", "gitcode-raw-v1", "deveco-self-upgrade-v1", "unknown")) { $source = "unknown" }
+    $script:TelemetrySessionID = [guid]::NewGuid().ToString("D")
+    $script:TelemetryEvents = [System.Collections.ArrayList]::new()
+    $script:TelemetryEnabled = $true
+    $script:TelemetryStarted = $true
+    $script:TelemetryInstallStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $cpuVariant = if ($Baseline) {
+        "baseline"
+    } else {
+        try { if (Test-Avx2) { "avx2" } else { "baseline" } } catch { $null }
+    }
+    $osArch = switch ($env:PROCESSOR_ARCHITECTURE) {
+        { $_ -in @("AMD64", "x86_64") } { "x64"; break }
+        "ARM64" { "arm64"; break }
+        default { "unknown" }
+    }
+    $eventDetail = @{
+        schema_version = 1
+        os_name = "Windows"
+        os_version = [System.Environment]::OSVersion.Version.ToString()
+        os_arch = $osArch
+        installer = "powershell"
+        shell_version = $PSVersionTable.PSVersion.ToString()
+        installer_revision = $InstallerRevision
+        installer_source_id = $source
+        install_method = if ($Binary) { "local_binary" } else { "download" }
+    }
+    if ($cpuVariant) { $eventDetail.cpu_variant = $cpuVariant }
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        try {
+            $nodeProbe = Invoke-NativeVersion -ExePath "node"
+            $telemetryNodeMajor = 0
+            if ($nodeProbe.ExitCode -eq 0 -and [int]::TryParse((($nodeProbe.Output -replace '^v', '') -split '\.')[0], [ref]$telemetryNodeMajor)) {
+                $eventDetail.node_major = $telemetryNodeMajor
+            }
+        } catch {}
+    }
+    $requestedTarget = if ($Version) { $Version -replace '^v', '' } elseif ($env:VERSION) { $env:VERSION -replace '^v', '' } else { $null }
+    if ($requestedTarget -and $requestedTarget.Length -le 128 -and $requestedTarget -match '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
+        $script:TelemetryStartedTarget = $requestedTarget
+        $eventDetail.target_version = $requestedTarget
+    }
+    Add-InstallTelemetryEvent -Action "DevEcoCodeInstallStarted" -EventDetail $eventDetail
+}
+
 function Show-Help {
     Write-Host "DevEco Code Windows Installer"
     Write-Host ""
@@ -61,12 +276,16 @@ function Show-Help {
     Write-Host "  -Baseline            Force baseline variant (no AVX2)"
     Write-Host "  -Binary <path>       Install from a local binary instead of downloading"
     Write-Host "  -NoModifyPath        Don't modify user PATH"
+    Write-Host "  -NoAnalytics         Disable installation telemetry for this run"
+    Write-Host "  -InstallSource <id>  Set the installer source identifier"
     Write-Host "  -Help                Show this help message"
     Write-Host ""
     Write-Host "Environment:"
     Write-Host "  GITCODE_OWNER        GitCode repo owner (default: openharmony-sig)"
     Write-Host "  GITCODE_REPO         GitCode repo name (default: deveco-code)"
     Write-Host "  VERSION              Version to install (overridden by -Version)"
+    Write-Host "  DEVECO_INSTALL_SOURCE Installer source identifier"
+    Write-Host "  DEVECO_TELEMETRY_DISABLED Set to 1 or true to disable installation telemetry"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  irm https://raw.gitcode.com/openharmony-sig/deveco-code/raw/develop/install.ps1 | iex"
@@ -221,10 +440,20 @@ function Download-WithProgress {
 function Download-WithRetry {
     param([string]$Url, [string]$Output, [int]$Attempts = 3)
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        if ($script:TelemetryDownloadStarted) { $script:TelemetryDownloadAttempts++ }
+        $attemptStopwatch = if ($script:TelemetryDownloadStarted) { [System.Diagnostics.Stopwatch]::StartNew() } else { $null }
         try {
             Download-WithProgress -Url $Url -Output $Output
+            if ($attemptStopwatch) {
+                $attemptStopwatch.Stop()
+                $script:TelemetryDownloadDurationMs += $attemptStopwatch.ElapsedMilliseconds
+            }
             return
         } catch {
+            if ($attemptStopwatch) {
+                $attemptStopwatch.Stop()
+                $script:TelemetryDownloadDurationMs += $attemptStopwatch.ElapsedMilliseconds
+            }
             if ($attempt -eq $Attempts) { throw }
             Start-Sleep -Milliseconds (500 * $attempt)
         }
@@ -419,7 +648,19 @@ if ($Help) {
     return
 }
 
+try { Start-InstallTelemetry } catch {
+    $script:TelemetryEnabled = $false
+    $script:TelemetryStarted = $false
+}
+
+trap {
+    try { Complete-InstallTelemetry } catch {}
+    break
+}
+
+$script:TelemetryStage = "preflight"
 if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+    $script:TelemetryErrorCode = "unsupported_os"
     throw "This installer supports Windows PowerShell only. On macOS, run the install script from Bash."
 }
 
@@ -437,10 +678,14 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 }
 
 # --- Discover version (skipped when -Binary is provided) ---
+$script:TelemetryStage = "version_resolution"
+$script:TelemetryErrorCode = "unknown"
 $installationState = "download"
 $resolvedBinary = $null
 if ($Binary) {
+    $script:TelemetryStage = "package_validation"
     if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
+        $script:TelemetryErrorCode = "invalid_argument"
         Write-Host "Please check the path and try again" -ForegroundColor DarkGray
         throw "Binary not found: $Binary"
     }
@@ -453,6 +698,7 @@ if ($Binary) {
         throw "Cannot read version from local binary: $($_.Exception.Message)"
     }
     if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
+        $script:TelemetryErrorCode = "invalid_version"
         throw "Local binary returned an invalid version: $tag"
     }
 } else {
@@ -477,13 +723,18 @@ if ($Binary) {
             }
             $isPrerelease = $releaseJson -match '"prerelease"\s*:\s*true'
             if ([string]::IsNullOrWhiteSpace($tag)) {
+                $script:TelemetryErrorCode = "release_not_found"
                 throw "No release found"
             }
             if ($isPrerelease) {
+                $script:TelemetryErrorCode = "release_prerelease"
                 throw "Latest GitCode release is marked as prerelease"
             }
             Write-Host "${ansiOrange}Latest version: ${ansiReset}$tag"
         } catch {
+            if ($script:TelemetryErrorCode -notin @("release_not_found", "release_prerelease")) {
+                $script:TelemetryErrorCode = "release_query_failed"
+            }
             Write-Host "Try: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
             throw "Failed to fetch version info from GitCode: $($_.Exception.Message)"
         }
@@ -495,12 +746,14 @@ if ($Binary) {
             $response = Invoke-WebRequest -Uri $releaseUrl -Method Get -UseBasicParsing -ErrorAction Stop
             if ($response.StatusCode -ne 200) { throw "HTTP $($response.StatusCode)" }
         } catch {
+            $script:TelemetryErrorCode = "release_not_found"
             Write-Host "Available releases: https://gitcode.com/$Repo/releases" -ForegroundColor DarkGray
             throw "Release v$tag not found: $($_.Exception.Message)"
         }
     }
 
     if ([string]::IsNullOrWhiteSpace($tag) -or $tag -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]*$') {
+        $script:TelemetryErrorCode = "invalid_version"
         throw "Invalid release version: $tag"
     }
 
@@ -512,6 +765,7 @@ $stageDir = $null
 $launcherStage = $null
 $installMutex = $null
 try {
+    $script:TelemetryStage = "preflight"
     $installMutex = Enter-InstallMutex
 
     # --- Create versioned install directories ---
@@ -577,17 +831,24 @@ try {
         }
 
         if (-not (Test-InstallationComplete $stageDir)) {
+            $script:TelemetryErrorCode = "binary_missing"
             throw "Local build output is incomplete — deveco.exe is missing"
         }
         $probe = Invoke-NativeVersion -ExePath $versionBin
         $installedVersion = $probe.Output
+        if ($probe.ExitCode -ne 0) { $script:TelemetryErrorCode = "binary_missing" }
+        if ($installedVersion -ne $tag) { $script:TelemetryErrorCode = "version_mismatch" }
         if ($probe.ExitCode -ne 0) { throw "Installation verification failed — deveco could not run" }
         if ($installedVersion -ne $tag) { throw "Local binary version does not match. Expected $tag, got $installedVersion" }
+        $script:TelemetryStage = "activate"
+        $script:TelemetryErrorCode = "activation_failed"
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
         Copy-Item -LiteralPath $versionBin -Destination $launcherStage -Force -ErrorAction Stop
         Publish-StagedInstallation -StageDir $stageDir -VersionDir $versionDir
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     } elseif ($installationState -eq "download") {
+        $script:TelemetryStage = "download"
+        $script:TelemetryErrorCode = "download_http_error"
         Write-Host ""
         Write-Host "${ansiMuted}Installing ${ansiReset}deveco ${ansiMuted}version: ${ansiReset}$tag"
 
@@ -599,19 +860,30 @@ try {
 
         # --- Download to temp file ---
         $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + ".zip")
+        if ($script:TelemetryEnabled) {
+            $script:TelemetryDownloadStarted = $true
+            $script:TelemetryDownloadRounds = 1
+        }
         try {
             Download-WithRetry -Url $downloadUrl -Output $tempFile
         } catch {
+            $script:TelemetryErrorCode = "download_http_error"
+            Add-DownloadFinishedTelemetry -Result "failure" -ErrorCode "download_http_error"
             Write-Host "Try: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
             throw "Download failed: $($_.Exception.Message)"
         }
 
         # Verify download is not empty
         if (-not (Test-Path -LiteralPath $tempFile) -or (Get-Item -LiteralPath $tempFile).Length -eq 0) {
+            $script:TelemetryErrorCode = "download_empty"
+            Add-DownloadFinishedTelemetry -Result "failure" -ErrorCode "download_empty"
             Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
             Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
             throw "Download failed — file is empty or missing"
         }
+        if ($script:TelemetryEnabled) { $script:TelemetryDownloadBytes = (Get-Item -LiteralPath $tempFile).Length }
+        $script:TelemetryStage = "extract"
+        $script:TelemetryErrorCode = "extract_failed"
         # --- Extract to staging directory ---
         $stageDir = Join-Path $VersionsDir ".staging.$tag.$installID"
         $stageBinDir = Join-Path $stageDir "bin"
@@ -630,12 +902,16 @@ try {
             Add-Type -AssemblyName $compressionAssembly -ErrorAction Stop
         }
         $extractionError = $null
+        $freshDownloadFailed = $false
         for ($extractAttempt = 1; $extractAttempt -le 2; $extractAttempt++) {
             if ($extractAttempt -gt 1) {
                 Write-Host "${ansiMuted}Archive extraction failed; downloading a fresh copy.${ansiReset}"
+                if ($script:TelemetryEnabled) { $script:TelemetryDownloadRounds++ }
                 try {
                     Download-WithRetry -Url $downloadUrl -Output $tempFile
+                    if ($script:TelemetryEnabled) { $script:TelemetryDownloadBytes = (Get-Item -LiteralPath $tempFile).Length }
                 } catch {
+                    $freshDownloadFailed = $true
                     $extractionError = $_
                     continue
                 }
@@ -655,9 +931,18 @@ try {
         }
         Remove-Item -LiteralPath $tempFile -Force -ErrorAction SilentlyContinue
         if ($extractionError) {
+            if ($freshDownloadFailed) {
+                $script:TelemetryStage = "download"
+                $script:TelemetryErrorCode = "download_http_error"
+                Add-DownloadFinishedTelemetry -Result "failure" -ErrorCode "download_http_error"
+            } else {
+                $script:TelemetryErrorCode = "extract_failed"
+                Add-DownloadFinishedTelemetry -Result "success"
+            }
             Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             throw "Extraction failed after a fresh download: $($extractionError.Exception.Message)"
         }
+        Add-DownloadFinishedTelemetry -Result "success"
 
         # --- Find binary and move to staging/bin/ ---
         $binarySrc = Join-Path $stageDir "$AppName.exe"
@@ -672,6 +957,8 @@ try {
             if ($found) { $binarySrc = $found.FullName }
         }
         if (-not (Test-Path -LiteralPath $binarySrc)) {
+            $script:TelemetryStage = "package_validation"
+            $script:TelemetryErrorCode = "binary_missing"
             Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
             throw "Binary '$AppName' not found in archive"
@@ -700,6 +987,8 @@ try {
         }
 
         if (-not (Test-InstallationComplete $stageDir)) {
+            $script:TelemetryStage = "package_validation"
+            $script:TelemetryErrorCode = "binary_missing"
             Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "Try again, or run: npm install -g @deveco/deveco-code" -ForegroundColor DarkGray
             throw "Release archive is incomplete"
@@ -709,15 +998,21 @@ try {
         $probe = Invoke-NativeVersion -ExePath $stageBin
         $installedVersion = $probe.Output
         if ($probe.ExitCode -ne 0) {
+            $script:TelemetryStage = "package_validation"
+            $script:TelemetryErrorCode = "binary_missing"
             Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "Platform may be incompatible" -ForegroundColor DarkGray
             throw "Installation verification failed — deveco could not run"
         }
         if ($installedVersion -ne $tag) {
+            $script:TelemetryStage = "package_validation"
+            $script:TelemetryErrorCode = "version_mismatch"
             Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
             throw "Downloaded binary version $installedVersion does not match release v$tag. Try: npm install -g @deveco/deveco-code"
         }
 
+        $script:TelemetryStage = "activate"
+        $script:TelemetryErrorCode = "activation_failed"
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
         Copy-Item -LiteralPath $stageBin -Destination $launcherStage -Force -ErrorAction Stop
 
@@ -733,9 +1028,15 @@ try {
             $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
             Copy-Item -LiteralPath $versionBin -Destination $launcherStage -Force -ErrorAction Stop
         }
+        if ($installationState -eq "ready") {
+            $script:TelemetryResult = "skipped"
+            $script:TelemetrySkipReason = "already_installed"
+        }
     }
 
     # --- Switch the pre-verified launcher with ordinary rollback ---
+    $script:TelemetryStage = "activate"
+    $script:TelemetryErrorCode = "activation_failed"
     if ($installationState -eq "ready" -and -not $Binary) {
         Write-Host "Keeping existing launcher binary" -ForegroundColor DarkGray
     } else {
@@ -785,7 +1086,12 @@ try {
 
     # --- Add to user PATH (deduplicated, case-insensitive) ---
     $pathModified = $false
+    $script:TelemetryStage = "path_update"
+    $script:TelemetryErrorCode = "path_update_failed"
+    $script:TelemetryPathReached = $true
+    $script:TelemetryPathResult = "failure"
     if ($NoModifyPath) {
+        $script:TelemetryPathResult = "disabled"
         Write-Host "Skipping PATH modification (-NoModifyPath)" -ForegroundColor DarkGray
     } else {
         $pathEntry = $BinDir
@@ -808,6 +1114,7 @@ try {
             }
 
             if ($alreadyInPath) {
+                $script:TelemetryPathResult = "already_present"
                 Write-Host "PATH already contains $pathEntry" -ForegroundColor DarkGray
             } else {
                 $newPath = if ($currentPath) { $currentPath.TrimEnd(";") + ";$pathEntry" } else { $pathEntry }
@@ -816,6 +1123,7 @@ try {
                 try { Publish-EnvironmentChange } catch {}
                 Write-Host "Added $pathEntry to user PATH" -ForegroundColor Green
                 $pathModified = $true
+                $script:TelemetryPathResult = "modified"
             }
         } finally {
             $environmentKey.Close()
@@ -823,6 +1131,7 @@ try {
     }
 
     # --- Success ---
+    if ($script:TelemetryResult -eq "failure") { $script:TelemetryResult = "success" }
     Write-Host ""
     Write-Host "▃▃▃▃  ▃▃▃▃ ▃   ▃ ▃▃▃▃  ▃▃▃   ▃▃▃     ▃▃▃   ▃▃▃  ▃▃▃▃  ▃▃▃▃"
     Write-Host "▃   ▃ ▃    ▃   ▃ ▃    ▃   ▃ ▃   ▃   ▃   ▃ ▃   ▃ ▃   ▃ ▃   "
@@ -851,6 +1160,7 @@ try {
     Write-Host ""
 
     if ($nodeWarning) {
+        if (-not $script:TelemetryWarningCode) { $script:TelemetryWarningCode = "node_version_unsupported" }
         Write-Host 'WARNING:' -ForegroundColor Red
         Write-Host 'Node.js 22 or later is required.' -ForegroundColor Red
         Write-Host 'Without it, some DevEco Code features will not work.' -ForegroundColor Red
@@ -869,4 +1179,5 @@ try {
             $installMutex.Dispose()
         }
     }
+    try { Complete-InstallTelemetry } catch {}
 }
