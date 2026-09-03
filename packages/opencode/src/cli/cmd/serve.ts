@@ -11,9 +11,6 @@ export const ServeCommand = effectCmd({
   // need for an ambient project InstanceContext at startup.
   instance: false,
   handler: Effect.fn("Cli.serve")(function* (args) {
-    // Capture the user's invocation directory before any module can change it.
-    // Used by the location middleware to restrict allowed directories.
-    process.env.DEVECO_SERVE_CWD = process.cwd()
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     const opts = yield* resolveNetworkOptions(args)
     if (!Flag.DEVECO_SERVER_PASSWORD) {
