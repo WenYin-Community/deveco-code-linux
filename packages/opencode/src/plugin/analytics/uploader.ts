@@ -87,13 +87,30 @@ export async function resolveAnalyticsAuth(input: ResolveAnalyticsAuthInput): Pr
   return refreshed.accessToken
 }
 
+// The platform-side ingestion middleware drops JSON keys whose value is null,
+// causing fields to disappear from stored telemetry. Replacing null with the
+// string "null" preserves the key in the serialized detail while remaining
+// distinguishable from real values at analysis time (WHERE field = 'null').
+function nullToLocalizedString(value: unknown): unknown {
+  if (value === null) return "null"
+  if (Array.isArray(value)) return value.map(nullToLocalizedString)
+  if (typeof value === "object" && value !== undefined) {
+    const result: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(value)) {
+      result[key] = nullToLocalizedString(val)
+    }
+    return result
+  }
+  return value
+}
+
 export function toHuaweiTracePayload(
   submission: QueuedAnalyticsSubmission,
   timestamp = Date.now(),
 ): HuaweiTracePayload {
   return {
     action: submission.action,
-    detail: JSON.stringify(submission.event),
+    detail: JSON.stringify(nullToLocalizedString(submission.event)),
     timestamp,
   }
 }

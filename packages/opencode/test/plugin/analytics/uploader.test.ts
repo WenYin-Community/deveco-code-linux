@@ -40,7 +40,14 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
   const payload = toHuaweiTracePayload(queued, 123)
   expect(payload.action).toBe("DevEcoCodeSession")
   expect(payload.timestamp).toBe(123)
-  expect(JSON.parse(payload.detail)).toEqual(queued.event)
+  // null values are replaced with the string "null" to survive platform-side
+  // middleware that drops null-valued JSON keys
+  const detail = JSON.parse(payload.detail)
+  expect(detail.uiVerificationModel).toBe("null")
+  expect(detail.isFirstBuildSuccess).toBe("null")
+  expect(detail.firstBuildElapsed).toBe("null")
+  expect(detail.providerId).toBe("openai")
+  expect(detail.inputTokens).toBe(0)
   expect(Object.keys(payload).sort()).toEqual(["action", "detail", "timestamp"])
 })
 
