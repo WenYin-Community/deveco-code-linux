@@ -303,6 +303,49 @@ describe("loadSkillsFromDisk fallback", () => {
     }),
   )
 
+  it.live("extracts the router-aware deveco-cli skill from repository resources", () =>
+    Effect.gen(function* () {
+      yield* cleanEffect
+      const fsys = yield* FSUtil.Service
+      yield* Defaults.ensure("10.0.0", fsys)
+      const extracted = yield* Effect.promise(() =>
+        fs.readFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "utf-8"),
+      )
+      const source = yield* Effect.promise(() =>
+        fs.readFile(path.join(import.meta.dir, "../../resources/skills/deveco-cli/SKILL.md"), "utf-8"),
+      )
+      expect(extracted).toBe(source)
+    }),
+  )
+
+  it.live("replaces a previously extracted native CLI skill on version upgrade", () =>
+    Effect.gen(function* () {
+      yield* cleanEffect
+      yield* writeVersionEffect("9.0.0")
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "deveco-cli"), { recursive: true }))
+      yield* Effect.promise(() =>
+        fs.copyFile(
+          path.join(import.meta.dir, "../../node_modules/@deveco/deveco-cli/SKILL.md"),
+          path.join(skillsDir, "deveco-cli", "SKILL.md"),
+        ),
+      )
+      yield* Effect.promise(() =>
+        fs.writeFile(path.join(skillsDir, "deveco-cli", ".version"), "deveco-cli"),
+      )
+      const fsys = yield* FSUtil.Service
+      yield* Defaults.ensure("10.0.0", fsys)
+      const extracted = yield* Effect.promise(() =>
+        fs.readFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "utf-8"),
+      )
+      const source = yield* Effect.promise(() =>
+        fs.readFile(path.join(import.meta.dir, "../../resources/skills/deveco-cli/SKILL.md"), "utf-8"),
+      )
+      expect(extracted).toBe(source)
+      expect(yield* readVersionEffect).toBe("10.0.0")
+      expect(yield* fsys.existsSafe(path.join(configSkillsDir, "deveco-cli"))).toBe(false)
+    }),
+  )
+
   it.live("writes version marker after extraction", () =>
     Effect.gen(function* () {
       yield* cleanEffect
