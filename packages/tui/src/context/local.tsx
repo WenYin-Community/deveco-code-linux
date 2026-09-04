@@ -48,6 +48,22 @@ export function recentModels(
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
+/**
+ * The effort tier actually in effect for the status bar: the user's explicit
+ * selection when valid, otherwise the cloud-declared default effort (it rides
+ * model.options into every request even without a selection, so it should show
+ * on first load instead of waiting for the user to discover Ctrl+T).
+ */
+export function effectiveVariant(input: {
+  selected: string | undefined
+  variants: string[]
+  defaultEffort?: unknown
+}): string | undefined {
+  if (input.selected && input.variants.includes(input.selected)) return input.selected
+  if (typeof input.defaultEffort === "string" && input.variants.includes(input.defaultEffort)) return input.defaultEffort
+  return undefined
+}
+
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   init: () => {
@@ -371,6 +387,21 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!this.list().includes(v)) return undefined
             return v
           },
+          // The effort tier actually in effect: the user's explicit selection,
+          // falling back to the cloud-declared default. The default rides
+          // model.options into every request even without a selection, so the
+          // status bar should show it from the very first load instead of
+          // waiting for the user to discover Ctrl+T.
+          effective() {
+            const m = currentModel()
+            if (!m) return undefined
+            const provider = sync.data.provider.find((item) => item.id === m.providerID)
+            return effectiveVariant({
+              selected: this.selected(),
+              variants: this.list(),
+              defaultEffort: provider?.models[m.modelID]?.options?.reasoningEffort,
+            })
+          },
           list() {
             const m = currentModel()
             if (!m) return []
@@ -389,17 +420,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           cycle() {
             const variants = this.list()
             if (variants.length === 0) return
-            const current = this.current()
-            if (!current) {
-              this.set(variants[0])
-              return
-            }
-            const index = variants.indexOf(current)
-            if (index === -1 || index === variants.length - 1) {
-              this.set(undefined)
-              return
-            }
-            this.set(variants[index + 1])
+            // Anchor on the tier the status bar is actually showing
+            // (effective() = explicit selection, falling back to the cloud
+            // default), then advance by one with wrap-around:
+            // shown -> variants[(indexOf(shown) + 1) % length]. With
+            // [low, high, max] and default "high", cycling runs
+            // high -> max -> low -> high -> ... from first load on.
+            const shown = this.effective()
+            const index = shown ? variants.indexOf(shown) : -1
+            this.set(variants[(index + 1) % variants.length])
           },
         },
       }

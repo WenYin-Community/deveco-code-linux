@@ -1547,8 +1547,10 @@ export function Prompt(props: PromptProps) {
   const showVariant = createMemo(() => {
     const variants = local.model.variant.list()
     if (variants.length === 0) return false
-    const current = local.model.variant.current()
-    return !!current
+    // effective() falls back to the cloud-declared default effort when the
+    // user has not picked a variant yet, so the tier shows on first load.
+    const effective = local.model.variant.effective()
+    return !!effective
   })
 
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
@@ -1777,7 +1779,7 @@ export function Prompt(props: PromptProps) {
                             <text fg={fadeColor(theme.textMuted, variantMetaAlpha())}>·</text>
                             <text>
                               <span style={{ fg: fadeColor(theme.warning, variantMetaAlpha()), bold: true }}>
-                                {local.model.variant.current()}
+                                {local.model.variant.effective()}
                               </span>
                             </text>
                           </Show>
