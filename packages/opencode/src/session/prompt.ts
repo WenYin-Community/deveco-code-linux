@@ -282,8 +282,11 @@ export const layer = Layer.effect(
           Stream.mkString,
           Effect.orDie,
         )
-      const cleaned = text
-        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+      // Reasoning models can stream reasoning as plain text; keep only the answer
+      // after the last closing tag, which also covers orphaned closers without an
+      // opening <think>.
+      const lastClose = text.lastIndexOf("</think>")
+      const cleaned = (lastClose === -1 ? text : text.slice(lastClose + "</think>".length))
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line.length > 0)

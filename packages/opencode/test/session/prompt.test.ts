@@ -1149,6 +1149,48 @@ it.instance(
   3_000,
 )
 
+it.instance(
+  "title agent uses text after stray think closing tag",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+
+      const isTitleHit = (hit: { body: Record<string, unknown> }) =>
+        JSON.stringify(hit.body).includes("Generate a title for this conversation")
+      yield* llm.textMatch((hit) => !isTitleHit(hit), "world")
+      yield* llm.pushMatch(
+        isTitleHit,
+        reply()
+          .text('The user message is "你好" which means "hello" in Chinese.\n\nI will write the title in Chinese.</think>打招呼')
+          .stop()
+          .item(),
+      )
+
+      const chat = yield* sessions.create({})
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "你好" }],
+      })
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+
+      const title = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const info = yield* sessions.get(chat.id)
+          return Session.isDefaultTitle(info.title) ? undefined : info.title
+        }),
+        "timed out waiting for generated title",
+        "5 seconds",
+      )
+      expect(title).toBe("打招呼")
+    }),
+  10_000,
+)
+
 // Cancel semantics
 
 it.instance(

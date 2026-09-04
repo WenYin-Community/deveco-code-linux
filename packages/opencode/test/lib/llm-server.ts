@@ -670,6 +670,16 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         return first.item
       }
 
+      // Title requests only consume explicitly matched replies so unmatched
+      // queues keep their previous title auto-reply behavior.
+      const pullMatched = (hit: Hit) => {
+        const index = list.findIndex((entry) => entry.match && entry.match(hit))
+        if (index === -1) return
+        const first = list[index]
+        list = [...list.slice(0, index), ...list.slice(index + 1)]
+        return first.item
+      }
+
       const handle = Effect.fn("TestLLMServer.handle")(function* (mode: "chat" | "responses") {
         const req = yield* HttpServerRequest.HttpServerRequest
         const body = yield* req.json.pipe(Effect.orElseSucceed(() => ({})))
@@ -677,6 +687,12 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         if (isTitleRequest(body)) {
           hits = [...hits, current]
           yield* notify()
+          const custom = pullMatched(current)
+          if (custom) {
+            if (custom.type !== "sse") return fail(custom)
+            if (mode === "responses") return send(responses(custom, modelFrom(body)))
+            return send(custom)
+          }
           const auto: Sse = { type: "sse", head: [role()], tail: [textLine("E2E Title"), finishLine("stop")] }
           if (mode === "responses") return send(responses(auto, modelFrom(body)))
           return send(auto)
