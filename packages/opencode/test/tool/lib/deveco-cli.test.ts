@@ -297,6 +297,7 @@ describe("deveco-cli runtime", () => {
     expect(env?.PATH).toContain("/usr/bin")
     expect(env?.DEVECO_CLI_AUTH_SOURCE).toBe("deveco-code")
     expect(env?.DEVECO_CODE_AUTH_DIR).toBe(Global.Path.config)
+    expect(env?.DEVECO_CLI_DISABLE_UPDATE).toBe("all")
   })
 
   test("buildDevecoCliBuildArgs() maps skill-aligned build options", () => {
@@ -393,6 +394,7 @@ describe("deveco-cli runtime", () => {
       `const args = process.argv.slice(2).join(" ")
 console.log("bundled:" + args)
 console.log("auth:" + process.env.DEVECO_CLI_AUTH_SOURCE + ":" + process.env.DEVECO_CODE_AUTH_DIR)
+console.log("disable-update:" + process.env.DEVECO_CLI_DISABLE_UPDATE)
 `,
     )
 
@@ -404,6 +406,7 @@ console.log("auth:" + process.env.DEVECO_CLI_AUTH_SOURCE + ":" + process.env.DEV
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toContain("bundled:build --product default")
     expect(result.stdout).toContain(`auth:deveco-code:${Global.Path.config}`)
+    expect(result.stdout).toContain("disable-update:all")
   })
 
   test("runBundledDevecoCli() propagates non-zero exit code through shim", async () => {

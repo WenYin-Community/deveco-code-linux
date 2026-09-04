@@ -16,6 +16,8 @@ export type DevecoCliShellEnv = {
   Path?: string
   DEVECO_CLI_AUTH_SOURCE: "deveco-code"
   DEVECO_CODE_AUTH_DIR: string
+  /** Bundled CLI must not self-update or show upgrade banners. */
+  DEVECO_CLI_DISABLE_UPDATE: "all"
 }
 
 function pathSep() {
@@ -204,6 +206,7 @@ async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliS
     PATH: pathValue,
     DEVECO_CLI_AUTH_SOURCE: "deveco-code",
     DEVECO_CODE_AUTH_DIR: Global.Path.config,
+    DEVECO_CLI_DISABLE_UPDATE: "all",
   }
   if (process.platform === "win32") {
     env.Path = pathValue
