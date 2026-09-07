@@ -25,7 +25,6 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
-import { arktsCheckBuildFailureNotice } from "./lib/session-arkts-check"
 import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/router"
 import { Global } from "@opencode-ai/core/global"
 
@@ -629,11 +628,6 @@ export const ShellTool = Tool.define(
 
       let output = end.text
       if (!output) output = "(no output)"
-
-      if (devecoCliEvents.some((event) => event.command === "build" && event.exitCode !== 0)) {
-        const notice = arktsCheckBuildFailureNotice(ctx.sessionID)
-        if (notice) output = `${notice}\n\n${output}`
-      }
 
       if (cut && file) {
         output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output

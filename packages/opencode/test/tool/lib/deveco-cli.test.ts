@@ -36,6 +36,15 @@ describe("deveco-cli runtime", () => {
     expect(resolveDevecoCodeProxyLauncher("/$bunfs/root/src/index.js", "/app/deveco")).toEqual(["/app/deveco"])
   })
 
+  test("resolveDevecoCodeProxyLauncher() invokes a compiled Windows executable directly", () => {
+    expect(
+      resolveDevecoCodeProxyLauncher(
+        "B:/~BUN/root/src/cli/tui/worker.js",
+        "C:\\app\\deveco.exe",
+      ),
+    ).toEqual(["C:\\app\\deveco.exe"])
+  })
+
   test("resolveDevecoCodeProxyLauncher() runs a source entry through Bun", async () => {
     await using tmp = await tmpdir()
     const main = path.join(tmp.path, "src", "index.ts")

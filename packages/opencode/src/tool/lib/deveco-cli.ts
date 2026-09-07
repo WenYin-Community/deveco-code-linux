@@ -132,7 +132,7 @@ function windowsArg(input: string) {
 
 export function resolveDevecoCodeProxyLauncher(main = Bun.main, executable = process.execPath) {
   // Bun exposes an embedded entry under /$bunfs in compiled binaries; the executable must re-enter itself directly.
-  if (main.startsWith("/$bunfs/")) return [executable]
+  if (main.startsWith("/$bunfs/") || /^[A-Za-z]:[\\/]~BUN[\\/]root[\\/]/i.test(main)) return [executable]
   if (exists(main) && /\.[cm]?[jt]s$/i.test(main)) {
     return [executable, "run", "--conditions=browser", main]
   }
@@ -237,6 +237,7 @@ function devecoCliEnv(): DevecoCliShellEnv {
     PATH: pathValue,
     DEVECO_CLI_AUTH_SOURCE: "deveco-code",
     DEVECO_CODE_AUTH_DIR: Global.Path.config,
+    DEVECO_CLI_DISABLE_UPDATE: "all",
   }
   if (process.platform === "win32") env.Path = pathValue
   return env
