@@ -125,7 +125,38 @@ stages:
                   return 1
                 fi
                 echo "PR #$NUMBER all checks passed (method=$MERGE_METHOD), merging..."
-                bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER" "$MERGE_METHOD"
+                MERGE_OUTPUT=$(bash .gitcode/scripts/gitcode-api.sh merge-pr "$NUMBER" "$MERGE_METHOD" 2>&1) \
+                  || MERGE_OUTPUT="merge request failed: $MERGE_OUTPUT"
+
+                MERGE_STATE=""
+                for ATTEMPT in 1 2 3; do
+                  if [ "$ATTEMPT" != "1" ]; then
+                    sleep 5
+                  fi
+                  MERGE_STATE=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$NUMBER" 2>/dev/null | \
+                    python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('state',''))" 2>/dev/null || true)
+                  if [ "$MERGE_STATE" = "merged" ]; then
+                    break
+                  fi
+                done
+
+                if [ "$MERGE_STATE" != "merged" ]; then
+                  echo "PR #$NUMBER merge failed (state=$MERGE_STATE): $MERGE_OUTPUT"
+                  if [ -n "$PR_NUMBER_INPUT" ] || [ -n "$ISSUE_NUMBER" ]; then
+                    {
+                      echo '## ❌ 自动合入失败'
+                      echo ''
+                      echo "PR 当前状态为 \`$MERGE_STATE\`，未确认合入成功。"
+                      echo ''
+                      echo '```'
+                      echo "$MERGE_OUTPUT"
+                      echo '```'
+                      echo ''
+                      echo '请检查 PR 状态后重试 `/merge`。'
+                    } | bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER"
+                  fi
+                  return 1
+                fi
 
                 {
                   echo '## ✅ PR 已自动合入'

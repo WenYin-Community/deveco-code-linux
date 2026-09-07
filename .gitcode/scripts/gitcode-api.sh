@@ -27,7 +27,7 @@ Commands:
   list-linked-issues <number>     List issues linked to a PR (JSON)
   list-issues [state]             List issues (JSON, paginated)
   list-prs [state] [head] [base]  List pull requests (JSON)
-  merge-pr <number> [method]      Merge a PR (ff/rebase/squash, default: ff)
+  merge-pr <number> [method]      Merge a PR (ff/rebase/squash, default: ff), exits 1 on API failure
   assign-tester <number> <user>  Assign a tester to a PR
   approve-test <number> [state]  Submit test result (passed/failed)
   reset-test <number>            Reset test approval (revoke tester accept)
@@ -224,9 +224,16 @@ print(json.dumps(d, ensure_ascii=False))
   merge-pr)
     NUMBER="$1"
     METHOD="${2:-ff}"
-    curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    RESPONSE=$(curl -sS -w '\n%{http_code}' -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
       -d "{\"merge_method\":\"$METHOD\"}" \
-      "$API/repos/$REPO/pulls/$NUMBER/merge"
+      "$API/repos/$REPO/pulls/$NUMBER/merge") || exit 1
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n 1)
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+      echo "$RESPONSE" | sed '$d'
+    else
+      echo "Merge failed (HTTP $HTTP_CODE): $(echo "$RESPONSE" | sed '$d')" >&2
+      exit 1
+    fi
     ;;
   assign-tester)
     NUMBER="$1"
