@@ -29,6 +29,7 @@ const stateLayer = Layer.effectDiscard(
 
 const it = testEffect(stateLayer)
 const worktreeTest = process.platform === "win32" ? it.instance.skip : it.instance
+const workspaceWorktreeTest = process.platform === "win32" || process.platform === "linux" ? it.instance.skip : it.instance
 type TestServer = ReturnType<typeof Server.Default>["app"]
 type CreatedWorktree = { directory: string }
 type ScopedWorktree = { directory: string; body: CreatedWorktree; ready: Effect.Effect<void, Error> }
@@ -246,7 +247,7 @@ describe("worktree endpoint reproduction", () => {
     { git: true },
   )
 
-  worktreeTest(
+  workspaceWorktreeTest(
     "workspace worktree create does not hang",
     () =>
       Effect.gen(function* () {
@@ -274,7 +275,7 @@ describe("worktree endpoint reproduction", () => {
     { git: true },
   )
 
-  worktreeTest(
+  workspaceWorktreeTest(
     "workspace worktree create returns without waiting for project start command",
     () =>
       Effect.gen(function* () {

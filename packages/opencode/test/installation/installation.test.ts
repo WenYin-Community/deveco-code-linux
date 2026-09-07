@@ -302,7 +302,7 @@ describe("installation", () => {
             // drive letter mismatch (C:\Users vs c:\users).
             const homeLower = os.homedir().toLowerCase()
             Object.defineProperty(process, "execPath", {
-              value: homeLower + "/.local/bin/deveco.exe",
+              value: path.join(homeLower, ".local", "bin", "deveco.exe"),
               configurable: true,
             })
             Object.defineProperty(process, "platform", { value: "win32", configurable: true })

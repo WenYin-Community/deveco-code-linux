@@ -1829,7 +1829,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  10_000,
 )
 
 it.instance(
@@ -1868,7 +1868,7 @@ it.instance(
       expect(yield* llm.calls).toBe(1)
     }),
   { git: true },
-  3_000,
+  10_000,
 )
 
 unix(

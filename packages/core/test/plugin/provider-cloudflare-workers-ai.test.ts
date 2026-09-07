@@ -13,7 +13,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
-import { fakeSelectorSdk, it, model, npmLayer, withEnv } from "./provider-helper"
+import { accountMergePlugin, fakeSelectorSdk, it, model, npmLayer, withEnv } from "./provider-helper"
 
 const database = Database.layerFromPath(":memory:").pipe(Layer.fresh)
 const preferences = Credential.layer.pipe(Layer.provide(database))
@@ -145,6 +145,7 @@ describe("CloudflareWorkersAIPlugin", () => {
               metadata: { accountId: "account-acct" },
             }),
           })
+          yield* plugin.add(accountMergePlugin(credentials))
           yield* plugin.add(CloudflareWorkersAIPlugin)
           const transform = yield* catalog.transform()
           yield* transform((catalog) =>

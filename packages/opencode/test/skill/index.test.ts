@@ -1,5 +1,6 @@
 import { describe, expect, it as bunIt } from "bun:test"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { Effect, Layer } from "effect"
 import { Skill } from "../../src/skill"
 import { Agent } from "../../src/agent/agent"
@@ -53,7 +54,7 @@ describe("fmt", () => {
     expect(result).toContain("</skill>")
     expect(result).toContain("<name>skill-a</name>")
     expect(result).toContain("<description>First skill</description>")
-    expect(result).toContain("<location>file:///tmp/skill1/SKILL.md</location>")
+    expect(result).toContain(`<location>${pathToFileURL("/tmp/skill1/SKILL.md").href}</location>`)
     expect(result).toContain("<name>skill-b</name>")
     expect(result).toContain("<description>Second skill</description>")
     // Should be sorted alphabetically by name

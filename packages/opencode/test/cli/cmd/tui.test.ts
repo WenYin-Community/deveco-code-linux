@@ -48,11 +48,17 @@ describe("resolveThreadDirectory", () => {
     })
 
     test("should resolve relative project from cwd when envPWD is undefined", async () => {
-      await using tmp = await tmpdir({ git: true })
-      const subdir = "workspace"
-      await fs.mkdir(path.join(tmp.path, subdir))
-      const result = resolveThreadDirectory(subdir, undefined, tmp.path)
-      expect(result).toBe(Filesystem.resolve(path.join(tmp.path, subdir)))
+      const savedPWD = process.env.PWD
+      delete process.env.PWD
+      try {
+        await using tmp = await tmpdir({ git: true })
+        const subdir = "workspace"
+        await fs.mkdir(path.join(tmp.path, subdir))
+        const result = resolveThreadDirectory(subdir, undefined, tmp.path)
+        expect(result).toBe(Filesystem.resolve(path.join(tmp.path, subdir)))
+      } finally {
+        if (savedPWD !== undefined) process.env.PWD = savedPWD
+      }
     })
 
     test("should resolve dot as cwd-equivalent relative path", async () => {
@@ -132,6 +138,6 @@ describe("TuiThreadCommand", () => {
     if (typeof builder === "function") {
       builder(yargs as Parameters<typeof builder>[0])
     }
-    expect(keys).toEqual(["network", "project", "model", "continue", "session", "fork", "prompt", "agent"])
+    expect(keys).toEqual(["network", "project", "model", "continue", "session", "fork", "prompt", "agent", "auto", "yolo", "dangerously-skip-permissions"])
   })
 })

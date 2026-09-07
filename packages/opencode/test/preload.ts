@@ -22,6 +22,7 @@ process.env["XDG_STATE_HOME"] = path.join(dir, "state")
 process.env["DEVECO_MODELS_PATH"] = path.join(import.meta.dir, "tool", "fixtures", "models-api.json")
 process.env["DEVECO_EXPERIMENTAL_EVENT_SYSTEM"] = "true"
 process.env["DEVECO_EXPERIMENTAL_WORKSPACES"] = "true"
+process.env["DEVECO_SERVE_CWD"] = os.tmpdir()
 
 // Set test home directory to isolate tests from user's actual home directory
 // This prevents tests from picking up real user configs/skills from ~/.claude/skills

@@ -29,7 +29,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
-import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
+import { isPathPluginSpec, parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -185,7 +185,10 @@ export const layer = Layer.effect(
         const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
         if (flags.pure && cfg.plugin_origins?.length) {
         }
-        if (plugins.length) yield* config.waitForDependencies()
+        // File URL and path plugins don't need npm packages installed — only
+        // wait for dependencies when there are package specs that require them.
+        const hasPackagePlugins = plugins.some((p) => !isPathPluginSpec(Array.isArray(p.spec) ? p.spec[0] : p.spec))
+        if (hasPackagePlugins) yield* config.waitForDependencies()
 
         const loaded = yield* Effect.promise(() =>
           PluginLoader.loadExternal({

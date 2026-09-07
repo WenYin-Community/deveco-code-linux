@@ -150,7 +150,7 @@ describe("schema-rejection wire shape", () => {
       Effect.gen(function* () {
         const test = yield* TestInstance
         const sessionID = yield* seedCorruptStepFinishPart
-        const url = `${SessionPaths.messages.replace(":sessionID", sessionID)}?limit=80&directory=${encodeURIComponent(test.directory)}`
+        const url = `${SessionPaths.messages.replace(":sessionID", sessionID)}?limit=80`
         const res = yield* requestInDirectory(url, test.directory)
         const body = yield* text(res)
         expect(res.status).toBe(400)

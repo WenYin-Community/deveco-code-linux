@@ -7,6 +7,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(OpenCode.layer)
+const itLive = process.platform === "win32" ? it.live.skip : it.live
 
 describe("public native OpenCode API", () => {
   it.effect("exposes only the intentional Session capabilities", () =>
@@ -41,7 +42,7 @@ describe("public native OpenCode API", () => {
     }),
   )
 
-  it.effect("switches to an available model and variant", () =>
+  itLive("switches to an available model and variant", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -65,7 +66,7 @@ describe("public native OpenCode API", () => {
     ),
   )
 
-  it.effect("rejects missing and Location-disabled models without changing the Session", () =>
+  itLive("rejects missing and Location-disabled models without changing the Session", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
@@ -103,7 +104,7 @@ describe("public native OpenCode API", () => {
     ),
   )
 
-  it.effect("rejects an unavailable variant without changing the Session", () =>
+  itLive("rejects an unavailable variant without changing the Session", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

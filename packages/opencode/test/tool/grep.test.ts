@@ -219,7 +219,7 @@ describe("tool.grep", () => {
       const alias = path.join(tmp, "alias")
       yield* Effect.promise(() => fs.mkdir(real))
       yield* Effect.promise(() => fs.symlink(real, alias, "dir"))
-      yield* Effect.promise(() => Bun.write(path.join(real, "test.txt"), "needle"))
+      yield* Effect.promise(() => Bun.write(path.join(real, "test.txt"), "alias-needle"))
 
       const ruleset = Permission.fromConfig({
         grep: "allow",
@@ -243,7 +243,7 @@ describe("tool.grep", () => {
       const grep = yield* info.init()
       const result = yield* grep.execute(
         {
-          pattern: "needle",
+          pattern: "alias-needle",
           path: alias,
           include: "*.txt",
         },

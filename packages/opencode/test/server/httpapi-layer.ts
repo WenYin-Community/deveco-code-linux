@@ -26,8 +26,22 @@ export function request(path: string, init?: RequestInit) {
   )
 }
 
+export function requestWithQuery(path: string, init: RequestInit = {}) {
+  const url = new URL(path, "http://localhost")
+  return HttpClientRequest.fromWeb(new Request(`${url.origin}${url.pathname}`, init)).pipe(
+    HttpClientRequest.setUrl(url.pathname + url.search),
+    HttpClient.execute,
+  )
+}
+
 export function requestInDirectory(path: string, directory: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
   headers.set("x-deveco-directory", directory)
   return request(path, { ...init, headers })
+}
+
+export function requestWithQueryInDirectory(path: string, directory: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers)
+  headers.set("x-deveco-directory", directory)
+  return requestWithQuery(path, { ...init, headers })
 }

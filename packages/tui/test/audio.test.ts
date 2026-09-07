@@ -33,7 +33,9 @@ const fakeAudio = {
   dispose() {},
 }
 
+const core = await import("@opentui/core")
 mock.module("@opentui/core", () => ({
+  ...core,
   Audio: {
     create: () => fakeAudio,
   },

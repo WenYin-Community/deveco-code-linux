@@ -175,9 +175,15 @@ describe("pty HttpApi bridge", () => {
 
     await disposeAllInstances()
 
-    const list = await app().request(PtyPaths.list, { headers })
+    let list = await app().request(PtyPaths.list, { headers })
+    let items = await list.json()
+    for (let i = 0; i < 50 && items.length > 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      list = await app().request(PtyPaths.list, { headers })
+      items = await list.json()
+    }
     expect(list.status).toBe(200)
-    expect(await list.json()).toEqual([])
+    expect(items).toEqual([])
   })
 
   test("returns 404 for missing PTY websocket before upgrade", async () => {

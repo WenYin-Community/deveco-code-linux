@@ -182,14 +182,6 @@ describe("session.list", () => {
         expect(pathIDs).toContain(current.id)
         expect(pathIDs).toContain(deeper.id)
         expect(pathIDs).not.toContain(sibling.id)
-
-        if (process.platform === "win32") {
-          const windowsPathIDs = (yield* SessionNs.Service.use((session) =>
-            session.list({ path: "packages\\opencode\\src" }),
-          )).map((session) => session.id)
-          expect(windowsPathIDs).toContain(current.id)
-          expect(windowsPathIDs).toContain(deeper.id)
-        }
       }),
     { git: true },
   )

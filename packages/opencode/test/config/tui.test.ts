@@ -106,11 +106,13 @@ it.instance("keeps server and tui plugin merge semantics aligned", () =>
       const tui = yield* getTuiConfig(test.directory)
       const tuiOrigins = yield* getTuiPluginOrigins(test.directory)
       // Filter CI-default plugins that leak in outside of the config hierarchy we control.
-      const isDefaultPlugin = (spec: string) => /oh-my-openagent/i.test(spec)
+      const isDefaultPlugin = (spec: string) => /oh-my-openagent/i.test(spec) || spec.startsWith("file://")
       const serverPlugins = (server.plugin ?? [])
         .map((item) => ConfigPlugin.pluginSpecifier(item))
         .filter((s) => !isDefaultPlugin(s))
-      const tuiPlugins = (tui.plugin ?? []).map((item) => ConfigPlugin.pluginSpecifier(item))
+      const tuiPlugins = (tui.plugin ?? [])
+        .map((item) => ConfigPlugin.pluginSpecifier(item))
+        .filter((s) => !isDefaultPlugin(s))
 
       expect(serverPlugins).toEqual(tuiPlugins)
       expect(serverPlugins).toContain("shared-plugin@2.0.0")
@@ -119,9 +121,12 @@ it.instance("keeps server and tui plugin merge semantics aligned", () =>
       const serverOrigins = (server.plugin_origins ?? []).filter(
         (item) => !isDefaultPlugin(ConfigPlugin.pluginSpecifier(item.spec)),
       )
+      const tuiOriginsFiltered = tuiOrigins.filter(
+        (item) => !isDefaultPlugin(ConfigPlugin.pluginSpecifier(item.spec)),
+      )
       expect(serverOrigins.map((item) => ConfigPlugin.pluginSpecifier(item.spec))).toEqual(serverPlugins)
-      expect(tuiOrigins.map((item) => ConfigPlugin.pluginSpecifier(item.spec))).toEqual(tuiPlugins)
-      expect(serverOrigins.map((item) => item.scope)).toEqual(tuiOrigins.map((item) => item.scope))
+      expect(tuiOriginsFiltered.map((item) => ConfigPlugin.pluginSpecifier(item.spec))).toEqual(tuiPlugins)
+      expect(serverOrigins.map((item) => item.scope)).toEqual(tuiOriginsFiltered.map((item) => item.scope))
     }),
   ),
 )

@@ -43,49 +43,59 @@ describe("Npm.sanitize", () => {
 })
 
 describe("Npm.add", () => {
-  test("reifies when package cache directory exists without the package installed", async () => {
-    await using tmp = await tmpdir()
-    await fs.mkdir(path.join(tmp.path, "fixture-provider"))
-    await writePackage(path.join(tmp.path, "fixture-provider"), {
-      name: "fixture-provider",
-      main: "index.js",
-    })
-    await Bun.write(path.join(tmp.path, "fixture-provider", "index.js"), "export const fixture = true\n")
+  test(
+    "reifies when package cache directory exists without the package installed",
+    async () => {
+      await using tmp = await tmpdir()
+      await fs.mkdir(path.join(tmp.path, "fixture-provider"))
+      await writePackage(path.join(tmp.path, "fixture-provider"), {
+        name: "fixture-provider",
+        main: "index.js",
+      })
+      await Bun.write(path.join(tmp.path, "fixture-provider", "index.js"), "export const fixture = true\n")
 
-    const spec = `fixture-provider@file:${path.join(tmp.path, "fixture-provider")}`
-    await fs.mkdir(path.join(tmp.path, "cache", "packages", Npm.sanitize(spec)), { recursive: true })
+      const spec = `fixture-provider@file:${path.join(tmp.path, "fixture-provider")}`
+      const pkgDir = path.join(tmp.path, "cache", "packages", Npm.sanitize(spec))
+      await fs.mkdir(pkgDir, { recursive: true })
+      await Bun.write(path.join(pkgDir, ".npmrc"), "offline=true\nfetch-retries=0\nfetch-timeout=1000\n")
 
-    const entry = await Effect.gen(function* () {
-      const npm = yield* Npm.Service
-      return yield* npm.add(spec)
-    }).pipe(Effect.scoped, Effect.provide(npmLayer(path.join(tmp.path, "cache"))), Effect.runPromise)
+      const entry = await Effect.gen(function* () {
+        const npm = yield* Npm.Service
+        return yield* npm.add(spec)
+      }).pipe(Effect.scoped, Effect.provide(npmLayer(path.join(tmp.path, "cache"))), Effect.runPromise)
 
-    expect(Option.isSome(entry.entrypoint)).toBe(true)
-  })
+      expect(Option.isSome(entry.entrypoint)).toBe(true)
+    },
+    { timeout: 30_000 },
+  )
 })
 
 describe("Npm.install", () => {
-  test("respects omit from project .npmrc", async () => {
-    await using tmp = await tmpdir()
+  test(
+    "respects omit from project .npmrc",
+    async () => {
+      await using tmp = await tmpdir()
 
-    await writePackage(tmp.path, {
-      name: "fixture",
-      dependencies: {
-        "prod-pkg": "file:./prod-pkg",
-      },
-      devDependencies: {
-        "dev-pkg": "file:./dev-pkg",
-      },
-    })
-    await Bun.write(path.join(tmp.path, ".npmrc"), "omit=dev\n")
-    await fs.mkdir(path.join(tmp.path, "prod-pkg"))
-    await fs.mkdir(path.join(tmp.path, "dev-pkg"))
-    await writePackage(path.join(tmp.path, "prod-pkg"), { name: "prod-pkg" })
-    await writePackage(path.join(tmp.path, "dev-pkg"), { name: "dev-pkg" })
+      await writePackage(tmp.path, {
+        name: "fixture",
+        dependencies: {
+          "prod-pkg": "file:./prod-pkg",
+        },
+        devDependencies: {
+          "dev-pkg": "file:./dev-pkg",
+        },
+      })
+      await Bun.write(path.join(tmp.path, ".npmrc"), "omit=dev\noffline=true\nfetch-retries=0\nfetch-timeout=1000\n")
+      await fs.mkdir(path.join(tmp.path, "prod-pkg"))
+      await fs.mkdir(path.join(tmp.path, "dev-pkg"))
+      await writePackage(path.join(tmp.path, "prod-pkg"), { name: "prod-pkg" })
+      await writePackage(path.join(tmp.path, "dev-pkg"), { name: "dev-pkg" })
 
-    await Npm.install(tmp.path)
+      await Npm.install(tmp.path)
 
-    await expect(fs.stat(path.join(tmp.path, "node_modules", "prod-pkg"))).resolves.toBeDefined()
-    await expect(fs.stat(path.join(tmp.path, "node_modules", "dev-pkg"))).rejects.toThrow()
-  })
+      await expect(fs.stat(path.join(tmp.path, "node_modules", "prod-pkg"))).resolves.toBeDefined()
+      await expect(fs.stat(path.join(tmp.path, "node_modules", "dev-pkg"))).rejects.toThrow()
+    },
+    { timeout: 30_000 },
+  )
 })

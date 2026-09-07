@@ -45,7 +45,7 @@ describe("DatabaseMigration", () => {
       ),
     )
   })
-  test("restricts database file permissions", async () => {
+  test.skipIf(process.platform === "win32")("restricts database file permissions", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "permissions.sqlite")
     const previous = process.umask(0)

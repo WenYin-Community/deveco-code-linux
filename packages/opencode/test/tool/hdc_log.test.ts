@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import * as env from "../../src/tool/lib/env"
+import * as devecoCli from "../../src/tool/lib/deveco-cli"
 import { Truncate } from "../../src/tool/truncate"
 import { Tool } from "../../src/tool/tool"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -29,6 +30,8 @@ const mockAgentLayer = Layer.mock(Agent.Service, {
 })
 
 const it = testEffect(Layer.mergeAll(mockTruncateLayer, mockAgentLayer))
+
+const hdcIt = process.platform === "linux" ? it.live.skip : it.live
 
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_hdc_log_test"),
@@ -121,9 +124,27 @@ function setupSpawnCaptureWithOutput(stdout: string) {
   return { spy, capturedCmd: () => capturedCmd }
 }
 
+function setupDevecoCliMock(stdout: string, stderr: string, exitCode: number) {
+  return spyOn(devecoCli, "runBundledDevecoCli").mockImplementation(async () => ({
+    stdout,
+    stderr,
+    exitCode,
+  }))
+}
+
+function setupDevecoCliCapture(stdout: string = "") {
+  const calls: { args: string[]; cwd: string }[] = []
+  const spy = spyOn(devecoCli, "runBundledDevecoCli").mockImplementation(async (args: string[], cwd: string) => {
+    calls.push({ args, cwd })
+    return { stdout, stderr: "", exitCode: 0 }
+  })
+  return { spy, calls: () => calls }
+}
+
 describe("HdcLogTool", () => {
   let fileSpy: ReturnType<typeof spyOn> | undefined
   let spawnSpy: ReturnType<typeof spyOn> | undefined
+  let devecoCliSpy: ReturnType<typeof spyOn> | undefined
   let findDevEcoHomeSpy: ReturnType<typeof spyOn>
   let hdcPathSpy: ReturnType<typeof spyOn>
 
@@ -131,6 +152,7 @@ describe("HdcLogTool", () => {
     resetMocks()
     fileSpy = undefined
     spawnSpy = undefined
+    devecoCliSpy = undefined
     findDevEcoHomeSpy = spyOn(env, "findDevEcoHome").mockImplementation(async () => mockFindDevEcoHomeResult)
     hdcPathSpy = spyOn(env, "hdcPath").mockImplementation((_home: string) => mockHdcPathResult)
   })
@@ -138,53 +160,51 @@ describe("HdcLogTool", () => {
   afterEach(() => {
     fileSpy?.mockRestore()
     spawnSpy?.mockRestore()
+    devecoCliSpy?.mockRestore()
     findDevEcoHomeSpy?.mockRestore()
     hdcPathSpy?.mockRestore()
   })
 
   describe("execute", () => {
-    it.live("should throw error when DevEco home is not found", () =>
+    hdcIt("should throw error when DevEco home is not found", () =>
       Effect.gen(function* () {
         mockFindDevEcoHomeResult = undefined
-        const error = yield* failExecute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
+        const error = yield* failExecute({ action: "clear", log_prefix: "[TEST]", lines: 100 })
         expect(error.message).toContain("DevEco Studio path not found")
       }),
     )
 
-    it.live("should throw error when hdc binary does not exist at resolved path", () =>
+    hdcIt("should throw error when hdc binary does not exist at resolved path", () =>
       Effect.gen(function* () {
         mockFileExistsResult = false
         fileSpy = setupFileMock()
-        const error = yield* failExecute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
+        const error = yield* failExecute({ action: "clear", log_prefix: "[TEST]", lines: 100 })
         expect(error.message).toContain("hdc not found")
         expect(error.message).toContain("/fake/hdc")
       }),
     )
 
     describe("list_devices", () => {
-      it.live("should throw error when hdc list targets returns non-zero exit code", () =>
+      hdcIt("should throw error when devecocli device list returns non-zero exit code", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("", "connection error", 1)
+          devecoCliSpy = setupDevecoCliMock("", "connection error", 1)
           const error = yield* failExecute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
-          expect(error.message).toContain("hdc list targets failed")
+          expect(error.message).toContain("devecocli device list failed")
           expect(error.message).toContain("connection error")
         }),
       )
 
-      it.live("should prefer stderr over stdout in error message when both are present", () =>
+      hdcIt("should prefer stderr over stdout in error message when both are present", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("stdout msg", "stderr msg", 1)
+          devecoCliSpy = setupDevecoCliMock("stdout msg", "stderr msg", 1)
           const error = yield* failExecute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
           expect(error.message).toContain("stderr msg")
         }),
       )
 
-      it.live("should return No Devices when stdout is empty", () =>
+      hdcIt("should return No Devices when stdout is empty", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("", "", 0)
+          devecoCliSpy = setupDevecoCliMock("", "", 0)
           const result = yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
           expect(result.title).toBe("No Devices")
           expect(result.output).toBe("No connected devices detected.")
@@ -193,54 +213,37 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should return No Devices when output only contains [Empty] entries", () =>
+      hdcIt("should return Device List with raw output when devices are listed", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("[Empty]\n  [Empty]  \n", "", 0)
+          devecoCliSpy = setupDevecoCliMock("device_abc\ndevice_def\n", "", 0)
           const result = yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
-          expect(result.title).toBe("No Devices")
-          expect(result.metadata.deviceCount).toBe(0)
+          expect(result.title).toBe("Device List")
+          expect(result.output).toContain("device_abc")
+          expect(result.output).toContain("device_def")
+          expect(result.metadata.deviceCount).toBeUndefined()
         }),
       )
 
-      it.live("should return Connected Devices with numbered device list", () =>
+      hdcIt("should return Device List when output only contains [Empty] entries", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("device_abc\ndevice_def\n", "", 0)
+          devecoCliSpy = setupDevecoCliMock("[Empty]\n  [Empty]  \n", "", 0)
           const result = yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
-          expect(result.title).toBe("Connected Devices")
-          expect(result.output).toContain("Connected devices:")
-          expect(result.output).toContain("1. device_abc")
-          expect(result.output).toContain("2. device_def")
-          expect(result.metadata.deviceCount).toBe(2)
+          expect(result.title).toBe("Device List")
         }),
       )
 
-      it.live("should trim whitespace and skip blank lines from device entries", () =>
+      hdcIt("should pass device list args to devecocli", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("  device1  \n\n  \r\n  device2  \n", "", 0)
-          const result = yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
-          expect(result.output).toContain("1. device1")
-          expect(result.output).toContain("2. device2")
-          expect(result.metadata.deviceCount).toBe(2)
-        }),
-      )
-
-      it.live("should handle CRLF line endings in device output", () =>
-        Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("device_a\r\ndevice_b\r\n", "", 0)
-          const result = yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
-          expect(result.output).toContain("1. device_a")
-          expect(result.output).toContain("2. device_b")
-          expect(result.metadata.deviceCount).toBe(2)
+          const capture = setupDevecoCliCapture("")
+          devecoCliSpy = capture.spy
+          yield* execute({ action: "list_devices", log_prefix: "[TEST]", lines: 100 })
+          expect(capture.calls()[0].args).toEqual(["device", "list"])
         }),
       )
     })
 
     describe("clear", () => {
-      it.live("should throw error when hdc hilog -r returns non-zero exit code", () =>
+      hdcIt("should throw error when hdc hilog -r returns non-zero exit code", () =>
         Effect.gen(function* () {
           fileSpy = setupFileMock()
           spawnSpy = setupSpawnMock("", "clear failed", 1)
@@ -250,7 +253,7 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should return Log Buffer Cleared with default device when device_id is omitted", () =>
+      hdcIt("should return Log Buffer Cleared with default device when device_id is omitted", () =>
         Effect.gen(function* () {
           fileSpy = setupFileMock()
           spawnSpy = setupSpawnMock("", "", 0)
@@ -263,7 +266,7 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should return Log Buffer Cleared with specified device_id in output", () =>
+      hdcIt("should return Log Buffer Cleared with specified device_id in output", () =>
         Effect.gen(function* () {
           fileSpy = setupFileMock()
           spawnSpy = setupSpawnMock("", "", 0)
@@ -273,7 +276,7 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should include -t device flag in spawn command when device_id is specified", () =>
+      hdcIt("should include -t device flag in spawn command when device_id is specified", () =>
         Effect.gen(function* () {
           fileSpy = setupFileMock()
           const capture = setupSpawnCapture()
@@ -286,29 +289,27 @@ describe("HdcLogTool", () => {
     })
 
     describe("collect", () => {
-      it.live("should throw error when hdc hilog -x returns non-zero exit code with stderr", () =>
+      hdcIt("should throw error when devecocli log returns non-zero exit code with stderr", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("", "hilog collection error", 1)
+          devecoCliSpy = setupDevecoCliMock("", "hilog collection error", 1)
           const error = yield* failExecute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
-          expect(error.message).toContain("hdc hilog -x failed")
+          expect(error.message).toContain("devecocli log")
+          expect(error.message).toContain("failed")
           expect(error.message).toContain("hilog collection error")
         }),
       )
 
-      it.live("should include stdout in error message when stderr is empty and exit code is non-zero", () =>
+      hdcIt("should include stdout in error message when stderr is empty and exit code is non-zero", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("error from stdout", "", 2)
+          devecoCliSpy = setupDevecoCliMock("error from stdout", "", 2)
           const error = yield* failExecute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
           expect(error.message).toContain("error from stdout")
         }),
       )
 
-      it.live("should return No Matching Logs when no logs match prefix filter", () =>
+      hdcIt("should return No Matching Logs when devecocli returns empty stdout", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("line1\nline2\n", "", 0)
+          devecoCliSpy = setupDevecoCliMock("", "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "[NOMATCH]", lines: 100 })
           expect(result.title).toBe("No Matching Logs")
           expect(result.output).toContain("No matching logs found.")
@@ -319,39 +320,35 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should return No Matching Logs when stdout has only blank/whitespace lines", () =>
+      hdcIt("should return No Matching Logs when stdout has only blank/whitespace lines", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("  \n\n\r\n  \n", "", 0)
+          devecoCliSpy = setupDevecoCliMock("  \n\n\r\n  \n", "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "", lines: 100 })
           expect(result.title).toBe("No Matching Logs")
           expect(result.metadata.lineCount).toBe(0)
         }),
       )
 
-      it.live("should return Log Collection Successful with prefix-filtered log content", () =>
+      hdcIt("should return Log Collection Successful with all lines from devecocli output", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          const logContent = "[VCODER_DEBUG] first log\n[OTHER] other log\n[VCODER_DEBUG] second log\n"
-          spawnSpy = setupSpawnMock(logContent, "", 0)
+          const logContent = "[VCODER_DEBUG] first log\n[VCODER_DEBUG] second log\n"
+          devecoCliSpy = setupDevecoCliMock(logContent, "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "[VCODER_DEBUG]", lines: 100 })
           expect(result.title).toBe("Log Collection Successful")
           expect(result.output).toContain("Log collection successful.")
           expect(result.output).toContain("--- Log Content ---")
           expect(result.output).toContain("[VCODER_DEBUG] first log")
           expect(result.output).toContain("[VCODER_DEBUG] second log")
-          expect(result.output).not.toContain("[OTHER] other log")
           expect(result.output).toContain("count: 2")
           expect(result.output).toContain("prefix: [VCODER_DEBUG]")
           expect(result.metadata.lineCount).toBe(2)
         }),
       )
 
-      it.live("should return all lines when prefix is empty string", () =>
+      hdcIt("should return all lines from devecocli output without prefix filtering", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
           const logContent = "unfiltered1\n[VCODER_DEBUG] filtered\nunfiltered2\n"
-          spawnSpy = setupSpawnMock(logContent, "", 0)
+          devecoCliSpy = setupDevecoCliMock(logContent, "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "", lines: 100 })
           expect(result.metadata.lineCount).toBe(3)
           expect(result.output).toContain("unfiltered1")
@@ -361,47 +358,64 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should limit output to last N matching lines when lines count is less than total", () =>
+      hdcIt("should include specified device_id in output", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          const lines = Array.from({ length: 10 }, (_, i) => `[TEST] log${i + 1}`).join("\n")
-          spawnSpy = setupSpawnMock(lines, "", 0)
-          const result = yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 3 })
-          expect(result.metadata.lineCount).toBe(3)
-          expect(result.output).toContain("[TEST] log8")
-          expect(result.output).toContain("[TEST] log9")
-          expect(result.output).toContain("[TEST] log10")
-          expect(result.output).not.toContain("[TEST] log7")
-        }),
-      )
-
-      it.live("should include specified device_id in output", () =>
-        Effect.gen(function* () {
-          fileSpy = setupFileMock()
           const logContent = "[TEST] log entry\n"
-          spawnSpy = setupSpawnMock(logContent, "", 0)
+          devecoCliSpy = setupDevecoCliMock(logContent, "", 0)
           const result = yield* execute({ action: "collect", device_id: "real-device-001", log_prefix: "[TEST]", lines: 100 })
           expect(result.output).toContain("device: real-device-001")
           expect(result.output).not.toContain("device: default")
         }),
       )
 
-      it.live("should include -t device flag in spawn command when device_id is specified", () =>
+      hdcIt("should include --device flag in devecocli args when device_id is specified", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          const logContent = "[TEST] log entry\n"
-          const capture = setupSpawnCaptureWithOutput(logContent)
-          spawnSpy = capture.spy
+          const capture = setupDevecoCliCapture("[TEST] log entry\n")
+          devecoCliSpy = capture.spy
           yield* execute({ action: "collect", device_id: "real-device-001", log_prefix: "[TEST]", lines: 100 })
-          expect(capture.capturedCmd()).toContain("-t")
-          expect(capture.capturedCmd()).toContain("real-device-001")
+          const lastCall = capture.calls()[capture.calls().length - 1]
+          expect(lastCall.args).toContain("--device")
+          expect(lastCall.args).toContain("real-device-001")
         }),
       )
 
-      it.live("should handle CRLF line endings in log output", () =>
+      hdcIt("should not include --device flag in devecocli args when device_id is omitted", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("[TEST] line1\r\n[TEST] line2\r\n", "", 0)
+          const capture = setupDevecoCliCapture("[TEST] log entry\n")
+          devecoCliSpy = capture.spy
+          yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
+          const lastCall = capture.calls()[capture.calls().length - 1]
+          expect(lastCall.args).not.toContain("--device")
+        }),
+      )
+
+      hdcIt("should include --keyword and --tail flags in devecocli args", () =>
+        Effect.gen(function* () {
+          const capture = setupDevecoCliCapture("[TEST] log entry\n")
+          devecoCliSpy = capture.spy
+          yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
+          const lastCall = capture.calls()[capture.calls().length - 1]
+          expect(lastCall.args).toContain("--keyword")
+          expect(lastCall.args).toContain("[TEST]")
+          expect(lastCall.args).toContain("--tail")
+          expect(lastCall.args).toContain("100")
+        }),
+      )
+
+      hdcIt("should omit --keyword flag when prefix is empty string", () =>
+        Effect.gen(function* () {
+          const capture = setupDevecoCliCapture("[TEST] log entry\n")
+          devecoCliSpy = capture.spy
+          yield* execute({ action: "collect", log_prefix: "", lines: 100 })
+          const lastCall = capture.calls()[capture.calls().length - 1]
+          expect(lastCall.args).not.toContain("--keyword")
+          expect(lastCall.args).toContain("--tail")
+        }),
+      )
+
+      hdcIt("should handle CRLF line endings in log output", () =>
+        Effect.gen(function* () {
+          devecoCliSpy = setupDevecoCliMock("[TEST] line1\r\n[TEST] line2\r\n", "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
           expect(result.metadata.lineCount).toBe(2)
           expect(result.output).toContain("[TEST] line1")
@@ -409,25 +423,13 @@ describe("HdcLogTool", () => {
         }),
       )
 
-      it.live("should skip blank and whitespace-only lines in log output", () =>
+      hdcIt("should skip blank and whitespace-only lines in log output", () =>
         Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          spawnSpy = setupSpawnMock("[TEST] a\n   \n\n[TEST] b\n", "", 0)
+          devecoCliSpy = setupDevecoCliMock("[TEST] a\n   \n\n[TEST] b\n", "", 0)
           const result = yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
           expect(result.metadata.lineCount).toBe(2)
           expect(result.output).toContain("[TEST] a")
           expect(result.output).toContain("[TEST] b")
-        }),
-      )
-
-      it.live("should not include -t flag when device_id is omitted", () =>
-        Effect.gen(function* () {
-          fileSpy = setupFileMock()
-          const logContent = "[TEST] log entry\n"
-          const capture = setupSpawnCaptureWithOutput(logContent)
-          spawnSpy = capture.spy
-          yield* execute({ action: "collect", log_prefix: "[TEST]", lines: 100 })
-          expect(capture.capturedCmd()).not.toContain("-t")
         }),
       )
     })

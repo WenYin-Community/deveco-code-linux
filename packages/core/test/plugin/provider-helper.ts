@@ -2,6 +2,7 @@ import { Npm } from "@opencode-ai/core/npm"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { expect } from "bun:test"
 import { Effect, Layer, Option } from "effect"
+import type { Draft } from "immer"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Integration } from "@opencode-ai/core/integration"
 import { Credential } from "@opencode-ai/core/credential"
@@ -13,6 +14,38 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
+
+function applyKey(provider: Draft<ProviderV2.Info>, value: Credential.Key) {
+  const blocked = new Set(["apikey", "baseurl", "url"])
+  for (const [key, val] of Object.entries(value.metadata ?? {})) {
+    if (!blocked.has(key.toLowerCase())) provider.request.body[key] = val
+  }
+  provider.request.body.apiKey = value.key
+}
+
+function applyCredential(provider: Draft<ProviderV2.Info>, value: Credential.Info) {
+  if (value.type === "key") {
+    applyKey(provider, value)
+    return
+  }
+  if (value.type === "oauth") provider.request.body.apiKey = value.access
+}
+
+export function accountMergePlugin(credentials: Credential.Interface) {
+  return PluginV2.define({
+    id: PluginV2.ID.make("test-account-merge"),
+    effect: Effect.succeed({
+      "catalog.transform": Effect.fn(function* (evt) {
+        const stored = yield* credentials.all()
+        for (const cred of stored) {
+          evt.provider.list()
+            .filter((item) => String(item.provider.id) === String(cred.integrationID))
+            .forEach((item) => evt.provider.update(item.provider.id, (provider) => applyCredential(provider, cred.value)))
+        }
+      }),
+    }),
+  })
+}
 
 export const fixtureProvider = new URL("./fixtures/provider-factory.ts", import.meta.url).href
 const locationLayer = Layer.succeed(

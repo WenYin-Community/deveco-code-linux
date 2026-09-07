@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/solid */
+import { randomUUID } from "crypto"
 import {
   TuiPathsProvider,
   TuiStartupProvider,
@@ -19,7 +20,7 @@ export function TestTuiContexts(
       value={{
         cwd: props.cwd ?? props.directory ?? "/tmp/opencode/packages/tui",
         home: "/tmp/opencode/home",
-        state: "/tmp/opencode/state",
+        state: `/tmp/opencode/state/${randomUUID()}`,
         worktree: "/tmp/opencode",
         ...props.paths,
       }}

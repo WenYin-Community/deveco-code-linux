@@ -12,7 +12,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
-import { it, model, npmLayer, withEnv } from "./provider-helper"
+import { accountMergePlugin, it, model, npmLayer, withEnv } from "./provider-helper"
 
 const gitlabSDKOptions: Record<string, unknown>[] = []
 const database = Database.layerFromPath(":memory:").pipe(Layer.fresh)
@@ -178,6 +178,7 @@ describe("GitLabPlugin", () => {
             integrationID: Integration.ID.make("gitlab"),
             value: new Credential.Key({ type: "key", key: "account-token" }),
           })
+          yield* plugin.add(accountMergePlugin(credentials))
           yield* plugin.add(GitLabPlugin)
           const transform = yield* catalog.transform()
           yield* transform((catalog) => catalog.provider.update(ProviderV2.ID.make("gitlab"), () => {}))
@@ -217,6 +218,7 @@ describe("GitLabPlugin", () => {
               expires: 9999999999999,
             }),
           })
+          yield* plugin.add(accountMergePlugin(credentials))
           yield* plugin.add(GitLabPlugin)
           const transform = yield* catalog.transform()
           yield* transform((catalog) => catalog.provider.update(ProviderV2.ID.make("gitlab"), () => {}))

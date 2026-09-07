@@ -12,7 +12,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
-import { fakeSelectorSdk, it, model, npmLayer, provider, withEnv } from "./provider-helper"
+import { accountMergePlugin, fakeSelectorSdk, it, model, npmLayer, provider, withEnv } from "./provider-helper"
 
 const database = Database.layerFromPath(":memory:").pipe(Layer.fresh)
 const preferences = Credential.layer.pipe(Layer.provide(database))
@@ -91,6 +91,7 @@ describe("AzurePlugin", () => {
               metadata: { resourceName: "from-account" },
             }),
           })
+          yield* plugin.add(accountMergePlugin(credentials))
           yield* plugin.add(AzurePlugin)
           const transform = yield* catalog.transform()
           yield* transform((catalog) => {

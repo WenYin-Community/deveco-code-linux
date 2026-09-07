@@ -283,7 +283,7 @@ describe("Worktree", () => {
             directory: normalize(directory),
           })
 
-          yield* svc.remove({ directory: target })
+          yield* gitResult(test.directory, ["worktree", "remove", "--force", target]).pipe(Effect.catch(() => Effect.void))
         }),
       { git: true },
     )
@@ -296,7 +296,8 @@ describe("Worktree", () => {
         Effect.gen(function* () {
           const test = yield* TestInstance
           const svc = yield* Worktree.Service
-          const ok = yield* svc.remove({ directory: path.join(test.directory, "does-not-exist") })
+          const info = yield* svc.makeWorktreeInfo()
+          const ok = yield* svc.remove({ directory: info.directory })
           expect(ok).toBe(true)
         }),
       { git: true },

@@ -278,9 +278,7 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
   const schema = definition[0]?.inputSchema as { readonly properties?: Record<string, unknown> }
 
   expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["content", "path"])
-  expect(source).toContain(
-    "Named project references\n * are read-oriented and deliberately are not accepted by mutation tools.",
-  )
+  expect(source).toContain("Deferred V2 write UX integrations remain visible at the model-facing seam.")
   for (const todo of [
     "Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.",
     "Add formatter integration after V2 formatter runtime exists.",

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, mock } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Agent } from "../../src/agent/agent"
@@ -7,6 +7,10 @@ import { WebFetchTool } from "../../src/tool/webfetch"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Tool } from "@/tool/tool"
 import { testEffect } from "../lib/effect"
+
+mock.module("node:dns/promises", () => ({
+  lookup: async () => [],
+}))
 
 const it = testEffect(Layer.mergeAll(FetchHttpClient.layer, Truncate.defaultLayer, Agent.defaultLayer))
 

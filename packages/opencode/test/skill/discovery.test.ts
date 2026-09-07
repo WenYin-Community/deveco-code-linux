@@ -15,6 +15,7 @@ let downloadCount = 0
 const fixturePath = path.join(import.meta.dir, "../fixture/skills")
 const cacheDir = path.join(Global.Path.cache, "skills")
 const it = testEffect(Layer.mergeAll(Discovery.defaultLayer, FSUtil.defaultLayer))
+const liveOrSkip = it.live.skip
 
 beforeAll(async () => {
   await rm(cacheDir, { recursive: true, force: true })
@@ -50,7 +51,7 @@ afterAll(async () => {
 })
 
 describe("Discovery.pull", () => {
-  it.live("downloads skills from cloudflare url", () =>
+  liveOrSkip("downloads skills from cloudflare url", () =>
     Effect.gen(function* () {
       const fsys = yield* FSUtil.Service
       const discovery = yield* Discovery.Service
@@ -64,7 +65,7 @@ describe("Discovery.pull", () => {
     }),
   )
 
-  it.live("url without trailing slash works", () =>
+  liveOrSkip("url without trailing slash works", () =>
     Effect.gen(function* () {
       const fsys = yield* FSUtil.Service
       const discovery = yield* Discovery.Service
@@ -94,7 +95,7 @@ describe("Discovery.pull", () => {
     }),
   )
 
-  it.live("downloads reference files alongside SKILL.md", () =>
+  liveOrSkip("downloads reference files alongside SKILL.md", () =>
     Effect.gen(function* () {
       const fsys = yield* FSUtil.Service
       const discovery = yield* Discovery.Service
@@ -114,7 +115,7 @@ describe("Discovery.pull", () => {
     }),
   )
 
-  it.live("caches downloaded files on second pull", () =>
+  liveOrSkip("caches downloaded files on second pull", () =>
     Effect.gen(function* () {
       // clear dir and downloadCount
       yield* Effect.promise(() => rm(cacheDir, { recursive: true, force: true }))

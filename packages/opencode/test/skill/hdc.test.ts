@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import path from "node:path"
+import * as realFsModule from "node:fs/promises"
+import * as realCpModule from "node:child_process"
 
-let fsStatBehavior: (filePath: string) => Promise<{ isDirectory: () => boolean }>
-let fsAccessBehavior: (filePath: string) => Promise<void>
+const realFs = { ...realFsModule }
+const realCp = { ...realCpModule }
+
+let fsStatBehavior: ((filePath: Parameters<typeof realFs.stat>[0]) => Promise<{ isDirectory: () => boolean }>) | undefined
+let fsAccessBehavior: ((filePath: Parameters<typeof realFs.access>[0]) => Promise<void>) | undefined
 
 interface MockStream {
   setEncoding: () => void
@@ -15,23 +20,24 @@ interface MockProcess {
   on: (event: string, handler: (arg: Error | number | null) => void) => void
 }
 
-let spawnBehavior: () => MockProcess
+let spawnBehavior: (() => MockProcess) | undefined
 
-function fsStatMock(filePath: string) {
-  return fsStatBehavior(filePath)
+function fsStatMock(...args: Parameters<typeof realFs.stat>) {
+  return fsStatBehavior ? fsStatBehavior(args[0]) : realFs.stat(...args)
 }
 
-function fsAccessMock(filePath: string) {
-  return fsAccessBehavior(filePath)
+function fsAccessMock(...args: Parameters<typeof realFs.access>) {
+  return fsAccessBehavior ? fsAccessBehavior(args[0]) : realFs.access(...args)
 }
 
-function spawnMock() {
-  return spawnBehavior()
+function spawnMock(...args: any[]) {
+  return spawnBehavior ? spawnBehavior() : (realCp as any).spawn(...args)
 }
 
-const fsMockObj = { stat: fsStatMock, access: fsAccessMock }
+const fsMockObj = { ...realFs, stat: fsStatMock, access: fsAccessMock }
 void mock.module("node:fs/promises", () => ({ ...fsMockObj, default: fsMockObj }))
-void mock.module("node:child_process", () => ({ spawn: spawnMock }))
+const cpMockObj = { ...realCp, spawn: spawnMock }
+void mock.module("node:child_process", () => ({ ...cpMockObj, default: cpMockObj }))
 
 interface HdcModule {
   targetArgs: (deviceId?: string) => string[]
@@ -67,9 +73,9 @@ beforeEach(() => {
 afterEach(() => {
   if (savedDevEcoHome !== undefined) process.env.DEVECO_HOME = savedDevEcoHome
   else delete process.env.DEVECO_HOME
-  fsStatBehavior = () => Promise.resolve({ isDirectory: () => true })
-  fsAccessBehavior = () => Promise.resolve()
-  spawnBehavior = () => createMockProcess({ exitCode: 0 })
+  fsStatBehavior = undefined
+  fsAccessBehavior = undefined
+  spawnBehavior = undefined
 })
 
 function createMockProcess(options: {
