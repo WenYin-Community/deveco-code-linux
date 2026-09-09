@@ -1,0 +1,47 @@
+diff --git a/src/terminal.ts b/src/terminal.ts
+index ec248d4..dd4f994 100644
+--- a/src/terminal.ts
++++ b/src/terminal.ts
+@@ -3,7 +3,7 @@
+ import { dlopen, FFIType, ptr } from "bun:ffi";
+ import { Buffer } from "node:buffer";
+ import { EventEmitter } from "./interfaces";
+-import type { IPty, IPtyForkOptions, IExitEvent } from "./interfaces";
++import type { IPty, IPtyForkOptions, IExitEvent, IDisposable } from "./interfaces";
+ import { join, dirname, basename } from "node:path";
+ import { existsSync } from "node:fs";
+ 
+@@ -143,6 +143,9 @@ export class Terminal implements IPty {
+ 
+ 	private readonly _onData = new EventEmitter<string>();
+ 	private readonly _onExit = new EventEmitter<IExitEvent>();
++	// Latched exit event: the read loop can observe child exit before spawn()
++	// returns and any listener is registered, so replay it to late listeners.
++	private _exitEvent: IExitEvent | null = null;
+ 
+ 	constructor(
+ 		file = DEFAULT_FILE,
+@@ -194,7 +197,14 @@ export class Terminal implements IPty {
+ 		return this._onData.event;
+ 	}
+ 	get onExit() {
+-		return this._onExit.event;
++		return (listener: (e: IExitEvent) => void): IDisposable => {
++			const disposable = this._onExit.event(listener);
++			if (this._exitEvent !== null) {
++				const evt = this._exitEvent;
++				queueMicrotask(() => listener(evt));
++			}
++			return disposable;
++		};
+ 	}
+ 
+ 	/* ------------- IO methods ------------- */
+@@ -244,6 +254,7 @@ export class Terminal implements IPty {
+ 					this._onData.fire(remaining);
+ 				}
+ 				const exitCode = lib.symbols.bun_pty_get_exit_code(this.handle);
++				this._exitEvent = { exitCode };
+ 				this._onExit.fire({ exitCode });
+ 				break;
+ 			} else if (n < 0) {

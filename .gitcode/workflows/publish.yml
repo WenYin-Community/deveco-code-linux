@@ -42,7 +42,7 @@ jobs:
           node-version: 22
 
       - name: 安装 Bun
-        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.3.14
+        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
 
       - name: 配置 npm 认证
         run: |
