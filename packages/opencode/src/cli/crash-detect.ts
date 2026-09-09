@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Global } from '@opencode-ai/core/global';
 import { InstallationVersion } from '@opencode-ai/core/installation/version';
+import { Logging } from '@opencode-ai/core/observability/logging';
 
 const RUNNING_PREFIX = '.running-';
 const logDir = Global.Path.log;
@@ -102,7 +103,7 @@ function writeFlag(): void {
   try {
     const flag: FlagContent = {
       pid: process.pid,
-      startTime: new Date().toISOString(),
+      startTime: Logging.formatTimestamp(new Date()),
       version: InstallationVersion,
     };
     fs.writeFileSync(ownFlagFile, JSON.stringify(flag, null, 2));
