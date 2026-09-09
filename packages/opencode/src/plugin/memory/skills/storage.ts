@@ -42,32 +42,17 @@ export class SkillStorage implements SkillStorageInterface {
       }
     }
     
-    // Auto-create default slash command skills
+    // Remove retired seed, then auto-create default slash command skills
+    await this.cleanupRetiredSkillSeeds()
     await this.ensureDefaultSkills()
   }
-  
+
   /**
    * Ensure default slash command skills exist
-   * These skills provide global slash commands like /dream and /dream-force
+   * These skills provide global slash commands like /dream-force and /auto-skill
    */
   private async ensureDefaultSkills(): Promise<void> {
     const defaultSkills = [
-      {
-        category: 'dream',
-        name: 'dream',
-        slashCommand: 'dream',
-        description: 'Trigger memory consolidation (Auto Dream)',
-        content: `Please call the dream-trigger tool to run memory consolidation.
-
-This will merge, deduplicate, and clean up memory files and skills.
-
-**What happens:**
-- Consolidates duplicate memories
-- Prunes outdated skills
-- Cleans up session state
-
-**Thresholds:** Must meet time (24h) and session (5) gates unless forced.`,
-      },
       {
         category: 'dream',
         name: 'dream-force',
@@ -112,6 +97,45 @@ Create a skill if you find a reusable pattern. Do not explain, just create the s
           content: skill.content,
         })
       }
+    }
+  }
+
+  /**
+   * Remove the retired `dream` seed skill. Its slash command stays dispatchable
+   * via the plugin's fallback registry, but the seed must no longer surface the
+   * command through the host skill/command registry. Only deletes when the file
+   * still matches the exact seeded content (frontmatter + body), so
+   * user-modified copies are preserved.
+   */
+  private async cleanupRetiredSkillSeeds(): Promise<void> {
+    const retired = {
+      category: 'dream',
+      name: 'dream',
+      description: 'Trigger memory consolidation (Auto Dream)',
+      content: `Please call the dream-trigger tool to run memory consolidation.
+
+This will merge, deduplicate, and clean up memory files and skills.
+
+**What happens:**
+- Consolidates duplicate memories
+- Prunes outdated skills
+- Cleans up session state
+
+**Thresholds:** Must meet time (24h) and session (5) gates unless forced.`,
+    }
+    try {
+      if (!(await this.exists(retired.category, retired.name))) return
+      const skill = await this.read(retired.category, retired.name)
+      if (
+        skill &&
+        skill.description === retired.description &&
+        skill.slashCommand === retired.name &&
+        skill.content.trim() === retired.content.trim()
+      ) {
+        await this.delete(retired.category, retired.name)
+      }
+    } catch {
+      // Best-effort cleanup; leave the file in place on read errors
     }
   }
 

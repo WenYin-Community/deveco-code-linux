@@ -7,6 +7,7 @@ import { Config } from "../../src/config/config"
 import { Env } from "../../src/env"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { Plugin } from "../../src/plugin"
+import { SLASH_COMMANDS_GUIDANCE } from "../../src/plugin/memory/skills/prompts"
 import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
@@ -42,7 +43,7 @@ describe("memory plugin integration", () => {
         const memoryHook = hooks.find((h) => h.tool && "memory-read" in h.tool)
         expect(memoryHook).toBeDefined()
 
-        // Verify all 10 tools are registered
+        // Verify all 11 tools are registered
         const tools = memoryHook!.tool!
         const toolNames = Object.keys(tools).sort()
         expect(toolNames).toEqual([
@@ -55,8 +56,16 @@ describe("memory plugin integration", () => {
           "memory-write",
           "skill-list",
           "skill-manage",
+          "skill-review-trigger",
           "skill-view",
         ])
+
+        // NL-trigger intent is documented in tool descriptions and guidance
+        expect(tools["dream-trigger"]!.description).toContain("整理记忆")
+        expect(tools["skill-review-trigger"]!.description).toContain("提取技能")
+        expect(SLASH_COMMANDS_GUIDANCE).toContain("/dream-force")
+        expect(SLASH_COMMANDS_GUIDANCE).toContain("/auto-skill")
+        expect(SLASH_COMMANDS_GUIDANCE).not.toContain("| /dream |")
 
         // Verify key hooks are present
         expect(memoryHook!.dispose).toBeDefined()

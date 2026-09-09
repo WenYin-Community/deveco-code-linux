@@ -101,7 +101,7 @@ async function showPendingExpiryToast(state: PluginState): Promise<void> {
         await state.client.tui.showToast({
             body: {
                 title: '⚠️ Pending expiry',
-                message: `${pending.pendingDeletions.length} memories marked for deletion. Use /dream-approve or /dream-reject.`,
+                message: `${pending.pendingDeletions.length} memories marked for deletion. Approve or keep them via the prompt in chat.`,
                 variant: 'warning',
                 duration: 6000,
             },
@@ -732,6 +732,9 @@ async function handleToolExecuteAfter(
     directory: string,
 ): Promise<void> {
     if (isForkedSession(input.sessionID)) { return }
+    // Meta-tool that spawns the review agent itself: must not feed the skill
+    // trigger counter (double-spawn risk) or count as user work.
+    if (input.tool === 'skill-review-trigger') { return }
     if (isSubagentSession(input.sessionID)) {
         if (!state.subagentHooksConfig.skillReviewTrigger) { return }
     } else {
@@ -1125,7 +1128,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                 },
             },
             'dream-trigger': {
-                description: 'Manually trigger memory consolidation (Auto Dream feature). Merges, deduplicates, and cleans up memory files.',
+                description: 'Manually trigger memory consolidation (Auto Dream feature). Merges, deduplicates, and cleans up memory files and skills. Call when the user asks to consolidate/clean/merge memories ("整理记忆", "清理记忆", "合并记忆", "强制整理", "consolidate/clean up memories", "run dream") or types /dream or /dream-force; use force=true (bypasses thresholds) whenever the user explicitly requests it.',
                 args: {
                     force: z.boolean().optional().default(false).describe('Force consolidation even if thresholds not met'),
                 },
@@ -1208,6 +1211,37 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         await state.storage.clearPendingExpiry();
                         state.pendingExpiryToastShown = false;
                         return `## Expiry Rejected\n\nKept ${count} memories. Pending expiry cleared.`;
+                    }
+                    catch (e) {
+                        return e instanceof Error ? e.message : 'Unknown error';
+                    }
+                },
+            },
+            'skill-review-trigger': {
+                description: 'Trigger the skill review agent to extract or update skills from this conversation. Call when the user asks to create/extract/review skills ("提取技能", "总结成技能", "save this as a skill", "review my skills") or types /auto-skill. Runs in the background as a forked session.',
+                args: {},
+                async execute(_args: Record<string, unknown>, ctx: ToolContext) {
+                    if (!state.skillConfig.enabled) {
+                        return 'Skills feature is disabled. Enable it via config: skills.enabled = true';
+                    }
+                    if (!state.client) {
+                        return 'Skill review is unavailable (no client).';
+                    }
+                    try {
+                        const result = await spawnSkillReviewAgent({
+                            sessionID: ctx?.sessionID || 'default',
+                            projectID,
+                            directory,
+                            skillsRoot: state.skillStorage.getSkillsRoot(),
+                            memoryRoot: state.storage.getMemoryPath(),
+                            messages: [],
+                            skillConfig: state.skillConfig,
+                            client: state.client,
+                            reviewMode: 'skill-only',
+                        });
+                        return result.success
+                            ? '## Skill Review Launched\n\nSkill review agent is running in the background. It will create/update skills and release the lock autonomously.'
+                            : '## Skill Review Not Started\n\n' + (result.error || 'A review may already be in progress.');
                     }
                     catch (e) {
                         return e instanceof Error ? e.message : 'Unknown error';

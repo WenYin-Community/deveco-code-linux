@@ -30,17 +30,16 @@ Skills that aren't maintained become liabilities.
  * Injected into system prompt when slashCommands enabled
  */
 export const SLASH_COMMANDS_GUIDANCE = `
-## Slash Commands
+## Slash Commands & Quick Actions
 
-The following slash commands are available:
-
-| Command | Action |
-|---------|--------|
-| /dream | Call dream-trigger tool to run memory consolidation |
-| /dream force | Call dream-trigger with force=true to bypass thresholds |
+Visible commands: /dream-force (memory consolidation, bypasses thresholds), /auto-skill (skill review).
 
 When a user message starts with a slash command, execute the corresponding tool immediately.
 Do not respond with text before invoking the tool.
+
+Natural-language equivalents (treat exactly like the slash commands — invoke the tool immediately, no confirming question):
+- User asks to consolidate/clean/merge/deduplicate memories — "整理记忆", "清理记忆", "合并记忆", "强制整理", "consolidate memories", "clean up memory", "run dream" → call dream-trigger with force=true.
+- User asks to extract/review skills — "提取技能", "总结成技能", "save this as a skill", "review my skills" → call skill-review-trigger.
 `
 
 // ============================================================================
