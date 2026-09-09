@@ -4,6 +4,7 @@ import { initLogger, logger, setLogDir, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
 import { normalizeProjectPath, getGlobalDataDir } from './util/path';
 import { MemoryInjection } from './memory/injection';
+import { SessionInjectionSnapshotCache, computeInjectionBlocks } from './memory/injectionSnapshot';
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
 import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType } from './memory/types';
 // Auto Dream imports
@@ -17,7 +18,7 @@ import { initAutoMemoryExtraction, getExtractionRunner, } from './memory/extract
 import { releaseExtractionLock } from './memory/extractionLock';
 import { processToolCallForSkill, incrementTurnCounter, markExtractionCompleted, resetExtractionSkillCounter, getThresholdState, updateThresholdState } from './memory/extractionThreshold';
 // Skills imports
-import { SkillStorage, SkillInjection, SKILLS_GUIDANCE, SLASH_COMMANDS_GUIDANCE, } from './skills';
+import { SkillStorage, SkillInjection } from './skills';
 import { checkSkillThreshold, incrementSkillCounter, resetSkillCounter, DEFAULT_SKILL_TRIGGER_STATE, } from './skills/trigger';
 import { spawnSkillReviewAgent, isSkillReviewInProgress, releaseSkillReviewLock, getSkillReviewLockPath } from './skills/reviewAgent';
 import { skillManageTool, skillListTool, skillViewTool, setSkillEnabled } from './skills/tools';
@@ -49,6 +50,7 @@ interface PluginState {
     storage: MemoryStorage
     retrieval: EnhancedMemoryRetrieval
     injection: MemoryInjection
+    injectionSnapshots: SessionInjectionSnapshotCache
     config: ReturnType<typeof mergeConfig>['autoMemory']
     autoDreamConfig: ReturnType<typeof mergeConfig>['autoDream']
     extractionConfig: ReturnType<typeof mergeConfig>['extraction']
@@ -272,6 +274,7 @@ function createPluginState(
         storage,
         retrieval: new EnhancedMemoryRetrieval(storage, fullConfig, memoryRecallConfig, semanticSelectionConfig, client),
         injection: new MemoryInjection(storage, fullConfig),
+        injectionSnapshots: new SessionInjectionSnapshotCache(),
         config: fullConfig,
         autoDreamConfig: configs.autoDream,
         extractionConfig: configs.extraction,
@@ -496,13 +499,21 @@ async function handleExtractionIdle(sid: string, state: PluginState, projectID: 
     }
 }
 
-async function handleSessionIdleEvent(
+async function handleSessionEvent(
     event: { type: string; properties?: Record<string, string> },
     state: PluginState,
     client: OpencodeClient,
     projectID: string,
     directory: string,
 ): Promise<void> {
+    if (event.type === 'session.deleted') {
+        // Evict the frozen injection snapshot so the session's blocks are not
+        // pinned in memory after deletion (the cache also FIFO-bounds itself).
+        const props = event.properties as { info?: { id?: string } } | undefined;
+        const deletedSid = props?.info?.id || '';
+        if (deletedSid) { state.injectionSnapshots.delete(deletedSid) }
+        return;
+    }
     if (event.type !== 'session.idle') { return }
     const sid = event.properties?.sessionID || '';
     if (!sid) { return }
@@ -534,27 +545,32 @@ function checkSubagentSystemPermission(subHooks: typeof DEFAULT_SUBAGENT_HOOKS_C
     return subHooks.memoryRecall || subHooks.skillReviewTrigger || subHooks.autoMemoryExtraction;
 }
 
-async function performSystemInjections(state: PluginState, isSubNow: boolean, output: { system: string[] }): Promise<void> {
-    try {
-        if (!isSubNow || state.subagentHooksConfig.memoryRecall) {
-            const result = state.config.truncation?.enabled !== false
-                ? await state.injection.injectIndexOnly()
-                : await state.injection.inject();
-            if (result.systemPrompt) { output.system.push(result.systemPrompt) }
-        }
-    } catch (e) {
-        logger.error('[SystemTransform]', 'Memory injection failed:', e instanceof Error ? e.message : String(e));
+async function performSystemInjections(sid: string, state: PluginState, isSubNow: boolean, output: { system: string[] }): Promise<void> {
+    // Prompt-cache stability: render the memory/skill blocks once per session
+    // and reuse the frozen snapshot for every subsequent request. Refresh
+    // points are process start (empty cache) and new sessions (/new) — a
+    // mid-session MEMORY.md rewrite must not shift the cached system prefix.
+    const cached = state.injectionSnapshots.get(sid);
+    if (cached) {
+        output.system.push(...cached);
+        return;
     }
-    if (state.skillConfig.enabled && (!isSubNow || state.subagentHooksConfig.skillReviewTrigger)) {
-        try {
-            const skillResult = await state.skillInjection.inject();
-            if (skillResult.systemPrompt) { output.system.push(skillResult.systemPrompt) }
-            output.system.push(SKILLS_GUIDANCE);
-        } catch (e) {
-            logger.error('[SystemTransform]', 'Skill injection failed:', e instanceof Error ? e.message : String(e));
-        }
-    }
-    if (state.slashCommandsEnabled) { output.system.push(SLASH_COMMANDS_GUIDANCE) }
+    const { blocks, hadError } = await computeInjectionBlocks({
+        injection: state.injection,
+        skillInjection: state.skillInjection,
+        opts: {
+            truncationEnabled: state.config.truncation?.enabled !== false,
+            skillsEnabled: state.skillConfig.enabled,
+            slashCommandsEnabled: state.slashCommandsEnabled,
+            subMemoryRecall: state.subagentHooksConfig.memoryRecall,
+            subSkillReviewTrigger: state.subagentHooksConfig.skillReviewTrigger,
+            isSubNow,
+        },
+    });
+    // Never freeze a degraded render — a transient storage failure would
+    // otherwise pin a memory-less prompt for the whole session.
+    if (!hadError) { state.injectionSnapshots.set(sid, blocks) }
+    output.system.push(...blocks);
 }
 
 async function handleSystemTransform(sid: string, state: PluginState, client: OpencodeClient, output: { system: string[] }, projectID: string): Promise<void> {
@@ -571,7 +587,7 @@ async function handleSystemTransform(sid: string, state: PluginState, client: Op
         await detectAndRegisterSubagent(sid, client);
         if (isSubagentSession(sid) && !checkSubagentSystemPermission(state.subagentHooksConfig)) { return }
     }
-    await performSystemInjections(state, isSubagentSession(sid), output);
+    await performSystemInjections(sid, state, isSubagentSession(sid), output);
 }
 
 function extractUserQueryText(parts: Array<Record<string, unknown>>): string {
@@ -863,7 +879,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             stateMap.delete(projectID);
         },
         'permission.ask': async (input, output) => handlePermissionAsk(input as unknown as Record<string, unknown>, output as unknown as { status: string }, state),
-        'event': async ({ event }) => handleSessionIdleEvent(event as unknown as { type: string; properties?: Record<string, string> }, state, client, projectID, directory),
+        'event': async ({ event }) => handleSessionEvent(event as unknown as { type: string; properties?: Record<string, string> }, state, client, projectID, directory),
         'experimental.chat.system.transform': async (_input, output) => handleSystemTransform(_input.sessionID || '', state, client, output as unknown as { system: string[] }, projectID),
         'experimental.session.compacting': async (_input, output) => {
             if (!state.config.enabled) return;
