@@ -5,6 +5,7 @@ import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
+import { AgentRules } from "@/agent/rules"
 import type { MessageV2 } from "../message-v2"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -58,6 +59,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const system = [
     [
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      ...AgentRules.forAgent(input.model, input.agent),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]
