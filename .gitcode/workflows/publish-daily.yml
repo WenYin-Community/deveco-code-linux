@@ -1,0 +1,75 @@
+name: Publish Daily
+
+on:
+  schedule:
+    - cron: '0 0 2 * * ?'
+  workflow_dispatch:
+
+permissions:
+  repository: read
+
+jobs:
+  release:
+    name: daily-build-and-publish
+    runs-on: ubuntu-latest
+    env:
+      DEVECO_SCOPE: deveco
+      DEVECO_CHANNEL: daily
+      GITCODE_OWNER: openharmony-sig
+      GITCODE_REPO: deveco-code
+    steps:
+      - name: 检出代码
+        uses: checkout
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Node.js
+        uses: setup-node
+        with:
+          node-version: 22
+
+      - name: 安装 Bun
+        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
+
+      - name: 配置 npm 认证
+        run: |
+          echo "@${DEVECO_SCOPE}:registry=https://registry.npmjs.org/" >> ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+
+      - name: 设置版本
+        run: |
+          VERSION="0.0.0-daily-$(TZ=Asia/Shanghai date +%Y%m%d)"
+          echo "DEVECO_VERSION=${VERSION}" >> "$ATOMGIT_ENV"
+
+          echo "## 版本信息" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 版本 | \`$VERSION\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 分支 | \`$ATOMGIT_REF_NAME\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Channel | \`$DEVECO_CHANNEL\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Scope | \`@$DEVECO_SCOPE\` |" >> "$ATOMGIT_STEP_SUMMARY"
+
+      - name: 准备构建环境
+        run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install
+
+      - name: 构建 CLI 二进制
+        run: |
+          cd packages/opencode && bun run script/build.ts
+          echo "## 构建" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "✅ CLI 二进制构建完成" >> "$ATOMGIT_STEP_SUMMARY"
+
+      - name: 组装并发布到 npm
+        run: |
+          cd packages/opencode && bun run script/publish.ts
+          echo "## npm 发布" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 包名 | 链接 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
+          for pkgjson in dist/deveco-*/package.json; do
+            name=$(jq -r '.name' "$pkgjson")
+            echo "| \`$name\` | [npm](https://www.npmjs.com/package/$name) |" >> "$ATOMGIT_STEP_SUMMARY"
+          done
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
