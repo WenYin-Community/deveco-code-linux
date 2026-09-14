@@ -59,6 +59,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { shouldKeepMessagesOnInterrupt } from "./interrupt"
 
 registerSpinner()
 
@@ -341,23 +342,6 @@ export function Prompt(props: PromptProps) {
 
   const exitTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  function hasSubstantiveOutput(): boolean {
-    const sid = props.sessionID
-    if (!sid) return false
-    const msgs = sync.data.message[sid] ?? []
-    const completed = msgs.findLast((x) => x.role === "assistant" && x.time.completed)?.id
-    const pendingMsg = msgs.findLast(
-      (x) => x.role === "assistant" && !x.time.completed && (!completed || x.id > completed),
-    )
-    if (!pendingMsg) return false
-    const parts = sync.data.part[pendingMsg.id] ?? []
-    return parts.some((p) => {
-      if (p.type === "text" || p.type === "reasoning") return p.text.trim().length > 0
-      if (p.type === "tool") return p.state.status !== "pending"
-      return false
-    })
-  }
-
   // Latch: once output is seen as substantive during a turn, stay "interrupt"
   // until a new user prompt is submitted. Prevents flickering between "cancel"
   // and "interrupt" during streaming and multi-turn tool calls (where pending
@@ -379,18 +363,7 @@ export function Prompt(props: PromptProps) {
       lastLatchUserMsgID = currentUserMsgID
     }
     if (outputSeen) return true
-    const completed = msgs.findLast((x) => x.role === "assistant" && x.time.completed)?.id
-    const hasSubstantive = msgs
-      .filter((x) => x.role === "assistant" && (!completed || x.id > completed))
-      .some((msg) => {
-        const parts = sync.data.part[msg.id] ?? []
-        return parts.some((p) => {
-          if (p.type === "text" || p.type === "reasoning") return p.text.trim().length > 0
-          if (p.type === "tool") return p.state.status !== "pending"
-          return false
-        })
-      })
-    if (hasSubstantive) outputSeen = true
+    if (shouldKeepMessagesOnInterrupt(msgs, sync.data.part)) outputSeen = true
     return outputSeen
   })
 
