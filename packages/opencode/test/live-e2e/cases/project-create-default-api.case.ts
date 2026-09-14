@@ -1,28 +1,36 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import {
+  completedDevecoCliEvent,
+  createEventDetails,
+  parseEvents,
+  partOf,
+  requireRegularFile,
+  sessionIDFromEvents,
+} from "../deveco-cli-events"
 import type { LiveTestCase } from "../types"
 
 const CASE_ID = "PROJECT_CREATE_DEFAULT_API"
 
-function partOf(event: Record<string, unknown>): Record<string, unknown> | undefined {
-  const part = event.part
-  if (!part || typeof part !== "object") return undefined
-  return part as Record<string, unknown>
-}
-
-// Tolerant JSON-line parser: skips truncated lines from a process killed mid-stream
-function parseEvents(stdout: string): Array<Record<string, unknown>> {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as Record<string, unknown>]
-      } catch {
-        return []
-      }
-    })
+async function validateCreatedProject(events: Record<string, unknown>[]) {
+  const event = completedDevecoCliEvent(events, "create")
+  if (!event) throw new Error("No completed devecocli create bash tool event found")
+  const details = createEventDetails(event)
+  if (details.command.includes("--api-level")) {
+    throw new Error("devecocli create command contains --api-level, expected CLI default selection")
+  }
+  const buildProfilePath = path.join(details.projectRoot, "build-profile.json5")
+  await requireRegularFile(buildProfilePath)
+  const autoSwitched = details.output.includes("Session directory auto-switched")
+  const hasSwitchCwdEvent = events.some((item) => {
+    if (item.type !== "tool_use" || partOf(item)?.tool !== "switch_cwd") return false
+    const state = partOf(item)?.state as Record<string, unknown> | undefined
+    return state?.status === "completed"
+  })
+  if (!autoSwitched && !hasSwitchCwdEvent) {
+    throw new Error("cwd was not switched - no auto-switch message and no switch_cwd tool event found")
+  }
+  return { ...details, buildProfilePath, autoSwitched, hasSwitchCwdEvent }
 }
 
 const testCase: LiveTestCase = {
@@ -61,89 +69,26 @@ const testCase: LiveTestCase = {
 
     try {
       const result = await ctx.runDevecoPrompt(sentMessage, { timeoutMs: 600_000, workspace })
-
-      
       await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
       await ctx.writeArtifact(CASE_ID, "stderr.log", result.stderr)
 
       const events = parseEvents(result.stdout)
       await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((event) => JSON.stringify(event)).join("\n"))
-
-      // Find the completed bash event that ran devecocli create.
-      const copyTemplateEvent = events.find((event) => {
-        if (event.type !== "tool_use") return false
-        const part = partOf(event)
-        if (!part || part.tool !== "bash") return false
-        const state = part.state
-        if (!state || typeof state !== "object") return false
-        const stateRecord = state as Record<string, unknown>
-        if (stateRecord.status !== "completed") return false
-        const input = stateRecord.input as Record<string, unknown> | undefined
-        if (!input || typeof input.command !== "string") return false
-        return /(?:^|\s)devecocli\s+create(?:\s|$)/.test(input.command)
-      })
-
-      if (!copyTemplateEvent) {
-        throw new Error("No completed devecocli create bash tool event found")
-      }
-
-      const copyTemplateState = partOf(copyTemplateEvent)!.state as Record<string, unknown>
-      const command = (copyTemplateState.input as Record<string, unknown>).command as string
-
-      // Verify no custom apiLevel was passed (auto-detection expected)
-      if (command.includes("--api-level")) {
-        throw new Error("devecocli create command contains --api-level, expected CLI default selection")
-      }
-
-      const output = copyTemplateState.output as string
-      const projectRoot = output.match(/Project root:\s*(.+)/)?.[1]?.trim()
-      if (!projectRoot) throw new Error(`devecocli create output is missing Project root:\n${output}`)
-
-      // Verify build-profile.json5 exists on disk
-      const buildProfilePath = path.join(projectRoot, "build-profile.json5")
-      try {
-        const stat = await fs.stat(buildProfilePath)
-        if (!stat.isFile()) {
-          throw new Error(`build-profile.json5 is not a regular file at ${buildProfilePath}`)
-        }
-      } catch (error) {
-        throw new Error(
-          `build-profile.json5 not found at ${buildProfilePath}: ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }
-
-      // Verify cwd was switched: either auto-switched by devecocli create or explicit switch_cwd tool call
-      const autoSwitched = output.includes("Session directory auto-switched")
-      const hasSwitchCwdEvent = events.some((event) => {
-        if (event.type !== "tool_use") return false
-        const part = partOf(event)
-        if (!part || part.tool !== "switch_cwd") return false
-        const state = part.state
-        if (!state || typeof state !== "object") return false
-        return (state as Record<string, unknown>).status === "completed"
-      })
-
-      if (!autoSwitched && !hasSwitchCwdEvent) {
-        throw new Error("cwd was not switched - no auto-switch message and no switch_cwd tool event found")
-      }
-
-      const sessionID = events.find((event) => typeof event.sessionID === "string")?.sessionID as
-        | string
-        | undefined
+      const details = await validateCreatedProject(events)
 
       return {
         sentMessage,
-        sessionID,
+        sessionID: sessionIDFromEvents(events),
         stdout: result.stdout,
         stderr: result.stderr,
         events,
         details: {
           exitCode: result.exitCode,
           commandDurationMs: result.durationMs,
-          projectRoot,
-          buildProfilePath,
-          autoSwitched,
-          hasSwitchCwdEvent,
+          projectRoot: details.projectRoot,
+          buildProfilePath: details.buildProfilePath,
+          autoSwitched: details.autoSwitched,
+          hasSwitchCwdEvent: details.hasSwitchCwdEvent,
         },
       }
     } finally {

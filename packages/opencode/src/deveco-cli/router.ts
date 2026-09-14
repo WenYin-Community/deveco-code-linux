@@ -46,6 +46,13 @@ type Device = {
   status: "running" | "stopped"
 }
 
+type SelectedDevice = Device & { serial: string }
+
+type LogClearDependencies = {
+  findHome?: () => Promise<string | undefined>
+  runCommand?: (cmd: string[]) => Promise<CliResult>
+}
+
 const SPECIAL_RUN_FLAGS = new Set(["--apply", "--hotreload", "--hotreload-apply", "--help", "-h"])
 const KNOWN_RUN_FLAGS = new Set([
   "--module",
@@ -61,10 +68,7 @@ export async function executeDevecoCliProxy(
   args: string[],
   cwd: string,
   runner: CliRunner = runBundledDevecoCli,
-  dependencies: {
-    findHome?: () => Promise<string | undefined>
-    runCommand?: (cmd: string[]) => Promise<CliResult>
-  } = {},
+  dependencies: LogClearDependencies = {},
 ): Promise<CliResult & { fullOutput?: string }> {
   if (args[0] === "log" && args[1] === "clear") {
     return executeLogClear(args.slice(2), cwd, runner, dependencies)
@@ -103,8 +107,8 @@ function validateLogTail(args: string[]): CliResult | undefined {
     if (arg.startsWith("--tail=")) return [arg.slice("--tail=".length)]
     return []
   })
-  if (values.length === 0) return
-  if (values.every((value) => /^[1-9]\d*$/.test(value ?? ""))) return
+  if (values.length === 0) return undefined
+  if (values.every((value) => /^[1-9]\d*$/.test(value ?? ""))) return undefined
   return {
     stdout: "",
     stderr: "`tail` must be a positive integer.\n",
@@ -120,17 +124,12 @@ function enhanceLogArgs(args: string[]) {
       (option) => arg === option || arg.startsWith(`${option}=`),
     ),
   )
-  return [
-    ...args,
-    ...(hasWindow ? [] : ["--tail", String(DEFAULT_LOG_TAIL)]),
-  ]
+  return [...args, ...(hasWindow ? [] : ["--tail", String(DEFAULT_LOG_TAIL)])]
 }
 
 async function truncateDocsOutput(result: CliResult) {
   if (result.stdout.length + result.stderr.length <= MAX_DOCS_OUTPUT_LENGTH) return result
-  const output = [result.stdout, result.stderr]
-    .filter(Boolean)
-    .join(result.stdout.endsWith("\n") ? "" : "\n")
+  const output = [result.stdout, result.stderr].filter(Boolean).join(result.stdout.endsWith("\n") ? "" : "\n")
   // Identical responses reuse a path so repeated lookups do not add changing paths to context.
   const file = path.join(
     Global.Path.tmp,
@@ -159,44 +158,48 @@ async function executeLogClear(
   args: string[],
   cwd: string,
   runner: CliRunner,
-  dependencies: {
-    findHome?: () => Promise<string | undefined>
-    runCommand?: (cmd: string[]) => Promise<CliResult>
-  },
+  dependencies: LogClearDependencies,
 ): Promise<CliResult> {
   const target = optionValue(args, "--device")
-  const valid =
-    args.length === 0 ||
-    (target &&
-      !target.startsWith("-") &&
-      ((args.length === 2 && args[0] === "--device") || (args.length === 1 && args[0].startsWith("--device="))))
-  if (!valid) {
-    return {
-      stdout: "",
-      stderr: "Usage: devecocli log clear [--device <name-or-serial>]\n",
-      exitCode: 1,
-    }
-  }
+  if (!validLogClearArgs(args, target)) return logClearUsage()
 
   const home = await (dependencies.findHome ?? findDevEcoHome)()
-  if (!home) {
-    return {
-      stdout: "",
-      stderr: "DevEco Studio path not found. Set DEVECO_HOME and retry.\n",
-      exitCode: 1,
-    }
-  }
+  if (!home) return logClearError("DevEco Studio path not found. Set DEVECO_HOME and retry.")
   const hdc = hdcPath(home)
-  if (!(await Bun.file(hdc).exists())) {
-    return { stdout: "", stderr: `hdc not found: ${hdc}\n`, exitCode: 1 }
-  }
+  if (!(await Bun.file(hdc).exists())) return logClearError(`hdc not found: ${hdc}`)
 
   const discovery = await runner(["device", "list", "--format", "json"], cwd, { skipVersionCheck: true })
   if (discovery.exitCode !== 0) return discovery
   const devices = parseDevices(discovery.stdout)
-  if (!devices) {
-    return { stdout: "", stderr: "Unable to parse connected devices. No logs were cleared.\n", exitCode: 1 }
+  if (!devices) return logClearError("Unable to parse connected devices. No logs were cleared.")
+  const device = selectLogClearDevice(devices, target)
+  if ("exitCode" in device) return device
+  const result = await (dependencies.runCommand ?? runCommand)([hdc, "-t", device.serial, "shell", "hilog", "-r"])
+  if (result.exitCode !== 0) return result
+  // HDC can report transport failures in stdout while exiting successfully.
+  if (logClearReportedFailure(result)) return { ...result, exitCode: 1 }
+  return {
+    stdout: `Device log buffer cleared.\ndevice: ${device.name} (${device.serial})\n`,
+    stderr: result.stderr,
+    exitCode: 0,
   }
+}
+
+function validLogClearArgs(args: string[], target: string | undefined) {
+  if (args.length === 0) return true
+  if (!target || target.startsWith("-")) return false
+  return (args.length === 2 && args[0] === "--device") || (args.length === 1 && args[0].startsWith("--device="))
+}
+
+function logClearUsage(): CliResult {
+  return logClearError("Usage: devecocli log clear [--device <name-or-serial>]")
+}
+
+function logClearError(stderr: string): CliResult {
+  return { stdout: "", stderr: `${stderr}\n`, exitCode: 1 }
+}
+
+function selectLogClearDevice(devices: Device[], target: string | undefined): SelectedDevice | CliResult {
   // Prefer an exact serial over a display name, and never clear an ambiguous/default target.
   const candidates = !target
     ? devices
@@ -204,36 +207,23 @@ async function executeLogClear(
       ? devices.filter((device) => device.serial === target)
       : devices.filter((device) => device.name === target)
   if (candidates.length !== 1) {
-    return {
-      stdout: "",
-      stderr: `${[
+    return logClearError(
+      [
         candidates.length > 1 ? "DEVICE_SELECTION_REQUIRED" : target ? "DEVICE_NOT_FOUND" : "NO_DEVICE_AVAILABLE",
         "No logs were cleared. Connect a device and select a unique serial.",
         ...devices.map((device) => `- ${device.name}${device.serial ? ` (${device.serial})` : ""}`),
         "Retry with `devecocli log clear --device <serial>`.",
-      ].join("\n")}\n`,
-      exitCode: 1,
-    }
+      ].join("\n"),
+    )
   }
-  const device = candidates[0]
-  if (!device.serial) {
-    return {
-      stdout: "",
-      stderr: "DEVICE_SERIAL_UNAVAILABLE\nNo logs were cleared. Refresh the device list and retry.\n",
-      exitCode: 1,
-    }
+  if (!candidates[0].serial) {
+    return logClearError("DEVICE_SERIAL_UNAVAILABLE\nNo logs were cleared. Refresh the device list and retry.")
   }
-  const result = await (dependencies.runCommand ?? runCommand)([hdc, "-t", device.serial, "shell", "hilog", "-r"])
-  if (result.exitCode !== 0) return result
-  // HDC can report transport failures in stdout while exiting successfully.
-  if (/\[(?:fail|error)\]|\bfail(?:ed|ure)?\b|^\s*error\b/im.test(stripAnsi(`${result.stdout}\n${result.stderr}`))) {
-    return { ...result, exitCode: 1 }
-  }
-  return {
-    stdout: `Device log buffer cleared.\ndevice: ${device.name} (${device.serial})\n`,
-    stderr: result.stderr,
-    exitCode: 0,
-  }
+  return candidates[0] as SelectedDevice
+}
+
+function logClearReportedFailure(result: CliResult) {
+  return /\[(?:fail|error)\]|\bfail(?:ed|ure)?\b|^\s*error\b/im.test(stripAnsi(`${result.stdout}\n${result.stderr}`))
 }
 
 async function executeCreate(args: string[], cwd: string, runner: CliRunner): Promise<CliResult> {
@@ -247,26 +237,35 @@ async function executeCreate(args: string[], cwd: string, runner: CliRunner): Pr
 
   const staging = await createStaging(target, state)
   try {
-    const result = replaceCreatePath(
-      await runner(["create", ...setOption(forwarded, "--project-path", staging.projectRoot)], cwd),
-      staging.projectRoot,
-      target,
-    )
-    if (result.exitCode !== 0) return result
-
-    if (state === "non-empty") {
-      const conflicts = await mergeProject(staging.projectRoot, target)
-      if (conflicts.length > 0) return projectFileConflict(target, conflicts)
-      return {
-        ...result,
-        stdout: `${[result.stdout.trimEnd(), `Preserved existing content in: ${target}`].filter(Boolean).join("\n")}\n`,
-      }
-    }
-
-    if (!(await promoteProject(staging, target, state))) return projectExists(target, false)
-    return result
+    return await createStagedProject(forwarded, cwd, target, state, staging, runner)
   } finally {
     await fs.rm(staging.root, { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+async function createStagedProject(
+  args: string[],
+  cwd: string,
+  target: string,
+  state: CreateTargetState,
+  staging: CreateStaging,
+  runner: CliRunner,
+) {
+  const result = replaceCreatePath(
+    await runner(["create", ...setOption(args, "--project-path", staging.projectRoot)], cwd),
+    staging.projectRoot,
+    target,
+  )
+  if (result.exitCode !== 0) return result
+  if (state !== "non-empty") {
+    if (!(await promoteProject(staging, target, state))) return projectExists(target, false)
+    return result
+  }
+  const conflicts = await mergeProject(staging.projectRoot, target)
+  if (conflicts.length > 0) return projectFileConflict(target, conflicts)
+  return {
+    ...result,
+    stdout: `${[result.stdout.trimEnd(), `Preserved existing content in: ${target}`].filter(Boolean).join("\n")}\n`,
   }
 }
 
@@ -313,17 +312,23 @@ async function promoteProject(staging: CreateStaging, target: string, state: Cre
 
 async function mergeProject(source: string, target: string) {
   const entries = await listProjectEntries(source)
-  const conflicts = (
+  const conflicts = await projectConflicts(entries, target)
+  if (conflicts.length > 0) return conflicts.sort()
+  return copyProjectEntries(entries, source, target)
+}
+
+async function projectConflicts(entries: ProjectEntry[], target: string) {
+  return (
     await Promise.all(
       entries.map(async (entry) => {
         const stat = await fs.lstat(path.join(target, entry.relative)).catch(() => undefined)
-        if (!stat || (entry.kind === "directory" && stat.isDirectory())) return []
-        return [entry.relative]
+        return !stat || (entry.kind === "directory" && stat.isDirectory()) ? [] : [entry.relative]
       }),
     )
   ).flat()
-  if (conflicts.length > 0) return conflicts.sort()
+}
 
+async function copyProjectEntries(entries: ProjectEntry[], source: string, target: string) {
   const createdFiles: string[] = []
   const createdDirectories: string[] = []
   for (const entry of entries.filter((entry) => entry.kind === "directory")) {
@@ -581,12 +586,12 @@ function parseRows(output: string): Record<string, unknown>[] | undefined {
   try {
     const text = stripAnsi(output).trim()
     const end = text.lastIndexOf("]")
-    if (!text.startsWith("[") || end < 0) return
+    if (!text.startsWith("[") || end < 0) return undefined
     const value: unknown = JSON.parse(text.slice(0, end + 1))
-    if (!Array.isArray(value)) return
+    if (!Array.isArray(value)) return undefined
     return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
   } catch {
-    return
+    return undefined
   }
 }
 

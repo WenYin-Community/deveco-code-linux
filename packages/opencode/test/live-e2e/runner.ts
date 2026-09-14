@@ -50,10 +50,7 @@ function skipReason(testCase: LiveTestCase, env: Awaited<ReturnType<typeof colle
   if (testCase.requires.includes("harmony-emulator") && env.deveco.emulators.length === 0) {
     return "A running HarmonyOS emulator is required. `hdc list targets` returned no 127.0.0.1:<port> emulator targets."
   }
-  if (
-    testCase.requires.includes("harmony-emulator-installed") &&
-    env.deveco.installedEmulators.length === 0
-  ) {
+  if (testCase.requires.includes("harmony-emulator-installed") && env.deveco.installedEmulators.length === 0) {
     return "No installed HarmonyOS emulator was found in DevEco Studio's deployed emulator list. Install one via DevEco Studio's Device Manager."
   }
   if (testCase.requires.includes("third-party-model") && !env.thirdPartyModel.available) {
@@ -138,8 +135,9 @@ async function runCase(
       // (60-120s of silence). Both indicate the LLM returned nothing due to
       // concurrent request limits or rate-window exhaustion. Use a longer backoff
       // to let the rate window reset.
-      const isLikelyRateLimited = /No text.*event was emitted/.test(lastResult.error ?? "")
-        || (lastResult.result?.stdout === "" && lastResult.result?.stderr === "")
+      const isLikelyRateLimited =
+        /No text.*event was emitted/.test(lastResult.error ?? "") ||
+        (lastResult.result?.stdout === "" && lastResult.result?.stderr === "")
       const delay = isLikelyRateLimited ? 30_000 : baseRetryDelayMs * Math.pow(2, attempt)
       const tag = isLikelyRateLimited ? " (rate limit backoff)" : ""
       console.log(`  Failed, retry ${attempt + 1}/${maxRetries} in ${delay}ms${tag}...`)
@@ -152,7 +150,9 @@ async function runCase(
 function printList(selected: LiveTestCase[]) {
   console.log("Live E2E cases")
   for (const testCase of selected) {
-    console.log(`${testCase.id.padEnd(20)} ${testCase.category.padEnd(8)} ${testCase.priority.padEnd(3)} ${testCase.title}`)
+    console.log(
+      `${testCase.id.padEnd(20)} ${testCase.category.padEnd(8)} ${testCase.priority.padEnd(3)} ${testCase.title}`,
+    )
   }
 }
 
@@ -210,30 +210,16 @@ function adaptiveCooldownMs(baseMs: number, lastResult: ExecutedCase): number {
   return adaptive
 }
 
-async function main() {
-  const args = parseArgs(Bun.argv.slice(2))
-  const cooldownMs = args.cooldownMs ?? 3000
-  const maxRetries = args.retries ?? 2
-  const maxConcurrent = args.parallel ?? 3
-  let selected = cases
-  if (args.caseIDs.length > 0) selected = selected.filter((testCase) => args.caseIDs.includes(testCase.id))
-  if (args.category) selected = selected.filter((testCase) => testCase.category === args.category)
-  if (args.priority) selected = selected.filter((testCase) => testCase.priority === args.priority)
+function selectCases(args: ReturnType<typeof parseArgs>) {
+  return cases.filter(
+    (testCase) =>
+      (args.caseIDs.length === 0 || args.caseIDs.includes(testCase.id)) &&
+      (!args.category || testCase.category === args.category) &&
+      (!args.priority || testCase.priority === args.priority),
+  )
+}
 
-  if (selected.length === 0) {
-    console.error("No live e2e cases matched the provided filters")
-    process.exit(1)
-  }
-  if (args.list) {
-    printList(selected)
-    return
-  }
-
-  await resetReportDir()
-  const suiteStart = Date.now()
-  const startedAt = new Date().toISOString()
-  const environment = await collectEnvironment()
-
+function printEnvironment(environment: Awaited<ReturnType<typeof collectEnvironment>>) {
   console.log("Environment:")
   console.log(`  LLM enabled: ${environment.liveEnabled}`)
   console.log(`  Model:       ${environment.selectedModel}`)
@@ -241,60 +227,89 @@ async function main() {
   console.log(`  Emulators:   ${environment.deveco.emulators.length}`)
   console.log(`  Auth:        ${environment.auth.hasDevecoOAuth ? "OK" : "MISSING"}`)
   if (!environment.liveEnabled) console.log("  WARNING: DEVECO_LIVE_LLM=1 not set — real-llm cases will be skipped")
-  if (!environment.auth.hasDevecoOAuth) console.log("  WARNING: DevEco OAuth not found — huawei-auth cases will be skipped")
+  if (!environment.auth.hasDevecoOAuth)
+    console.log("  WARNING: DevEco OAuth not found — huawei-auth cases will be skipped")
   console.log("")
+}
 
-  const results: ExecutedCase[] = []
-  const writeJunit = args.format === "junit"
-
-  const sequentialCases = selected.filter((c) => c.parallel !== true)
-  const parallelCases = selected.filter((c) => c.parallel === true)
-
+async function runSequentialCases(input: {
+  selected: LiveTestCase[]
+  environment: Awaited<ReturnType<typeof collectEnvironment>>
+  results: ExecutedCase[]
+  maxRetries: number
+  cooldownMs: number
+  suiteStart: number
+  startedAt: string
+  writeJunit: boolean
+}) {
+  const sequentialCases = input.selected.filter((testCase) => testCase.parallel !== true)
   for (let i = 0; i < sequentialCases.length; i++) {
     const testCase = sequentialCases[i]
     console.log(`Running ${testCase.id}: ${testCase.title}`)
-    const result = await runCase(testCase, environment, maxRetries, cooldownMs * 3)
-    results.push(result)
-    await writeIncrementalReport(results, environment, suiteStart, startedAt, writeJunit)
+    const result = await runCase(testCase, input.environment, input.maxRetries, input.cooldownMs * 3)
+    input.results.push(result)
+    await writeIncrementalReport(input.results, input.environment, input.suiteStart, input.startedAt, input.writeJunit)
     if (i < sequentialCases.length - 1 && testCase.requires.includes("real-llm") && result.status !== "skipped") {
-      const cooldown = adaptiveCooldownMs(cooldownMs, result)
+      const cooldown = adaptiveCooldownMs(input.cooldownMs, result)
       if (cooldown > 0) {
         console.log(`  Cooldown ${cooldown}ms...`)
         await new Promise((resolve) => setTimeout(resolve, cooldown))
       }
     }
   }
+}
 
-  if (parallelCases.length > 0) {
-    console.log(`\nRunning ${parallelCases.length} cases in parallel (max ${maxConcurrent} concurrent)...`)
-    let nextIndex = 0
-    const workers = Array.from(
-      { length: Math.min(maxConcurrent, parallelCases.length) },
-      async (_, workerIndex) => {
-        // Stagger worker starts to avoid hitting the LLM simultaneously.
-        // Worker 0 starts immediately, worker N starts at N*3s.
-        if (workerIndex > 0) await new Promise((r) => setTimeout(r, 3000 * workerIndex))
-        while (nextIndex < parallelCases.length) {
-          const testCase = parallelCases[nextIndex++]
-          console.log(`Running ${testCase.id}: ${testCase.title}`)
-          const result = await runCase(testCase, environment, maxRetries, cooldownMs * 3)
-          results.push(result)
-          await writeIncrementalReport(results, environment, suiteStart, startedAt, writeJunit)
-          // Inter-case cooldown to prevent rate-limit cascades across workers.
-          // Without this, a worker finishing a fast case immediately hits the
-          // LLM alongside other workers, triggering rate-limit retries that
-          // cost 15s backoff + 120s stallMs each — far more than 5s.
-          if (nextIndex < parallelCases.length) {
-            await new Promise((r) => setTimeout(r, 5000))
-          }
+async function runParallelCases(input: {
+  selected: LiveTestCase[]
+  environment: Awaited<ReturnType<typeof collectEnvironment>>
+  results: ExecutedCase[]
+  maxRetries: number
+  maxConcurrent: number
+  cooldownMs: number
+  suiteStart: number
+  startedAt: string
+  writeJunit: boolean
+}) {
+  const parallelCases = input.selected.filter((testCase) => testCase.parallel === true)
+  if (parallelCases.length === 0) return
+  console.log(`\nRunning ${parallelCases.length} cases in parallel (max ${input.maxConcurrent} concurrent)...`)
+  let nextIndex = 0
+  const workers = Array.from(
+    { length: Math.min(input.maxConcurrent, parallelCases.length) },
+    async (_, workerIndex) => {
+      // Stagger worker starts to avoid hitting the LLM simultaneously.
+      // Worker 0 starts immediately, worker N starts at N*3s.
+      if (workerIndex > 0) await new Promise((r) => setTimeout(r, 3000 * workerIndex))
+      while (nextIndex < parallelCases.length) {
+        const testCase = parallelCases[nextIndex++]
+        console.log(`Running ${testCase.id}: ${testCase.title}`)
+        const result = await runCase(testCase, input.environment, input.maxRetries, input.cooldownMs * 3)
+        input.results.push(result)
+        await writeIncrementalReport(
+          input.results,
+          input.environment,
+          input.suiteStart,
+          input.startedAt,
+          input.writeJunit,
+        )
+        // Inter-case cooldown prevents rate-limit cascades across workers.
+        if (nextIndex < parallelCases.length) {
+          await new Promise((r) => setTimeout(r, 5000))
         }
-      },
-    )
-    await Promise.all(workers)
-  }
+      }
+    },
+  )
+  await Promise.all(workers)
+}
 
+function createSuiteReport(
+  results: ExecutedCase[],
+  environment: Awaited<ReturnType<typeof collectEnvironment>>,
+  suiteStart: number,
+  startedAt: string,
+): SuiteReport {
   const finishedAt = new Date().toISOString()
-  const report: SuiteReport = {
+  return {
     summary: {
       total: results.length,
       passed: results.filter((item) => item.status === "passed").length,
@@ -307,7 +322,38 @@ async function main() {
     cases: results,
     environment,
   }
+}
 
+async function main() {
+  const args = parseArgs(Bun.argv.slice(2))
+  const selected = selectCases(args)
+  if (selected.length === 0) {
+    console.error("No live e2e cases matched the provided filters")
+    process.exit(1)
+  }
+  if (args.list) return printList(selected)
+
+  await resetReportDir()
+  const suiteStart = Date.now()
+  const startedAt = new Date().toISOString()
+  const environment = await collectEnvironment()
+  const results: ExecutedCase[] = []
+  const input = {
+    selected,
+    environment,
+    results,
+    maxRetries: args.retries ?? 2,
+    maxConcurrent: args.parallel ?? 3,
+    cooldownMs: args.cooldownMs ?? 3000,
+    suiteStart,
+    startedAt,
+    writeJunit: args.format === "junit",
+  }
+  printEnvironment(environment)
+  await runSequentialCases(input)
+  await runParallelCases(input)
+
+  const report = createSuiteReport(results, environment, suiteStart, startedAt)
   await writeReports(report, latestReportDir)
   if (args.format === "junit") await writeJUnitXml(report, latestReportDir)
   printSummary(report)

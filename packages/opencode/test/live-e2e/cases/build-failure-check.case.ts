@@ -1,5 +1,6 @@
-import type { LiveTestCase } from "../types"
+import type { CaseContext, LiveTestCase, RunCommandResult } from "../types"
 import { createHarmonyProject } from "../env"
+import { sessionIDFromEvents, textFromEvents } from "../deveco-cli-events"
 import fs from "fs/promises"
 import path from "path"
 
@@ -36,6 +37,21 @@ struct Index {
 }
 `
 
+async function captureFailureRun(ctx: CaseContext, result: RunCommandResult) {
+  await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
+  await ctx.writeArtifact(CASE_ID, "stderr.log", result.stderr)
+  const events = ctx.parseJsonLines(result.stdout)
+  await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((event) => JSON.stringify(event)).join("\n"))
+  if (result.exitCode !== 0) throw new Error(`deveco run exited with ${result.exitCode}`)
+  const receivedText = textFromEvents(events)
+  if (!receivedText) throw new Error("No text event was emitted")
+  const failureKeywords = ["失败", "fail", "错误", "error", "报错", "异常", "无法", "cannot"]
+  if (!failureKeywords.some((keyword) => receivedText.toLowerCase().includes(keyword))) {
+    throw new Error(`Expected response to contain build failure keywords, got: ${receivedText.substring(0, 400)}...`)
+  }
+  return { events, receivedText, sessionID: sessionIDFromEvents(events) }
+}
+
 const testCase: LiveTestCase = {
   id: CASE_ID,
   title: "编译构建结果检查",
@@ -44,8 +60,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 240_000,
   stallMs: 180_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
-  description:
-    "验证对包含编译错误的鸿蒙项目调用 devecocli build 时，能够返回失败检查结果。",
+  description: "验证对包含编译错误的鸿蒙项目调用 devecocli build 时，能够返回失败检查结果。",
   steps: [
     "创建临时工作目录，复制鸿蒙工程模板。",
     "覆盖Index.ets为包含编译错误的版本（使用any类型、类型不匹配）。",
@@ -75,84 +90,25 @@ const testCase: LiveTestCase = {
 
       const args = ["run", "--format", "json", "--dir", projectRoot, sentMessage]
       const result = await ctx.runDeveco(args, { timeoutMs: 220_000 })
-
-      await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
-      await ctx.writeArtifact(CASE_ID, "stderr.log", result.stderr)
-
-      let events: Array<Record<string, unknown>> = []
-      try {
-        events = ctx.parseJsonLines(result.stdout)
-      } catch (error) {
-        throw new Error(
-          `stdout is not valid JSON lines: ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }
-
-      await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((e) => JSON.stringify(e)).join("\n"))
-
-      if (result.exitCode !== 0) {
-        throw new Error(`deveco run exited with ${result.exitCode}`)
-      }
-
-      const textEvents = events.filter((e) => e.type === "text")
-      const receivedText = textEvents
-        .map((e) => {
-          const part = e.part
-          if (!part || typeof part !== "object") return undefined
-          if (!("text" in part) || typeof part.text !== "string") return undefined
-          return part.text
-        })
-        .filter((t): t is string => Boolean(t))
-        .join("\n")
-
-      const sessionID = events.find((e) => typeof e.sessionID === "string")?.sessionID as
-        | string
-        | undefined
-
-      if (textEvents.length === 0) {
-        throw new Error("No text event was emitted")
-      }
-
-      // Verify the response contains build failure keywords
-      const lowerText = receivedText.toLowerCase()
-      const failureKeywords = [
-        "失败",
-        "fail",
-        "错误",
-        "error",
-        "报错",
-        "异常",
-        "无法",
-        "cannot",
-      ]
-      const hasFailure = failureKeywords.some((kw) => lowerText.includes(kw.toLowerCase()))
-      if (!hasFailure) {
-        throw new Error(
-          `Expected response to contain build failure keywords, got: ${receivedText.substring(0, 400)}...`,
-        )
-      }
+      const captured = await captureFailureRun(ctx, result)
 
       return {
         sentMessage,
-        receivedText,
-        sessionID,
+        receivedText: captured.receivedText,
+        sessionID: captured.sessionID,
         stdout: result.stdout,
         stderr: result.stderr,
-        events,
+        events: captured.events,
         details: {
           exitCode: result.exitCode,
           commandDurationMs: result.durationMs,
-          textEventCount: textEvents.length,
+          textEventCount: captured.events.filter((event) => event.type === "text").length,
           etsFile: etsPath,
           workspace,
         },
       }
     } finally {
-      try {
-        await fs.rm(workspace, { recursive: true, force: true })
-      } catch {
-        // ignore cleanup errors
-      }
+      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
     }
   },
 }

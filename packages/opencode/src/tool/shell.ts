@@ -35,10 +35,8 @@ export const DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const DEVECO_IMAGE_DOWNLOAD_COMMAND = /\bdevecocli(?:\.(?:cmd|exe))?\s+emulator\s+image\s+download\b/i
 
 export function resolveShellTimeout(command: string, timeout: number): number {
-  const normalized = command.replace(/["']/g, ' ').replace(/\s+/g, ' ')
-  return DEVECO_IMAGE_DOWNLOAD_COMMAND.test(normalized)
-    ? Math.max(timeout, DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS)
-    : timeout;
+  const normalized = command.replace(/["']/g, " ").replace(/\s+/g, " ")
+  return DEVECO_IMAGE_DOWNLOAD_COMMAND.test(normalized) ? Math.max(timeout, DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS) : timeout
 }
 
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
@@ -95,6 +93,33 @@ type Scan = {
 type Chunk = {
   text: string
   size: number
+}
+
+type ShellRunInput = {
+  shell: string
+  command: string
+  cwd: string
+  env: NodeJS.ProcessEnv
+  timeout: number
+  description: string
+  devecoCliEventFile: string
+}
+
+type ShellRunLimits = {
+  maxBytes: number
+  maxLines: number
+}
+
+type ShellRunState = {
+  full: string
+  last: string
+  list: Chunk[]
+  used: number
+  file: string
+  sink?: ReturnType<typeof createWriteStream>
+  cut: boolean
+  expired: boolean
+  aborted: boolean
 }
 
 const resolveWasm = (asset: string) => {
@@ -271,28 +296,34 @@ function tail(text: string, maxLines: number, maxBytes: number) {
 }
 
 async function readDevecoCliEvents(file: string): Promise<DevecoCliEvent[]> {
+  const text = await Bun.file(file)
+    .text()
+    .catch(() => "")
+  await rm(file, { force: true }).catch(() => undefined)
+  return text.split(/\r?\n/).filter(Boolean).flatMap(parseDevecoCliEvent)
+}
+
+function parseDevecoCliEvent(line: string): DevecoCliEvent[] {
   try {
-    const text = await Bun.file(file).text()
-    return text
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          const event: unknown = JSON.parse(line)
-          if (!event || typeof event !== "object") return []
-          const value = event as Record<string, unknown>
-          if (value.command !== "build" && value.command !== "create") return []
-          if (typeof value.exitCode !== "number" || typeof value.durationMs !== "number") return []
-          return [event as DevecoCliEvent]
-        } catch {
-          return []
-        }
-      })
+    const event: unknown = JSON.parse(line)
+    if (!event || typeof event !== "object") return []
+    const value = event as Record<string, unknown>
+    if (value.command !== "build" && value.command !== "create") return []
+    if (typeof value.exitCode !== "number" || typeof value.durationMs !== "number") return []
+    return [event as DevecoCliEvent]
   } catch {
     return []
-  } finally {
-    await rm(file, { force: true }).catch(() => undefined)
   }
+}
+
+function updateSessionCwdFromDevecoCliEvents(events: DevecoCliEvent[], cwd: string, sessionID: string) {
+  const projectDir = events.findLast(
+    (event) => event.command === "create" && event.exitCode === 0 && event.projectRoot,
+  )?.projectRoot
+  if (!projectDir) return ""
+  const projectRoot = path.resolve(cwd, projectDir)
+  setSessionCwd(sessionID, projectRoot)
+  return `\n\n[Session directory auto-switched to ${projectRoot}]`
 }
 
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
@@ -339,12 +370,16 @@ const ask = Effect.fn("ShellTool.ask")(function* (
 
 function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
   if (process.platform === "win32" && Shell.ps(shell)) {
-    return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PS_ENCODING_PREAMBLE + command], {
-      cwd,
-      env,
-      stdin: "ignore",
-      detached: false,
-    })
+    return ChildProcess.make(
+      shell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PS_ENCODING_PREAMBLE + command],
+      {
+        cwd,
+        env,
+        stdin: "ignore",
+        detached: false,
+      },
+    )
   }
 
   return ChildProcess.make(command, [], {
@@ -472,192 +507,158 @@ export const ShellTool = Tool.define(
       }
     })
 
-    const run = Effect.fn("ShellTool.run")(function* (
-      input: {
-        shell: string
-        command: string
-        cwd: string
-        env: NodeJS.ProcessEnv
-        timeout: number
-        description: string
-        devecoCliEventFile: string
-      },
-      ctx: Tool.Context,
-    ) {
-      const limits = yield* trunc.limits()
-      const keep = limits.maxBytes * 2
-      let full = ""
-      let last = ""
-      const list: Chunk[] = []
-      let used = 0
-      let file = ""
-      let sink: ReturnType<typeof createWriteStream> | undefined
-      let cut = false
-      let expired = false
-      let aborted = false
+    const closeSink = Effect.fnUntraced(function* (state: ShellRunState) {
+      const stream = state.sink
+      if (!stream) return
+      state.sink = undefined
+      if (stream.destroyed || stream.closed) return
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            let settled = false
+            const done = () => {
+              if (settled) return
+              settled = true
+              stream.off("close", done)
+              stream.off("error", done)
+              stream.off("finish", done)
+              resolve()
+            }
+            stream.once("close", done)
+            stream.once("error", done)
+            stream.once("finish", done)
+            stream.end(done)
+          }),
+      ).pipe(Effect.catch(() => Effect.void))
+    })
 
-      const closeSink = Effect.fnUntraced(function* () {
-        const stream = sink
-        if (!stream) return
-        sink = undefined
-        if (stream.destroyed || stream.closed) return
-        yield* Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              let settled = false
-              const done = () => {
-                if (settled) return
-                settled = true
-                stream.off("close", done)
-                stream.off("error", done)
-                stream.off("finish", done)
-                resolve()
-              }
-              stream.once("close", done)
-              stream.once("error", done)
-              stream.once("finish", done)
-              stream.end(done)
+    const captureChunk = (chunk: string, input: ShellRunInput, state: ShellRunState, limits: ShellRunLimits) => {
+      const size = Buffer.byteLength(chunk, "utf-8")
+      state.list.push({ text: chunk, size })
+      state.used += size
+      while (state.used > limits.maxBytes * 2 && state.list.length > 1) {
+        const item = state.list.shift()
+        if (!item) break
+        state.used -= item.size
+        state.cut = true
+      }
+      state.last = preview(state.last + chunk)
+      if (state.file) state.sink?.write(chunk)
+      if (!state.file) state.full += chunk
+      if (!state.file && Buffer.byteLength(state.full, "utf-8") > limits.maxBytes) {
+        return trunc.write(state.full).pipe(
+          Effect.andThen((file) =>
+            Effect.sync(() => {
+              state.file = file
+              state.cut = true
+              state.sink = createWriteStream(file, { flags: "a" })
+              state.full = ""
             }),
-        ).pipe(Effect.catch(() => Effect.void))
-      })
+          ),
+          Effect.andThen(ctxMetadata(input, state.last)),
+        )
+      }
+      return ctxMetadata(input, state.last)
+    }
 
-      yield* ctx.metadata({
+    const ctxMetadata = (input: ShellRunInput, output: string) =>
+      Effect.succeed({
         metadata: {
-          output: "",
+          output,
           description: input.description,
         },
       })
 
-      const code: number | null = yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+    const executeShell = Effect.fn("ShellTool.executeShell")(function* (
+      input: ShellRunInput,
+      ctx: Tool.Context,
+      state: ShellRunState,
+      limits: ShellRunLimits,
+    ) {
+      yield* Effect.addFinalizer(() => closeSink(state))
+      const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+      yield* Effect.forkScoped(
+        Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
+          captureChunk(chunk, input, state, limits).pipe(Effect.andThen((metadata) => ctx.metadata(metadata))),
+        ),
+      )
+      const abort = Effect.callback<void>((resume) => {
+        if (ctx.abort.aborted) return resume(Effect.void)
+        const handler = () => resume(Effect.void)
+        ctx.abort.addEventListener("abort", handler, { once: true })
+        return Effect.sync(() => ctx.abort.removeEventListener("abort", handler))
+      })
+      const exit = yield* Effect.raceAll([
+        handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
+        abort.pipe(Effect.map(() => ({ kind: "abort" as const, code: null }))),
+        Effect.sleep(`${input.timeout + 100} millis`).pipe(
+          Effect.map(() => ({ kind: "timeout" as const, code: null })),
+        ),
+      ])
+      if (exit.kind === "exit") return exit.code
+      state.aborted = exit.kind === "abort"
+      state.expired = exit.kind === "timeout"
+      yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+      return null
+    })
 
-          yield* Effect.forkScoped(
-            Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
-              const size = Buffer.byteLength(chunk, "utf-8")
-              list.push({ text: chunk, size })
-              used += size
-              while (used > keep && list.length > 1) {
-                const item = list.shift()
-                if (!item) break
-                used -= item.size
-                cut = true
-              }
-
-              last = preview(last + chunk)
-
-              if (file) {
-                sink?.write(chunk)
-              } else {
-                full += chunk
-                if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-                  return trunc.write(full).pipe(
-                    Effect.andThen((next) =>
-                      Effect.sync(() => {
-                        file = next
-                        cut = true
-                        sink = createWriteStream(next, { flags: "a" })
-                        full = ""
-                      }),
-                    ),
-                    Effect.andThen(
-                      ctx.metadata({
-                        metadata: {
-                          output: last,
-                          description: input.description,
-                        },
-                      }),
-                    ),
-                  )
-                }
-              }
-
-              return ctx.metadata({
-                metadata: {
-                  output: last,
-                  description: input.description,
-                },
-              })
-            }),
-          )
-
-          const abort = Effect.callback<void>((resume) => {
-            if (ctx.abort.aborted) return resume(Effect.void)
-            const handler = () => resume(Effect.void)
-            ctx.abort.addEventListener("abort", handler, { once: true })
-            return Effect.sync(() => ctx.abort.removeEventListener("abort", handler))
-          })
-
-          const timeout = Effect.sleep(`${input.timeout + 100} millis`)
-
-          const exit = yield* Effect.raceAll([
-            handle.exitCode.pipe(Effect.map((code) => ({ kind: "exit" as const, code }))),
-            abort.pipe(Effect.map(() => ({ kind: "abort" as const, code: null }))),
-            timeout.pipe(Effect.map(() => ({ kind: "timeout" as const, code: null }))),
-          ])
-
-          if (exit.kind === "abort") {
-            aborted = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
-          }
-          if (exit.kind === "timeout") {
-            expired = true
-            yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
-          }
-
-          return exit.kind === "exit" ? exit.code : null
-        }),
-      ).pipe(Effect.orDie)
-
-      const devecoCliEvents = yield* Effect.promise(() => readDevecoCliEvents(input.devecoCliEventFile))
-
-      const meta: string[] = []
-      if (expired) {
-        meta.push(
-          `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
-        )
-      }
-      if (aborted) meta.push("User aborted the command")
-      const raw = list.map((item) => item.text).join("")
+    const finishShell = Effect.fn("ShellTool.finishShell")(function* (
+      input: ShellRunInput,
+      ctx: Tool.Context,
+      state: ShellRunState,
+      limits: ShellRunLimits,
+      code: number | null,
+    ) {
+      const events = yield* Effect.promise(() => readDevecoCliEvents(input.devecoCliEventFile))
+      const meta = [
+        ...(state.expired
+          ? [
+              `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
+            ]
+          : []),
+        ...(state.aborted ? ["User aborted the command"] : []),
+      ]
+      const raw = state.list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
-      if (end.cut) cut = true
-      if (!file && end.cut) {
-        file = yield* trunc.write(raw)
-      }
-
-      let output = end.text
-      if (!output) output = "(no output)"
-
-      if (cut && file) {
-        output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output
-      }
-
-      if (meta.length > 0) {
-        output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
-      }
-
-      const projectDir = devecoCliEvents.findLast(
-        (event) => event.command === "create" && event.exitCode === 0 && event.projectRoot,
-      )?.projectRoot
-      if (projectDir) {
-        const projectRoot = path.resolve(input.cwd, projectDir)
-        setSessionCwd(ctx.sessionID, projectRoot)
-        output += `\n\n[Session directory auto-switched to ${projectRoot}]`
-      }
-
+      state.cut ||= end.cut
+      if (!state.file && end.cut) state.file = yield* trunc.write(raw)
+      const truncated =
+        state.cut && state.file ? `...output truncated...\n\nFull output saved to: ${state.file}\n\n` : ""
+      const metadata = meta.length > 0 ? `\n\n<shell_metadata>\n${meta.join("\n")}\n</shell_metadata>` : ""
+      const output =
+        truncated +
+        (end.text || "(no output)") +
+        metadata +
+        updateSessionCwdFromDevecoCliEvents(events, input.cwd, ctx.sessionID)
       return {
         title: input.description,
         metadata: {
-          output: last || preview(output),
+          output: state.last || preview(output),
           exit: code,
           description: input.description,
-          truncated: cut,
-          devecoCliEvents,
-          ...(cut && file ? { outputPath: file } : {}),
+          truncated: state.cut,
+          devecoCliEvents: events,
+          ...(state.cut && state.file ? { outputPath: state.file } : {}),
         },
         output,
       }
+    })
+
+    const run = Effect.fn("ShellTool.run")(function* (input: ShellRunInput, ctx: Tool.Context) {
+      const limits = yield* trunc.limits()
+      const state: ShellRunState = {
+        full: "",
+        last: "",
+        list: [],
+        used: 0,
+        file: "",
+        cut: false,
+        expired: false,
+        aborted: false,
+      }
+      yield* ctx.metadata({ metadata: { output: "", description: input.description } })
+      const code = yield* Effect.scoped(executeShell(input, ctx, state, limits)).pipe(Effect.orDie)
+      return yield* finishShell(input, ctx, state, limits, code)
     })
 
     return () =>

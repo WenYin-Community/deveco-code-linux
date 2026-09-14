@@ -1,34 +1,46 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import {
+  completedDevecoCliEvent,
+  createEventDetails,
+  devecoCliToolEvents,
+  parseEvents,
+  partOf,
+  requireRegularFile,
+  sessionIDFromEvents,
+  textFromEvents,
+} from "../deveco-cli-events"
 import type { LiveTestCase } from "../types"
 
 const CASE_ID = "SKILL_DEVECO_CREATE_HELLO_WORLD"
 
-function partOf(event: Record<string, unknown>): Record<string, unknown> | undefined {
-  const part = event.part
-  if (!part || typeof part !== "object") return undefined
-  return part as Record<string, unknown>
-}
+async function inspectHelloWorldBuild(events: Record<string, unknown>[]) {
+  const createEvent = completedDevecoCliEvent(events, "create")
+  if (!createEvent) throw new Error("No completed devecocli create bash tool event found")
+  const create = createEventDetails(createEvent)
+  const buildProfilePath = path.join(create.projectRoot, "build-profile.json5")
+  await requireRegularFile(buildProfilePath)
 
-function parseEvents(stdout: string): Array<Record<string, unknown>> {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as Record<string, unknown>]
-      } catch {
-        return []
-      }
-    })
-}
+  const buildEvents = devecoCliToolEvents(events, "build")
+  const receivedText = textFromEvents(events)
+  const hasBuildAttempt =
+    buildEvents.length > 0 ||
+    ["编译", "build", "devecocli build"].some((value) => receivedText.toLowerCase().includes(value))
+  if (!hasBuildAttempt) throw new Error("No devecocli build call or build-related text found")
 
-function textFromEvent(event: Record<string, unknown>) {
-  const part = event.part
-  if (!part || typeof part !== "object") return undefined
-  if (!("text" in part) || typeof part.text !== "string") return undefined
-  return part.text
+  const hasBuildSuccess =
+    buildEvents.some((event) => {
+      const state = partOf(event)?.state as Record<string, unknown> | undefined
+      return state?.status === "completed"
+    }) ||
+    ["编译成功", "构建成功", "build succeeded", "build success"].some((value) =>
+      receivedText.toLowerCase().includes(value),
+    )
+  const hasBuildFix = ["修复", "修正", "fix", "resolved"].some((value) => receivedText.toLowerCase().includes(value))
+  if (!hasBuildSuccess && !hasBuildFix && buildEvents.length === 0) {
+    throw new Error("Build was not successful and no fix attempts were made")
+  }
+  return { create, buildProfilePath, buildEvents, receivedText, hasBuildSuccess, hasBuildFix }
 }
 
 const testCase: LiveTestCase = {
@@ -71,80 +83,24 @@ const testCase: LiveTestCase = {
 
       const events = parseEvents(result.stdout)
       await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((e) => JSON.stringify(e)).join("\n"))
-
-      const copyTemplateEvent = events.find((event) => {
-        if (event.type !== "tool_use") return false
-        const part = partOf(event)
-        if (!part || part.tool !== "bash") return false
-        const state = part.state
-        if (!state || typeof state !== "object") return false
-        const stateRecord = state as Record<string, unknown>
-        if (stateRecord.status !== "completed") return false
-        const input = stateRecord.input as Record<string, unknown> | undefined
-        if (!input || typeof input.command !== "string") return false
-        return /(?:^|\s)devecocli\s+create(?:\s|$)/.test(input.command)
-      })
-
-      if (!copyTemplateEvent) {
-        throw new Error("No completed devecocli create bash tool event found")
-      }
-
-      const copyTemplateState = partOf(copyTemplateEvent)!.state as Record<string, unknown>
-      const output = copyTemplateState.output as string
-      const projectRoot = output.match(/Project root:\s*(.+)/)?.[1]?.trim()
-      if (!projectRoot) throw new Error(`devecocli create output is missing Project root:\n${output}`)
-      const buildProfilePath = path.join(projectRoot, "build-profile.json5")
-      try {
-        const stat = await fs.stat(buildProfilePath)
-        if (!stat.isFile()) {
-          throw new Error(`build-profile.json5 is not a regular file at ${buildProfilePath}`)
-        }
-      } catch (error) {
-        throw new Error(`build-profile.json5 not found at ${buildProfilePath}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-
-      const buildEvents = events.filter((event) => {
-        if (event.type !== "tool_use") return false
-        const part = partOf(event)
-        if (!part || part.tool !== "bash") return false
-        const state = part.state as Record<string, unknown> | undefined
-        const input = state?.input as Record<string, unknown> | undefined
-        return typeof input?.command === "string" && /(?:^|\s)devecocli\s+build(?:\s|$)/.test(input.command)
-      })
-
-      const textEvents = events.filter((event) => event.type === "text")
-      const receivedText = textEvents.map(textFromEvent).filter((t): t is string => Boolean(t)).join("\n")
-      const sessionID = events.find((event) => typeof event.sessionID === "string")?.sessionID as string | undefined
-
-      const hasBuildAttempt = buildEvents.length > 0 ||
-        receivedText.includes("编译") || receivedText.includes("build") ||
-        receivedText.toLowerCase().includes("devecocli build")
-
-      if (!hasBuildAttempt) {
-        throw new Error("No devecocli build call or build-related text found")
-      }
-
-      const hasBuildSuccess =
-        buildEvents.some((event) => {
-          const part = partOf(event)
-          const state = part?.state as Record<string, unknown> | undefined
-          return state?.status === "completed"
-        }) ||
-        receivedText.includes("编译成功") || receivedText.includes("构建成功") ||
-        receivedText.toLowerCase().includes("build succeeded") ||
-        receivedText.toLowerCase().includes("build success")
-
-      const hasBuildFix =
-        receivedText.includes("修复") || receivedText.includes("修正") ||
-        receivedText.toLowerCase().includes("fix") || receivedText.toLowerCase().includes("resolved")
-
-      if (!hasBuildSuccess && !hasBuildFix && buildEvents.length === 0) {
-        throw new Error("Build was not successful and no fix attempts were made")
-      }
+      const inspected = await inspectHelloWorldBuild(events)
 
       return {
-        sentMessage, receivedText, sessionID, stdout: result.stdout, stderr: result.stderr, events,
-        details: { exitCode: result.exitCode, commandDurationMs: result.durationMs, projectRoot, buildProfilePath, buildEventCount: buildEvents.length, hasBuildSuccess, hasBuildFix },
+        sentMessage,
+        receivedText: inspected.receivedText,
+        sessionID: sessionIDFromEvents(events),
+        stdout: result.stdout,
+        stderr: result.stderr,
+        events,
+        details: {
+          exitCode: result.exitCode,
+          commandDurationMs: result.durationMs,
+          projectRoot: inspected.create.projectRoot,
+          buildProfilePath: inspected.buildProfilePath,
+          buildEventCount: inspected.buildEvents.length,
+          hasBuildSuccess: inspected.hasBuildSuccess,
+          hasBuildFix: inspected.hasBuildFix,
+        },
       }
     } finally {
       try {

@@ -61,129 +61,121 @@ const builtEvent: AiSessionEvent = {
   finalBuildElapsed: null,
 }
 
-function createHarness() {
-  let loggedIn = true
-  let jwtExpired: boolean | null = false
-  let shouldCollect = true
-  let diagnosticThrows = false
-  let active = false
-  const startSession = mock((_input: SessionStart) => {
-    active = true
-  })
-  const recordTokenUsage = mock((_inputTokens: number, _outputTokens: number) => undefined)
-  const recordBuildProjectInfo = mock((_entry: BuildProjectInfo) => undefined)
-  const recordToolExecution = mock((_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess: boolean) => undefined)
-  const recordBuildExecution = mock((_isBuildSuccess: boolean) => undefined)
-  const buildEvent = mock(async () => builtEvent)
-  const buildProjectEvent = mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent)
-  const upload = mock(async (_submission: AnalyticsSubmission) => true)
-  const projectId = mock(async () => "550e8400-e29b-41d4-a716-446655440000")
-  const setAttributionEnabled = mock(async (_enabled: boolean) => undefined)
-  const beforeAiTool = mock(async () => undefined)
-  const afterAiTool = mock(async () => undefined)
-  const shutdownAttribution = mock(async () => undefined)
-  const purgeAttribution = mock(async () => undefined)
-  const startPeriodicFlush = mock(() => undefined)
-  const stopPeriodicFlush = mock(() => undefined)
-  const clearQueue = mock(async () => undefined)
-  const flush = mock(async () => ({ success: true }))
-  const diagnostics: string[] = []
-  const analyticsEnabled = mock(async () => shouldCollect)
-  let improvementEnabled = true
-  const toolImprovementEnabled = mock(async () => improvementEnabled)
-  const codeAttribution = mock(
+function createHarnessState() {
+  return {
+    loggedIn: true,
+    jwtExpired: false as boolean | null,
+    shouldCollect: true,
+    diagnosticThrows: false,
+    active: false,
+    improvementEnabled: true,
+    diagnostics: [] as string[],
+  }
+}
+
+function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
+  return {
+    startSession: mock((_input: SessionStart) => {
+      state.active = true
+    }),
+    recordTokenUsage: mock((_inputTokens: number, _outputTokens: number) => undefined),
+    recordBuildProjectInfo: mock((_entry: BuildProjectInfo) => undefined),
+    recordToolExecution: mock(
+      (_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess?: boolean) => undefined,
+    ),
+    recordBuildExecution: mock((_isBuildSuccess: boolean) => undefined),
+    buildEvent: mock(async () => builtEvent),
+    buildProjectEvent: mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent),
+    upload: mock(async (_submission: AnalyticsSubmission) => true),
+    projectId: mock(async () => "550e8400-e29b-41d4-a716-446655440000"),
+    setAttributionEnabled: mock(async (_enabled: boolean) => undefined),
+    beforeAiTool: mock(async () => undefined),
+    afterAiTool: mock(async () => undefined),
+    shutdownAttribution: mock(async () => undefined),
+    purgeAttribution: mock(async () => undefined),
+    startPeriodicFlush: mock(() => undefined),
+    stopPeriodicFlush: mock(() => undefined),
+    clearQueue: mock(async () => undefined),
+    flush: mock(async () => ({ success: true })),
+    analyticsEnabled: mock(async () => state.shouldCollect),
+    toolImprovementEnabled: mock(async () => state.improvementEnabled),
+  }
+}
+
+function createCollector(state: ReturnType<typeof createHarnessState>, calls: ReturnType<typeof createHarnessCalls>) {
+  return {
+    init: async () => undefined,
+    setLoggedIn: (value: boolean) => {
+      if (!value) state.active = false
+    },
+    analyticsEnabled: calls.analyticsEnabled,
+    startSession: calls.startSession,
+    recordResponseDelta: () => undefined,
+    recordTokenUsage: calls.recordTokenUsage,
+    recordBuildProjectInfo: calls.recordBuildProjectInfo,
+    recordFileEdit: () => undefined,
+    recordFileDiff: () => undefined,
+    recordToolExecution: calls.recordToolExecution,
+    recordBuildExecution: calls.recordBuildExecution,
+    getSessionID: () => (state.active ? "session-1" : null),
+    buildEvent: calls.buildEvent,
+    buildProjectEvent: calls.buildProjectEvent,
+    clear: () => {
+      state.active = false
+    },
+  }
+}
+
+function createAttribution(calls: ReturnType<typeof createHarnessCalls>) {
+  return mock(
     async (_options: CodeAttributionTrackerOptions): Promise<CodeAttributionTracker> => ({
-      setEnabled: setAttributionEnabled,
-      purge: purgeAttribution,
-      beforeAiTool,
-      afterAiTool,
+      setEnabled: calls.setAttributionEnabled,
+      purge: calls.purgeAttribution,
+      beforeAiTool: calls.beforeAiTool,
+      afterAiTool: calls.afterAiTool,
       poll: async () => undefined,
-      shutdown: shutdownAttribution,
+      shutdown: calls.shutdownAttribution,
     }),
   )
+}
+
+function createHarness() {
+  const state = createHarnessState()
+  const calls = createHarnessCalls(state)
+  const codeAttribution = createAttribution(calls)
   const plugin = createAnalyticsPlugin({
-    collector: {
-      init: async () => undefined,
-      setLoggedIn: (value) => {
-        if (!value) active = false
-      },
-      analyticsEnabled,
-      startSession,
-      recordResponseDelta: () => undefined,
-      recordTokenUsage,
-      recordBuildProjectInfo,
-      recordFileEdit: () => undefined,
-      recordFileDiff: () => undefined,
-      recordToolExecution,
-      recordBuildExecution,
-      getSessionID: () => (active ? "session-1" : null),
-      buildEvent,
-      buildProjectEvent,
-      clear: () => {
-        active = false
-      },
-    },
+    collector: createCollector(state, calls),
     uploader: {
       restorePending: async () => undefined,
-      startPeriodicFlush,
-      stopPeriodicFlush,
-      clearQueue,
+      startPeriodicFlush: calls.startPeriodicFlush,
+      stopPeriodicFlush: calls.stopPeriodicFlush,
+      clearQueue: calls.clearQueue,
       shutdown: async () => undefined,
-      upload,
-      flush,
+      upload: calls.upload,
+      flush: calls.flush,
     },
-    isLoggedIn: async () => loggedIn,
-    isJwtExpired: async () => jwtExpired,
-    toolImprovementEnabled,
+    isLoggedIn: async () => state.loggedIn,
+    isJwtExpired: async () => state.jwtExpired,
+    toolImprovementEnabled: calls.toolImprovementEnabled,
     diagnostic: async (message) => {
-      if (diagnosticThrows) throw new Error("diagnostic unavailable")
-      diagnostics.push(message)
+      if (state.diagnosticThrows) throw new Error("diagnostic unavailable")
+      state.diagnostics.push(message)
     },
-    projectId,
+    projectId: calls.projectId,
     codeAttribution,
     version: () => "1.2.3",
   })
-
   return {
     plugin,
-    startSession,
-    recordTokenUsage,
-    recordBuildProjectInfo,
-    recordToolExecution,
-    recordBuildExecution,
-    buildEvent,
-    buildProjectEvent,
-    upload,
-    flush,
-    toolImprovementEnabled,
-    projectId,
+    ...calls,
     codeAttribution,
-    setAttributionEnabled,
-    beforeAiTool,
-    afterAiTool,
-    shutdownAttribution,
-    purgeAttribution,
-    startPeriodicFlush,
-    stopPeriodicFlush,
-    clearQueue,
-    analyticsEnabled,
-    diagnostics,
-    isActive: () => active,
-    setLoggedIn: (value: boolean) => {
-      loggedIn = value
-    },
-    setJwtExpired: (value: boolean | null) => {
-      jwtExpired = value
-    },
-    setDiagnosticThrows: (value: boolean) => {
-      diagnosticThrows = value
-    },
-    setShouldCollect: (value: boolean) => {
-      shouldCollect = value
-    },
-    setImprovementEnabled: (value: boolean) => {
-      improvementEnabled = value
-    },
+    diagnostics: state.diagnostics,
+    isActive: () => state.active,
+    setLoggedIn: (value: boolean) => (state.loggedIn = value),
+    setJwtExpired: (value: boolean | null) => (state.jwtExpired = value),
+    setDiagnosticThrows: (value: boolean) => (state.diagnosticThrows = value),
+    setShouldCollect: (value: boolean) => (state.shouldCollect = value),
+    setImprovementEnabled: (value: boolean) => (state.improvementEnabled = value),
   }
 }
 
@@ -443,7 +435,10 @@ test("records build_project compile failure as a successful tool execution", asy
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1" },
+    { args: {} },
+  )
   // Real-world shape: mixed-case "ArkTS Compiler Error" plus the appended status line.
   // The substring check used to misclassify this as a tool failure (isSuccess=false),
   // silently dropping compile failures from build result tracking.
@@ -550,9 +545,16 @@ test("extractBuildExitCode ignores success markers and keeps the fallback", () =
 
 test("extractBuildExitCode parses the three real hvigor error shapes", () => {
   // ArkTS compiler error: code leads the line (arkts-build-cases case02)
-  expect(extractBuildExitCode("10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)", 1)).toBe(10505001)
+  expect(
+    extractBuildExitCode(
+      "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)",
+      1,
+    ),
+  ).toBe(10505001)
   // ArkTS lint error: code followed by colon (case03)
-  expect(extractBuildExitCode('10605008: Use explicit types instead of "any", "unknown" (arkts-no-any-unknown)', 1)).toBe(10605008)
+  expect(
+    extractBuildExitCode('10605008: Use explicit types instead of "any", "unknown" (arkts-no-any-unknown)', 1),
+  ).toBe(10605008)
   // ohpm error: code after "ERROR:" (case07)
   expect(extractBuildExitCode('ohpm ERROR: 00608002: Missing file "oh-package.json5" in ".../entry2"', 1)).toBe(608002)
 })
@@ -565,12 +567,16 @@ test("records build project info with the parsed exit code on tool.execute.after
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1" },
+    { args: {} },
+  )
   await hooks["tool.execute.after"]!(
     { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
     {
       title: "Build",
-      output: "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)",
+      output:
+        "10505001 ArkTS Compiler Error: Type 'string' is not assignable to type 'number'\nBUILD FAILED (exitCode=1)",
       metadata: { exitCode: 1 },
     },
   )
@@ -589,14 +595,18 @@ test("records build success from the authoritative metadata exit code", async ()
   const harness = createHarness()
   const hooks = await startSession(harness, "deveco")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1" },
+    { args: {} },
+  )
   await hooks["tool.execute.after"]!(
     { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
     {
       title: "Build",
       // A lint warning line can share the error-code shape without failing the build;
       // metadata.exitCode=0 must decide success before any log parsing happens.
-      output: '10605008: Use explicit types instead of "any" (warning)\nhvigor BUILD SUCCESSFUL in 991 ms\nBuild completed successfully (exitCode=0)',
+      output:
+        '10605008: Use explicit types instead of "any" (warning)\nhvigor BUILD SUCCESSFUL in 991 ms\nBuild completed successfully (exitCode=0)',
       metadata: { exitCode: 0 },
     },
   )
@@ -611,7 +621,10 @@ test("strips the local full-output path pointer from truncated build logs", asyn
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
 
-  await hooks["tool.execute.before"]!({ tool: "build_project", sessionID: "session-1", callID: "build-1" }, { args: {} })
+  await hooks["tool.execute.before"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-1" },
+    { args: {} },
+  )
   // Real truncated shape: the tool prepends a pointer to the local full log (build_project.ts).
   await hooks["tool.execute.after"]!(
     { tool: "build_project", sessionID: "session-1", callID: "build-1", args: {} },
@@ -619,7 +632,11 @@ test("strips the local full-output path pointer from truncated build logs", asyn
       title: "Build",
       output:
         "--- The log is too long, only the last 50 lines are kept ---\n\nFull output saved to: /Users/zhuyu/.local/share/deveco/tool-output/tool_abc123\n\n1 ERROR: 10505001 ArkTS Compiler Error\nBUILD FAILED (exitCode=1)",
-      metadata: { exitCode: 1, truncated: true, outputPath: "/Users/zhuyu/.local/share/deveco/tool-output/tool_abc123" },
+      metadata: {
+        exitCode: 1,
+        truncated: true,
+        outputPath: "/Users/zhuyu/.local/share/deveco/tool-output/tool_abc123",
+      },
     },
   )
 
@@ -641,7 +658,10 @@ test("session idle uploads the build project event on a separate flush", async (
 
   expect(harness.upload).toHaveBeenCalledTimes(2)
   expect(harness.upload.mock.calls[0]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION })
-  expect(harness.upload.mock.calls[1]?.[0]).toMatchObject({ action: ANALYTICS_ACTION.BUILD_PROJECT, event: builtBuildProjectEvent })
+  expect(harness.upload.mock.calls[1]?.[0]).toMatchObject({
+    action: ANALYTICS_ACTION.BUILD_PROJECT,
+    event: builtBuildProjectEvent,
+  })
   // Session event flushes out first, then the build event flushes separately,
   // so the two never share one HTTP request.
   expect(harness.flush).toHaveBeenCalledTimes(2)

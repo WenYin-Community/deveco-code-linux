@@ -123,7 +123,7 @@ export function isolatedShellPath(current: string | undefined, shimDir: string) 
 }
 
 function unixArg(input: string) {
-  return `'${input.replaceAll("'", `'"'"'`)}'`
+  return "'" + input.replaceAll("'", "'\"'\"'") + "'"
 }
 
 function windowsArg(input: string) {

@@ -1,9 +1,59 @@
-import type { LiveTestCase } from "../types"
+import type { CaseContext, LiveTestCase, RunCommandResult } from "../types"
 import { opencodeRoot } from "../env"
+import { completedDevecoCliEvent, partOf, sessionIDFromEvents, textFromEvents } from "../deveco-cli-events"
 import fs from "fs/promises"
 import path from "path"
 
 const CASE_ID = "BUILD_PROJECT"
+
+async function createBuildProject(workspace: string) {
+  const projectRoot = path.join(workspace, "BuildProject")
+  const create = Bun.spawn(
+    [
+      process.execPath,
+      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+      "create",
+      "--project-path",
+      projectRoot,
+      "--app-name",
+      "BuildProject",
+      "--bundle-name",
+      "com.example.buildproject",
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  )
+  const [exitCode, stderr] = await Promise.all([create.exited, new Response(create.stderr).text()])
+  if (exitCode !== 0) throw new Error(`devecocli create exited with ${exitCode}: ${stderr}`)
+  return projectRoot
+}
+
+async function captureBuildRun(ctx: CaseContext, result: RunCommandResult) {
+  await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
+  await ctx.writeArtifact(CASE_ID, "stderr.log", result.stderr)
+  const events = ctx.parseJsonLines(result.stdout)
+  await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((event) => JSON.stringify(event)).join("\n"))
+  if (result.exitCode !== 0) throw new Error(`deveco run exited with ${result.exitCode}`)
+  const receivedText = textFromEvents(events)
+  if (!receivedText) throw new Error("No text event was emitted")
+  return { events, receivedText, sessionID: sessionIDFromEvents(events) }
+}
+
+function assertBuildSucceeded(events: Record<string, unknown>[], receivedText: string) {
+  const completedBuild = completedDevecoCliEvent(events, "build")
+  if (!completedBuild) throw new Error("devecocli build was not called or did not complete")
+  const state = partOf(completedBuild)?.state as Record<string, unknown> | undefined
+  const output = typeof state?.output === "string" ? state.output : ""
+  if (["失败", "failed", "failure"].some((keyword) => output.toLowerCase().includes(keyword))) {
+    throw new Error(`devecocli build output indicates failure: ${output.substring(0, 400)}...`)
+  }
+  const success = ["成功", "success", "完成", "complete", "构建完毕", "已构建"]
+  if (
+    !success.some((keyword) => receivedText.toLowerCase().includes(keyword)) &&
+    !output.toLowerCase().includes("success")
+  ) {
+    throw new Error(`Expected response to indicate build success, got: ${receivedText.substring(0, 300)}...`)
+  }
+}
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
@@ -13,8 +63,7 @@ const testCase: LiveTestCase = {
   timeoutMs: 360_000,
   stallMs: 180_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
-  description:
-    "验证 Agent 通过 Shell 调用 devecocli build，成功完成鸿蒙工程构建并返回构建结果。",
+  description: "验证 Agent 通过 Shell 调用 devecocli build，成功完成鸿蒙工程构建并返回构建结果。",
   steps: [
     "创建临时工作目录，通过 bundled devecocli create 创建工程。",
     "执行deveco run，要求使用 devecocli build 构建当前工程。",
@@ -31,130 +80,31 @@ const testCase: LiveTestCase = {
   cleanup: "用例只创建临时工作目录；执行结束后删除临时目录。真实auth/config只读不清理。",
   async run(ctx) {
     const workspace = await ctx.createTempWorkspace("build-project-")
-
     try {
-      const projectRoot = path.join(workspace, "BuildProject")
-      const create = Bun.spawn([
-        process.execPath,
-        path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
-        "create",
-        "--project-path",
-        projectRoot,
-        "--app-name",
-        "BuildProject",
-        "--bundle-name",
-        "com.example.buildproject",
-      ], { stdout: "pipe", stderr: "pipe" })
-      const [createExit, createError] = await Promise.all([create.exited, new Response(create.stderr).text()])
-      if (createExit !== 0) throw new Error(`devecocli create exited with ${createExit}: ${createError}`)
-
-      // Use the exact prompt specified by the user
+      const projectRoot = await createBuildProject(workspace)
       const sentMessage = "请先使用 arkts_check 检查，再执行 devecocli build 构建当前项目工程"
-
-      const args = ["run", "--format", "json", "--dir", projectRoot, sentMessage]
-      const result = await ctx.runDeveco(args, { timeoutMs: 340_000 })
-
-      await ctx.writeArtifact(CASE_ID, "stdout.log", result.stdout)
-      await ctx.writeArtifact(CASE_ID, "stderr.log", result.stderr)
-
-      let events: Array<Record<string, unknown>> = []
-      try {
-        events = ctx.parseJsonLines(result.stdout)
-      } catch (error) {
-        throw new Error(
-          `stdout is not valid JSON lines: ${error instanceof Error ? error.message : String(error)}`,
-        )
-      }
-
-      await ctx.writeArtifact(CASE_ID, "events.jsonl", events.map((e) => JSON.stringify(e)).join("\n"))
-
-      if (result.exitCode !== 0) {
-        throw new Error(`deveco run exited with ${result.exitCode}`)
-      }
-
-      const textEvents = events.filter((e) => e.type === "text")
-      const receivedText = textEvents
-        .map((e) => {
-          const part = e.part
-          if (!part || typeof part !== "object") return undefined
-          if (!("text" in part) || typeof part.text !== "string") return undefined
-          return part.text
-        })
-        .filter((t): t is string => Boolean(t))
-        .join("\n")
-
-      const sessionID = events.find((e) => typeof e.sessionID === "string")?.sessionID as
-        | string
-        | undefined
-
-      if (textEvents.length === 0) {
-        throw new Error("No text event was emitted")
-      }
-
-      // Verify bash invoked devecocli build and completed.
-      const buildToolEvents = events.filter((event) => {
-        if (event.type !== "tool_use") return false
-        const part = event.part
-        if (!part || typeof part !== "object") return false
-        const partRecord = part as Record<string, unknown>
-        if (partRecord.tool !== "bash") return false
-        const state = partRecord.state as Record<string, unknown> | undefined
-        const input = state?.input as Record<string, unknown> | undefined
-        return typeof input?.command === "string" && /(?:^|\s)devecocli\s+build(?:\s|$)/.test(input.command)
+      const result = await ctx.runDeveco(["run", "--format", "json", "--dir", projectRoot, sentMessage], {
+        timeoutMs: 340_000,
       })
-
-      if (buildToolEvents.length === 0) {
-        throw new Error("devecocli build was not called by the agent")
-      }
-
-      const completedBuild = buildToolEvents.find((event) => {
-        const part = (event.part as Record<string, unknown>) ?? {}
-        const state = part.state as Record<string, unknown> | undefined
-        return state?.status === "completed"
-      })
-
-      if (!completedBuild) {
-        throw new Error("devecocli build was called but did not complete")
-      }
-
-      // Check the TOOL OUTPUT (not LLM text) for failure indicators.
-      // Checking LLM text for "报错"/"失败" causes false positives when the
-      // agent says "没有报错" (no errors) in a successful summary.
-      const buildState = ((completedBuild.part as Record<string, unknown>).state ?? {}) as Record<string, unknown>
-      const buildOutput = typeof buildState.output === "string" ? buildState.output : ""
-      const lowerOutput = buildOutput.toLowerCase()
-      const outputFailureMarkers = ["失败", "failed", "failure"]
-      if (outputFailureMarkers.some((kw) => lowerOutput.includes(kw.toLowerCase()))) {
-        throw new Error(`devecocli build output indicates failure: ${buildOutput.substring(0, 400)}...`)
-      }
-
-      // Also check LLM text for success indicators (relaxed — no failure keyword check on text)
-      const lowerText = receivedText.toLowerCase()
-      const successKeywords = ["成功", "success", "完成", "complete", "构建完毕", "已构建"]
-      if (!successKeywords.some((kw) => lowerText.includes(kw.toLowerCase())) && !lowerOutput.includes("success")) {
-        throw new Error(`Expected response to indicate build success, got: ${receivedText.substring(0, 300)}...`)
-      }
+      const captured = await captureBuildRun(ctx, result)
+      assertBuildSucceeded(captured.events, captured.receivedText)
 
       return {
         sentMessage,
-        receivedText,
-        sessionID,
+        receivedText: captured.receivedText,
+        sessionID: captured.sessionID,
         stdout: result.stdout,
         stderr: result.stderr,
-        events,
+        events: captured.events,
         details: {
           exitCode: result.exitCode,
           commandDurationMs: result.durationMs,
-          textEventCount: textEvents.length,
+          textEventCount: captured.events.filter((event) => event.type === "text").length,
           workspace: projectRoot,
         },
       }
     } finally {
-      try {
-        await fs.rm(workspace, { recursive: true, force: true })
-      } catch {
-        // ignore cleanup errors
-      }
+      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
     }
   },
 }

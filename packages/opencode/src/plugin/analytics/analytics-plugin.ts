@@ -87,319 +87,335 @@ export function extractBuildExitCode(output: string, fallback: number): number {
   return fallback
 }
 
-export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies): Plugin {
-  return async ({ directory }) => {
-    const { collector, uploader } = dependencies
-    const toolStartTimes = new Map<string, number>()
-    const attributionCalls = new Set<string>()
+type ChatMessageHook = NonNullable<Hooks["chat.message"]>
+type ToolBeforeHook = NonNullable<Hooks["tool.execute.before"]>
+type ToolAfterHook = NonNullable<Hooks["tool.execute.after"]>
+type ToolFinallyHook = NonNullable<Hooks["tool.execute.finally"]>
+
+async function diagnostic(dependencies: AnalyticsPluginDependencies, message: string) {
+  try {
+    await dependencies.diagnostic(message)
+  } catch {
+    // Diagnostics must never affect the TUI or tool execution.
+  }
+}
+
+async function createAttribution(dependencies: AnalyticsPluginDependencies, projectPath: string, projectId: string) {
+  return dependencies.codeAttribution({
+    directory: projectPath,
+    projectId,
+    diagnostic: (message) => diagnostic(dependencies, message),
+    submit: async (event) => {
+      const accepted = await dependencies.uploader.upload({ action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION, event })
+      await diagnostic(dependencies, `Attribution event queued: ${accepted}`)
+      return accepted
+    },
+  })
+}
+
+class AnalyticsRuntime {
+  private readonly toolStartTimes = new Map<string, number>()
+  private readonly attributionCalls = new Set<string>()
+  private uiVerificationModel: string | null = null
+  private sessionProviderId = "unknown"
+  private attributionEligibility: boolean | undefined
+  private uploaderReady = false
+  private lastAnalyticsEnabled: boolean | undefined
+  private shutdown = false
+
+  private constructor(
+    private readonly dependencies: AnalyticsPluginDependencies,
+    private readonly projectPath: string,
+    private readonly projectId: string,
+    private readonly attribution: CodeAttributionTracker,
+  ) {}
+
+  static async create(dependencies: AnalyticsPluginDependencies, directory: string) {
     const projectPath = directory || process.cwd()
     const projectId = await dependencies.projectId(projectPath)
-    // Captured once per instance from the merged config; the ui-verification tool
-    // resolves agent.ui_verification.model from the same source.
-    let uiVerificationModel: string | null = null
-    let sessionProviderId = "unknown"
-    let attributionEligibility: boolean | undefined
-    let uploaderReady = false
-    let lastAnalyticsEnabled: boolean | undefined
-    const diagnostic = async (message: string) => {
-      try {
-        await dependencies.diagnostic(message)
-      } catch {
-        // Diagnostics must never affect the TUI or tool execution.
-      }
-    }
-    const attribution = await dependencies.codeAttribution({
-      directory: projectPath,
+    const runtime = new AnalyticsRuntime(
+      dependencies,
+      projectPath,
       projectId,
-      diagnostic,
-      submit: async (event) => {
-        const accepted = await uploader.upload({ action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION, event })
-        await diagnostic(`Attribution event queued: ${accepted}`)
-        return accepted
-      },
-    })
-
-    const updateAttributionEligibility = async (eligible: boolean) => {
-      if (attributionEligibility === eligible) return
-      try {
-        await attribution.setEnabled(eligible)
-        attributionEligibility = eligible
-      } catch {
-        await diagnostic("Attribution tracker operation failed: eligibility")
-      }
-    }
-
-    const runAttribution = async (operationName: string, operation: () => Promise<void>) => {
-      try {
-        await operation()
-      } catch {
-        await diagnostic(`Attribution tracker operation failed: ${operationName}`)
-      }
-    }
-
-    const refreshIdentityEligibility = async () => {
-      const loggedIn = await dependencies.isLoggedIn()
-      const jwtExpired = loggedIn ? await dependencies.isJwtExpired() : null
-      const eligible = loggedIn && jwtExpired !== true
-      collector.setLoggedIn(eligible)
-      return eligible
-    }
-
-    const updateUploaderEligibility = async (eligible: boolean, analyticsEnabled: boolean) => {
-      if (!uploaderReady) return
-      if (eligible) {
-        uploader.startPeriodicFlush()
-      } else {
-        uploader.stopPeriodicFlush()
-        if (!analyticsEnabled && lastAnalyticsEnabled !== false) {
-          await uploader.clearQueue()
-          await runAttribution("purge", () => attribution.purge())
-        }
-      }
-      lastAnalyticsEnabled = analyticsEnabled
-    }
-
-    const ensureEligible = async () => {
-      const eligibleIdentity = await refreshIdentityEligibility()
-      const analyticsEnabled = await collector.analyticsEnabled()
-      const eligible = eligibleIdentity && analyticsEnabled
-      if (!eligible) collector.clear()
-      await updateAttributionEligibility(eligible)
-      await updateUploaderEligibility(eligible, analyticsEnabled)
-      return eligible
-    }
-
-    await collector.init()
-    const isLoggedIn = await refreshIdentityEligibility()
-    const analyticsEnabled = await collector.analyticsEnabled()
-    await updateAttributionEligibility(isLoggedIn && analyticsEnabled)
-
-    await diagnostic(`Plugin initialized, version: ${dependencies.version()}, logged in: ${isLoggedIn}`)
-
-    await uploader.restorePending()
-    uploaderReady = true
-    await updateUploaderEligibility(isLoggedIn && analyticsEnabled, analyticsEnabled)
-
-    // Use the worker's shutdown RPC for cleanup instead of SIGINT/SIGTERM
-    // handlers. Signal handlers delay process exit and can leave Flock locks
-    // in a stale state, causing long startup delays after rapid Ctrl+C cycles.
-    // The periodic flush already covers normal operation; on Ctrl+C, a small
-    // amount of analytics data may be lost — acceptable for telemetry.
-    let shutdown = false
-    const shutdownHandler = async () => {
-      if (shutdown) return
-      shutdown = true
-      try {
-        await ensureEligible()
-      } catch {
-        collector.clear()
-        uploader.stopPeriodicFlush()
-      }
-      await runAttribution("shutdown", () => attribution.shutdown())
-      await uploader.shutdown()
-    }
-
-    const hooks: Hooks = {
-      config: async (cfg) => {
-        uiVerificationModel = cfg.agent?.ui_verification?.model ?? null
-      },
-
-      event: async ({ event }) => {
-        const evt = event as unknown as Record<string, unknown>
-        const eventType = evt.type as string
-        const props = evt.properties as Record<string, unknown> | undefined
-
-        if (eventType === "message.part.delta") {
-          if (attributionEligibility === true && props?.field === "text" && typeof props.delta === "string")
-            collector.recordResponseDelta()
-          return
-        }
-
-        if (!(await ensureEligible())) return
-
-        if (eventType === "message.part.updated") {
-          // step-finish parts carry the same per-step usage the session projector
-          // sums into the session row; other part types are irrelevant here.
-          const part = props?.part as Record<string, unknown> | undefined
-          if (part?.type === "step-finish" && typeof props?.sessionID === "string" && collector.getSessionID() === props.sessionID) {
-            const tokens = part.tokens as Record<string, unknown> | undefined
-            collector.recordTokenUsage(
-              typeof tokens?.input === "number" ? tokens.input : 0,
-              typeof tokens?.output === "number" ? tokens.output : 0,
-            )
-          }
-          return
-        }
-
-        if (eventType === "file.edited" && typeof props?.file === "string") {
-          collector.recordFileEdit(props.file)
-        }
-
-        if (
-          eventType === "session.idle" &&
-          typeof props?.sessionID === "string" &&
-          collector.getSessionID() === props.sessionID
-        ) {
-          const event = await collector.buildEvent(projectId, projectPath)
-          if (event) {
-            // Best-effort flush between the two events so they normally leave in separate
-            // HTTP requests, mirroring how the magpie flow reports on its own stream. If a
-            // flush fails or overlaps an in-flight upload, both events stay queued and may
-            // share a later batched request — data is never lost, only coalesced.
-            await uploader.upload({ action: ANALYTICS_ACTION.AI_SESSION, event })
-            await uploader.flush()
-            const buildEvent = collector.buildProjectEvent()
-            if (buildEvent && sessionProviderId === "deveco" && (await dependencies.toolImprovementEnabled())) {
-              await uploader.upload({ action: ANALYTICS_ACTION.BUILD_PROJECT, event: buildEvent })
-              await uploader.flush()
-              await diagnostic(`Build project event queued: ${buildEvent.buildProjectInfo.length} build(s)`)
-            } else if (buildEvent) {
-              // Log the rejection reason so field debugging does not have to guess why
-              // DevEcoCodeBuild is missing. The provider branch fires without reading the
-              // Improvement switch, preserving the short-circuit order above.
-              await diagnostic(
-                sessionProviderId === "deveco"
-                  ? "Build project event skipped: Improvement disabled"
-                  : `Build project event skipped: provider=${sessionProviderId}`,
-              )
-            }
-            collector.clear()
-          }
-        }
-      },
-
-      "chat.message": async (input, output) => {
-        if (!(await ensureEligible())) return
-
-        const providerId = input.model?.providerID || "unknown"
-        const modelId = input.model?.modelID || "unknown"
-        const agentName = input.agent || "unknown"
-        // DevEcoCodeBuild only reports for deveco-provided models; tracked per turn so
-        // model upgrades never need a code change, only the provider matters.
-        sessionProviderId = providerId
-        collector.startSession({
-          sessionID: input.sessionID,
-          messageId: output.message.id,
-          sourceVersion: dependencies.version(),
-          providerId,
-          modelId,
-          agentName,
-          uiVerificationModel,
-        })
-        await diagnostic(`Session started, provider: ${providerId}, model: ${modelId}, agent: ${agentName}`)
-      },
-
-      "tool.execute.before": async (input) => {
-        if (!(await ensureEligible())) return
-        toolStartTimes.set(input.callID, Date.now())
-        if (ATTRIBUTED_TOOLS.has(input.tool)) {
-          await runAttribution("before-ai-tool", () => attribution.beforeAiTool())
-          attributionCalls.add(input.callID)
-        }
-      },
-
-      "tool.execute.after": async (input, output) => {
-        const startTime = toolStartTimes.get(input.callID)
-        if (startTime === undefined) return
-        toolStartTimes.delete(input.callID)
-        const metadata = output.metadata as Record<string, unknown> | undefined
-        // build_project reports compile failures as a normal tool result (exitCode in
-        // metadata, "ArkTS Compiler Error"/"BUILD FAILED" in output). The generic output
-        // substring check would misclassify those as tool failures and silently drop them
-        // from build result tracking, so it only applies to other tools.
-        const hasError =
-          metadata?.error ||
-          (input.tool !== "build_project" && (output.output?.includes("Error") || output.output?.includes("Failed")))
-        const duration = Date.now() - startTime
-        // isSuccess tracks tool execution success; buildSucceeded tracks the build result.
-        // metadata.exitCode is authoritative (the tool always sets it); the hvigor
-        // "BUILD SUCCESSFUL" substring only backfills when metadata is absent. One
-        // predicate feeds both the session event (isBuildSuccess) and the build event
-        // (isSuccess/exitCode), so the two events can never disagree on a build.
-        const isSuccess = !hasError
-        const buildSucceeded =
-          typeof metadata?.exitCode === "number"
-            ? metadata.exitCode === 0
-            : (output.output ?? "").toLowerCase().includes("build successful")
-        collector.recordToolExecution(input.tool, duration, isSuccess, input.tool === "build_project" && isSuccess && buildSucceeded)
-
-        if (input.tool === "build_project" && typeof output.output === "string") {
-          collector.recordBuildProjectInfo({
-            toolName: input.tool,
-            duration,
-            // Build outcome, not tool outcome: tool failure never reaches this event
-            // because tool.execute.after only fires when the tool returned normally.
-            isSuccess: buildSucceeded,
-            timestamp: Date.now(),
-            exitCode: buildSucceeded
-              ? 0
-              : extractBuildExitCode(
-                  output.output,
-                  typeof metadata?.exitCode === "number" ? metadata.exitCode : 1,
-                ),
-            // Strip the "Full output saved to: <path>" pointer the tool prepends when the
-            // log is truncated (build_project.ts): the local path carries the OS username
-            // and the platform cannot read the local file anyway. The bounded preview and
-            // status line stay intact.
-            output: output.output
-              .split("\n")
-              .filter((line) => !line.startsWith("Full output saved to:"))
-              .join("\n"),
-            truncated: metadata?.truncated === true,
-          })
-        } else {
-          collector.recordToolExecution(input.tool, duration, isSuccess)
-        }
-
-        const devecoCliEvents = Array.isArray(metadata?.devecoCliEvents) ? metadata.devecoCliEvents : []
-        for (const event of devecoCliEvents) {
-          if (!event || typeof event !== "object") continue
-          const value = event as Record<string, unknown>
-          if (value.command !== "build" || typeof value.exitCode !== "number") continue
-          collector.recordBuildExecution(value.exitCode === 0)
-        }
-
-        if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return
-
-        const filediff = metadata.filediff as Record<string, unknown> | Array<Record<string, unknown>>
-        if (Array.isArray(filediff)) {
-          for (const diff of filediff) {
-            const filePath = diff.file
-            const additions = typeof diff.additions === "number" ? diff.additions : 0
-            const deletions = typeof diff.deletions === "number" ? diff.deletions : 0
-            if (typeof filePath === "string") collector.recordFileDiff(filePath, additions, deletions)
-          }
-          return
-        }
-
-        const filePath = input.args?.file_path || input.args?.filePath
-        const additions = typeof filediff.additions === "number" ? filediff.additions : 0
-        const deletions = typeof filediff.deletions === "number" ? filediff.deletions : 0
-        if (typeof filePath === "string") collector.recordFileDiff(filePath, additions, deletions)
-      },
-
-      "tool.execute.finally": async (input) => {
-        toolStartTimes.delete(input.callID)
-        if (!attributionCalls.delete(input.callID)) return
-        const analyticsEnabled = await collector.analyticsEnabled()
-        if (!analyticsEnabled) {
-          collector.clear()
-          await updateAttributionEligibility(false)
-          await updateUploaderEligibility(false, false)
-          return
-        }
-        await runAttribution("after-ai-tool", () => attribution.afterAiTool())
-        const eligibleIdentity = await refreshIdentityEligibility()
-        if (!eligibleIdentity) collector.clear()
-        await updateAttributionEligibility(eligibleIdentity)
-        await updateUploaderEligibility(eligibleIdentity, true)
-      },
-
-      dispose: shutdownHandler,
-    }
-
-    return hooks
+      await createAttribution(dependencies, projectPath, projectId),
+    )
+    await runtime.initialize()
+    return runtime
   }
+
+  private async initialize() {
+    await this.dependencies.collector.init()
+    const isLoggedIn = await this.refreshIdentityEligibility()
+    const analyticsEnabled = await this.dependencies.collector.analyticsEnabled()
+    await this.updateAttributionEligibility(isLoggedIn && analyticsEnabled)
+    await this.log(`Plugin initialized, version: ${this.dependencies.version()}, logged in: ${isLoggedIn}`)
+    await this.dependencies.uploader.restorePending()
+    this.uploaderReady = true
+    await this.updateUploaderEligibility(isLoggedIn && analyticsEnabled, analyticsEnabled)
+  }
+
+  hooks(): Hooks {
+    return {
+      config: async (cfg) => {
+        this.uiVerificationModel = cfg.agent?.ui_verification?.model ?? null
+      },
+      event: async ({ event }) => this.event(event),
+      "chat.message": async (input, output) => this.chatMessage(input, output),
+      "tool.execute.before": async (input) => this.toolBefore(input),
+      "tool.execute.after": async (input, output) => this.toolAfter(input, output),
+      "tool.execute.finally": async (input) => this.toolFinally(input),
+      dispose: async () => this.dispose(),
+    }
+  }
+
+  private log(message: string) {
+    return diagnostic(this.dependencies, message)
+  }
+
+  private async runAttribution(operationName: string, operation: () => Promise<void>) {
+    try {
+      await operation()
+    } catch {
+      await this.log(`Attribution tracker operation failed: ${operationName}`)
+    }
+  }
+
+  private async refreshIdentityEligibility() {
+    const loggedIn = await this.dependencies.isLoggedIn()
+    const jwtExpired = loggedIn ? await this.dependencies.isJwtExpired() : null
+    const eligible = loggedIn && jwtExpired !== true
+    this.dependencies.collector.setLoggedIn(eligible)
+    return eligible
+  }
+
+  private async updateAttributionEligibility(eligible: boolean) {
+    if (this.attributionEligibility === eligible) return
+    try {
+      await this.attribution.setEnabled(eligible)
+      this.attributionEligibility = eligible
+    } catch {
+      await this.log("Attribution tracker operation failed: eligibility")
+    }
+  }
+
+  private async updateUploaderEligibility(eligible: boolean, analyticsEnabled: boolean) {
+    if (!this.uploaderReady) return
+    if (eligible) this.dependencies.uploader.startPeriodicFlush()
+    if (!eligible) {
+      this.dependencies.uploader.stopPeriodicFlush()
+      if (!analyticsEnabled && this.lastAnalyticsEnabled !== false) {
+        await this.dependencies.uploader.clearQueue()
+        await this.runAttribution("purge", () => this.attribution.purge())
+      }
+    }
+    this.lastAnalyticsEnabled = analyticsEnabled
+  }
+
+  private async ensureEligible() {
+    const eligibleIdentity = await this.refreshIdentityEligibility()
+    const analyticsEnabled = await this.dependencies.collector.analyticsEnabled()
+    const eligible = eligibleIdentity && analyticsEnabled
+    if (!eligible) this.dependencies.collector.clear()
+    await this.updateAttributionEligibility(eligible)
+    await this.updateUploaderEligibility(eligible, analyticsEnabled)
+    return eligible
+  }
+
+  private async dispose() {
+    // The worker shutdown RPC avoids signal handlers that delay exit and retain stale locks.
+    if (this.shutdown) return
+    this.shutdown = true
+    try {
+      await this.ensureEligible()
+    } catch {
+      this.dependencies.collector.clear()
+      this.dependencies.uploader.stopPeriodicFlush()
+    }
+    await this.runAttribution("shutdown", () => this.attribution.shutdown())
+    await this.dependencies.uploader.shutdown()
+  }
+
+  private async event(event: unknown) {
+    const value = event as Record<string, unknown>
+    const eventType = value.type as string
+    const props = value.properties as Record<string, unknown> | undefined
+    if (eventType === "message.part.delta") {
+      if (this.attributionEligibility === true && props?.field === "text" && typeof props.delta === "string") {
+        this.dependencies.collector.recordResponseDelta()
+      }
+      return
+    }
+    if (!(await this.ensureEligible())) return
+    if (eventType === "message.part.updated") return this.recordTokenUsage(props)
+    if (eventType === "file.edited" && typeof props?.file === "string") {
+      this.dependencies.collector.recordFileEdit(props.file)
+    }
+    if (eventType === "session.idle") await this.reportSession(props)
+  }
+
+  private recordTokenUsage(props: Record<string, unknown> | undefined) {
+    const part = props?.part as Record<string, unknown> | undefined
+    if (part?.type !== "step-finish" || typeof props?.sessionID !== "string") return
+    if (this.dependencies.collector.getSessionID() !== props.sessionID) return
+    const tokens = part.tokens as Record<string, unknown> | undefined
+    this.dependencies.collector.recordTokenUsage(
+      typeof tokens?.input === "number" ? tokens.input : 0,
+      typeof tokens?.output === "number" ? tokens.output : 0,
+    )
+  }
+
+  private async reportSession(props: Record<string, unknown> | undefined) {
+    if (typeof props?.sessionID !== "string" || this.dependencies.collector.getSessionID() !== props.sessionID) return
+    const event = await this.dependencies.collector.buildEvent(this.projectId, this.projectPath)
+    if (!event) return
+    await this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.AI_SESSION, event })
+    await this.dependencies.uploader.flush()
+    const buildEvent = this.dependencies.collector.buildProjectEvent()
+    if (buildEvent) await this.reportBuildEvent(buildEvent)
+    this.dependencies.collector.clear()
+  }
+
+  private async reportBuildEvent(event: BuildProjectAnalyticsEvent) {
+    if (this.sessionProviderId !== "deveco") {
+      await this.log(`Build project event skipped: provider=${this.sessionProviderId}`)
+      return
+    }
+    if (!(await this.dependencies.toolImprovementEnabled())) {
+      await this.log("Build project event skipped: Improvement disabled")
+      return
+    }
+    await this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.BUILD_PROJECT, event })
+    await this.dependencies.uploader.flush()
+    await this.log(`Build project event queued: ${event.buildProjectInfo.length} build(s)`)
+  }
+
+  private async chatMessage(input: Parameters<ChatMessageHook>[0], output: Parameters<ChatMessageHook>[1]) {
+    if (!(await this.ensureEligible())) return
+    const providerId = input.model?.providerID || "unknown"
+    const modelId = input.model?.modelID || "unknown"
+    const agentName = input.agent || "unknown"
+    this.sessionProviderId = providerId
+    this.dependencies.collector.startSession({
+      sessionID: input.sessionID,
+      messageId: output.message.id,
+      sourceVersion: this.dependencies.version(),
+      providerId,
+      modelId,
+      agentName,
+      uiVerificationModel: this.uiVerificationModel,
+    })
+    await this.log(`Session started, provider: ${providerId}, model: ${modelId}, agent: ${agentName}`)
+  }
+
+  private async toolBefore(input: Parameters<ToolBeforeHook>[0]) {
+    if (!(await this.ensureEligible())) return
+    this.toolStartTimes.set(input.callID, Date.now())
+    if (!ATTRIBUTED_TOOLS.has(input.tool)) return
+    await this.runAttribution("before-ai-tool", () => this.attribution.beforeAiTool())
+    this.attributionCalls.add(input.callID)
+  }
+
+  private async toolAfter(input: Parameters<ToolAfterHook>[0], output: Parameters<ToolAfterHook>[1]) {
+    const startTime = this.toolStartTimes.get(input.callID)
+    if (startTime === undefined) return
+    this.toolStartTimes.delete(input.callID)
+    const metadata = output.metadata as Record<string, unknown> | undefined
+    const hasError =
+      metadata?.error ||
+      (input.tool !== "build_project" && (output.output?.includes("Error") || output.output?.includes("Failed")))
+    const duration = Date.now() - startTime
+    const isSuccess = !hasError
+    const buildSucceeded =
+      typeof metadata?.exitCode === "number"
+        ? metadata.exitCode === 0
+        : (output.output ?? "").toLowerCase().includes("build successful")
+    this.dependencies.collector.recordToolExecution(
+      input.tool,
+      duration,
+      isSuccess,
+      input.tool === "build_project" && isSuccess && buildSucceeded,
+    )
+    this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
+    this.recordDevecoBuilds(metadata)
+    this.recordFileDiff(input, metadata)
+  }
+
+  private recordBuildProject(
+    input: Parameters<ToolAfterHook>[0],
+    output: Parameters<ToolAfterHook>[1],
+    metadata: Record<string, unknown> | undefined,
+    duration: number,
+    buildSucceeded: boolean,
+    isSuccess: boolean,
+  ) {
+    if (input.tool !== "build_project" || typeof output.output !== "string") {
+      this.dependencies.collector.recordToolExecution(input.tool, duration, isSuccess)
+      return
+    }
+    this.dependencies.collector.recordBuildProjectInfo({
+      toolName: input.tool,
+      duration,
+      isSuccess: buildSucceeded,
+      timestamp: Date.now(),
+      exitCode: buildSucceeded
+        ? 0
+        : extractBuildExitCode(output.output, typeof metadata?.exitCode === "number" ? metadata.exitCode : 1),
+      output: output.output
+        .split("\n")
+        .filter((line) => !line.startsWith("Full output saved to:"))
+        .join("\n"),
+      truncated: metadata?.truncated === true,
+    })
+  }
+
+  private recordDevecoBuilds(metadata: Record<string, unknown> | undefined) {
+    const events = Array.isArray(metadata?.devecoCliEvents) ? metadata.devecoCliEvents : []
+    for (const event of events) {
+      if (!event || typeof event !== "object") continue
+      const value = event as Record<string, unknown>
+      if (value.command !== "build" || typeof value.exitCode !== "number") continue
+      this.dependencies.collector.recordBuildExecution(value.exitCode === 0)
+    }
+  }
+
+  private recordFileDiff(input: Parameters<ToolAfterHook>[0], metadata: Record<string, unknown> | undefined) {
+    if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return
+    const filediff = metadata.filediff as Record<string, unknown> | Array<Record<string, unknown>>
+    if (Array.isArray(filediff)) {
+      for (const diff of filediff) {
+        const filePath = diff.file
+        const additions = typeof diff.additions === "number" ? diff.additions : 0
+        const deletions = typeof diff.deletions === "number" ? diff.deletions : 0
+        if (typeof filePath === "string") this.dependencies.collector.recordFileDiff(filePath, additions, deletions)
+      }
+      return
+    }
+    const filePath = input.args?.file_path || input.args?.filePath
+    const additions = typeof filediff.additions === "number" ? filediff.additions : 0
+    const deletions = typeof filediff.deletions === "number" ? filediff.deletions : 0
+    if (typeof filePath === "string") this.dependencies.collector.recordFileDiff(filePath, additions, deletions)
+  }
+
+  private async toolFinally(input: Parameters<ToolFinallyHook>[0]) {
+    this.toolStartTimes.delete(input.callID)
+    if (!this.attributionCalls.delete(input.callID)) return
+    const analyticsEnabled = await this.dependencies.collector.analyticsEnabled()
+    if (!analyticsEnabled) {
+      this.dependencies.collector.clear()
+      await this.updateAttributionEligibility(false)
+      await this.updateUploaderEligibility(false, false)
+      return
+    }
+    await this.runAttribution("after-ai-tool", () => this.attribution.afterAiTool())
+    const eligibleIdentity = await this.refreshIdentityEligibility()
+    if (!eligibleIdentity) this.dependencies.collector.clear()
+    await this.updateAttributionEligibility(eligibleIdentity)
+    await this.updateUploaderEligibility(eligibleIdentity, true)
+  }
+}
+
+export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies): Plugin {
+  return async ({ directory }) => (await AnalyticsRuntime.create(dependencies, directory)).hooks()
 }
 
 const AnalyticsPlugin = createAnalyticsPlugin({
