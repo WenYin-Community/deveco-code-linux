@@ -32,10 +32,15 @@ export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
 export const DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000
-const DEVECO_IMAGE_DOWNLOAD_COMMAND = /\bdevecocli(?:\.(?:cmd|exe))?\s+emulator\s+image\s+download\b/i
+const DEVECO_IMAGE_DOWNLOAD_COMMAND = new RegExp(
+  "\\bdevecocli(?:\\.(?:cmd|exe))?\\s+emulator\\s+image\\s+download\\b",
+  "i",
+)
+const SHELL_COMMAND_QUOTES = new RegExp("[\"']", "g")
+const SHELL_COMMAND_WHITESPACE = new RegExp("\\s+", "g")
 
 export function resolveShellTimeout(command: string, timeout: number): number {
-  const normalized = command.replace(/["']/g, " ").replace(/\s+/g, " ")
+  const normalized = command.replace(SHELL_COMMAND_QUOTES, " ").replace(SHELL_COMMAND_WHITESPACE, " ")
   return DEVECO_IMAGE_DOWNLOAD_COMMAND.test(normalized) ? Math.max(timeout, DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS) : timeout
 }
 

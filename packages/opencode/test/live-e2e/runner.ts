@@ -259,7 +259,7 @@ async function runSequentialCases(input: {
   }
 }
 
-async function runParallelCases(input: {
+type ParallelCasesInput = {
   selected: LiveTestCase[]
   environment: Awaited<ReturnType<typeof collectEnvironment>>
   results: ExecutedCase[]
@@ -269,37 +269,36 @@ async function runParallelCases(input: {
   suiteStart: number
   startedAt: string
   writeJunit: boolean
-}) {
+}
+
+async function runParallelWorker(
+  input: ParallelCasesInput,
+  parallelCases: LiveTestCase[],
+  state: { nextIndex: number },
+  workerIndex: number,
+) {
+  // Stagger worker starts to avoid hitting the LLM simultaneously.
+  // Worker 0 starts immediately, worker N starts at N*3s.
+  if (workerIndex > 0) await new Promise((resolve) => setTimeout(resolve, 3000 * workerIndex))
+  while (state.nextIndex < parallelCases.length) {
+    const testCase = parallelCases[state.nextIndex++]
+    console.log(`Running ${testCase.id}: ${testCase.title}`)
+    input.results.push(await runCase(testCase, input.environment, input.maxRetries, input.cooldownMs * 3))
+    await writeIncrementalReport(input.results, input.environment, input.suiteStart, input.startedAt, input.writeJunit)
+    if (state.nextIndex < parallelCases.length) await new Promise((resolve) => setTimeout(resolve, 5000))
+  }
+}
+
+async function runParallelCases(input: ParallelCasesInput) {
   const parallelCases = input.selected.filter((testCase) => testCase.parallel === true)
   if (parallelCases.length === 0) return
   console.log(`\nRunning ${parallelCases.length} cases in parallel (max ${input.maxConcurrent} concurrent)...`)
-  let nextIndex = 0
-  const workers = Array.from(
-    { length: Math.min(input.maxConcurrent, parallelCases.length) },
-    async (_, workerIndex) => {
-      // Stagger worker starts to avoid hitting the LLM simultaneously.
-      // Worker 0 starts immediately, worker N starts at N*3s.
-      if (workerIndex > 0) await new Promise((r) => setTimeout(r, 3000 * workerIndex))
-      while (nextIndex < parallelCases.length) {
-        const testCase = parallelCases[nextIndex++]
-        console.log(`Running ${testCase.id}: ${testCase.title}`)
-        const result = await runCase(testCase, input.environment, input.maxRetries, input.cooldownMs * 3)
-        input.results.push(result)
-        await writeIncrementalReport(
-          input.results,
-          input.environment,
-          input.suiteStart,
-          input.startedAt,
-          input.writeJunit,
-        )
-        // Inter-case cooldown prevents rate-limit cascades across workers.
-        if (nextIndex < parallelCases.length) {
-          await new Promise((r) => setTimeout(r, 5000))
-        }
-      }
-    },
+  const state = { nextIndex: 0 }
+  await Promise.all(
+    Array.from({ length: Math.min(input.maxConcurrent, parallelCases.length) }, (_, workerIndex) =>
+      runParallelWorker(input, parallelCases, state, workerIndex),
+    ),
   )
-  await Promise.all(workers)
 }
 
 function createSuiteReport(

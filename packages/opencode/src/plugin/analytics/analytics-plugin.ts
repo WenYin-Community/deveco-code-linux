@@ -246,7 +246,10 @@ class AnalyticsRuntime {
       return
     }
     if (!(await this.ensureEligible())) return
-    if (eventType === "message.part.updated") return this.recordTokenUsage(props)
+    if (eventType === "message.part.updated") {
+      this.recordTokenUsage(props)
+      return
+    }
     if (eventType === "file.edited" && typeof props?.file === "string") {
       this.dependencies.collector.recordFileEdit(props.file)
     }
@@ -382,18 +385,19 @@ class AnalyticsRuntime {
     if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool) || !metadata?.filediff) return
     const filediff = metadata.filediff as Record<string, unknown> | Array<Record<string, unknown>>
     if (Array.isArray(filediff)) {
-      for (const diff of filediff) {
-        const filePath = diff.file
-        const additions = typeof diff.additions === "number" ? diff.additions : 0
-        const deletions = typeof diff.deletions === "number" ? diff.deletions : 0
-        if (typeof filePath === "string") this.dependencies.collector.recordFileDiff(filePath, additions, deletions)
-      }
+      filediff.forEach((diff) => this.recordFileDiffEntry(diff.file, diff))
       return
     }
-    const filePath = input.args?.file_path || input.args?.filePath
-    const additions = typeof filediff.additions === "number" ? filediff.additions : 0
-    const deletions = typeof filediff.deletions === "number" ? filediff.deletions : 0
-    if (typeof filePath === "string") this.dependencies.collector.recordFileDiff(filePath, additions, deletions)
+    this.recordFileDiffEntry(input.args?.file_path || input.args?.filePath, filediff)
+  }
+
+  private recordFileDiffEntry(filePath: unknown, filediff: Record<string, unknown>) {
+    if (typeof filePath !== "string") return
+    this.dependencies.collector.recordFileDiff(
+      filePath,
+      typeof filediff.additions === "number" ? filediff.additions : 0,
+      typeof filediff.deletions === "number" ? filediff.deletions : 0,
+    )
   }
 
   private async toolFinally(input: Parameters<ToolFinallyHook>[0]) {
