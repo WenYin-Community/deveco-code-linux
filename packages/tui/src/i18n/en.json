@@ -8,7 +8,9 @@
     "token_usage_cached": "Cached",
     "token_usage_total": "Total",
     "token_usage_cache_bust": "! Likely cache bust: {{count}} fewer cached tokens than the previous step",
-    "token_usage_tool_call": "→ {{tool}} {{input}}"
+    "token_usage_tool_call": "→ {{tool}} {{input}}",
+    "jump_to_latest": "Jump to latest",
+    "jump_to_earliest": "Jump to earliest"
   },
   "btw": {
     "title": "By the way",

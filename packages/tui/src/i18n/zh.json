@@ -8,7 +8,9 @@
     "token_usage_cached": "缓存",
     "token_usage_total": "总计",
     "token_usage_cache_bust": "! 可能缓存失效：比上一步骤少了 {{count}} 个缓存 token",
-    "token_usage_tool_call": "→ {{tool}} {{input}}"
+    "token_usage_tool_call": "→ {{tool}} {{input}}",
+    "jump_to_latest": "跳转到最新",
+    "jump_to_earliest": "跳转到最早"
   },
   "btw": {
     "title": "顺带一问",

@@ -281,6 +281,10 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const [showTokenUsage, setShowTokenUsage] = kv.signal("token_usage_mode", "off" as "off" | "on" | "verbose")
+  const [atBottom, setAtBottom] = createSignal(true)
+  const [atTop, setAtTop] = createSignal(true)
+  const [jumpHover, setJumpHover] = createSignal(false)
+  const [jumpTopHover, setJumpTopHover] = createSignal(false)
 
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
@@ -357,6 +361,19 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  // The scrollbar emits "change" for every scroll position change (wheel, keys,
+  // drag, sticky follow, programmatic scrollTo), so it drives the scroll edge state.
+  const updateScrollEdges = () => {
+    if (!scroll || scroll.isDestroyed) return
+    setAtTop(scroll.scrollTop <= 0)
+    setAtBottom(scroll.scrollHeight - scroll.viewport.height - scroll.scrollTop <= 1)
+  }
+  createEffect(on(dimensions, updateScrollEdges))
+  // The hints unmount while hovered so mouse-out never fires; clear hover when they hide
+  createEffect(() => {
+    if (atTop()) setJumpTopHover(false)
+    if (atBottom()) setJumpHover(false)
+  })
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -1195,7 +1212,11 @@ export function Session() {
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <scrollbox
-                ref={(r) => (scroll = r)}
+                ref={(r) => {
+                  scroll = r
+                  r.verticalScrollBar.on("change", updateScrollEdges)
+                  updateScrollEdges()
+                }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
@@ -1321,6 +1342,38 @@ export function Session() {
                 </For>
               </scrollbox>
               <SlowResponseTip sessionID={route.sessionID} />
+              <Show when={!atTop() || !atBottom()}>
+                <box flexDirection="row" justifyContent="flex-end" gap={4} paddingRight={2} flexShrink={0}>
+                  <Show when={!atTop()}>
+                    <box
+                      onMouseOver={() => setJumpTopHover(true)}
+                      onMouseOut={() => setJumpTopHover(false)}
+                      onMouseUp={() => {
+                        if (!scroll || scroll.isDestroyed) return
+                        scroll.scrollTo(0)
+                      }}
+                    >
+                      <text fg={jumpTopHover() ? theme.text : theme.textMuted}>
+                        {t("session.jump_to_earliest")} ↑
+                      </text>
+                    </box>
+                  </Show>
+                  <Show when={!atBottom()}>
+                    <box
+                      onMouseOver={() => setJumpHover(true)}
+                      onMouseOut={() => setJumpHover(false)}
+                      onMouseUp={() => {
+                        if (!scroll || scroll.isDestroyed) return
+                        scroll.scrollTo(scroll.scrollHeight)
+                      }}
+                    >
+                      <text fg={jumpHover() ? theme.text : theme.textMuted}>
+                        {t("session.jump_to_latest")} ↓
+                      </text>
+                    </box>
+                  </Show>
+                </box>
+              </Show>
               <box flexShrink={0}>
                 {(() => {
                   const debugStateActive = createMemo(() => sync.data.debug_state[route.sessionID]?.state === "set")
