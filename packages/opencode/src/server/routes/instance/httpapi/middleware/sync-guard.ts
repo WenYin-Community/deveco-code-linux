@@ -3,10 +3,10 @@ import { Effect, Layer } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiError, HttpApiMiddleware } from "effect/unstable/httpapi"
 
-// When experimental workspaces are off (the default), /sync/replay and
-// /sync/steal are not reachable: no syncing workspaces exist, so the endpoints
-// serve only as attack. Return 404 before payload schema validation so
-// probing requests cannot confirm the routes exist. When the flag is on, the
+// When experimental workspaces are off, /sync/replay and /sync/steal are not
+// reachable: no syncing workspaces exist, so the endpoints serve only as
+// attack. Return 404 before payload schema validation so probing requests
+// cannot confirm the routes exist. When the flag is on (the default), the
 // handlers additionally require a workspace-bound SyncTicket plus (for steal)
 // an ownership check.
 const GUARDED_PATHS = new Set(["/sync/replay", "/sync/steal"])

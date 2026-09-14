@@ -234,6 +234,46 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("default-on experimental flags default to true", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+
+      expect(flags.experimentalWorkspaces).toBe(true)
+      expect(flags.experimentalBackgroundSubagents).toBe(true)
+    }),
+  )
+
+  it.effect("default-on experimental flags honor explicit opt-out", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            DEVECO_EXPERIMENTAL_WORKSPACES: "false",
+            DEVECO_EXPERIMENTAL_BACKGROUND_SUBAGENTS: "false",
+          }),
+        ),
+      )
+
+      expect(flags.experimentalWorkspaces).toBe(false)
+      expect(flags.experimentalBackgroundSubagents).toBe(false)
+    }),
+  )
+
+  it.effect("DEVECO_EXPERIMENTAL keeps default-on experimental flags enabled", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(
+          fromConfig({
+            DEVECO_EXPERIMENTAL: "true",
+            DEVECO_EXPERIMENTAL_WORKSPACES: "false",
+          }),
+        ),
+      )
+
+      expect(flags.experimentalWorkspaces).toBe(true)
+    }),
+  )
+
   it.effect("experimentalOxfmt defaults to false", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))

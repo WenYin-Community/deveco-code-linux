@@ -13,6 +13,12 @@ const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
     Config.map((flags) => Option.getOrElse(flags.enabled, () => flags.experimental)),
   )
+// Default-on experimental flag: enabled unless the dedicated env var is
+// explicitly set to false; DEVECO_EXPERIMENTAL=true keeps forcing it on.
+const enabledByDefault = (name: string) =>
+  Config.all({ experimental, enabled: boolTrue(name) }).pipe(
+    Config.map((flags) => flags.experimental || flags.enabled),
+  )
 
 export class Service extends ConfigService.Service<Service>()("@opencode/RuntimeFlags", {
   autoShare: bool("DEVECO_AUTO_SHARE"),
@@ -43,16 +49,13 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   enableQuestionTool: bool("DEVECO_ENABLE_QUESTION_TOOL"),
   experimentalScout: enabledByExperimental("DEVECO_EXPERIMENTAL_SCOUT"),
   experimentalReferences: enabledByExperimental("DEVECO_EXPERIMENTAL_REFERENCES"),
-  experimentalBackgroundSubagents: Config.all({
-    experimental,
-    enabled: boolTrue("DEVECO_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
-  }).pipe(Config.map((flags) => flags.experimental || flags.enabled)),
+  experimentalBackgroundSubagents: enabledByDefault("DEVECO_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
   experimentalLspTy: bool("DEVECO_EXPERIMENTAL_LSP_TY"),
   experimentalLspTool: enabledByExperimental("DEVECO_EXPERIMENTAL_LSP_TOOL"),
   experimentalOxfmt: enabledByExperimental("DEVECO_EXPERIMENTAL_OXFMT"),
   experimentalPlanMode: enabledByExperimental("DEVECO_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEVECO_EXPERIMENTAL_EVENT_SYSTEM"),
-  experimentalWorkspaces: enabledByExperimental("DEVECO_EXPERIMENTAL_WORKSPACES"),
+  experimentalWorkspaces: enabledByDefault("DEVECO_EXPERIMENTAL_WORKSPACES"),
   experimentalIconDiscovery: enabledByExperimental("DEVECO_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEVECO_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   bashDefaultTimeoutMs: positiveInteger("DEVECO_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),

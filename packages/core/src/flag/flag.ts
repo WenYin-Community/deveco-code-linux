@@ -13,6 +13,13 @@ function enabledByExperimental(key: string) {
   return process.env[key] === undefined ? DEVECO_EXPERIMENTAL : truthy(key)
 }
 
+// Default-on experimental flag: enabled unless the dedicated env var is
+// explicitly set to a non-truthy value; DEVECO_EXPERIMENTAL=true keeps forcing
+// it on. Mirrors enabledByDefault in packages/opencode runtime-flags.ts.
+function enabledByDefault(key: string) {
+  return process.env[key] === undefined ? true : DEVECO_EXPERIMENTAL || truthy(key)
+}
+
 export const Flag = {
   OTEL_EXPORTER_OTLP_ENDPOINT: process.env["OTEL_EXPORTER_OTLP_ENDPOINT"],
   OTEL_EXPORTER_OTLP_HEADERS: process.env["OTEL_EXPORTER_OTLP_HEADERS"],
@@ -49,7 +56,7 @@ export const Flag = {
   DEVECO_DB: process.env["DEVECO_DB"],
 
   DEVECO_WORKSPACE_ID: process.env["DEVECO_WORKSPACE_ID"],
-  DEVECO_EXPERIMENTAL_WORKSPACES: enabledByExperimental("DEVECO_EXPERIMENTAL_WORKSPACES"),
+  DEVECO_EXPERIMENTAL_WORKSPACES: enabledByDefault("DEVECO_EXPERIMENTAL_WORKSPACES"),
 
   // Evaluated at access time (not module load) because tests, the CLI, and
   // external tooling set these env vars at runtime.

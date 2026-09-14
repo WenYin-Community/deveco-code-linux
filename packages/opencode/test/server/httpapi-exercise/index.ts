@@ -600,13 +600,18 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/sync/replay", "sync.replay")
     .at((ctx) => ({ path: "/sync/replay", headers: ctx.headers(), body: { directory: ctx.directory, events: [] } }))
-    // SyncGuardMiddleware returns 404 for replay/steal while experimentalWorkspaces
-    // is off (the default); the endpoints are not reachable attack then.
-    .status(404),
+    // experimentalWorkspaces is on by default now, so SyncGuardMiddleware lets
+    // replay/steal through. The handler still requires a workspace-bound
+    // SyncTicket, but this probe's empty `events` array fails NonEmptyArray
+    // schema validation first, yielding 400 before the ticket check.
+    .status(400, undefined, "status"),
   http.protected
     .post("/sync/steal", "sync.steal.invalid")
     .at((ctx) => ({ path: "/sync/steal", headers: ctx.headers(), body: {} }))
-    .status(404, undefined, "status"),
+    // Flag on by default: guard passes, but the empty payload is missing
+    // `sessionID`, so schema validation rejects it with 400 before the handler's
+    // SyncTicket + ownership checks run.
+    .status(400, undefined, "status"),
   http.protected
     .post("/sync/start", "sync.start")
     .mutating()
