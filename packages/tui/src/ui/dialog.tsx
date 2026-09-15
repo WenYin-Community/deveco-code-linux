@@ -13,12 +13,14 @@ import * as Selection from "../util/selection"
 export function Dialog(
   props: ParentProps<{
     size?: "medium" | "large" | "xlarge"
+    align?: "top" | "center"
     onClose: () => void
   }>,
 ) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const renderer = useRenderer()
+  const centered = () => props.align === "center"
 
   let dismiss = false
   const width = () => {
@@ -42,9 +44,10 @@ export function Dialog(
       width={dimensions().width}
       height={dimensions().height}
       alignItems="center"
+      justifyContent={centered() ? "center" : "flex-start"}
       position="absolute"
       zIndex={3000}
-      paddingTop={dimensions().height / 4}
+      paddingTop={centered() ? 0 : dimensions().height / 4}
       left={0}
       top={0}
       backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
@@ -72,6 +75,7 @@ function init() {
       onClose?: () => void
     }[],
     size: "medium" as "medium" | "large" | "xlarge",
+    align: "top" as "top" | "center",
   })
 
   const renderer = useRenderer()
@@ -143,6 +147,7 @@ function init() {
       }
       batch(() => {
         setStore("size", "medium")
+        setStore("align", "top")
         setStore("stack", [])
       })
       refocus()
@@ -156,6 +161,7 @@ function init() {
         if (item.onClose) item.onClose()
       }
       setStore("size", "medium")
+      setStore("align", "top")
       setStore("stack", [
         {
           element: input,
@@ -171,6 +177,12 @@ function init() {
     },
     setSize(size: "medium" | "large" | "xlarge") {
       setStore("size", size)
+    },
+    get align() {
+      return store.align
+    },
+    setAlign(align: "top" | "center") {
+      setStore("align", align)
     },
   }
 }
@@ -216,7 +228,7 @@ export function DialogProvider(props: ParentProps) {
         }
       >
         <Show when={value.stack.length}>
-          <Dialog onClose={() => value.clear()} size={value.size}>
+          <Dialog onClose={() => value.clear()} size={value.size} align={value.align}>
             {value.stack.at(-1)!.element}
           </Dialog>
         </Show>

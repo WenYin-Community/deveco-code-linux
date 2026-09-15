@@ -753,7 +753,9 @@
     "dismiss": "关闭",
     "multi_select_hint": "（可多选）",
     "type_your_own_answer": "输入你自己的答案",
-    "select_answer_index": "选择答案 {{index}}"
+    "select_answer_index": "选择答案 {{index}}",
+    "view_details": "查看详情",
+    "details_title": "记忆详情"
   },
   "tool": {
     "writing_command": "正在写入命令…",

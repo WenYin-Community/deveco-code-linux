@@ -1,16 +1,57 @@
 import { createStore } from "solid-js/store"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useRenderer } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
+import { TextAttributes } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
+import { useDialog } from "../../ui/dialog"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
 import { useI18n } from "../../i18n"
 
 const QUESTION_MODE = "question"
+
+function QuestionDetails(props: { content: string }) {
+  const dialog = useDialog()
+  const { theme, syntax } = useTheme()
+  const { t } = useI18n()
+  const dimensions = useTerminalDimensions()
+  // Each markdown block needs a row plus a gap; wrapped text still overflows into the
+  // scrollbar, so this only has to avoid a mostly-empty panel.
+  const height = createMemo(() => {
+    const lines = props.content.split("\n").filter((line) => line.trim().length > 0).length
+    return Math.max(6, Math.min(lines * 2 + 2, Math.floor(dimensions().height * 0.6)))
+  })
+
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          {t("question.details_title")}
+        </text>
+        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+          {t("dialog.esc")}
+        </text>
+      </box>
+      <scrollbox height={height()}>
+        <box paddingLeft={1} paddingRight={1}>
+          <markdown
+            syntaxStyle={syntax()}
+            internalBlockMode="top-level"
+            content={props.content}
+            tableOptions={{ style: "grid" }}
+            fg={theme.markdownText}
+            bg={theme.backgroundPanel}
+          />
+        </box>
+      </scrollbox>
+      <box paddingBottom={1} />
+    </box>
+  )
+}
 
 export function QuestionPrompt(props: { request: QuestionRequest; directory?: string }) {
   const { t } = useI18n()
@@ -19,6 +60,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const renderer = useRenderer()
   const tuiConfig = useTuiConfig()
   const modeStack = useOpencodeModeStack()
+  const dialog = useDialog()
 
   const questions = createMemo(() => props.request.questions)
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
@@ -46,6 +88,24 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     if (!value) return false
     return store.answers[store.tab]?.includes(value) ?? false
   })
+
+  const details = createMemo(() => question()?.details)
+  // Label for the footer hint: the configured stroke text, so a rebind in tui.keybinds stays
+  // honest. A multi-binding config shows only the first; the keymap still handles them all.
+  const detailsKey = createMemo(() => {
+    const key = tuiConfig.keybinds.get("question.details")[0]?.key
+    return typeof key === "string" ? key : ""
+  })
+
+  // The modal pushes its own keymap mode, so the popup's escape (reject) stays
+  // inert while the details are open and esc closes only the dialog.
+  function openDetails() {
+    const content = details()
+    if (!content) return
+    dialog.replace(() => <QuestionDetails content={content} />)
+    dialog.setSize("xlarge")
+    dialog.setAlign("center")
+  }
 
   function submit() {
     const answers = questions().map((_, i) => store.answers[i] ?? [])
@@ -225,6 +285,16 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
             reject()
           },
         },
+        ...(details()
+          ? [
+              {
+                name: "question.details",
+                title: t("question.view_details"),
+                category: t("category.question"),
+                run: openDetails,
+              },
+            ]
+          : []),
       ],
       bindings: [
         {
@@ -280,6 +350,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               { key: "down", desc: t("question.next_answer"), group: t("category.question"), cmd: () => moveTo((store.selected + 1) % total) },
               { key: "j", desc: t("question.next_answer"), group: t("category.question"), cmd: () => moveTo((store.selected + 1) % total) },
               { key: "return", desc: t("question.select_answer"), group: t("category.question"), cmd: () => selectOption() },
+              ...(details() ? tuiConfig.keybinds.get("question.details") : []),
               { key: "escape", desc: t("question.reject"), group: t("category.question"), cmd: () => reject() },
               ...tuiConfig.keybinds.get("app.exit"),
             ]),
@@ -509,6 +580,11 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
           <text fg={theme.text}>
             esc <span style={{ fg: theme.textMuted }}>{t("question.dismiss")}</span>
           </text>
+          <Show when={details()}>
+            <text fg={theme.text}>
+              {detailsKey()} <span style={{ fg: theme.textMuted }}>{t("question.view_details")}</span>
+            </text>
+          </Show>
         </box>
       </box>
     </box>

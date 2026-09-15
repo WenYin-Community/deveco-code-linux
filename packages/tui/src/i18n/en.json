@@ -752,7 +752,9 @@
     "dismiss": "dismiss",
     "multi_select_hint": " (select all that apply)",
     "type_your_own_answer": "Type your own answer",
-    "select_answer_index": "Select answer {{index}}"
+    "select_answer_index": "Select answer {{index}}",
+    "view_details": "view details",
+    "details_title": "Memory details"
   },
   "tool": {
     "writing_command": "Writing command...",
