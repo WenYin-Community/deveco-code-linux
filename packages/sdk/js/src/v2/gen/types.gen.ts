@@ -749,6 +749,7 @@ export type QuestionInfo = {
    */
   options: Array<QuestionOption>
   multiple?: boolean
+  details?: string
   custom?: boolean
 }
 

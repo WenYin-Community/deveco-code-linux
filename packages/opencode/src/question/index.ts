@@ -34,6 +34,9 @@ const base = {
   multiple: Schema.optional(Schema.Boolean).annotate({
     description: "Allow selecting multiple choices",
   }),
+  details: Schema.optional(Schema.String).annotate({
+    description: "Long-form reference text the user can expand in the prompt (e.g. the source material a choice acts on). Filled in by plugins, not by the model.",
+  }),
 }
 
 export const Info = Schema.Struct({

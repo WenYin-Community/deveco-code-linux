@@ -95,6 +95,29 @@ describe("tool.question", () => {
     }),
   )
 
+  // The memory plugin injects `details` into the tool args from `tool.execute.before`;
+  // parameter decoding must keep it so the TUI can render it under the `v` shortcut.
+  it.instance("should carry plugin-injected details to the pending request", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const tool = yield* (yield* QuestionTool).init()
+      const questions = [
+        {
+          question: "Delete expired memories?",
+          header: "Expiry",
+          options: [{ label: "Keep all", description: "Cancel the deletions" }],
+          details: "### stale-memory — feedback, 40d old, TTL: 0\nbody text",
+        },
+      ]
+
+      const fiber = yield* tool.execute({ questions }, ctx).pipe(Effect.forkScoped)
+      const item = yield* pending(question)
+      expect(item.questions[0]?.details).toContain("stale-memory")
+      yield* question.reply({ requestID: item.id, answers: [["Keep all"]] })
+      yield* Fiber.join(fiber)
+    }),
+  )
+
   // intentionally removed the zod validation due to tool call errors, hoping prompting is gonna be good enough
   //   test("should throw an Error for header exceeding 30 characters", async () => {
   //     const tool = await QuestionTool.init()
