@@ -357,7 +357,7 @@
         "tree-sitter-bash": "0.25.0",
         "tree-sitter-powershell": "0.25.10",
         "turndown": "7.2.0",
-        "ui-verification-mcp": "0.0.16",
+        "ui-verification-mcp": "0.0.17",
         "ulid": "catalog:",
         "venice-ai-sdk-provider": "2.0.2",
         "vscode-jsonrpc": "8.2.1",
@@ -2921,7 +2921,7 @@
 
     "typescript": ["typescript@5.8.2", "https://registry.npmmirror.com/typescript/-/typescript-5.8.2.tgz", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-aJn6wq13/afZp/jT9QZmwEjDqqvSGp1VT5GVg+f/t6/oVyrgXM6BY1h9BRh/O5p3PlUPAe+WuiEZOmb/49RqoQ=="],
 
-    "ui-verification-mcp": ["ui-verification-mcp@0.0.16", "https://registry.npmmirror.com/ui-verification-mcp/-/ui-verification-mcp-0.0.16.tgz", { "dependencies": { "ajv": "8.18.0" }, "bin": { "ui-verification-mcp": "bin/ui-verification-mcp.cjs" } }, "sha512-m/bhkbtN02DDD6YUBZ4wWbSviFk2jaJeuPJTWA3u6CLl2ZgdvGwqNHdvt8CZ25qwy68wwg3x9ARxMmI5zXgmuQ=="],
+    "ui-verification-mcp": ["ui-verification-mcp@0.0.17", "https://registry.npmmirror.com/ui-verification-mcp/-/ui-verification-mcp-0.0.17.tgz", { "dependencies": { "ajv": "8.18.0" }, "bin": { "ui-verification-mcp": "bin/ui-verification-mcp.cjs" } }, "sha512-gdu0InzxYN+EVxcS8IwmwfpjfBxPEVFOHAenMBiJFjw6FD7nmmGu6xVNviR0R/VFSqlZvcWsPUXHqf7SLq2JWg=="],
 
     "ulid": ["ulid@3.0.1", "https://registry.npmmirror.com/ulid/-/ulid-3.0.1.tgz", { "bin": { "ulid": "dist/cli.js" } }, "sha512-dPJyqPzx8preQhqq24bBG1YNkvigm87K8kVEHCD+ruZg24t6IFEFv00xMWfxcC4djmFtiTLdFuADn4+DOz6R7Q=="],
 
