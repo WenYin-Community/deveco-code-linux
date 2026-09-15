@@ -70,13 +70,8 @@ interface PluginState {
     recalledUserMsgIds: Set<string>
     pendingExpiryToastShown: boolean
     memoryToolUsedThisTurn: Set<string>
-}
-
-interface PendingDeletion {
-    name: string
-    type: string
-    ageDays: number
-    ttlDays: number | null
+    /** Sessions whose last memory tool output carried a pending-expiry notice. */
+    pendingExpiryNotice: Set<string>
 }
 
 const stateMap = new Map<string, PluginState>();
@@ -86,12 +81,59 @@ const initPromises = new Map<string, Promise<PluginState>>();
 // removes pre-existing / crash-before-idle extraction forks from prior runs.
 const sweptProjects = new Set<string>();
 
-async function getPendingExpiryNotice(state: PluginState): Promise<string | null> {
+async function getPendingExpiryNotice(state: PluginState, sessionID?: string): Promise<string | null> {
     if (!state.expiryConfig?.enabled) return null;
     const pending = await state.storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return null;
-    const items = pending.pendingDeletions.map((d: PendingDeletion) => `- **${d.name}** (${d.type}, age: ${d.ageDays}d, TTL: ${d.ttlDays ?? '∞'})`).join('\n');
-    return `\n\n---\n⚠️ **Pending expiry**: ${pending.pendingDeletions.length} memories marked for deletion:\n${items}\n\n**You MUST immediately use the \`question\` tool to present the user with interactive approve/reject choices.** Do not just describe the expiry passively — ask the user to decide: "确认删除" (call \`dream-approve\`) or "保留" (call \`dream-reject\`).`;
+    const count = pending.pendingDeletions.length;
+    // This notice is what produces the expiry question, so mark the session: only its next
+    // matching `question` call gets the real memory bodies attached as `details`.
+    state.pendingExpiryNotice.add(sessionID || 'default');
+    return `\n\n---\n⚠️ **Pending expiry**: ${count} memories marked for deletion.\n\n**You MUST immediately use the \`question\` tool to present the user with interactive approve/reject choices.** Do not just describe the expiry passively — ask the user to decide: "确认删除" (call \`dream-approve\`) or "保留" (call \`dream-reject\`). Ask with the count only: do not list memory names, ages or bodies — the prompt itself shows the details.`;
+}
+
+/**
+ * Details for the pending-expiry confirmation: one section per marked memory (name / description
+ * / body / metadata) joined into a single Markdown document. Read from storage, never from the
+ * model, so a destructive prompt cannot be paraphrased. Null when nothing is pending.
+ */
+export async function readPendingExpiryDetails(storage: MemoryStorage): Promise<string | null> {
+    const pending = await storage.readPendingExpiry();
+    if (!pending || pending.pendingDeletions.length === 0) return null;
+    const sections = [];
+    for (const d of pending.pendingDeletions) {
+        const memory = await storage.read(d.name);
+        // Memory files carry no authoring session, so the only session id in scope is the
+        // dream run that marked these for deletion.
+        const modified = memory?.mtime ? new Date(memory.mtime).toISOString().slice(0, 16).replace('T', ' ') : 'unknown';
+        sections.push([
+            // Bold-labelled name and description, plain body, inline-code metadata values: three
+            // markdown scopes, three distinct theme colours, no TUI styling.
+            `**name**: ${d.name}`,
+            `**description**: ${(memory?.description?.trim() || '(empty)').replace(/\s*\n\s*/g, ' ')}`,
+            memory?.content?.trim() || '(memory file is missing on disk)',
+            [
+                '**metadata**',
+                `\`type: ${memory?.type ?? d.type}\``,
+                `\`sessionId: ${pending.dreamSessionID || '(not recorded)'}\``,
+                `\`modified: ${modified}\``,
+            ].join('\n- '),
+        ].join('\n\n'));
+    }
+    return sections.join('\n\n---\n\n');
+}
+
+interface ExpiryQuestion {
+    question?: string
+    header?: string
+    options?: Array<{ label?: string }>
+    details?: string
+}
+
+/** Only the expiry prompt gets the details panel, so match its wording rather than any deletion. */
+function isExpiryQuestion(question: ExpiryQuestion) {
+    const text = [question.question, question.header, ...(question.options ?? []).map((o) => o.label)].join(' ').toLowerCase();
+    return /expiry|expire|dream-approve|dream-reject|delete|deletion|memory|memories|删除|过期|保留|记忆/.test(text);
 }
 
 async function showPendingExpiryToast(state: PluginState): Promise<void> {
@@ -294,6 +336,7 @@ function createPluginState(
         recalledUserMsgIds: new Set(),
         pendingExpiryToastShown: false,
         memoryToolUsedThisTurn: new Set(),
+        pendingExpiryNotice: new Set(),
     };
 }
 
@@ -441,8 +484,14 @@ async function handleExtractionCleanup(sid: string, memRoot: string, state: Plug
     logger.info('[SessionIdle]', 'Forked extraction done — lock released, threshold reset, cursor:', thresholdState.pendingLastMessageUuid || '(none)', sid);
 }
 
-async function handleDreamCleanup(sid: string, memRoot: string): Promise<void> {
-    await markDreamDone(memRoot);
+async function handleDreamCleanup(sid: string, storage: MemoryStorage): Promise<void> {
+    await markDreamDone(storage.getMemoryPath());
+    // The dream agent writes .pending-expiry.json itself and usually omits dreamSessionID,
+    // so stamp the fork session that produced the file before it is reported as unknown.
+    const pending = await storage.readPendingExpiry();
+    if (pending && !pending.dreamSessionID) {
+        await storage.writePendingExpiry({ ...pending, dreamSessionID: sid });
+    }
     logger.info('[SessionIdle]', 'Forked dream done — consolidation lock/flag reset:', sid);
 }
 
@@ -469,7 +518,7 @@ async function handleForkedSessionIdle(sid: string, state: PluginState, client: 
             logger.warn('[SessionIdle]', 'delete forked session failed:', e instanceof Error ? e.message : String(e));
         }
     } else if (agentType === 'dream') {
-        await handleDreamCleanup(sid, memRoot);
+        await handleDreamCleanup(sid, state.storage);
     } else if (agentType === 'skill-review') {
         await handleSkillReviewCleanup(sid, memRoot);
     } else {
@@ -898,6 +947,22 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             } catch (e) { logger.error('[Compacting]', 'Failed to get compaction context:', e instanceof Error ? e.message : String(e)); }
         },
         'experimental.chat.messages.transform': async (_input, output) => handleMessagesTransform(_input, output as unknown as MessagesTransformOutput, state, client),
+        'tool.execute.before': async (input, output) => {
+            if (input.tool !== 'question' || !state.expiryConfig?.enabled) return;
+            const sid = input.sessionID || 'default';
+            if (!state.pendingExpiryNotice.has(sid)) return;
+            const questions = (output.args?.questions as ExpiryQuestion[] | undefined) ?? [];
+            const target = questions.find(isExpiryQuestion);
+            if (!target) return;
+            try {
+                const details = await readPendingExpiryDetails(state.storage);
+                if (!details) return;
+                target.details = details;
+                state.pendingExpiryNotice.delete(sid);
+            } catch (e) {
+                logger.error('[Expiry]', 'Failed to attach pending expiry details:', e instanceof Error ? e.message : String(e));
+            }
+        },
         'tool.execute.after': async (input, output) => handleToolExecuteAfter(input, state, client, projectID, directory),
         'experimental.text.complete': async (input, output) => {
             const sid = input.sessionID || 'default';
@@ -956,7 +1021,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                 args: {
                     name: z.string().optional().describe('Memory name to read'),
                 },
-                async execute(args: { name?: string }, _ctx: ToolContext) {
+                async execute(args: { name?: string }, ctx: ToolContext) {
                     if (!state.config.enabled) {
                         return 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true';
                     }
@@ -973,7 +1038,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                                     result += `\n\n<system-reminder>This memory is ${ageDays} days old. Memories are point-in-time observations — claims about code behavior may be outdated. Verify against current code before asserting as fact.</system-reminder>`;
                                 }
                             }
-                            const notice = await getPendingExpiryNotice(state);
+                            const notice = await getPendingExpiryNotice(state, ctx.sessionID);
                             if (notice) result += notice;
                             await showPendingExpiryToast(state);
                             return result;
@@ -987,7 +1052,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                             output += '   ' + h.description + '\n\n';
                         }
                         output += '\n---\n\n**Stats:** ' + stats.total + ' total\n';
-                        const notice = await getPendingExpiryNotice(state);
+                        const notice = await getPendingExpiryNotice(state, ctx.sessionID);
                         if (notice) output += notice;
                         await showPendingExpiryToast(state);
                         return output;
@@ -1042,7 +1107,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                             state.pendingWriteMap.set(sid, existing ? existing + ', ' + writeText : writeText);
                         }
                         await showPendingExpiryToast(state);
-                        const expiryNotice = await getPendingExpiryNotice(state);
+                        const expiryNotice = await getPendingExpiryNotice(state, sid);
                         return {
                             title: visibleWriteEnabled ? `📝 Memory '${memory.name}' ${action}` : `Memory '${memory.name}' ${action}`,
                             output: `Memory ${memory.name} ${action}${expiryNotice ?? ''}`,
@@ -1089,7 +1154,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                             }
                             output += (i + 1) + '. **' + m.name + '**\n' + content + '\n\n';
                         }
-                        const expiryNotice = await getPendingExpiryNotice(state);
+                        const expiryNotice = await getPendingExpiryNotice(state, ctx?.sessionID);
                         if (expiryNotice) output += expiryNotice;
                         await showPendingExpiryToast(state);
                         const sid = ctx.sessionID || 'default';
