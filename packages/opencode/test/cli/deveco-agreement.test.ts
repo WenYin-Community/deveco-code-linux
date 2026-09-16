@@ -261,3 +261,24 @@ describe("agreement offline degradation", () => {
     expect(kvData[pendingKey]).toBe(true)
   })
 })
+
+describe("agreement identity and version coverage", () => {
+  test("checks both agreement identities and detects subversion updates", async () => {
+    const { AgreementService } = await import("@/cli/deveco-agreement")
+    let entries: Array<Record<string, unknown>> = [{ agrType: "20000222", isAgree: true, version: 1, newestVersion: 1 }]
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ errorCode: 0, signInfo: entries }),
+    })
+    try {
+      const service = new AgreementService({ tms_url: server.url.toString() })
+      expect((await service.queryAgreement("test-access")).status).toBe(AgreementStatus.NEED_SIGN)
+      entries = [...entries, { agrType: "10000351", isAgree: true, version: 1, newestVersion: 1, subVersion: 0, newestSubVersion: 1 }]
+      const result = await service.queryAgreement("test-access")
+      expect(result.status).toBe(AgreementStatus.NEED_RE_SIGN)
+      expect(result.signInfos).toHaveLength(2)
+    } finally {
+      server.stop(true)
+    }
+  })
+})

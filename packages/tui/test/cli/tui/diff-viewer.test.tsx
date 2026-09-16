@@ -10,6 +10,7 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { TuiConfigProvider } from "../../../src/config"
 import { TuiKeybind } from "../../../src/config/keybind"
 import { OpencodeKeymapProvider } from "../../../src/keymap"
+import { I18nProvider } from "../../../src/i18n"
 import diffViewerPlugin from "../../../src/feature-plugins/system/diff-viewer"
 import { createTuiPluginApi } from "../../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -156,9 +157,11 @@ async function renderDiffViewer(vcsDiff: unknown[], height = 20) {
         <OpencodeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={config}>
             <KVProvider>
-              <ThemeProvider mode="dark">
-                {renderDiff?.({ params: "params" in current ? current.params : undefined })}
-              </ThemeProvider>
+              <I18nProvider>
+                <ThemeProvider mode="dark">
+                  {renderDiff?.({ params: "params" in current ? current.params : undefined })}
+                </ThemeProvider>
+              </I18nProvider>
             </KVProvider>
           </TuiConfigProvider>
         </OpencodeKeymapProvider>

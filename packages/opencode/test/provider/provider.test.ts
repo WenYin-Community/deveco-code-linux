@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, spyOn, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
@@ -1812,3 +1812,56 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     expect(keyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
 )
+
+for (const { available, expired } of [{ available: true, expired: false }, { available: false, expired: false }, { available: false, expired: true }, { available: true, expired: true }]) {
+  it.instance(
+    `signed-in deveco with no catalog cache and a third-party default: cloud available=${available}, expired=${expired}`,
+    () => Effect.gen(function* () {
+      const { devecoAuth } = yield* Effect.promise(() => import("@/plugin/deveco/auth"))
+      const refresh = spyOn(devecoAuth, "refreshToken").mockResolvedValue(null)
+      yield* Effect.addFinalizer(() => Effect.sync(() => refresh.mockRestore()))
+      const cache = Global.Path.cache
+      const isolatedCache = yield* tmpdirScoped().pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+      const { clearDevecoModelCache } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+        expect(String(input)).toContain("/codeGenie/modelConfig?")
+        if (!available) throw new Error("Model catalog unavailable")
+        return Response.json({ code: 200, body: { version: 1, inner_models: [{
+          protocol: "openai", group_name: "default",
+          model_configs: [{ id: 1, model_id: "test-deveco-model", context_window: 32768, output: 8192 }],
+        }] } })
+      }, { preconnect: globalThis.fetch.preconnect }))
+      yield* Effect.addFinalizer(() => Effect.sync(() => {
+        fetch.mockRestore()
+        clearDevecoModelCache()
+        Global.Path.cache = cache
+      }))
+      Global.Path.cache = isolatedCache
+      clearDevecoModelCache()
+      yield* setProcessEnv("DEVECO_AUTH_CONTENT", "")
+      yield* withAuthJson(JSON.stringify({
+        deveco: { type: "oauth", access: "test-login-access", refresh: "test-refresh", expires: expired ? 1 : Date.now() + 60000, isRealName: true },
+        openai: { type: "api", key: "test-third-party-key" },
+      }))
+      const providers = yield* list
+      expect(fetch).toHaveBeenCalledTimes(expired ? 0 : 1)
+      expect(refresh).not.toHaveBeenCalled()
+      expect(providers[ProviderV2.ID.openai]).toBeDefined()
+      const builtIn = providers[ProviderV2.ID.make("deveco")]
+      if (available && expired) {
+        expect(builtIn).toBeUndefined()
+        refresh.mockResolvedValue({ accessToken: "renewed-access", refreshToken: "renewed-refresh", isRealName: true })
+        const model = yield* Provider.use.getModel(ProviderV2.ID.make("deveco"), ModelV2.ID.make("test-deveco-model"))
+        expect(model.id).toBe(ModelV2.ID.make("test-deveco-model"))
+        expect(refresh).toHaveBeenCalledTimes(1)
+        return
+      }
+      if (available) {
+        expect(builtIn?.models[ModelV2.ID.make("test-deveco-model")]).toBeDefined()
+        return
+      }
+      expect(builtIn).toBeUndefined()
+    }),
+    { config: { model: "openai/gpt-4o", enabled_providers: ["openai", "deveco"] } },
+  )
+}

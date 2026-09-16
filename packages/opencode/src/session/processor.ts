@@ -1002,7 +1002,7 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 aborted = true
                 // Exit queue on interrupt
-                if (ctx.model?.id) {
+                if (ctx.model?.providerID === "deveco" && ctx.model.id) {
                   yield* exitQueue.exit(ctx.sessionID, ctx.model.id).pipe(Effect.forkIn(scope), Effect.ignore)
                 }
                 if (!ctx.assistantMessage.error) {
@@ -1051,7 +1051,7 @@ export const layer = Layer.effect(
           )
 
           // Exit queue on success
-          if (ctx.model?.id) {
+          if (ctx.model?.providerID === "deveco" && ctx.model.id) {
             yield* exitQueue.exit(ctx.sessionID, ctx.model.id).pipe(Effect.forkIn(scope), Effect.ignore)
           }
 

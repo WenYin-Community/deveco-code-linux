@@ -1,4 +1,5 @@
 import { Auth } from "@/auth"
+import { UnknownError } from "../errors"
 
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -9,6 +10,11 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (handlers) =>
   Effect.gen(function* () {
     const auth = yield* Auth.Service
+
+    const authList = Effect.fn("ControlHttpApi.authList")(function* () {
+      const saved = yield* auth.all().pipe(Effect.mapError(() => new UnknownError({ message: "Unable to load saved credentials." })))
+      return Object.entries(saved).map(([providerID, info]) => ({ providerID, type: info.type, removable: !process.env.DEVECO_AUTH_CONTENT }))
+    })
 
     const authSet = Effect.fn("ControlHttpApi.authSet")(function* (ctx: {
       params: { providerID: ProviderV2.ID }
@@ -38,6 +44,6 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
       return true
     })
 
-    return handlers.handle("authSet", authSet).handle("authRemove", authRemove).handle("log", log)
+    return handlers.handle("authList", authList).handle("authSet", authSet).handle("authRemove", authRemove).handle("log", log)
   }),
 )

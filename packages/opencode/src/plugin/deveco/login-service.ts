@@ -17,12 +17,14 @@ export class LoginService {
   private config: LoginConfig
   private server: LocalAuthServer | null = null
   private userInfo: UserInfo | null = null
+  private loginAttempt = 0
 
   constructor(config?: Partial<LoginConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config }
   }
 
   public async login(): Promise<LoginResult> {
+    const attempt = ++this.loginAttempt
     try {
       const loginState = this.generateLoginState()
 
@@ -50,7 +52,17 @@ export class LoginService {
 
       const userInfo = await this.getUserInfoFromJwt(jwtToken)
 
+      if (attempt !== this.loginAttempt) throw new LoginCancelledError()
+
+      const { clearDevecoModelCache } = await import("../deveco-models")
       await tokenStorage.saveToken(jwtToken)
+
+      if (attempt !== this.loginAttempt) {
+        if (await tokenStorage.loadToken() === jwtToken) await tokenStorage.clearToken()
+        throw new LoginCancelledError()
+      }
+
+      clearDevecoModelCache()
 
       this.userInfo = userInfo
 
@@ -91,15 +103,13 @@ export class LoginService {
   }
 
   public cancel(): void {
+    this.loginAttempt++
     if (this.server) {
       this.server.cancel()
     }
   }
 
   public async isLoggedIn(): Promise<boolean> {
-    if (this.userInfo) {
-      return true
-    }
     const token = await tokenStorage.loadToken()
     return token !== null
   }
@@ -109,13 +119,33 @@ export class LoginService {
   }
 
   public async logout(): Promise<void> {
-    await tokenStorage.clearToken()
+    this.cancel()
+    const { stopAgreementSync } = await import("@/cli/deveco-agreement-sync")
+    stopAgreementSync()
     this.userInfo = null
-    try {
-      await saveAuthToDisk("deveco", null)
-    } catch (err) {
-      logWarn("failed to clear auth.json deveco entry during logout", { service: "deveco", error: String(err) })
-    }
+    // Independent cleanup must finish even if one credential file cannot be written.
+    const results = await Promise.allSettled([
+      tokenStorage.clearToken(),
+      saveAuthToDisk("deveco", null),
+      (async () => {
+        const { clearDevEcoAccess } = await import("./access")
+        clearDevEcoAccess()
+      })(),
+      (async () => {
+        const { clearDevecoModelCache } = await import("../deveco-models")
+        clearDevecoModelCache()
+      })(),
+      (async () => {
+        const { clearAnalyticsQueue } = await import("../analytics/uploader")
+        await clearAnalyticsQueue()
+      })(),
+      (async () => {
+        const { disableAnalyticsMagpie } = await import("../analytics-magpie/uploader")
+        await disableAnalyticsMagpie()
+      })(),
+    ])
+    const failure = results.find((result) => result.status === "rejected")
+    if (failure?.status === "rejected") throw failure.reason
     logInfo("logout succeeded", { service: "deveco" })
   }
 

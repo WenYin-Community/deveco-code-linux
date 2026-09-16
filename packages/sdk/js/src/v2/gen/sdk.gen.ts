@@ -11,6 +11,8 @@ import type {
   AppSkillsErrors,
   AppSkillsResponses,
   Auth as Auth3,
+  AuthListErrors,
+  AuthListResponses,
   AuthRemoveErrors,
   AuthRemoveResponses,
   AuthSetErrors,
@@ -76,6 +78,8 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GlobalAcceptProductAgreementErrors,
+  GlobalAcceptProductAgreementResponses,
   GlobalConfigGetErrors,
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
@@ -86,6 +90,10 @@ import type {
   GlobalEventResponses,
   GlobalHealthErrors,
   GlobalHealthResponses,
+  GlobalProductAgreementErrors,
+  GlobalProductAgreementResponses,
+  GlobalRetryAgreementUploadErrors,
+  GlobalRetryAgreementUploadResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
   InstanceDisposeErrors,
@@ -432,6 +440,18 @@ class HeyApiRegistry<T> {
 }
 
 export class Auth extends HeyApiClient {
+  /**
+   * List saved credential metadata
+   *
+   * List provider IDs and credential types without exposing secrets.
+   */
+  public list<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<AuthListResponses, AuthListErrors, ThrowOnError>({
+      url: "/auth",
+      ...options,
+    })
+  }
+
   /**
    * Remove auth credentials
    *
@@ -1296,6 +1316,82 @@ export class Config extends HeyApiClient {
 }
 
 export class Global extends HeyApiClient {
+  /**
+   * Get product agreements
+   */
+  public productAgreement<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      GlobalProductAgreementResponses,
+      GlobalProductAgreementErrors,
+      ThrowOnError
+    >({ url: "/global/product-agreement", ...options })
+  }
+
+  /**
+   * Accept product agreements on this server
+   */
+  public acceptProductAgreement<ThrowOnError extends boolean = false>(
+    parameters?: {
+      version?: string
+      accepted?: true
+      serviceRevision?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "version" },
+            { in: "body", key: "accepted" },
+            { in: "body", key: "serviceRevision" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      GlobalAcceptProductAgreementResponses,
+      GlobalAcceptProductAgreementErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-agreement",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Retry the current account agreement upload
+   */
+  public retryAgreementUpload<ThrowOnError extends boolean = false>(
+    parameters?: {
+      force?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "force" }] }])
+    return (options?.client ?? this.client).post<
+      GlobalRetryAgreementUploadResponses,
+      GlobalRetryAgreementUploadErrors,
+      ThrowOnError
+    >({
+      url: "/global/product-agreement/retry",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Get health
    *

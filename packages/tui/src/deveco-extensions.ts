@@ -9,7 +9,7 @@
  * Registration site: packages/opencode/src/cli/deveco-ui/register.ts
  * called from: packages/opencode/src/cli/cmd/tui.ts (before TUI run())
  */
-import type { JSX } from "solid-js"
+import type { JSX, ParentProps } from "solid-js"
 import type { useSync } from "./context/sync"
 
 /** Sync object type — inferred from TUI's own useSync hook. */
@@ -27,10 +27,7 @@ export type SyncObject = ReturnType<typeof useSync>
  * authentication + agreement are complete, it renders the standard prompt UI.
  * When not, it renders the onboarding flow (privacy / entry / provider / key).
  */
-export type DevEcoHomeBody = (props: {
-  sync: SyncObject
-  bodySlotHeight: number
-}) => JSX.Element
+export type DevEcoHomeBody = (props: { sync: SyncObject; bodySlotHeight: number }) => JSX.Element
 
 /**
  * Reads the local auth store and returns a sentinel error message if it is
@@ -47,16 +44,18 @@ export type DevEcoLocalAuthErrorReader = () => Promise<string | undefined>
  * Returns { ok: true } on success, or { ok: false, message } describing why
  * it failed (e.g. Chrome not installed).
  */
-export type DevEcoComplainOpener = (latestConversation?: string) => Promise<
-  | { ok: true }
-  | { ok: false; message: string }
->
+export type DevEcoComplainOpener = (
+  latestConversation?: string,
+) => Promise<{ ok: true } | { ok: false; message: string }>
 
 /** Pluralization helper: `pluralize(1, "{} item", "{} items")` → "1 item". */
 export type DevEcoPluralize = (count: number, singular: string, plural: string) => string
 
 /** Privacy settings dialog. Shown via the `/privacy` command. */
 export type DevEcoPrivacyDialog = () => JSX.Element
+
+/** Agreement review shown when a built-in model request discovers updated terms. */
+export type DevEcoAgreementReviewDialog = (props: { onComplete: () => void }) => JSX.Element
 
 /** Log collection dialog. Shown via the `/collect` command or crash detection. */
 export type DevEcoCollectDialog = (props: { triggerType?: string }) => JSX.Element
@@ -72,11 +71,14 @@ export type DevEcoConsumeCrashInfo = () => boolean
  * the host runs without DevEco features (generic upstream mode).
  */
 export type DevEcoExtensions = {
+  agreementGate?: (props: ParentProps<{ home: boolean; onConsentRequired: () => void }>) => JSX.Element
   homeBody?: DevEcoHomeBody
   readLocalAuthError?: DevEcoLocalAuthErrorReader
   openComplainPage?: DevEcoComplainOpener
   pluralize?: DevEcoPluralize
   privacyDialog?: DevEcoPrivacyDialog
+  agreementReviewDialog?: DevEcoAgreementReviewDialog
+  isAgreementReviewError?: (message: string) => boolean
   collectDialog?: DevEcoCollectDialog
   consumeCrashInfo?: DevEcoConsumeCrashInfo
 }

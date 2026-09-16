@@ -24,6 +24,7 @@ import { formatKeyBindings, useBindings, useKeymapSelector } from "../keymap"
 export interface DialogSelectProps<T> {
   title: string
   titleView?: JSX.Element
+  notice?: JSX.Element
   placeholder?: string
   footer?: JSX.Element
   emptyView?: JSX.Element
@@ -524,6 +525,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               placeholderColor={theme.textMuted}
             />
           </box>
+        </Show>
+        <Show when={props.notice}>
+          <box paddingTop={1} paddingBottom={1}>{props.notice}</box>
         </Show>
       </box>
       <box flexGrow={1} flexShrink={1}>

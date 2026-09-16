@@ -1,3 +1,5 @@
+import { Global } from "@opencode-ai/core/global"
+import { tmpdir } from "../fixture/fixture"
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer, Option } from "effect"
@@ -61,6 +63,83 @@ describe("global HttpApi", () => {
 
       expect(response.status).toBe(400)
       expect(yield* response.json).toEqual({ success: false, error: "Invalid request body" })
+    }),
+  )
+})
+
+const productPath = "/global/product-agreement"
+describe("product agreement HttpApi", () => {
+  it.live("exposes review links and accepts the displayed version without HUAWEI auth", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClient.get(productPath)
+      expect(response.status).toBe(200)
+      const agreement = (yield* response.json) as { version: string; termsUrl: string; privacyUrl: string }
+      expect(agreement.termsUrl).toStartWith("https://")
+      expect(agreement.privacyUrl).toStartWith("https://")
+      const accepted = yield* HttpClientRequest.post(productPath).pipe(
+        HttpClientRequest.setBody(HttpBody.text(JSON.stringify({ version: agreement.version, accepted: true }), "application/json")),
+        HttpClient.execute,
+      )
+      expect(accepted.status).toBe(200)
+      expect(yield* accepted.json).toMatchObject({ accepted: true, version: agreement.version })
+    }),
+  )
+  it.live("reports storage failures as server errors without exposing filesystem paths", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const original = Global.Path.state
+      yield* Effect.addFinalizer(() => Effect.sync(() => { Global.Path.state = original }))
+      yield* Effect.promise(() => Bun.write(`${tmp.path}/not-a-directory`, "file"))
+      Global.Path.state = `${tmp.path}/not-a-directory`
+      const response = yield* HttpClientRequest.post(productPath).pipe(
+        HttpClientRequest.setBody(HttpBody.text(JSON.stringify({ version: "1", accepted: true }), "application/json")),
+        HttpClient.execute,
+      )
+      expect(response.status).toBe(500)
+      expect(yield* response.json).toEqual({
+        _tag: "UnknownError", message: "Unable to save product agreement acceptance.",
+      })
+    }),
+  )
+  it.live("rejects missing consent and outdated versions", () =>
+    Effect.gen(function* () {
+      for (const payload of [{ version: "old", accepted: true }, { version: "1", accepted: false }]) {
+        const response = yield* HttpClientRequest.post(productPath).pipe(
+          HttpClientRequest.setBody(HttpBody.text(JSON.stringify(payload), "application/json")),
+          HttpClient.execute,
+        )
+        expect(response.status).toBe(400)
+      }
+    }),
+  )
+})
+
+describe("agreement upload HttpApi", () => {
+  it.live("retry cannot create consent and stale service revisions are rejected", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const original = Global.Path.state
+      yield* Effect.addFinalizer(() => Effect.sync(() => { Global.Path.state = original }))
+      Global.Path.state = tmp.path
+      const retry = yield* HttpClientRequest.post(`${productPath}/retry`).pipe(
+        HttpClientRequest.setBody(HttpBody.text(JSON.stringify({ force: true }), "application/json")),
+        HttpClient.execute,
+      )
+      expect(retry.status).toBe(200)
+      expect(yield* retry.json).toMatchObject({ accepted: false, upload: { state: "not_signed" } })
+      const stale = yield* HttpClientRequest.post(productPath).pipe(
+        HttpClientRequest.setBody(HttpBody.text(JSON.stringify({ version: "1", accepted: true, serviceRevision: "stale" }), "application/json")),
+        HttpClient.execute,
+      )
+      expect(stale.status).toBe(400)
+      const current = yield* HttpClient.get(productPath)
+      expect(yield* current.json).toMatchObject({ accepted: false })
     }),
   )
 })

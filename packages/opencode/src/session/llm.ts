@@ -86,6 +86,8 @@ const live: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
+      const { requireProductAccess } = yield* Effect.promise(() => import("@/cli/deveco-product-agreement"))
+      yield* Effect.tryPromise({ try: requireProductAccess, catch: (error) => error })
       let chatId = sessionChatIdMap.get(input.sessionID)
       if (!chatId) {
         chatId = crypto.randomUUID().replace(/-/g, "")
@@ -101,15 +103,20 @@ const live: Layer.Layer<
         mode: input.agent.mode,
       })
 
-      const [language, cfg, item, info] = yield* Effect.all(
+      const [language, cfg, item] = yield* Effect.all(
         [
           provider.getLanguage(input.model),
           config.get(),
           provider.getProvider(input.model.providerID),
-          auth.get(input.model.providerID),
         ],
         { concurrency: "unbounded" },
       )
+
+      if (input.model.providerID === "deveco") {
+        const { requireDevEcoAccess } = yield* Effect.promise(() => import("@/plugin/deveco/access"))
+        yield* Effect.tryPromise({ try: () => requireDevEcoAccess(cfg.agreement), catch: (error) => error })
+      }
+      const info = yield* auth.get(input.model.providerID)
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const prepared = yield* LLMRequestPrep.prepare({

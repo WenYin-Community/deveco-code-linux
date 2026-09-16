@@ -13,6 +13,8 @@ import { sessionChatIdMap } from "./session"
 import { ensureValidToken } from "./token-refresh"
 import { ACCESS_TOKEN_EXPIRES_MS, PROVIDER_ID } from "./types"
 import { MAINLAND_CHINA_ONLY_MESSAGE, regionPolicy } from "./region-policy"
+import { requireDevEcoAccess } from "./access"
+import type { AgreementConfig } from "@/cli/deveco-legal"
 
 export { TOOL_IMPROVEMENT_HEADER }
 
@@ -26,7 +28,11 @@ export function isHuaweiInferenceRequest(input: RequestInfo | URL) {
 }
 
 export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
+  let agreement: AgreementConfig | undefined
   return {
+    async config(config) {
+      agreement = (config as { agreement?: AgreementConfig }).agreement
+    },
     auth: {
       provider: PROVIDER_ID,
       async loader(getAuth, _provider) {
@@ -45,6 +51,11 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
                   headers: { "Content-Type": "application/json" },
                 })
               }
+              try {
+                await requireDevEcoAccess(agreement)
+              } catch (error) {
+                return Response.json({ error: error instanceof Error ? error.message : "HUAWEI authentication required" }, { status: 403 })
+              }
             }
 
             if (init?.headers) {
@@ -60,6 +71,9 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
             }
 
             const currentAuth = await getAuth()
+            if (isHuaweiInferenceRequest(requestInput) && currentAuth?.type !== "oauth") {
+              return Response.json({ error: "Sign in with HUAWEI ID to use built-in models." }, { status: 401 })
+            }
             if (currentAuth?.type === "oauth") {
               if (!currentAuth.access || currentAuth.expires < Date.now()) {
                 const newToken = await ensureValidToken()
@@ -158,7 +172,7 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
       methods: [
         {
           type: "oauth",
-          label: "Login with Huawei DevEco Account",
+          label: "Sign in with HUAWEI ID",
           async authorize() {
             return {
               url: "",
@@ -190,6 +204,7 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
                   access,
                   refresh,
                   expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
+                  isRealName: result.userInfo?.isRealName ?? false,
                 }
               },
             }

@@ -25,6 +25,7 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import { readdirSync } from "node:fs"
 import path from "node:path"
+import { PRODUCT_AGREEMENT_VERSION } from "../../src/cli/deveco-product-agreement"
 import { TestLLMServer } from "./llm-server"
 import { testProviderConfig } from "./test-provider"
 import { it } from "./effect"
@@ -213,6 +214,17 @@ export function withCliFixture<A, E>(
     // FileSystem.makeTempDirectoryScoped handles both creation and scope-tied
     // cleanup — replaces the old mkdir + addFinalizer pair.
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-" })
+
+    // Seed product agreement acceptance into the isolated state dir. The
+    // subprocess gate (requireProductAccess) reads
+    // $XDG_STATE_HOME/deveco/product-agreement.json and has no runtime env
+    // bypass; Bun.write creates the missing parent directories.
+    yield* Effect.promise(() =>
+      Bun.write(
+        path.join(home, ".local/state/deveco/product-agreement.json"),
+        JSON.stringify({ version: PRODUCT_AGREEMENT_VERSION, acceptedAt: Date.now() }),
+      ),
+    )
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
     const env = isolatedEnv(home, configJson)

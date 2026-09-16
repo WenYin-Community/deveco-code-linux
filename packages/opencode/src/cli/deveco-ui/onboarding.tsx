@@ -1,3 +1,5 @@
+import { useI18n } from "@opencode-ai/tui/i18n"
+import { AgreementPanel } from "./agreement-panel"
 import { Show, createSignal, createMemo, For, createEffect, onMount, type ParentProps } from 'solid-js';
 import { useKeyboard, useTerminalDimensions } from '@opentui/solid';
 import { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
@@ -6,27 +8,24 @@ import { useSync } from '@opencode-ai/tui/context/sync';
 import { useExit } from '@opencode-ai/tui/context/exit';
 import { useDialog } from '@opencode-ai/tui/ui/dialog';
 import { useSDK } from '@opencode-ai/tui/context/sdk';
+import { useLocal } from '@opencode-ai/tui/context/local';
 import { DialogSelect } from '@opencode-ai/tui/ui/dialog-select';
 import { DialogPrompt } from '@opencode-ai/tui/ui/dialog-prompt';
 import { Link } from '@opencode-ai/tui/ui/link';
 import { useToast } from '@opencode-ai/tui/ui/toast';
+import { Spinner } from '@opencode-ai/tui/component/spinner';
 import open from 'open';
 import { devecoAuth, ACCESS_TOKEN_EXPIRES_MS, saveAuthToDisk } from '@/plugin/deveco';
-import { useKV } from '@opencode-ai/tui/context/kv';
-import { resolveAgreementConfig, getPrivacyAcceptedKey, getSignPendingKey, type AgreementConfig } from '@/cli/deveco-legal';
 import { logInfo, logWarn, logError } from '@/plugin/deveco/log';
-import { agreementService, AgreementStatus } from '@/cli/deveco-agreement';
-import type { AgreementCheckResult } from '@/cli/deveco-agreement';
 import { resolveDevEcoHome, saveDevEcoHome, findDevEcoHomes, hasConfiguredDevEcoHome } from '@/tool/lib/env';
 import HuaweiEndpoints from '../../../huawei-endpoints.json';
 import { BANNER_HOME_CONTENT_INSET, HOME_CONTENT_MAX_WIDTH, homeContentPadX } from '@opencode-ai/tui/component/banner';
 
-declare const DEVECO_SKIP_AGREEMENT: boolean | undefined
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from '@opencode-ai/sdk/v2';
 
-type OnboardingStep = 'privacy' | 'entry' | 'auth' | 'deveco-home' | 'providers' | 'key' | 'realname';
+type OnboardingStep = 'privacy' | 'product-privacy' | 'entry' | 'auth' | 'deveco-home' | 'providers' | 'key' | 'realname';
 
-const LIST_HELP = 'Use Enter to Select';
+
 
 function OnboardingContent(props: ParentProps) {
   const dimensions = useTerminalDimensions();
@@ -53,9 +52,6 @@ function providerLabel(id: string, name: string): string {
   if (id === 'github-copilot') {
     return 'GitHub Copilot';
   }
-  if (id === 'opencode') {
-    return 'DevEco Code Zen';
-  }
   return name;
 }
 
@@ -80,9 +76,10 @@ type ProviderAuthContext = {
   sdk: AuthSdk;
   theme: AuthTheme;
   finish: () => Promise<void>;
+  t: ReturnType<typeof useI18n>["t"];
 };
 
-async function pickAuthMethodIndex(dialog: AuthDialog, methods: ProviderAuthMethod[]): Promise<number | null> {
+async function pickAuthMethodIndex(dialog: AuthDialog, methods: ProviderAuthMethod[], t: ReturnType<typeof useI18n>["t"]): Promise<number | null> {
   if (methods.length <= 1) {
     return 0;
   }
@@ -90,7 +87,7 @@ async function pickAuthMethodIndex(dialog: AuthDialog, methods: ProviderAuthMeth
     dialog.replace(
       () => (
         <DialogSelect
-          title='Select auth method'
+          title={t("dialog.select_auth_method")}
           options={methods.map((m, i) => ({
             title: m.label,
             value: i,
@@ -168,7 +165,7 @@ async function runOAuthCodeFlow(
   authorization: ProviderAuthAuthorization,
 ): Promise<boolean> {
   const code = await DialogPrompt.show(ctx.dialog, label, {
-    placeholder: 'Authorization code',
+    placeholder: ctx.t("dialog.placeholder_authorization_code"),
     description: () => (
       <box gap={1}>
         <text fg={ctx.theme.textMuted}>{authorization.instructions}</text>
@@ -205,7 +202,7 @@ async function runOAuthAutoFlow(
         <Link href={authorization.url} fg={ctx.theme.primary} />
         <text fg={ctx.theme.textMuted}>{authorization.instructions}</text>
       </box>
-      <text fg={ctx.theme.textMuted}>Waiting for authorization...</text>
+      <text fg={ctx.theme.textMuted}>{ctx.t("dialog.waiting_for_authorization")}</text>
     </box>
   ));
   const cbResult = await ctx.sdk.client.provider.oauth.callback({
@@ -257,28 +254,16 @@ async function runProviderOAuth(
 
 export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean; initialAuthError?: string }) {
   const { theme } = useTheme();
+  const { t } = useI18n();
   const sync = useSync();
   const exit = useExit();
   const dialog = useDialog();
   const sdk = useSDK();
-  const kv = useKV();
+  const local = useLocal();
   const toast = useToast();
-
-  // Merge project-level agreement config overrides with built-in defaults
-  const agreementConfig = createMemo(() =>
-    resolveAgreementConfig((sync.data.config as unknown as { agreement?: AgreementConfig }).agreement)
-  )
 
   // Initial step determined by caller: 'entry' if not logged in, 'privacy' if logged in but agreement pending
   const [step, setStep] = createSignal<OnboardingStep>(props.initialStep ?? 'entry')
-  const [privacyIndex, setPrivacyIndex] = createSignal(0);
-  const [checkboxChecked, setCheckboxChecked] = createSignal(false);
-  const [signBusy, setSignBusy] = createSignal(false);
-  const [signError, setSignError] = createSignal<string | null>(null);
-  const [checkingStatus, setCheckingStatus] = createSignal(step() === 'privacy');
-  const [agreementCheckResult, setAgreementCheckResult] = createSignal<AgreementCheckResult | null>(null);
-  const [networkErrorNoCache, setNetworkErrorNoCache] = createSignal(false);
-  const [sessionExpired, setSessionExpired] = createSignal(props.sessionExpired ?? false);
   const [entryIndex, setEntryIndex] = createSignal(0);
   const [realnameIndex, setRealnameIndex] = createSignal(0);
   const [realnameRecheckError, setRealnameRecheckError] = createSignal<string | null>(null);
@@ -287,12 +272,36 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const [providerIndex, setProviderIndex] = createSignal(0);
   let authAborted = false;
   let authReturnStep: 'entry' | 'realname' = 'entry';
+  let productReturnStep: 'auth' | 'providers' | 'complete' = props.initialStep === 'product-privacy' ? 'complete' : 'auth';
+
+  const continueSetup = () => {
+    if (productReturnStep === 'complete') return props.onComplete();
+    setStep(productReturnStep);
+    if (productReturnStep === 'auth') {
+      authReturnStep = 'entry';
+      void runBrowserLogin();
+    }
+  };
+
+  const chooseEntry = async () => {
+    productReturnStep = entryIndex() === 0 ? 'auth' : 'providers';
+    try {
+      const result = await sdk.client.global.productAgreement({ throwOnError: true });
+      if (!result.data) throw new Error(t("account.agreement_load_failed"));
+      if (!result.data.accepted) {
+        setStep('product-privacy');
+        return;
+      }
+      continueSetup();
+    } catch {
+      setAuthMessage(t("account.agreement_read_failed"));
+    }
+  };
   const [providerQuery, setProviderQuery] = createSignal('');
   const [pid, setPid] = createSignal<string | null>(null);
   const [key, setKey] = createSignal('');
   let input: TextareaRenderable | undefined;
   let providerScroll: ScrollBoxRenderable | undefined;
-  let privacyScroll: ScrollBoxRenderable | undefined;
 
   // DEVECO_HOME configuration step signals
   const [devecoHomeIndex, setDevecoHomeIndex] = createSignal(0);
@@ -321,11 +330,6 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
         process.env.DEVECO_HOME = resolved;
       }
     }
-    // Skip AGReement check if built with --skip-agreement or runtime env var
-    if ((typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT) || process.env.DEVECO_SKIP_AGREEMENT === "1") {
-      props.onComplete();
-      return;
-    }
     setStep('privacy');
     void checkAgreementStatus();
   };
@@ -337,81 +341,24 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     setDevecoHomeError(null);
     const resolved = await resolveDevEcoHome(value);
     if (!resolved) {
-      setDevecoHomeError('Invalid path. Please enter a directory containing DevEco Studio (v6.1 or later).');
+      setDevecoHomeError(t("account.invalid_studio"));
       return;
     }
     await applyDevEcoHomeAndContinue(resolved);
   };
 
-  // Async agreement status check — runs when entering privacy step
   const checkAgreementStatus = async () => {
-    setCheckingStatus(true)
-    setNetworkErrorNoCache(false)
-    setSessionExpired(false)
-    setSignError(null)
-    setPrivacyIndex(1)
-
-    if (!kv.ready) {
-      await new Promise<void>((resolve) => {
-        const check = () => {
-          if (kv.ready) {
-            resolve()
-            return
-          }
-          setTimeout(check, 50)
-        }
-        check()
-        setTimeout(() => resolve(), 5000)
-      })
-    }
-
-    const session = await devecoAuth.getSession()
-    const accessToken = session?.accessToken || ''
-    const userId = session?.userId || await devecoAuth.getUserId() || ''
-
-    if (!accessToken) {
-      // Not logged in → should not be here, go back to entry
-      setCheckingStatus(false)
-      setStep('entry')
-      return
-    }
-
-    const checkResult = await agreementService.checkAllAgreements(accessToken, userId, kv)
-    setAgreementCheckResult(checkResult)
-
-    if (checkResult.overallStatus === AgreementStatus.COMPLIANT) {
-      // Agreements compliant → complete onboarding, enter conversation page
-      kv.set(getPrivacyAcceptedKey(userId), true)
-      setCheckingStatus(false)
-      props.onComplete()
-      return
-    }
-
-    // NETWORK_ERROR → if local cache exists (canEnter=true), allow entry (offline degradation).
-    // Otherwise, show agreement form so user can sign offline (degraded mode).
-    if (checkResult.overallStatus === AgreementStatus.NETWORK_ERROR) {
-      if (checkResult.canEnter) {
-        setCheckingStatus(false)
-        void agreementService.retryPendingSign(accessToken, userId, kv)
-        props.onComplete()
-        return
+    try {
+      const result = await sdk.client.global.retryAgreementUpload({ force: false }, { throwOnError: true });
+      if (result.data?.accepted && result.data.upload.state !== 'review_required') {
+        props.onComplete();
+        return;
       }
-      setCheckingStatus(false)
-      setPrivacyIndex(0)
-      return
+      setStep('privacy');
+    } catch {
+      setStep('privacy');
     }
-
-    // SESSION_EXPIRED → refresh token failed, user needs to re-login
-    if (checkResult.overallStatus === AgreementStatus.SESSION_EXPIRED) {
-      setSessionExpired(true)
-      setPrivacyIndex(0)
-      setCheckingStatus(false)
-      return
-    }
-
-    setCheckingStatus(false)
-    setPrivacyIndex(0) // Default select Agree in normal agreement form
-  }
+  };
 
   // Kick off detection on mount when initial step requires it
   onMount(() => {
@@ -422,8 +369,8 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     if (props.sessionExpired) {
       // Caller already determined the session is expired — show the re-login prompt
       // without making another API call that would fail with the same expired token.
-      setCheckingStatus(false)
-      setStep('privacy')
+      setAuthMessage(t("account.session_expired"));
+      setStep('entry')
       return
     }
     if (step() === 'privacy') {
@@ -433,47 +380,6 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       void runDevEcoHomeDetection()
     }
   })
-
-  // Sign agreement via TMS API
-  const runSignAgreement = async () => {
-    setSignBusy(true)
-    setSignError(null)
-
-    const session = await devecoAuth.getSession()
-    const accessToken = session?.accessToken || ''
-    const userId = session?.userId || await devecoAuth.getUserId() || ''
-
-    if (!accessToken) {
-      setSignError('Please login first')
-      setSignBusy(false)
-      return
-    }
-
-    const signResult = await agreementService.signAgreement(accessToken, false)
-
-    if (signResult.isUpload) {
-      // Update KV cache (failure only logs, doesn't block)
-      try {
-        kv.set(getPrivacyAcceptedKey(userId), true)
-      } catch (err) {
-        logError("failed to update local KV cache after signing", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
-      }
-      // Signing success → complete onboarding, enter conversation page
-      props.onComplete()
-      return
-    }
-
-    // Sign API failed — save pending for background retry on next startup,
-    // allow user to enter conversation page immediately (offline degradation)
-    try {
-      kv.set(getPrivacyAcceptedKey(userId), true)
-      kv.set(getSignPendingKey(userId), true)
-    } catch (err) {
-      logError("failed to save pending agreement sign", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
-    }
-    logInfo("agreement sign failed offline, saved pending for retry", { service: "deveco-onboarding", error: signResult.error ?? "unknown" })
-    props.onComplete()
-  }
 
   const providerList = createMemo(() => {
     return [...sync.data.provider_next.all]
@@ -521,26 +427,6 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
    *  Keeps numbered options at the same vertical position on every page. */
   const TOP_ZONE_HEIGHT = 8;
 
-  const privacyVerticalScrollbar = createMemo(() => ({
-    trackOptions: {
-      backgroundColor: theme.backgroundElement,
-      foregroundColor: theme.border,
-    },
-  }));
-
-  // Let the framework auto-show/hide the scrollbar based on content overflow
-  createEffect(() => {
-    if (step() === 'privacy' && privacyScroll) {
-      setTimeout(() => privacyScroll?.verticalScrollBar.resetVisibilityControl(), 0);
-    }
-  });
-
-  const scrollPrivacyBy = (delta: number) => {
-    if (!privacyScroll) {
-      return;
-    }
-    privacyScroll.scrollBy(delta);
-  };
 
   const providerSearchBoxWidth = createMemo(() => {
     const termW = Math.floor(dimensions().width);
@@ -602,9 +488,9 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
         // Login failed (e.g. network error, port conflict) → surface the error on
         // whichever page we return to and let the user retry
         if (authReturnStep === 'realname') {
-          setRealnameRecheckError(result.error ?? 'Login failed');
+          setRealnameRecheckError(result.error ?? t("account.login_failed"));
         } else {
-            setAuthMessage(result.error ?? 'Login failed');
+            setAuthMessage(result.error ?? t("account.login_failed"));
         }
         setStep(authReturnStep);
         setAuthBusy(false);
@@ -619,21 +505,21 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
         expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
         isRealName: result.userInfo?.isRealName ?? false,
       });
+      const { trySyncAgreement } = await import('@/cli/deveco-agreement-sync');
+      await trySyncAgreement();
+      const { getDevecoProviderConfig, clearDevecoModelCache } = await import('@/plugin/deveco-models');
+      clearDevecoModelCache();
+      await getDevecoProviderConfig(access);
       await sdk.client.instance.dispose();
       await sync.bootstrap();
       setAuthBusy(false);
       // Check real-name verification status
       if (result.userInfo && !result.userInfo.isRealName) {
         if (authReturnStep === 'realname') {
-          toast.show({ variant: 'warning', message: 'Real-name authentication not yet completed.', duration: 3000 });
+          toast.show({ variant: 'warning', message: t("account.realname_incomplete"), duration: 3000 });
         }
         logWarn("login succeeded but real-name verification not completed, blocking entry", { service: "deveco" });
         setStep('realname');
-        return;
-      }
-      // Login success → skip agreement check if built with --skip-agreement or runtime env var
-      if ((typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT) || process.env.DEVECO_SKIP_AGREEMENT === "1") {
-        props.onComplete();
         return;
       }
       // If DEVECO_HOME is not configured, prompt for it before agreement
@@ -649,7 +535,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       if (authAborted) {
         return;
       }
-      const errorMessage = error instanceof Error ? error.message : 'Login failed';
+      const errorMessage = error instanceof Error ? error.message : t("account.login_failed");
       setAuthMessage(errorMessage);
       setStep('entry');
       setAuthBusy(false);
@@ -659,20 +545,39 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const apiKeyTitle = (providerId: string) => {
     const row = sync.data.provider_next.all.find((p) => p.id === providerId);
     const name = row ? providerLabel(row.id, row.name) : providerId;
-    return `Enter ${name} API Key`;
+    return t("account.provider_key", { name });
   };
 
   const submitKey = async (providerId: string, value: string) => {
     await sdk.client.auth.set({
       providerID: providerId,
       auth: { type: 'api', key: value },
+    }, { throwOnError: true });
+    await finishOnboarding(providerId).catch(() => {
+      toast.show({ variant: 'error', message: t("account.key_setup_failed") });
     });
+  };
+
+  const finishOnboarding = async (providerId: string) => {
+    setKeySubmitStatus(t("account.loading_models"));
     await sdk.client.instance.dispose();
     await sync.bootstrap();
+    const provider = sync.data.provider.find((item) => item.id === providerId);
+    const modelID = sync.data.provider_default[providerId] ?? Object.values(provider?.models ?? {})[0]?.id;
+    if (!modelID) {
+      toast.show({ variant: 'warning', message: t("account.model_config_required") });
+      return;
+    }
+    setKeySubmitStatus(t("account.applying_model"));
+    if (sync.data.config.model?.startsWith('deveco/')) {
+      await sdk.client.config.update({ config: { model: `${providerId}/${modelID}` } }, { throwOnError: true });
+    }
+    local.model.set({ providerID: providerId, modelID }, { recent: true });
     props.onComplete();
   };
 
   const [keySubmitBusy, setKeySubmitBusy] = createSignal(false);
+  const [keySubmitStatus, setKeySubmitStatus] = createSignal('');
   const trySubmitApiKey = () => {
     if (keySubmitBusy()) {
       return;
@@ -685,19 +590,16 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     if (!value) {
       return;
     }
+    setKeySubmitStatus(t("account.saving_key"));
     setKeySubmitBusy(true);
-    void submitKey(id, value).finally(() => setKeySubmitBusy(false));
-  };
-
-  const finishOnboarding = async () => {
-    await sdk.client.instance.dispose();
-    await sync.bootstrap();
-    props.onComplete();
+    void submitKey(id, value).catch(() => {
+      toast.show({ variant: 'error', message: t("account.save_failed") });
+    }).finally(() => setKeySubmitBusy(false));
   };
 
   const handleProviderSelect = async (providerId: string) => {
     const methods = sync.data.provider_auth[providerId] ?? DEFAULT_AUTH_METHODS;
-    const methodIndex = await pickAuthMethodIndex(dialog, methods);
+    const methodIndex = await pickAuthMethodIndex(dialog, methods, t);
     if (methodIndex === null) {
       return;
     }
@@ -711,7 +613,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     }
 
     if (method.type === 'oauth') {
-      await runProviderOAuth({ dialog, sdk, theme, finish: finishOnboarding }, providerId, methodIndex, method);
+      await runProviderOAuth({ dialog, sdk, theme, t, finish: () => finishOnboarding(providerId) }, providerId, methodIndex, method);
     }
   };
 
@@ -735,6 +637,11 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     const st = step();
 
     if (st === 'realname') {
+      if (evt.name === 'escape') {
+        evt.preventDefault();
+        setStep('entry');
+        return;
+      }
       if (evt.ctrl && evt.name === 'c') {
         evt.preventDefault();
         void exit();
@@ -765,66 +672,16 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
           setStep('auth');
           void runBrowserLogin();
         } else {
-          void exit();
+          setStep('entry');
         }
       }
       return;
     }
 
-    if (st === 'privacy') {
-      if (evt.ctrl && evt.name === 'c') {
+    if (st === 'privacy' || st === 'product-privacy') {
+      if (evt.name === 'escape' || (evt.ctrl && evt.name === 'c')) {
         evt.preventDefault();
         void exit();
-        return;
-      }
-      // Space toggles checkbox
-      if (evt.name === 'space') {
-        evt.preventDefault();
-        setCheckboxChecked(!checkboxChecked());
-        return;
-      }
-      if (evt.name === 'up') {
-        evt.preventDefault();
-        setPrivacyIndex(0);
-        return;
-      }
-      if (evt.name === 'down') {
-        evt.preventDefault();
-        setPrivacyIndex(1);
-        return;
-      }
-      if (evt.name === 'pageup') {
-        evt.preventDefault();
-        scrollPrivacyBy(-(privacyScroll?.height ?? 4));
-        return;
-      }
-      if (evt.name === 'pagedown') {
-        evt.preventDefault();
-        scrollPrivacyBy(privacyScroll?.height ?? 4);
-        return;
-      }
-      if (evt.name === 'return') {
-        evt.preventDefault();
-        if (signBusy() || checkingStatus()) {
-          return;
-        }
-        if (sessionExpired()) {
-          if (privacyIndex() === 0) {
-            setStep('entry');
-          } else {
-            void exit();
-          }
-          return;
-        }
-        if (privacyIndex() === 0) {
-          // Agree — requires checkbox checked
-          if (checkboxChecked()) {
-            void runSignAgreement();
-          }
-        } else {
-          // Cancel
-          void exit();
-        }
       }
       return;
     }
@@ -847,13 +704,7 @@ if (st === 'entry') {
       }
       if (evt.name === 'return') {
         evt.preventDefault();
-        if (entryIndex() === 0) {
-          authReturnStep = 'entry';
-          setStep('auth');
-          void runBrowserLogin();
-        } else {
-          void exit();
-        }
+        void chooseEntry();
         return;
       }
       return;
@@ -983,7 +834,9 @@ if (st === 'entry') {
         const idx = providerIndex();
         const provider = list[idx];
         if (provider) {
-          void handleProviderSelect(provider.id);
+          void handleProviderSelect(provider.id).catch(() => {
+            toast.show({ variant: 'error', message: t("account.setup_failed") });
+          });
         }
         return;
       }
@@ -995,6 +848,11 @@ if (st === 'entry') {
     }
 
     if (st === 'key') {
+      if (keySubmitBusy()) {
+        evt.preventDefault();
+        if (evt.ctrl && evt.name === 'c') void exit();
+        return;
+      }
       if (evt.ctrl && evt.name === 'c') {
         if (key().length > 0) {
           evt.preventDefault();
@@ -1027,140 +885,26 @@ if (st === 'entry') {
       alignItems='center'
       justifyContent='center'
     >
-      <Show when={step() === 'privacy'}>
-        <Show when={checkingStatus()}>
-          <box flexDirection='column' alignItems='center'>
-            <text fg={theme.textMuted} selectable={false}>
-              Checking agreement status...
-            </text>
-          </box>
-        </Show>
-        <Show when={!checkingStatus() && networkErrorNoCache()}>
-          <box flexDirection='column' alignItems='center'>
-            <text fg={theme.error} selectable={false}>
-              Network error: Cannot reach agreement service.
-            </text>
-            <text fg={privacyIndex() === 1 ? theme.success : theme.text} selectable={false} marginTop={1}>
-              {selectionLead(privacyIndex() === 1)}
-              Cancel
-            </text>
-            <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to Select, Up/Down to navigate
-            </text>
-          </box>
-        </Show>
-        <Show when={!checkingStatus() && sessionExpired()}>
-          <OnboardingContent>
-            <text fg={theme.warning} selectable={false} marginBottom={2}>
-              Your login session has expired. Please sign in again.
-            </text>
-            <box flexDirection='column'>
-              <text fg={privacyIndex() === 0 ? theme.success : theme.text} selectable={false}>
-                {selectionLead(privacyIndex() === 0)}
-                1. Sign in again
-              </text>
-              <text fg={privacyIndex() === 1 ? theme.success : theme.text} selectable={false}>
-                {selectionLead(privacyIndex() === 1)}
-                2. Exit
-              </text>
-            </box>
-            <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to Select, Up/Down to navigate
-            </text>
-          </OnboardingContent>
-        </Show>
-        <Show when={!checkingStatus() && !networkErrorNoCache() && !sessionExpired()}>
-          <OnboardingContent>
-            <box flexDirection='column' width='100%' minHeight={0} maxHeight={props.bodySlotHeight}>
-              {/* Top zone: scrollbox shrinks when terminal is compressed */}
-              <scrollbox
-                ref={(r: ScrollBoxRenderable) => (privacyScroll = r)}
-                flexShrink={1}
-                minHeight={0}
-                maxHeight={TOP_ZONE_HEIGHT - 1}
-                width='100%'
-                verticalScrollbarOptions={privacyVerticalScrollbar()}
-              >
-                <box flexDirection='column' alignItems='center' width='100%'>
-                  <text fg={theme.text} selectable={false} wrapMode='word'>
-                    Please read and agree to the following agreements to start the HarmonyOS development journey:
-                  </text>
-                  <box flexDirection='column' marginTop={1}>
-                    <box flexDirection='row' gap={1}>
-                      <text fg={theme.primary} selectable={false}>a.</text>
-                      <Link href={agreementConfig().terms_url} fg={theme.primary}>
-                        DevEco Code AI Terms Of Use
-                      </Link>
-                    </box>
-                    <box flexDirection='row' gap={1} marginTop={1}>
-                      <text fg={theme.primary} selectable={false}>b.</text>
-                      <Link href={agreementConfig().privacy_url} fg={theme.primary}>
-                        DevEco Code AI Privacy Policy
-                      </Link>
-                    </box>
-                  </box>
-                </box>
-              </scrollbox>
-
-              {/* Bottom zone: checkbox + options (never scroll away) */}
-              <box flexDirection='column' alignItems='center' flexShrink={0} marginTop={1}>
-              <box onMouseUp={() => setCheckboxChecked(!checkboxChecked())} flexShrink={0}>
-                <text fg={checkboxChecked() ? theme.success : theme.text} selectable={false} wrapMode='word'>
-                  {checkboxChecked() ? '[✓]' : '[ ]'}  I have read and agree to the above agreements
-                </text>
-              </box>
-              <text fg={theme.textMuted} selectable={false} flexShrink={0}>
-                (Press Space or click to check)
-              </text>
-              <box flexDirection='column' marginTop={1}>
-                <text
-                  fg={privacyIndex() === 0 && checkboxChecked() ? theme.success : theme.textMuted}
-                  selectable={false}
-                  flexShrink={0}
-                >
-                  {selectionLead(privacyIndex() === 0)}
-                  1. Agree (check first)
-                </text>
-                <text fg={privacyIndex() === 1 ? theme.success : theme.text} selectable={false} flexShrink={0}>
-                  {selectionLead(privacyIndex() === 1)}
-                  2. Cancel
-                </text>
-                <Show when={signBusy()}>
-                  <text fg={theme.textMuted} selectable={false} flexShrink={0}>
-                    Signing agreement...
-                  </text>
-                </Show>
-                <Show when={signError() !== null}>
-                  <text fg={theme.error} selectable={false} wrapMode='word' flexShrink={0}>
-                    {signError()}
-                  </text>
-                </Show>
-              </box>
-              <text fg={theme.textMuted} selectable={false} flexShrink={0} marginTop={1}>
-                Use Enter to Select, Up/Down to navigate
-              </text>
-            </box>
-            </box>
-          </OnboardingContent>
-        </Show>
+      <Show when={step() === 'privacy' || step() === 'product-privacy'}>
+        <AgreementPanel maxHeight={props.bodySlotHeight} onComplete={() => step() === 'product-privacy' ? continueSetup() : props.onComplete()} />
       </Show>
       <Show when={step() === 'entry'}>
         <OnboardingContent>
             <text fg={theme.text} attributes={1} selectable={false} marginBottom={2}>
-              Get started with DevEco Code
+              {t("account.setup_title")}
             </text>
             <box flexDirection='column'>
               <text fg={entryIndex() === 0 ? theme.success : theme.text} selectable={false}>
                 {selectionLead(entryIndex() === 0)}
-                1. Sign in with HUAWEI account
+                {t("account.entry_huawei")}
               </text>
               <text fg={entryIndex() === 1 ? theme.success : theme.text} selectable={false}>
                 {selectionLead(entryIndex() === 1)}
-                2. Exit
+                {t("account.entry_thirdparty")}
               </text>
             </box>
             <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to Select, Up/Down to navigate
+              {t("account.setup_help")}
             </text>
             <Show when={authMessage() !== null}>
               <text fg={theme.error} selectable={false}>
@@ -1172,10 +916,10 @@ if (st === 'entry') {
       <Show when={step() === 'auth'}>
         <OnboardingContent>
             <text fg={theme.text} selectable={false}>
-              Sign in with HUAWEI account
+              {t("account.signin")}
             </text>
             <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              {authBusy() ? 'Waiting for browser…' : 'Press Enter to open the login page'}
+              {authBusy() ? t("account.browser_wait") : t("account.open_login")}
             </text>
             <Show when={authMessage() !== null}>
               <text fg={theme.error} selectable={false}>
@@ -1184,7 +928,7 @@ if (st === 'entry') {
             </Show>
             <Show when={authBusy()}>
               <text fg={theme.textMuted} selectable={false}>
-                Press Esc to go back
+                {t("account.esc_back")}
               </text>
             </Show>
         </OnboardingContent>
@@ -1194,13 +938,13 @@ if (st === 'entry') {
           <Show when={devecoHomeBusy()}>
             <box flexDirection='column' alignItems='center'>
               <text fg={theme.textMuted} selectable={false}>
-                Detecting DevEco Studio installations...
+                {t("account.detect_studio")}
               </text>
             </box>
           </Show>
           <Show when={!devecoHomeBusy() && !devecoHomeInputMode()}>
             <text fg={theme.text} attributes={1} selectable={false} marginBottom={1}>
-              Configure DevEco Studio Path (Requires version 6.1 or later)
+              {t("account.configure_studio")}
             </text>
             <box flexDirection='column'>
               <For each={devecoHomeCandidates()}>
@@ -1216,23 +960,23 @@ if (st === 'entry') {
                 selectable={false}
               >
                 {selectionLead(devecoHomeIndex() === devecoHomeCandidates().length)}
-                {devecoHomeCandidates().length + 1}. Enter a custom path
+                {devecoHomeCandidates().length + 1}. {t("account.custom_path")}
               </text>
               <text
                 fg={devecoHomeIndex() === devecoHomeCandidates().length + 1 ? theme.success : theme.text}
                 selectable={false}
               >
                 {selectionLead(devecoHomeIndex() === devecoHomeCandidates().length + 1)}
-                {devecoHomeCandidates().length + 2}. Skip (DevEco Studio Tools will be unavailable)
+                {devecoHomeCandidates().length + 2}. {t("account.skip_studio")}
               </text>
             </box>
             <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to Select, Up/Down to navigate
+              {t("account.select_hint")}
             </text>
           </Show>
           <Show when={!devecoHomeBusy() && devecoHomeInputMode()}>
             <text fg={theme.text} attributes={1} selectable={false}>
-              Enter DevEco Studio path (v6.1 or later)
+              {t("account.studio_path")}
             </text>
             <box flexDirection='column' width={providerSearchBoxWidth()}>
               <text fg={theme.textMuted} selectable={false} wrapMode='none'>
@@ -1247,7 +991,7 @@ if (st === 'entry') {
                   ref={(r: TextareaRenderable) => (devecoHomeInput = r)}
                   height={1}
                   width={Math.max(0, providerSearchBoxWidth() - 2)}
-                  placeholder=' e.g. D:\DevEco Studio'
+                  placeholder={t("account.studio_placeholder")}
                   textColor={theme.text}
                   focusedTextColor={theme.text}
                   cursorColor={theme.text}
@@ -1268,7 +1012,7 @@ if (st === 'entry') {
               </text>
             </Show>
             <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to submit, Esc to go back
+              {t("account.submit_hint")}
             </text>
           </Show>
         </OnboardingContent>
@@ -1276,33 +1020,33 @@ if (st === 'entry') {
       <Show when={step() === 'realname'}>
         <OnboardingContent>
           <text fg={theme.warning} attributes={1} selectable={false} marginBottom={1}>
-            Real-name authentication required
+            {t("account.realname_required")}
           </text>
           <text fg={theme.text} selectable={false} wrapMode='word'>
-            Please complete real-name authentication on HUAWEI official website to continue:
+            {t("account.realname_description")}
           </text>
           <Link
             href={HuaweiEndpoints.huaweiRealnameAuth}
             fg={theme.primary}
           >
-            Complete Real-name Authentication
+            {t("account.realname_link")}
           </Link>
           <box flexDirection='column' marginTop={1}>
             <text fg={realnameIndex() === 0 ? theme.success : theme.text} selectable={false}>
               {selectionLead(realnameIndex() === 0)}
-              1. Authenticate
+              {t("account.realname_go")}
             </text>
             <text fg={realnameIndex() === 1 ? theme.success : theme.text} selectable={false}>
               {selectionLead(realnameIndex() === 1)}
-              2. Re-check real-name
+              {t("account.realname_recheck")}
             </text>
             <text fg={realnameIndex() === 2 ? theme.success : theme.text} selectable={false}>
               {selectionLead(realnameIndex() === 2)}
-              3. Exit
+              {t("account.realname_back")}
             </text>
           </box>
           <text fg={theme.textMuted} selectable={false} marginTop={1}>
-            Use Enter to Select, Up/Down to navigate
+            {t("account.select_hint")}
           </text>
           <Show when={realnameRecheckError() !== null}>
             <text fg={theme.error} selectable={false}>
@@ -1314,7 +1058,7 @@ if (st === 'entry') {
       <Show when={step() === 'providers'}>
         <OnboardingContent>
             <text fg={theme.text} attributes={1} selectable={false}>
-              Please select provider
+              {t("account.choose_provider")}
             </text>
             <box flexDirection='column' width={providerSearchBoxWidth()}>
               <text fg={theme.textMuted} selectable={false} wrapMode='none'>
@@ -1346,46 +1090,55 @@ if (st === 'entry') {
               </For>
             </scrollbox>
             <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to Select, Esc to Cancel, Type : to search
+              {t("account.provider_hint")}
             </text>
         </OnboardingContent>
       </Show>
       <Show when={step() === 'key'}>
         <OnboardingContent>
             <text fg={theme.text} attributes={1} selectable={false}>
-              {pid() ? apiKeyTitle(pid()!) : 'Enter API Key'}
+              {pid() ? apiKeyTitle(pid()!) : t("account.enter_key")}
             </text>
-            <box flexDirection='column' width={providerSearchBoxWidth()}>
-              <text fg={theme.textMuted} selectable={false} wrapMode='none'>
-                {`╭${'─'.repeat(Math.max(0, providerSearchBoxWidth() - 2))}╮`}
-              </text>
-              <box flexDirection='row' width={providerSearchBoxWidth()}>
-                <text fg={theme.textMuted} selectable={false} wrapMode='none'>
-                  │
-                </text>
-                <textarea
-                  focused={true}
-                  ref={(r: TextareaRenderable) => (input = r)}
-                  height={1}
-                  width={Math.max(0, providerSearchBoxWidth() - 2)}
-                  placeholder=' Paste API Key here'
-                  textColor={theme.text}
-                  focusedTextColor={theme.text}
-                  cursorColor={theme.text}
-                  onContentChange={() => setKey(input?.plainText ?? '')}
-                  onSubmit={() => trySubmitApiKey()}
-                />
-                <text fg={theme.textMuted} selectable={false} wrapMode='none'>
-                  │
-                </text>
-              </box>
-              <text fg={theme.textMuted} selectable={false} wrapMode='none'>
-                {`╰${'─'.repeat(Math.max(0, providerSearchBoxWidth() - 2))}╯`}
-              </text>
+            <box
+              width={providerSearchBoxWidth()}
+              border={true}
+              borderStyle='rounded'
+              borderColor={theme.textMuted}
+              paddingLeft={1}
+              paddingRight={1}
+            >
+              <textarea
+                focused={!keySubmitBusy()}
+                ref={(r: TextareaRenderable) => (input = r)}
+                width='100%'
+                minHeight={1}
+                maxHeight={4}
+                wrapMode='char'
+                keyBindings={[
+                  { name: 'home', action: 'buffer-home' },
+                  { name: 'end', action: 'buffer-end' },
+                ]}
+                placeholder={t("account.paste_key")}
+                textColor={theme.text}
+                focusedTextColor={theme.text}
+                cursorColor={theme.text}
+                onContentChange={() => setKey(input?.plainText ?? '')}
+                onSubmit={() => trySubmitApiKey()}
+              />
             </box>
-            <text fg={theme.textMuted} selectable={false} marginTop={1}>
-              Use Enter to submit, Esc to Cancel, Ctrl+C to Clear
-            </text>
+            <Show
+              when={keySubmitBusy()}
+              fallback={
+                <text fg={theme.textMuted} selectable={false} marginTop={1}>
+                  {t("account.key_hint")}
+                </text>
+              }
+            >
+              <box flexDirection='column' alignItems='center' width='100%' gap={1} marginTop={1}>
+                <Spinner>{keySubmitStatus()}</Spinner>
+                <text fg={theme.textMuted} selectable={false}>{t("account.wait_exit")}</text>
+              </box>
+            </Show>
         </OnboardingContent>
       </Show>
     </box>

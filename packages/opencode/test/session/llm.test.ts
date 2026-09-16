@@ -10,6 +10,7 @@ import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
+import { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } from "@/cli/deveco-product-agreement"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
@@ -637,7 +638,8 @@ function waitStreamingRequest(pathname: string) {
   }
 }
 
-beforeAll(() => {
+beforeAll(async () => {
+  await acceptProductAgreement(PRODUCT_AGREEMENT_VERSION)
   state.server = Bun.serve({
     port: 0,
     async fetch(req) {

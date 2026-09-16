@@ -75,3 +75,15 @@ process.env["DEVECO_DB"] = ":memory:"
 const { initProjectors } = await import("../src/server/projectors")
 
 initProjectors()
+
+// Seed product agreement acceptance before any test file runs. The LLM.run gate
+// (requireProductAccess) reads $XDG_STATE_HOME/deveco/product-agreement.json, and
+// XDG_STATE_HOME points at this process-shared directory. Without seeding,
+// in-process tests using the real LLM layer only pass when an earlier file in the
+// same worker happens to call acceptProductAgreement first — an implicit ordering
+// dependency that breaks whenever bun's file scheduling changes.
+const { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } = await import(
+  "../src/cli/deveco-product-agreement"
+)
+
+await acceptProductAgreement(PRODUCT_AGREEMENT_VERSION)

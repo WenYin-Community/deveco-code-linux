@@ -3,7 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js"
 import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
-import { ACCESS_TOKEN_EXPIRES_MS, devecoAuth } from "@/plugin/deveco"
+import { requireDevEcoAccess } from "@/plugin/deveco/access"
 import { Session } from "@/session/session"
 import { Effect, Schema } from "effect"
 import fs from "node:fs"
@@ -63,6 +63,7 @@ type RuntimeState = {
   client: Client
   transport: StdioClientTransport
   schemaProperties: Map<string, Set<string>>
+  params: UiVerifyParams
 }
 
 const TOOL_NAME_MAP: Record<ToolName, string> = {
@@ -202,7 +203,9 @@ export async function resolveUIVerifyParams(worktree: string): Promise<UiVerifyP
             if (!provider || !model) return null
             return {
               baseURL: (provider.options?.baseURL as string | undefined) ?? model.api.url ?? null,
-              apiKey: provider.key ?? (provider.options?.apiKey as string | undefined) ?? null,
+              apiKey: providerID === "deveco"
+                ? yield* Effect.promise(() => requireDevEcoAccess(cfg.agreement))
+                : provider.key ?? (provider.options?.apiKey as string | undefined) ?? null,
               modelName: model.api.id ?? null,
             }
           }),
@@ -223,45 +226,11 @@ export async function resolveUIVerifyParams(worktree: string): Promise<UiVerifyP
   }
 
   try {
-    const { Effect } = await import("effect")
-    const { AppRuntime } = await import("@/effect/app-runtime")
-    const { Auth } = await import("@/auth")
-    const getAuth = () =>
-      AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const svc = yield* Auth.Service
-          return yield* svc.get("deveco")
-        }),
-      ).catch(() => undefined)
-    let auth = await getAuth()
-    if (auth instanceof Auth.Oauth && auth.access) {
-      if (auth.expires < Date.now()) {
-        const tokens = await devecoAuth.refreshToken()
-        if (tokens) {
-          await AppRuntime.runPromise(
-            Effect.gen(function* () {
-              const svc = yield* Auth.Service
-              yield* svc.set(
-                "deveco",
-                new Auth.Oauth({
-                  type: "oauth",
-                  access: tokens.accessToken,
-                  refresh: tokens.refreshToken,
-                  expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
-                }),
-              )
-            }),
-          )
-          auth = await getAuth()
-        }
-      }
-      if (auth instanceof Auth.Oauth && auth.access && auth.expires > Date.now()) {
-        return {
-          baseURL: DEVECO_API_URL + "/no-stream",
-          apiKey: auth.access,
-          modelName: getTaskDefaultModelMap()?.["ui_verification"] ?? "Qwen3_VL_235B_A22B_Instruct",
-        }
-      }
+    const access = await requireDevEcoAccess()
+    return {
+      baseURL: DEVECO_API_URL + "/no-stream",
+      apiKey: access,
+      modelName: getTaskDefaultModelMap()?.["ui_verification"] ?? "Qwen3_VL_235B_A22B_Instruct",
     }
   } catch {}
 
@@ -269,19 +238,13 @@ export async function resolveUIVerifyParams(worktree: string): Promise<UiVerifyP
 }
 
 async function ensureInitialized(worktree: string): Promise<void> {
-  gate = gate.then(async () => {
-    if (bound === worktree) {
-      const { Effect } = await import("effect")
-      const { AppRuntime } = await import("@/effect/app-runtime")
-      const { Auth } = await import("@/auth")
-      const auth = await AppRuntime.runPromise(
-        Effect.gen(function* () {
-          const svc = yield* Auth.Service
-          return yield* svc.get('deveco');
-        }),
-      ).catch(() => undefined)
-      if (!(auth instanceof Auth.Oauth) || auth.expires > Date.now()) {
-        return;
+  gate = gate.catch(() => {}).then(async () => {
+    if (bound === worktree && runtime) {
+      if (runtime.params.baseURL?.startsWith(DEVECO_API_URL)) {
+        const access = await requireDevEcoAccess().catch(() => undefined)
+        if (access && access === runtime.params.apiKey) return
+      } else if (runtime.params.baseURL && runtime.params.apiKey && runtime.params.modelName) {
+        return
       }
     }
     bound = worktree
@@ -291,23 +254,10 @@ async function ensureInitialized(worktree: string): Promise<void> {
 }
 
 async function isBoundDevecoOauthExpired(worktree: string): Promise<boolean> {
-  if (bound !== worktree) {
-    return false;
-  }
-  try {
-    const { Effect } = await import("effect")
-    const appRuntimeModule: typeof import("@/effect/app-runtime") = await import("@/effect/app-runtime")
-    const authModule: typeof import("@/auth") = await import("@/auth")
-    const auth: unknown = await appRuntimeModule.AppRuntime.runPromise(
-      Effect.gen(function* () {
-        const svc = yield* authModule.Auth.Service
-        return yield* svc.get('deveco')
-      }),
-    ).catch(() => undefined)
-    return auth instanceof authModule.Auth.Oauth && auth.expires <= Date.now();
-  } catch {
-    return false;
-  }
+  if (bound !== worktree || !runtime?.params.baseURL?.startsWith(DEVECO_API_URL)) return false
+  // Lost access invalidates the binding; rebuilding resolves the current provider.
+  const access = await requireDevEcoAccess().catch(() => undefined)
+  return !access || access !== runtime.params.apiKey
 }
 
 async function startUiVerificationMcp(worktree: string): Promise<void> {
@@ -341,6 +291,7 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   await client.connect(transport)
   const listed = await client.listTools()
   runtime = {
+    params,
     client,
     transport,
     schemaProperties: new Map(

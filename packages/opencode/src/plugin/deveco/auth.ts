@@ -12,8 +12,10 @@ export class DevEcoAuth {
   }
 
   async getSession(): Promise<DevEcoSession | null> {
+    const jwtToken = await tokenStorage.loadToken()
+    if (!jwtToken) return null
     const userInfo = loginService.getUserInfo()
-    if (userInfo) {
+    if (userInfo?.jwtToken === jwtToken) {
       const now = Date.now()
       return {
         ...userInfo,
@@ -21,7 +23,6 @@ export class DevEcoAuth {
         expiresAt: now + 30 * 24 * 60 * 60 * 1000,
       }
     }
-    const jwtToken = await tokenStorage.loadToken()
     if (jwtToken) {
       try {
         const parsed = loginService.parseJwt(jwtToken)
@@ -76,7 +77,7 @@ export class DevEcoAuth {
   }
 
   async checkAccountRegion(): Promise<AccountRegionStatus> {
-    const jwtToken = this.getUserInfo()?.jwtToken ?? (await tokenStorage.loadToken())
+    const jwtToken = await tokenStorage.loadToken()
     if (!jwtToken) return "unverified"
     return loginService.checkAccountRegion(jwtToken)
   }
@@ -113,7 +114,7 @@ export class DevEcoAuth {
    */
   async refreshToken(): Promise<{ accessToken: string; refreshToken: string; isRealName: boolean } | null> {
     const userInfo = this.getUserInfo()
-    const jwtToken = userInfo?.jwtToken ?? (await tokenStorage.loadToken())
+    const jwtToken = await tokenStorage.loadToken()
     if (!jwtToken) return null
 
     // If the JWT token itself has expired, refreshing will always fail — skip the
@@ -130,8 +131,9 @@ export class DevEcoAuth {
 
     const newTokens = await loginService.refreshToken(jwtToken)
     if (!newTokens) return null
+    if (await tokenStorage.loadToken() !== jwtToken) return null
 
-    if (userInfo) {
+    if (userInfo?.jwtToken === jwtToken) {
       userInfo.accessToken = newTokens.accessToken
       userInfo.refreshToken = newTokens.refreshToken
       userInfo.isRealName = newTokens.isRealName
@@ -156,10 +158,12 @@ export class DevEcoAuth {
    * @returns true if verified, false if not, null if no token or check failed
    */
   async checkRealName(): Promise<boolean | null> {
+    const expectedAccess = loadAccessTokenFromDisk()
     const jwtToken = await tokenStorage.loadToken()
     if (!jwtToken) return null
     try {
       const result = await loginService.checkRealNameWithToken(jwtToken)
+      if (await tokenStorage.loadToken() !== jwtToken) return null
       if (result.verified) {
         await saveAuthToDisk("deveco", {
           type: "oauth",
@@ -167,7 +171,7 @@ export class DevEcoAuth {
           refresh: result.refreshToken,
           expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
           isRealName: true,
-        })
+        }, expectedAccess)
       }
       return result.verified
     } catch (err) {
@@ -200,10 +204,10 @@ export class DevEcoAuth {
    * 解析失败返回 null（不抛出错误）。
    */
   async getUserId(): Promise<string | null> {
-    const userInfo = this.getUserInfo()
-    if (userInfo?.userId) return userInfo.userId
     const jwtToken = await tokenStorage.loadToken()
     if (!jwtToken) return null
+    const userInfo = this.getUserInfo()
+    if (userInfo?.jwtToken === jwtToken && userInfo.userId) return userInfo.userId
     try {
       const parsed = loginService.parseJwt(jwtToken)
       return parsed.userId || null

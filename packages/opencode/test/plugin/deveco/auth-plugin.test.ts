@@ -23,6 +23,8 @@ const privacySettings = await import("@/cli/deveco-privacy-settings")
 const readToolImprovementEnabledSpy = spyOn(privacySettings, "readToolImprovementEnabled").mockImplementation(() =>
   Promise.resolve(improvementEnabled),
 )
+const access = await import("@/plugin/deveco/access")
+const accessSpy = spyOn(access, "requireDevEcoAccess")
 const { DevEcoAuthPlugin } = await import("@/plugin/deveco/auth-plugin")
 
 type AuthCallbackResult =
@@ -63,6 +65,7 @@ const minimalPluginInput: PluginInput = {
 
 beforeEach(() => {
   capturedFetchCall = null
+  accessSpy.mockReset().mockResolvedValue("access-token-123")
   sessionChatIdMap.clear()
   globalBusEmitCalls = []
   improvementEnabled = true
@@ -93,6 +96,7 @@ afterAll(() => {
   devecAuthRefreshTokenSpy.mockRestore()
   ensureValidTokenSpy.mockRestore()
   regionCheckSpy.mockRestore()
+  accessSpy.mockRestore()
   readToolImprovementEnabledSpy.mockRestore()
 })
 
@@ -127,7 +131,7 @@ describe("DevEcoAuthPlugin", () => {
     expect(hooks.auth!.provider).toBe(PROVIDER_ID)
     expect(hooks.auth!.methods).toHaveLength(1)
     expect(hooks.auth!.methods[0].type).toBe("oauth")
-    expect(hooks.auth!.methods[0].label).toBe("Login with Huawei DevEco Account")
+    expect(hooks.auth!.methods[0].label).toBe("Sign in with HUAWEI ID")
   })
 })
 
@@ -217,12 +221,13 @@ describe("fetch tool improvement consent header", () => {
     expect((capturedFetchCall!.init!.headers as Headers).get("X-DevEco-Improvement-Enabled")).toBeNull()
   })
 
-  test("does not send improvement consent for api-key auth", async () => {
+  test("rejects API keys on the built-in Huawei endpoint", async () => {
     const fetchFn = await getFetchFn(() => Promise.resolve({ type: "api", key: "sk-test" }))
-    await fetchFn("https://cn.devecostudio.huawei.com/sse/codeGenie/maas/v2/chat/completions", {
+    const response = await fetchFn("https://cn.devecostudio.huawei.com/sse/codeGenie/maas/v2/chat/completions", {
       body: JSON.stringify({ stream: true }),
     })
-    expect((capturedFetchCall!.init!.headers as Headers).get("X-DevEco-Improvement-Enabled")).toBeNull()
+    expect(response.status).toBe(401)
+    expect(capturedFetchCall).toBeNull()
   })
 
   test("sends the same consent value for non-streaming inference", async () => {

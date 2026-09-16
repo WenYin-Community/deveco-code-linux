@@ -16,6 +16,7 @@ import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
+import { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } from "../../src/cli/deveco-product-agreement"
 
 import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
@@ -893,6 +894,7 @@ describe("HttpApi SDK", () => {
     withFakeLlmProject("default", { setup: writeProjectSkill }, ({ sdk, llm }) =>
       Effect.gen(function* () {
         yield* llm.text("skill context ok", { usage: { input: 11, output: 7 } })
+        yield* Effect.promise(() => acceptProductAgreement(PRODUCT_AGREEMENT_VERSION))
         const session = yield* capture(() =>
           sdk.session.create({
             title: "project skill prompt",

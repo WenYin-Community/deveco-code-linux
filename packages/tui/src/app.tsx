@@ -12,6 +12,7 @@ import { createCliRenderer, MouseButton, type CliRenderer } from "@opentui/core"
 import "./util/fix-mouse-events"
 import { RouteProvider, useRoute } from "./context/route"
 import {
+  type ParentProps,
   Switch,
   Match,
   createEffect,
@@ -27,6 +28,7 @@ import {
 import { TuiPathsProvider, TuiStartupProvider, TuiTerminalEnvironmentProvider, useTuiStartup } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogProvider as DialogProviderList } from "./component/dialog-provider"
+import { DialogAuth } from "./component/dialog-auth"
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
@@ -123,6 +125,7 @@ const appBindingCommands = [
   "variant.cycle",
   "variant.list",
   "provider.connect",
+  "provider.auth",
   "console.org.switch",
   "opencode.status",
   "theme.switch",
@@ -268,63 +271,63 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                             <ArgsProvider {...input.args}>
                               <KVProvider>
                                 <I18nProvider>
-                                <ToastProvider>
-                                  <RouteProvider
-                                    initialRoute={
-                                      // Don't use a "dummy" sessionID for --continue: it causes the
-                                      // <Show keyed> to mount a Session with key="dummy", then immediately
-                                      // destroy and re-mount it when the real sessionID arrives. This rapid
-                                      // Yoga node remove→insert can race and trigger
-                                      // "Child already has a owner, it must be removed first" in Yoga WASM.
-                                      // Instead, start at home and let the sync/bootstrap navigate to the
-                                      // correct session once data is loaded.
-                                      undefined
-                                    }
-                                  >
-                                    <TuiConfigProvider config={input.config}>
-                                      <PluginRuntimeProvider value={pluginRuntime}>
-                                        <SDKProvider
-                                          url={input.url}
-                                          directory={input.directory}
-                                          fetch={input.fetch}
-                                          headers={input.headers}
-                                          events={input.events}
-                                        >
-                                          <PermissionProvider>
-                                          <ProjectProvider>
-                                            <SyncProvider>
-                                              <DataProvider>
-                                                <ThemeProvider mode={mode}>
-                                                  <LocalProvider>
-                                                    <PromptStashProvider>
-                                                      <DialogProvider>
-                                                        <FrecencyProvider>
-                                                          <PromptHistoryProvider>
-                                                            <PromptRefProvider>
-                                                              <EditorContextProvider>
-                                                                <BtwProvider>
-                                                                  <App
-                                                                    onSnapshot={input.onSnapshot}
-                                                                    pluginHost={input.pluginHost}
-                                                                  />
-                                                                </BtwProvider>
-                                                              </EditorContextProvider>
-                                                            </PromptRefProvider>
-                                                          </PromptHistoryProvider>
-                                                        </FrecencyProvider>
-                                                      </DialogProvider>
-                                                    </PromptStashProvider>
-                                                  </LocalProvider>
-                                                </ThemeProvider>
-                                              </DataProvider>
-                                            </SyncProvider>
-                                          </ProjectProvider>
-                                          </PermissionProvider>
-                                        </SDKProvider>
-                                      </PluginRuntimeProvider>
-                                    </TuiConfigProvider>
-                                  </RouteProvider>
-                                </ToastProvider>
+                                  <ToastProvider>
+                                    <RouteProvider
+                                      initialRoute={
+                                        // Don't use a "dummy" sessionID for --continue: it causes the
+                                        // <Show keyed> to mount a Session with key="dummy", then immediately
+                                        // destroy and re-mount it when the real sessionID arrives. This rapid
+                                        // Yoga node remove→insert can race and trigger
+                                        // "Child already has a owner, it must be removed first" in Yoga WASM.
+                                        // Instead, start at home and let the sync/bootstrap navigate to the
+                                        // correct session once data is loaded.
+                                        undefined
+                                      }
+                                    >
+                                      <TuiConfigProvider config={input.config}>
+                                        <PluginRuntimeProvider value={pluginRuntime}>
+                                          <SDKProvider
+                                            url={input.url}
+                                            directory={input.directory}
+                                            fetch={input.fetch}
+                                            headers={input.headers}
+                                            events={input.events}
+                                          >
+                                            <PermissionProvider>
+                                              <ProjectProvider>
+                                                <SyncProvider>
+                                                  <DataProvider>
+                                                    <ThemeProvider mode={mode}>
+                                                      <LocalProvider>
+                                                        <PromptStashProvider>
+                                                          <DialogProvider>
+                                                            <FrecencyProvider>
+                                                              <PromptHistoryProvider>
+                                                                <PromptRefProvider>
+                                                                  <EditorContextProvider>
+                                                                    <BtwProvider>
+                                                                      <App
+                                                                        onSnapshot={input.onSnapshot}
+                                                                        pluginHost={input.pluginHost}
+                                                                      />
+                                                                    </BtwProvider>
+                                                                  </EditorContextProvider>
+                                                                </PromptRefProvider>
+                                                              </PromptHistoryProvider>
+                                                            </FrecencyProvider>
+                                                          </DialogProvider>
+                                                        </PromptStashProvider>
+                                                      </LocalProvider>
+                                                    </ThemeProvider>
+                                                  </DataProvider>
+                                                </SyncProvider>
+                                              </ProjectProvider>
+                                            </PermissionProvider>
+                                          </SDKProvider>
+                                        </PluginRuntimeProvider>
+                                      </TuiConfigProvider>
+                                    </RouteProvider>
+                                  </ToastProvider>
                                 </I18nProvider>
                               </KVProvider>
                             </ArgsProvider>
@@ -351,10 +354,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   })
 })
 
-function App(props: {
-  onSnapshot?: () => Promise<string[]>
-  pluginHost: TuiPluginHost
-}) {
+function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPluginHost }) {
   const startup = useTuiStartup()
   const tuiConfig = useTuiConfig()
   const route = useRoute()
@@ -496,12 +496,12 @@ function App(props: {
   // Show crash log collection dialog after UI is fully loaded
   let crashDialogShown = false
   createEffect(() => {
-    if (crashDialogShown || sync.status !== "complete") return;
-    if (getDevEcoExtensions().consumeCrashInfo?.() === false) return;
-    crashDialogShown = true;
-    const CollectDialog = getDevEcoExtensions().collectDialog;
+    if (crashDialogShown || sync.status !== "complete") return
+    if (getDevEcoExtensions().consumeCrashInfo?.() === false) return
+    crashDialogShown = true
+    const CollectDialog = getDevEcoExtensions().collectDialog
     if (CollectDialog) {
-      dialog.replace(() => <CollectDialog triggerType='00002' />);
+      dialog.replace(() => <CollectDialog triggerType="00002" />)
     }
   })
 
@@ -556,7 +556,8 @@ function App(props: {
     if (workspace?.type !== "worktree" || !workspace.directory) return
     return workspace
   })
-  const appCommands = createMemo(() => [
+  const appCommands = createMemo(() =>
+    [
       {
         name: COMMAND_PALETTE_COMMAND,
         title: t("command.show_command_palette"),
@@ -735,6 +736,13 @@ function App(props: {
         },
       },
       {
+        name: "provider.auth",
+        title: t("account.command"),
+        slashName: "auth",
+        run: () => dialog.replace(() => <DialogAuth />),
+        category: t("category.provider"),
+      },
+      {
         name: "provider.connect",
         title: t("command.connect_provider"),
         suggested: !connected(),
@@ -856,12 +864,7 @@ function App(props: {
             return
           }
           const { DialogReleaseNoteVersions } = await import("./component/dialog-release-note-versions")
-          dialog.replace(() => (
-            <DialogReleaseNoteVersions
-              releases={data.releases}
-              getBody={data.getBody}
-            />
-          ))
+          dialog.replace(() => <DialogReleaseNoteVersions releases={data.releases} getBody={data.getBody} />)
         },
       },
       {
@@ -954,7 +957,9 @@ function App(props: {
       },
       {
         name: "app.toggle.file_context",
-        title: kv.get("file_context_enabled", true) ? t("command.disable_file_context") : t("command.enable_file_context"),
+        title: kv.get("file_context_enabled", true)
+          ? t("command.disable_file_context")
+          : t("command.enable_file_context"),
         category: t("category.system"),
         run: () => {
           kv.set("file_context_enabled", !kv.get("file_context_enabled", true))
@@ -963,7 +968,10 @@ function App(props: {
       },
       {
         name: "app.toggle.diffwrap",
-        title: kv.get("diff_wrap_mode", "word") === "word" ? t("command.disable_diff_wrapping") : t("command.enable_diff_wrapping"),
+        title:
+          kv.get("diff_wrap_mode", "word") === "word"
+            ? t("command.disable_diff_wrapping")
+            : t("command.enable_diff_wrapping"),
         category: t("category.system"),
         run: () => {
           const current = kv.get("diff_wrap_mode", "word")
@@ -1006,10 +1014,7 @@ function App(props: {
       },
       {
         name: "permission.mode",
-        title:
-          local.permission.mode === "auto"
-            ? t("command.disable_auto_approve")
-            : t("command.enable_auto_approve"),
+        title: local.permission.mode === "auto" ? t("command.disable_auto_approve") : t("command.enable_auto_approve"),
         category: t("category.system"),
         run: () => {
           local.permission.toggle()
@@ -1057,7 +1062,7 @@ function App(props: {
         },
         category: t("category.system"),
       },
-      ...(sync.data.provider_next.connected.includes("deveco")
+      ...(ready() && getDevEcoExtensions().privacyDialog
         ? [
             {
               name: "privacy.open",
@@ -1077,30 +1082,34 @@ function App(props: {
               },
               category: t("category.system"),
             },
+          ]
+        : []),
+      ...(sync.data.provider_next.connected.includes("deveco")
+        ? [
             {
-              name: 'collect.open',
-              title: t('command.collect'),
-              desc: t('command.collect_desc'),
-              slashName: 'collect',
- 	            run: () => {
-                const CollectDialog = getDevEcoExtensions().collectDialog;
- 	              if (!CollectDialog) {
+              name: "collect.open",
+              title: t("command.collect"),
+              desc: t("command.collect_desc"),
+              slashName: "collect",
+              run: () => {
+                const CollectDialog = getDevEcoExtensions().collectDialog
+                if (!CollectDialog) {
                   toast.show({
- 	                  message: t('dialog.collect_not_available'),
- 	                  variant: 'error',
- 	                });
-                  return;
- 	              }
-               dialog.replace(() => <CollectDialog triggerType="00001" />);
- 	            },
-              category: t('category.system'),
- 	          },
+                    message: t("dialog.collect_not_available"),
+                    variant: "error",
+                  })
+                  return
+                }
+                dialog.replace(() => <CollectDialog triggerType="00001" />)
+              },
+              category: t("category.system"),
+            },
           ]
         : []),
     ].map((command) => ({
       namespace: "palette",
       ...command,
-    }))
+    })),
   )
 
   useBindings(() => ({
@@ -1176,14 +1185,26 @@ function App(props: {
     if (error && typeof error === "object" && error.name === "MessageAbortedError") return
     const message = errorMessage(error)
 
+    const extensions = getDevEcoExtensions()
+    if (extensions.agreementReviewDialog && extensions.isAgreementReviewError?.(message)) {
+      const AgreementReviewDialog = extensions.agreementReviewDialog
+      dialog.replace(() => (
+        <AgreementReviewDialog
+          onComplete={() => {
+            dialog.clear()
+            toast.show({ variant: "info", message: t("account.agreement_updated_retry") })
+          }}
+        />
+      ))
+      return
+    }
+
     toast.show({
       variant: "error",
       message,
       duration: 5000,
     })
   })
-
-
 
   const plugin = createMemo(() => {
     if (!ready()) return
@@ -1223,7 +1244,9 @@ function App(props: {
       }}
       onMouseUp={
         !Flag.DEVECO_EXPERIMENTAL_DISABLE_COPY_ON_SELECT
-          ? () => { if (!wordSelectActive) Selection.copy(renderer, toast, clipboard) }
+          ? () => {
+              if (!wordSelectActive) Selection.copy(renderer, toast, clipboard)
+            }
           : undefined
       }
     >
@@ -1231,27 +1254,40 @@ function App(props: {
         <TimeToFirstDraw />
       </Show>
       <Show when={ready()}>
-        <box flexGrow={1} minHeight={0} flexDirection="column">
-          <Switch>
-            <Match when={route.data.type === "home"}>
-              <Home />
-            </Match>
-            <Match when={route.data.type === "session"}>
-              <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                {(_) => <Session />}
-              </Show>
-            </Match>
-          </Switch>
-          {plugin()}
-        </box>
-        <box flexShrink={0}>
-          <pluginRuntime.Slot name="app_bottom" />
-        </box>
-        <pluginRuntime.Slot name="app" />
+        <AgreementGate>
+          <box flexGrow={1} minHeight={0} flexDirection="column">
+            <Switch>
+              <Match when={route.data.type === "home"}>
+                <Home />
+              </Match>
+              <Match when={route.data.type === "session"}>
+                <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
+                  {(_) => <Session />}
+                </Show>
+              </Match>
+            </Switch>
+            {plugin()}
+          </box>
+          <box flexShrink={0}>
+            <pluginRuntime.Slot name="app_bottom" />
+          </box>
+          <pluginRuntime.Slot name="app" />
+        </AgreementGate>
       </Show>
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />
       </Show>
     </box>
+  )
+}
+
+function AgreementGate(props: ParentProps) {
+  const Gate = getDevEcoExtensions().agreementGate
+  if (!Gate) return props.children
+  const route = useRoute()
+  return (
+    <Gate home={route.data.type === "home"} onConsentRequired={() => route.navigate({ type: "home" })}>
+      {props.children}
+    </Gate>
   )
 }

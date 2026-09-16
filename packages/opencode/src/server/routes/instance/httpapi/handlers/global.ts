@@ -8,10 +8,12 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { productAgreementDetails, acceptProductAgreement, ProductAgreementVersionError } from "@/cli/deveco-product-agreement"
+import { UnknownError } from "../errors"
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -146,6 +148,24 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     return handlers
+      .handle("productAgreement", () => Effect.promise(productAgreementDetails))
+      .handle("acceptProductAgreement", (ctx) => Effect.tryPromise({
+        try: async () => {
+          await acceptProductAgreement(ctx.payload.version, ctx.payload.serviceRevision)
+          return productAgreementDetails()
+        },
+        catch: (error) => error instanceof ProductAgreementVersionError
+          ? new HttpApiError.BadRequest()
+          : new UnknownError({ message: "Unable to save product agreement acceptance." }),
+      }))
+      .handle("retryAgreementUpload", (ctx) => Effect.tryPromise({
+        try: async () => {
+          const { syncAgreement } = await import("@/cli/deveco-agreement-sync")
+          await syncAgreement(ctx.payload.force ?? true)
+          return productAgreementDetails()
+        },
+        catch: () => new UnknownError({ message: "Unable to retry agreement upload. Your local acceptance is preserved." }),
+      }))
       .handle("health", health)
       .handleRaw("event", event)
       .handle("configGet", configGet)

@@ -1,5 +1,8 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, beforeAll, describe, expect } from "bun:test"
+import { Global } from "@opencode-ai/core/global"
+import { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } from "@/cli/deveco-product-agreement"
+beforeAll(() => acceptProductAgreement(PRODUCT_AGREEMENT_VERSION))
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
@@ -568,6 +571,28 @@ describe("session HttpApi", () => {
         expect(yield* responseJson(prompt)).toEqual(expected)
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance("requires local product consent before V2 prompt admission", () =>
+    Effect.gen(function* () {
+      const state = Global.Path.state
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.addFinalizer(() => Effect.sync(() => { Global.Path.state = state }))
+      Global.Path.state = tmp
+      const session = yield* createSession({ title: "product consent" })
+      const post = () => request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "msg_consent_probe", prompt: { text: "hello" }, resume: false }),
+      })
+      const blocked = yield* post()
+      expect(blocked.status).toBe(403)
+      expect(yield* responseJson(blocked)).toMatchObject({ _tag: "ForbiddenError" })
+      yield* Effect.promise(() => acceptProductAgreement(PRODUCT_AGREEMENT_VERSION))
+      const allowed = yield* post()
+      expect(allowed.status).toBe(200)
+      expect(yield* responseJson(allowed)).toMatchObject({ data: { id: "msg_consent_probe" } })
+    }), { git: true, config: { formatter: false, lsp: false } },
   )
 
   it.instance(

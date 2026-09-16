@@ -32,6 +32,7 @@ import { CommentsProvider } from "@/context/comments"
 import { FileProvider } from "@/context/file"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
+import { ProductAgreementGate } from "@/components/product-agreement-gate"
 import { GlobalProvider } from "@/context/global"
 import { HighlightsProvider } from "@/context/highlights"
 import { LanguageProvider, type Locale, useLanguage } from "@/context/language"
@@ -95,7 +96,7 @@ function SelectedServerLayout(props: ParentProps) {
     <ServerKey>
       <ServerSDKProvider>
         <ServerSyncProvider>
-          <ServerScopedShell>{props.children}</ServerScopedShell>
+          <ProductAgreementGate><ServerScopedShell>{props.children}</ServerScopedShell></ProductAgreementGate>
         </ServerSyncProvider>
       </ServerSDKProvider>
     </ServerKey>
@@ -120,7 +121,7 @@ function DraftServerLayout(props: ParentProps) {
   return (
     <ServerSDKProvider server={conn}>
       <ServerSyncProvider server={conn}>
-        <ServerScopedShell>{props.children}</ServerScopedShell>
+        <ProductAgreementGate><ServerScopedShell>{props.children}</ServerScopedShell></ProductAgreementGate>
       </ServerSyncProvider>
     </ServerSDKProvider>
   )

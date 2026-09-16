@@ -144,6 +144,7 @@ Commands:
   deveco providers login [url]        log in to a provider
   deveco providers logout [provider]  log out from a configured provider
   deveco providers reset              reset local provider credentials
+  deveco providers consent            review and accept the local product agreements
 
 Options:
   -h, --help        show help                                                              [boolean]

@@ -23,6 +23,8 @@ async function mountPrompt(input: {
   root: string
   keybinds: Partial<TuiKeybind.Keybinds>
   onConfirm: (value: string) => void
+  busy?: boolean
+  busyText?: string
 }) {
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })
@@ -31,6 +33,7 @@ async function mountPrompt(input: {
   const [
     { DialogProvider },
     { DialogPrompt },
+    { I18nProvider },
     { KVProvider },
     { ThemeProvider },
     { TuiConfigProvider },
@@ -39,6 +42,7 @@ async function mountPrompt(input: {
   ] = await Promise.all([
     import("../../../src/ui/dialog"),
     import("../../../src/ui/dialog-prompt"),
+    import("../../../src/i18n"),
     import("../../../src/context/kv"),
     import("../../../src/context/theme"),
     import("../../../src/config"),
@@ -68,13 +72,21 @@ async function mountPrompt(input: {
         <OpencodeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={resolvedConfig}>
             <KVProvider>
-              <ThemeProvider mode="dark">
-                <ToastProvider>
-                  <DialogProvider>
-                    <DialogPrompt title="Rename Session" value="draft" onConfirm={input.onConfirm} />
-                  </DialogProvider>
-                </ToastProvider>
-              </ThemeProvider>
+              <I18nProvider>
+                <ThemeProvider mode="dark">
+                  <ToastProvider>
+                    <DialogProvider>
+                      <DialogPrompt
+                        title="Rename Session"
+                        value="draft"
+                        busy={input.busy}
+                        busyText={input.busyText}
+                        onConfirm={input.onConfirm}
+                      />
+                    </DialogProvider>
+                  </ToastProvider>
+                </ThemeProvider>
+              </I18nProvider>
             </KVProvider>
           </TuiConfigProvider>
         </OpencodeKeymapProvider>
@@ -90,6 +102,24 @@ async function mountPrompt(input: {
     },
   }
 }
+
+test("dialog prompt shows only the specific busy status", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountPrompt({
+    root: tmp.path,
+    keybinds: {},
+    busy: true,
+    busyText: "Loading models...",
+    onConfirm: () => {},
+  })
+
+  try {
+    await wait(() => prompt.app.captureCharFrame().includes("Loading models..."))
+    expect(prompt.app.captureCharFrame()).not.toContain("processing...")
+  } finally {
+    await prompt.cleanup()
+  }
+})
 
 test("dialog prompt submit wins when return is also input newline", async () => {
   await using tmp = await tmpdir()

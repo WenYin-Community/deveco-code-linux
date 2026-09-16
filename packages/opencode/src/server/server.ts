@@ -71,6 +71,8 @@ export let url: URL | undefined
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
   const listener = await Effect.runPromise(listenEffect(opts))
+  const { startAgreementSync } = await import("@/cli/deveco-agreement-sync")
+  startAgreementSync()
   return {
     hostname: listener.hostname,
     port: listener.port,

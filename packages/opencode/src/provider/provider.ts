@@ -850,17 +850,11 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       const auth = yield* dep.auth("deveco")
       if (!auth || auth.type !== "oauth") return { autoload: false }
 
-      const { ensureValidToken } = yield* Effect.promise(() => import("@/plugin/deveco"))
-      const accessToken = yield* Effect.promise(() => ensureValidToken())
-      if (!accessToken) {
-        yield* Effect.logWarning("deveco token unavailable, user needs to re-login")
-        return { autoload: false }
-      }
-
       return {
         autoload: true,
         options: {
-          apiKey: accessToken,
+          // Refresh only when the built-in provider is actually used.
+          apiKey: auth.access,
         },
       }
     }),
@@ -1404,15 +1398,26 @@ export const layer = Layer.effect(
 
         // === DevEco Code: inject provider config if authenticated ===
         const devecoAuth = yield* auth.get("deveco").pipe(Effect.orElseSucceed(() => undefined))
-        if (devecoAuth && devecoAuth.type === "oauth") {
+        if (devecoAuth?.type === "oauth" && !cfg.disabled_providers?.includes("deveco") && (!cfg.enabled_providers || cfg.enabled_providers.includes("deveco"))) {
+          const otherCredentials = Object.keys(yield* auth.all().pipe(Effect.orDie)).some((id) => id !== "deveco")
+          const otherConfig = configProviders.some(([id]) => id !== "deveco")
+          const otherEnv = Object.values(database).some((p) => p.id !== "deveco" && p.env.some((name) => process.env[name]))
+          const useBuiltIn = cfg.model?.startsWith("deveco/") || (!cfg.model && !otherCredentials && !otherConfig && !otherEnv)
+          const { getDevecoProviderConfig } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+          const cached = useBuiltIn
+            ? null
+            : yield* Effect.promise(() => getDevecoProviderConfig(devecoAuth.access, { cachedOnly: true }))
           const { ensureValidToken } = yield* Effect.promise(() => import("@/plugin/deveco"))
-          const accessToken = yield* Effect.promise(() => ensureValidToken())
-          if (accessToken) {
-            const { getDevecoProviderConfig } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
-            const config = yield* Effect.promise(() => getDevecoProviderConfig(accessToken))
-            if (config) {
-              configProviders.push(["deveco", config as unknown as Partial<Info>])
-            }
+          // Third-party startup must not refresh expired Huawei credentials.
+          // A still-valid login may load a missing catalog so CLI sign-in remains discoverable.
+          const accessToken = cached ? undefined : useBuiltIn
+            ? yield* Effect.promise(() => ensureValidToken())
+            : devecoAuth.expires > Date.now() ? devecoAuth.access : undefined
+          const config = cached ?? (accessToken
+            ? yield* Effect.promise(() => getDevecoProviderConfig(accessToken))
+            : null)
+          if (config) {
+            configProviders.push(["deveco", config as unknown as Partial<Info>])
           }
         }
 
@@ -1844,6 +1849,20 @@ export const layer = Layer.effect(
     )
 
     const getModel = Effect.fn("Provider.getModel")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
+      // Explicit selection can request Huawei models even when startup used a third-party default.
+      // Refresh only here; listing third-party providers must not require a Huawei connection.
+      if (providerID === "deveco" && !(yield* InstanceState.get(state)).providers[providerID]) {
+        const cfg = yield* config.get()
+        const credential = yield* auth.get(providerID).pipe(Effect.orElseSucceed(() => undefined))
+        if (credential?.type === "oauth" && !cfg.disabled_providers?.includes(providerID) &&
+            (!cfg.enabled_providers || cfg.enabled_providers.includes(providerID))) {
+          const { ensureValidToken } = yield* Effect.promise(() => import("@/plugin/deveco/token-refresh"))
+          const { getDevecoProviderConfig } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+          const token = yield* Effect.promise(ensureValidToken)
+          if (token && (yield* Effect.promise(() => getDevecoProviderConfig(token))))
+            yield* InstanceState.invalidate(state)
+        }
+      }
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) {

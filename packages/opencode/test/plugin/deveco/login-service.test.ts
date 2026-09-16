@@ -155,7 +155,7 @@ describe("LoginService.parseJwt", () => {
 })
 
 describe("LoginService.isLoggedIn", () => {
-  test("should return true without checking storage when userInfo is set", async () => {
+  test("should check persisted credentials even when userInfo is set", async () => {
     mockHttpClientForLogin()
     tokenStorage.saveToken = mock(() => Promise.resolve())
     mockServerInstance = makeServer({
@@ -164,10 +164,10 @@ describe("LoginService.isLoggedIn", () => {
     const service = new LoginService()
     await service.login()
 
-    const loadSpy = mock(() => Promise.resolve("should-not-be-called"))
+    const loadSpy = mock(() => Promise.resolve("stored-jwt-token"))
     tokenStorage.loadToken = loadSpy
     expect(await service.isLoggedIn()).toBe(true)
-    expect(loadSpy.mock.calls.length).toBe(0)
+    expect(loadSpy.mock.calls.length).toBe(1)
   })
 
   test("should return true when token exists in storage and userInfo is null", async () => {
@@ -207,15 +207,31 @@ describe("LoginService.logout", () => {
     expect(service.getUserInfo()).toBe(null)
   })
 
-  test("should not throw when saveAuthToDisk fails", async () => {
+  test("reports incomplete logout when saveAuthToDisk fails", async () => {
     tokenStorage.clearToken = mock(() => Promise.resolve())
     mockSaveAuthToDisk = mock(async () => {
       throw new Error("disk write failed")
     })
 
-    const service = new LoginService()
-    await service.logout()
-    expect(service.getUserInfo()).toBe(null)
+    const access = await import("@/plugin/deveco/access")
+    const models = await import("@/plugin/deveco-models")
+    const analytics = await import("@/plugin/analytics/uploader")
+    const magpie = await import("@/plugin/analytics-magpie/uploader")
+    const checks = [
+      spyOn(access, "clearDevEcoAccess"),
+      spyOn(models, "clearDevecoModelCache"),
+      spyOn(analytics, "clearAnalyticsQueue"),
+      spyOn(magpie, "disableAnalyticsMagpie"),
+    ]
+    try {
+      const service = new LoginService()
+      await expect(service.logout()).rejects.toThrow("disk write failed")
+      expect(service.getUserInfo()).toBe(null)
+      expect(tokenStorage.clearToken).toHaveBeenCalledTimes(1)
+      for (const check of checks) expect(check).toHaveBeenCalledTimes(1)
+    } finally {
+      for (const check of checks) check.mockRestore()
+    }
   })
 })
 
@@ -250,6 +266,7 @@ describe("LoginService.login", () => {
     expect(result.userInfo!.isRealName).toBe(true)
     expect(stopSpy.mock.calls.length).toBe(1)
 
+    tokenStorage.loadToken = mock(() => Promise.resolve("stored-jwt-token"))
     expect(await service.isLoggedIn()).toBe(true)
     expect(service.getUserInfo()!.userId).toBe("user-123")
   })

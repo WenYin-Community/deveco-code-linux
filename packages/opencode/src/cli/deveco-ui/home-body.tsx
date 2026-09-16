@@ -1,3 +1,4 @@
+import { useI18n } from "@opencode-ai/tui/i18n"
 /**
  * DevEco Home body — owns the entire center slot of the TUI Home page.
  *
@@ -36,28 +37,21 @@ import { useArgs } from "@opencode-ai/tui/context/args"
 import { useRouteData } from "@opencode-ai/tui/context/route"
 import { usePromptRef } from "@opencode-ai/tui/context/prompt"
 import { useLocal } from "@opencode-ai/tui/context/local"
+import { useSDK } from "@opencode-ai/tui/context/sdk"
 import { Prompt, type PromptRef } from "@opencode-ai/tui/component/prompt"
 import { usePluginRuntime } from "@opencode-ai/tui/plugin/runtime"
 import { HomeSessionDestinationProvider } from "@opencode-ai/tui/routes/home/session-destination"
 import { Toast, useToast } from "@opencode-ai/tui/ui/toast"
 import type { SyncObject } from "@opencode-ai/tui/deveco-extensions"
-import { agreementService, AgreementStatus } from "@/cli/deveco-agreement"
 import { devecoAuth, hasDevecoOAuthEntry, ensureValidToken, loadIsRealNameFromDisk, UnsupportedRegionError, CHINA_ACCOUNT_ONLY_MESSAGE } from "@/plugin/deveco"
 import { hasConfiguredDevEcoHome } from "@/tool/lib/env"
-import { getPrivacyAcceptedKey, type AgreementConfig } from "@/cli/deveco-legal"
 import { DevEcoOnboarding } from "./onboarding"
 import { logWarn, logError } from "@/plugin/deveco/log"
 
-declare const DEVECO_SKIP_AGREEMENT: boolean | undefined
 
 // TODO: what is the best way to do this?
 let once = false
 
-// Cache the auth check result so /new (or /clear) doesn't re-run it.
-// Only populated when the check succeeds (user is authed + compliant).
-let authCheckCached = false
-let cachedAuthCanEnter = false
-let cachedDevecoReady = false
 // Cache DEVECO_HOME check — only check on initial startup, skip on /new
 let devecoHomeChecked = false
 
@@ -69,12 +63,14 @@ const placeholder = {
 export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number }) {
   const sync = props.sync
   const kv = useKV()
+  const sdk = useSDK()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const { t } = useI18n()
   const toast = useToast()
 
   const [devecoReady, setDevecoReady] = createSignal<boolean | null>(null)
-  const [devecoInitialStep, setDevecoInitialStep] = createSignal<"entry" | "privacy" | "deveco-home">("entry")
+  const [devecoInitialStep, setDevecoInitialStep] = createSignal<"entry" | "privacy" | "product-privacy" | "deveco-home">("entry")
   const [devecoSessionExpired, setDevecoSessionExpired] = createSignal(false)
   const [authCanEnter, setAuthCanEnter] = createSignal(false)
   const [authCheckDone, setAuthCheckDone] = createSignal(false)
@@ -89,8 +85,6 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
    * or the privacy agreement screen.
    */
   const finishCheck = (sessionExpired: boolean, step: "entry" | "privacy" = "entry") => {
-    // Don't cache failure states — clear any previous cache
-    authCheckCached = false
     if (sessionExpired) setDevecoSessionExpired(true)
     setDevecoInitialStep(step)
     setDevecoReady(false)
@@ -98,10 +92,37 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   }
 
   const runDevecoCheck = async () => {
+    if (sync.status === "loading" || sync.data.local_auth_error) return
     if (devecoChecked) return
     devecoChecked = true
 
     try {
+
+    const product = await sdk.client.global.productAgreement({ throwOnError: true })
+    const hasThirdParty = sync.data.provider.some((provider) =>
+      provider.id !== "deveco" &&
+      (provider.id !== "opencode" || Object.values(provider.models).some((model) => model.cost?.input)) &&
+      Object.keys(provider.models).length > 0,
+    )
+    if (hasThirdParty) {
+      if (!product.data?.accepted) {
+        setDevecoInitialStep("product-privacy")
+        setDevecoReady(false)
+        setAuthCheckDone(true)
+        return
+      }
+      setAuthCanEnter(true)
+      setAuthCheckDone(true)
+      setDevecoReady(true)
+      return
+    }
+
+    if (hasDevecoOAuthEntry() && !product.data?.accepted) {
+      setDevecoInitialStep("product-privacy")
+      setDevecoReady(false)
+      setAuthCheckDone(true)
+      return
+    }
 
     if (!hasDevecoOAuthEntry()) {
       return finishCheck(false)
@@ -127,7 +148,8 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       // Regardless of local exp, treat as session expired — the server no longer
       // trusts this token. Continuing would fall through to the real-name check
       // which also uses the same invalid jwtToken, creating a dead-end loop.
-      return finishCheck(true)
+      setDevecoInitialAuthError(t("account.refresh_session_failed"))
+      return finishCheck(await devecoAuth.isJwtExpired() === true)
     }
 
     // Check real-name status from disk cache first; only call API if uncertain.
@@ -156,61 +178,14 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       }
     }
 
-    if (
-      (typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT) ||
-      process.env.DEVECO_SKIP_AGREEMENT === "1"
-    ) {
-      authCheckCached = true
-      cachedAuthCanEnter = true
-      cachedDevecoReady = sync.status === "complete"
-      setAuthCanEnter(true)
-      setAuthCheckDone(true)
-      if (sync.status === "complete") {
-        setDevecoReady(true)
-      }
-      return
+    const result = await sdk.client.global.retryAgreementUpload({ force: false })
+    if (result.data?.upload.state === "review_required") return finishCheck(false, "privacy")
+    if (result.error) {
+      logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
     }
-
-    if (!kv.ready) {
-      await new Promise<void>((resolve) => {
-        const check = () => {
-          if (kv.ready) {
-            resolve()
-            return
-          }
-          setTimeout(check, 50)
-        }
-        check()
-        setTimeout(() => resolve(), 5000)
-      })
-    }
-
-    agreementService.configure((sync.data.config as unknown as { agreement?: AgreementConfig }).agreement)
-    const checkResult = await agreementService.checkAllAgreements(accessToken, userId, kv)
-
-    if (checkResult.canEnter) {
-      kv.set(getPrivacyAcceptedKey(userId), true)
-      authCheckCached = true
-      cachedAuthCanEnter = true
-      cachedDevecoReady = sync.status === "complete"
-      setAuthCanEnter(true)
-      setAuthCheckDone(true)
-      void agreementService.retryPendingSign(accessToken, userId, kv)
-      if (sync.status === "complete") {
-        setDevecoReady(true)
-      }
-    } else if (checkResult.overallStatus === AgreementStatus.SESSION_EXPIRED) {
-      finishCheck(true)
-    } else {
-      if (checkResult.overallStatus === AgreementStatus.NEED_RE_SIGN) {
-        toast.show({
-          variant: "warning",
-          message: "Agreements updated — please review.",
-          duration: 6000,
-        })
-      }
-      finishCheck(false, "privacy")
-    }
+    setAuthCanEnter(true)
+    setAuthCheckDone(true)
+    setDevecoReady(true)
 
     } catch (err) {
       if (err instanceof UnsupportedRegionError) {
@@ -229,18 +204,11 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   }
 
   onMount(() => {
-    if (authCheckCached) {
-      setAuthCheckDone(true)
-      setAuthCanEnter(cachedAuthCanEnter)
-      if (cachedDevecoReady || sync.status === "complete") {
-        setDevecoReady(true)
-      }
-      return
-    }
     void runDevecoCheck()
   })
 
   createEffect(() => {
+    if (sync.status !== "loading" && !devecoChecked) void runDevecoCheck()
     if (sync.status === "complete" && authCanEnter()) {
       setDevecoReady(true)
     }
@@ -340,15 +308,18 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
               paddingTop={HOME_BODY_GAP_ROWS}
               flexShrink={0}
             >
-              <Show when={!authCheckDone()}>
+              <Show when={sync.data.local_auth_error}>
+                <text fg={theme.error}>{sync.data.local_auth_error} Run `deveco auth reset` in a terminal, then reopen DevEco Code.</text>
+              </Show>
+              <Show when={!authCheckDone() && !sync.data.local_auth_error}>
                 <text fg={theme.textMuted} selectable={false}>
-                  Checking login status...
+                  {t("account.checking_setup")}
                 </text>
               </Show>
               <Show when={authCheckDone() && authCanEnter() && devecoReady() !== true}>
                 <box flexDirection="column" alignItems="center">
                   <text fg={theme.textMuted} selectable={false}>
-                    Loading project data...
+                    {t("account.loading_project")}
                   </text>
                   <text fg={theme.textMuted} selectable={false}>
                     providers, MCP servers, LSP, sessions...
@@ -377,7 +348,10 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
               </Show>
               <Show when={devecoReady() === false}>
                 <DevEcoOnboarding
-                  onComplete={() => setDevecoReady(true)}
+                  onComplete={() => {
+                    devecoChecked = false
+                    void runDevecoCheck()
+                  }}
                   bodySlotHeight={bodySlotHeight()}
                   initialStep={devecoInitialStep()}
                   sessionExpired={devecoSessionExpired()}

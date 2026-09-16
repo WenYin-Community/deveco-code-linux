@@ -9,13 +9,15 @@
  */
 import { registerDevEcoExtensions } from "@opencode-ai/tui/deveco-extensions"
 import { DevEcoHomeBody } from "./home-body"
-import { DialogPrivacy } from "./dialog-privacy"
+import { AgreementReviewDialog, ProductAgreementGate } from "./agreement-panel"
+import { DialogPrivacyConnected } from "./dialog-privacy"
 import { DialogCollect } from "./dialog-collect"
 import { openComplainPage } from "./complain"
 import { Auth } from "@/auth"
 import { LOCAL_CREDENTIALS_CORRUPTED_MESSAGE } from "@/auth/messages"
 import { Effect } from "effect"
 import { detectCrashedFlag } from "@/cli/crash-detect"
+import { AGREEMENT_REVIEW_REQUIRED_MESSAGE } from "@/plugin/deveco/access"
 
 async function readLocalAuthError(): Promise<string | undefined> {
   try {
@@ -49,11 +51,14 @@ export function registerDevEcoTuiExtensions(
   } = {},
 ): void {
   registerDevEcoExtensions({
+    agreementGate: ProductAgreementGate,
     homeBody: DevEcoHomeBody,
     readLocalAuthError,
     openComplainPage,
     pluralize,
-    privacyDialog: () => DialogPrivacy({ onToolImprovementEnabledChange: options.onToolImprovementEnabledChange }),
+    privacyDialog: () => DialogPrivacyConnected({ onToolImprovementEnabledChange: options.onToolImprovementEnabledChange }),
+    agreementReviewDialog: AgreementReviewDialog,
+    isAgreementReviewError: (message) => message.includes(AGREEMENT_REVIEW_REQUIRED_MESSAGE),
     collectDialog: DialogCollect,
     consumeCrashInfo: detectCrashedFlag,
   })

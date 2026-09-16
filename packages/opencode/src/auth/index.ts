@@ -20,6 +20,7 @@ export class Oauth extends Schema.Class<Oauth>("OAuth")({
   expires: NonNegativeInt,
   accountId: Schema.optional(Schema.String),
   enterpriseUrl: Schema.optional(Schema.String),
+  isRealName: Schema.optional(Schema.Boolean),
 }) {}
 
 export class Api extends Schema.Class<Api>("ApiAuth")({
@@ -90,6 +91,15 @@ export const layer = Layer.effect(
 
     const set = Effect.fn("Auth.set")(function* (key: string, info: Info) {
       const norm = key.replace(/\/+$/, "")
+      if (norm === "deveco") {
+        const { saveAuthToDisk } = yield* Effect.promise(() => import("@/plugin/deveco/storage"))
+        yield* Effect.tryPromise({ try: () => saveAuthToDisk(norm, { ...info }), catch: fail("Failed to write auth data") })
+        if (info.type === "oauth") {
+          const { startAgreementSync } = yield* Effect.promise(() => import("@/cli/deveco-agreement-sync"))
+          startAgreementSync()
+        }
+        return
+      }
       const data = yield* all()
       if (norm !== key) delete data[key]
       delete data[norm + "/"]
@@ -99,6 +109,11 @@ export const layer = Layer.effect(
 
     const remove = Effect.fn("Auth.remove")(function* (key: string) {
       const norm = key.replace(/\/+$/, "")
+      if (norm === "deveco") {
+        const { devecoAuth } = yield* Effect.promise(() => import("@/plugin/deveco/auth"))
+        yield* Effect.tryPromise({ try: () => devecoAuth.logout(), catch: fail("Failed to sign out of HUAWEI account") })
+        return
+      }
       const data = yield* all()
       delete data[key]
       delete data[norm]

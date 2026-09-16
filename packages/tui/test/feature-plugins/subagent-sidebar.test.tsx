@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, mock, test } from "bun:test"
+import { afterAll, expect, mock, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import type { JSX } from "solid-js"
 import { RGBA } from "@opentui/core"
@@ -20,12 +20,21 @@ type CommandLayer = {
 
 // The View reads translations through the app i18n context; stub it so the
 // plugin renders standalone (interpolation matches the {{n}} JSON format).
-const i18nModule = await import("../../src/i18n")
+// Snapshot the exports by value before mocking. The namespace object carries live
+// bindings, so once mock.module below replaces the registry entry it reports the
+// stub too, and restoring from it would just re-install the stub.
+const realI18n = { ...(await import("../../src/i18n")) }
 mock.module("../../src/i18n", () => ({
-  ...i18nModule,
+  ...realI18n,
   useI18n: () => ({ t, lng: () => "en" }),
   onLanguageChange: () => () => {},
 }))
+// mock.module rewrites the process-wide module registry and bun never undoes it,
+// so without this every later test file imports the stub above and silently loses
+// real i18n reactivity. Hand the genuine exports back once this file is done.
+afterAll(() => {
+  mock.module("../../src/i18n", () => realI18n)
+})
 
 function t(key: string, params?: Record<string, string | number>): string {
   const value = key.split(".").reduce<unknown>((acc, part) => (acc as Record<string, unknown>)?.[part], en)

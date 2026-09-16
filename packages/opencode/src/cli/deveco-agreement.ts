@@ -52,6 +52,7 @@ export interface VersionInfo {
 export interface AgreementQueryResult {
   status: AgreementStatus
   signInfo: SignInfo | null
+  signInfos?: SignInfo[]
   versionInfo: VersionInfo | null
   error?: string
 }
@@ -122,11 +123,17 @@ async function tmsPost(tmsUrl: string, body: TmsFormBody): Promise<string> {
         data += chunk
       })
       res.on("end", () => {
+        clearTimeout(deadline)
         resolve(data)
       })
+      res.on("error", reject)
     })
 
+    const deadline = setTimeout(() => req.destroy(new Error("TMS request deadline exceeded")), 10000)
+    deadline.unref()
+    req.on("close", () => clearTimeout(deadline))
     req.on("error", (err: Error) => {
+      clearTimeout(deadline)
       reject(err)
     })
     req.on("timeout", () => {
@@ -174,7 +181,7 @@ async function handleSessionTimeoutAndRetry<T>(
       refresh: newTokens.refreshToken,
       expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
       isRealName: newTokens.isRealName,
-    })
+    }, accessToken)
 
     const retryRaw = await retryApiCall(newTokens.accessToken)
     return { result: parseResponse(retryRaw), refreshedToken: true }
@@ -222,8 +229,12 @@ function parseVersionInfo(raw: Record<string, unknown>): VersionInfo {
   }
 }
 
-class AgreementService {
-  private config = resolveAgreementConfig()
+export class AgreementService {
+  private config
+
+  constructor(config?: AgreementConfig) {
+    this.config = resolveAgreementConfig(config)
+  }
 
   /** Update agreement config from project-level settings. Called before any API use. */
   configure(overrides?: AgreementConfig) {
@@ -305,7 +316,7 @@ class AgreementService {
       const errorCode = resJson[ERROR_CODE] as number | undefined
       if (errorCode === 0) {
         const signArr = resJson.signInfo as Array<Record<string, unknown>> | undefined
-        if (!signArr || signArr.length === 0) {
+        if (!signArr || ![this.config.privacy_id, this.config.terms_id].every((id) => signArr.some((entry) => String(entry.agrType) === id))) {
           logWarn("query agreement response: empty signInfo array", { service: "deveco-agreement" })
           return {
             status: AgreementStatus.NEED_SIGN,
@@ -320,18 +331,20 @@ class AgreementService {
 
         for (const signEntry of signArr) {
           const parsedSign = parseSignInfo(signEntry)
+          const outdated = !compareAgreementVersion(parsedSign.newestVersion, parsedSign.version) ||
+            (parsedSign.newestVersion === parsedSign.version && parsedSign.newestSubVersion > parsedSign.subVersion)
           if (parsedSign.needSign) {
             allCompliant = false
             // If needSign but isAgree=true → version expired → NEED_RE_SIGN
             // If needSign and isAgree=false → never signed → NEED_SIGN
-            if (parsedSign.isAgree && !compareAgreementVersion(parsedSign.newestVersion, parsedSign.version)) {
+            if (parsedSign.isAgree && outdated) {
               anyNeedReSign = true
             }
           }
           if (!parsedSign.isAgree) {
             allCompliant = false
           }
-          if (parsedSign.isAgree && !compareAgreementVersion(parsedSign.newestVersion, parsedSign.version)) {
+          if (parsedSign.isAgree && outdated) {
             allCompliant = false
             anyNeedReSign = true
           }
@@ -341,6 +354,7 @@ class AgreementService {
           return {
             status: AgreementStatus.COMPLIANT,
             signInfo: parseSignInfo(signArr[0]),
+            signInfos: signArr.map(parseSignInfo),
             versionInfo: null,
           }
         }
@@ -348,6 +362,7 @@ class AgreementService {
         return {
           status: anyNeedReSign ? AgreementStatus.NEED_RE_SIGN : AgreementStatus.NEED_SIGN,
           signInfo: parseSignInfo(signArr[0]),
+            signInfos: signArr.map(parseSignInfo),
           versionInfo: null,
         }
       }

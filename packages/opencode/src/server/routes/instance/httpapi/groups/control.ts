@@ -1,4 +1,5 @@
 import { Auth } from "@/auth"
+import { UnknownError } from "../errors"
 
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
@@ -36,6 +37,13 @@ export const ControlPaths = {
 export const ControlApi = HttpApi.make("control").add(
   HttpApiGroup.make("control")
     .add(
+      HttpApiEndpoint.get("authList", "/auth", {
+        success: Schema.Array(Schema.Struct({ providerID: Schema.String, type: Schema.String, removable: Schema.Boolean })),
+        error: UnknownError,
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "auth.list", summary: "List saved credential metadata",
+        description: "List provider IDs and credential types without exposing secrets.",
+      })),
       HttpApiEndpoint.put("authSet", ControlPaths.auth, {
         params: AuthParams,
         payload: Auth.Info,

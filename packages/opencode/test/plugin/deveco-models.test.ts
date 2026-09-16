@@ -1,3 +1,7 @@
+import { Global } from "@opencode-ai/core/global"
+import { createHash } from "node:crypto"
+import { tokenStorage } from "../../src/plugin/deveco/token-storage"
+import { tmpdir } from "../fixture/fixture"
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 
 import "../../src/plugin/deveco-models"
@@ -112,6 +116,25 @@ describe("getDevecoProviderConfig", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch
+  })
+
+  test("a corrupt disk cache cannot relabel the previous account's memory cache", async () => {
+    await using tmp = await tmpdir()
+    const cache = Global.Path.cache
+    Global.Path.cache = tmp.path
+    try {
+      const mod = await loadFresh()
+      globalThis.fetch = mockFetch(async () => Response.json(makeValidApiResponse()))
+      expect(await mod.getDevEcoModelCatalog("old-access")).not.toBeNull()
+      const owner = createHash("sha256").update((await tokenStorage.loadToken()) ?? "new-access").digest("hex")
+      await Bun.write(`${tmp.path}/deveco-models-${owner}.json`, JSON.stringify({ invalid: true }))
+      expect(await mod.getDevecoProviderConfig("new-access", { cachedOnly: true })).toBeNull()
+      globalThis.fetch = mockFetch(async () => new Response("unavailable", { status: 503 }))
+      // A poisoned cache would return the old catalog without contacting the server.
+      expect(await mod.getDevEcoModelCatalog("new-access")).toBeNull()
+    } finally {
+      Global.Path.cache = cache
+    }
   })
 
   test("returns null on HTTP error", async () => {
@@ -651,5 +674,33 @@ describe("entry.source preserves raw cloud fields through decode", () => {
     expect(projected.tool_call).toBe(true)
     expect(entry.model.reasoning).toBe(true)
     expect(entry.model.tool_call).toBe(true)
+  })
+
+  test("keeps unknown fields after a disk cache round trip", async () => {
+    await using tmp = await tmpdir()
+    const cache = Global.Path.cache
+    Global.Path.cache = tmp.path
+    try {
+      const response = {
+        code: 200,
+        body: {
+          version: 1,
+          inner_models: [{
+            protocol: "openai",
+            group_name: "cached",
+            model_configs: [{ id: 1, model_id: "cached-model", thinking_mode: "on", future_field: "kept" }],
+          }],
+        },
+      }
+      const writer = await loadFresh()
+      globalThis.fetch = mockFetch(async () => Response.json(response))
+      expect(await writer.getDevecoProviderConfig("token")).not.toBeNull()
+
+      const reader = await loadFresh()
+      const provider = await reader.getDevecoProviderConfig("token", { cachedOnly: true })
+      expect((provider?.models["cached-model"] as Record<string, unknown> | undefined)?.thinking_mode).toBe("on")
+    } finally {
+      Global.Path.cache = cache
+    }
   })
 })

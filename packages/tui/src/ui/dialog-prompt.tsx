@@ -104,7 +104,7 @@ export function DialogPrompt(props: DialogPromptProps) {
         </Show>
       </box>
       <box paddingBottom={1} gap={1} flexDirection="row">
-        <Show when={!props.busy} fallback={<text fg={theme.textMuted}>{t("dialog.processing")}</text>}>
+        <Show when={!props.busy}>
           <Show when={submitShortcut()}>
             <text fg={theme.text}>
               {submitShortcut()} <span style={{ fg: theme.textMuted }}>{t("dialog.action_submit")}</span>

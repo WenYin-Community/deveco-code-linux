@@ -17,7 +17,7 @@ import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 
-export function DialogConnectProvider(props: { provider: string }) {
+export function DialogConnectProvider(props: { provider: string; onConnected?: (disposed: boolean) => void }) {
   const dialog = useDialog()
   const serverSync = useServerSync()
   const serverSDK = useServerSDK()
@@ -41,7 +41,8 @@ export function DialogConnectProvider(props: { provider: string }) {
   })
 
   const provider = createMemo(
-    () => providers.all().get(props.provider) ?? serverSync().data.provider.all.get(props.provider)!,
+    () => providers.all().get(props.provider) ?? serverSync().data.provider.all.get(props.provider) ??
+      (props.provider === "deveco" ? { id: "deveco", name: "HUAWEI ID" } : undefined!),
   )
   const fallback = createMemo<ProviderAuthMethod[]>(() => [
     {
@@ -331,8 +332,13 @@ export function DialogConnectProvider(props: { provider: string }) {
   })
 
   async function complete() {
-    await serverSDK().client.global.dispose()
+    const refreshed = await serverSDK().client.global.dispose({ throwOnError: true }).then(() => true, () => false)
     dialog.close()
+    props.onConnected?.(refreshed)
+    if (!refreshed) {
+      showToast({ variant: "error", title: "Signed in, but unable to refresh providers", description: "Retry loading models from the setup screen." })
+      return
+    }
     showToast({
       variant: "success",
       icon: "circle-check",

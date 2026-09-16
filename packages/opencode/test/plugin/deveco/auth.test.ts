@@ -87,8 +87,9 @@ afterEach(() => {
 })
 
 describe("DevEcoAuth.getSession", () => {
-  test("returns session from userInfo, skips token storage and disk", async () => {
+  test("returns session from userInfo only while its persisted token still exists", async () => {
     mockLoginServiceMethods.getUserInfo = mock(() => sampleUserInfo)
+    mockTokenStorageLoadToken = mock(() => Promise.resolve(sampleUserInfo.jwtToken))
     const auth = new DevEcoAuth()
     const before = Date.now()
     const session = await auth.getSession()
@@ -98,7 +99,7 @@ describe("DevEcoAuth.getSession", () => {
     expect(session!.createdAt).toBeGreaterThanOrEqual(before)
     expect(session!.createdAt).toBeLessThanOrEqual(after)
     expect(session!.expiresAt - session!.createdAt).toBe(THIRTY_DAYS_MS)
-    expect(mockTokenStorageLoadToken.mock.calls.length).toBe(0)
+    expect(mockTokenStorageLoadToken.mock.calls.length).toBeGreaterThan(0)
     expect(mockLoadAccessTokenFromDisk.mock.calls.length).toBe(0)
   })
 
@@ -152,6 +153,7 @@ describe("DevEcoAuth.getSession", () => {
 describe("DevEcoAuth.refreshToken", () => {
   test("updates userInfo tokens when userInfo exists and refresh succeeds", async () => {
     const userInfo: UserInfo = { ...sampleUserInfo }
+    mockTokenStorageLoadToken = mock(() => Promise.resolve(userInfo.jwtToken))
     const newTokens = { accessToken: "new-access", refreshToken: "new-refresh", isRealName: true }
     mockLoginServiceMethods.getUserInfo = mock(() => userInfo)
     mockLoginServiceMethods.refreshToken = mock(() => Promise.resolve(newTokens))
@@ -204,12 +206,13 @@ describe("DevEcoAuth.refreshToken", () => {
 })
 
 describe("DevEcoAuth.getUserId", () => {
-  test("returns userId from userInfo, skips token storage", async () => {
+  test("returns userId from userInfo only while its persisted token still exists", async () => {
     mockLoginServiceMethods.getUserInfo = mock(() => sampleUserInfo)
+    mockTokenStorageLoadToken = mock(() => Promise.resolve(sampleUserInfo.jwtToken))
     const auth = new DevEcoAuth()
     const result = await auth.getUserId()
     expect(result).toBe("user-123")
-    expect(mockTokenStorageLoadToken.mock.calls.length).toBe(0)
+    expect(mockTokenStorageLoadToken.mock.calls.length).toBeGreaterThan(0)
   })
 
   test("falls through to jwtToken when userInfo.userId is empty", async () => {

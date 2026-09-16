@@ -99,6 +99,7 @@ import { statsHandlers } from "./handlers/stats"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { handlers } from "@opencode-ai/server/handlers"
+import { SessionAdmission } from "@opencode-ai/server/middleware/session-location"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
@@ -172,7 +173,10 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, syncGuardLayer, schemaErrorLayer, AsideService.defaultLayer]),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
-  Layer.provide(handlers),
+  Layer.provide(handlers.pipe(Layer.provide(Layer.succeed(SessionAdmission, async () => {
+    const { requireProductAccess } = await import("@/cli/deveco-product-agreement")
+    await requireProductAccess()
+  })))),
   Layer.provide(PluginPtyEnvironment.layer),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
 )

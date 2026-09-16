@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onMount, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { useSync } from "../context/sync"
 import { map, pipe, sortBy } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
@@ -10,6 +10,8 @@ import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@opencode-ai/sdk/v2"
 import { DialogModel } from "./dialog-model"
+import { DialogProviderProgress } from "./dialog-provider-progress"
+import { createProviderRefresh } from "./provider-refresh"
 import { useToast } from "../ui/toast"
 import { isConsoleManagedProvider } from "../util/provider-origin"
 import { useConnected } from "./use-connected"
@@ -66,7 +68,14 @@ export function providerOptions(list: { id: string; name: string }[], t?: (key: 
           openai: t ? t("dialog.provider_openai") : "(ChatGPT Plus/Pro or API key)",
           google: t ? t("dialog.provider_api_key") : "(API key)",
         }[provider.id],
-        category: provider.id in PROVIDER_PRIORITY ? (t ? t("category.popular") : "Popular") : (t ? t("category.providers") : "Providers"),
+        category:
+          provider.id in PROVIDER_PRIORITY
+            ? t
+              ? t("category.popular")
+              : "Popular"
+            : t
+              ? t("category.providers")
+              : "Providers",
       })),
     ),
     {
@@ -85,7 +94,7 @@ export function normalizeCustomProviderID(value: string) {
   return providerID
 }
 
-export function createDialogProviderOptions() {
+export function createDialogProviderOptions(input?: { onConnected?: () => void }) {
   const { t } = useI18n()
   const sync = useSync()
   const dialog = useDialog()
@@ -97,11 +106,7 @@ export function createDialogProviderOptions() {
   async function promptCustomProviderID(): Promise<string | undefined> {
     const value = await DialogPrompt.show(dialog, t("dialog.other"), {
       placeholder: t("dialog.placeholder_provider_id"),
-      description: () => (
-        <text fg={theme.textMuted}>
-          {t("dialog.custom_provider_desc")}
-        </text>
-      ),
+      description: () => <text fg={theme.textMuted}>{t("dialog.custom_provider_desc")}</text>,
     })
     if (value === null) return
 
@@ -128,7 +133,14 @@ export function createDialogProviderOptions() {
             async onSelect() {
               const providerID = await promptCustomProviderID()
               if (!providerID) return
-              return dialog.replace(() => <ApiMethod providerID={providerID} title={t("dialog.api_key")} custom />)
+              return dialog.replace(() => (
+                <ApiMethod
+                  providerID={providerID}
+                  title={t("dialog.api_key")}
+                  custom
+                  onConnected={input?.onConnected}
+                />
+              ))
             },
           }
         }
@@ -199,12 +211,24 @@ export function createDialogProviderOptions() {
               }
               if (result.data?.method === "code") {
                 dialog.replace(() => (
-                  <CodeMethod providerID={providerID} title={method.label} index={index} authorization={result.data!} />
+                  <CodeMethod
+                    onConnected={input?.onConnected}
+                    providerID={providerID}
+                    title={method.label}
+                    index={index}
+                    authorization={result.data!}
+                  />
                 ))
               }
               if (result.data?.method === "auto") {
                 dialog.replace(() => (
-                  <AutoMethod providerID={providerID} title={method.label} index={index} authorization={result.data!} />
+                  <AutoMethod
+                    onConnected={input?.onConnected}
+                    providerID={providerID}
+                    title={method.label}
+                    index={index}
+                    authorization={result.data!}
+                  />
                 ))
               }
             }
@@ -216,7 +240,12 @@ export function createDialogProviderOptions() {
                 metadata = value
               }
               return dialog.replace(() => (
-                <ApiMethod providerID={providerID} title={method.label} metadata={metadata} />
+                <ApiMethod
+                  onConnected={input?.onConnected}
+                  providerID={providerID}
+                  title={method.label}
+                  metadata={metadata}
+                />
               ))
             }
           },
@@ -233,7 +262,25 @@ export function DialogProvider() {
   return <DialogSelect title={t("dialog.connect_provider_title")} options={options()} />
 }
 
+function createProviderCompletion(props: { providerID: string; onConnected?: () => void; custom?: boolean }) {
+  const refresh = createProviderRefresh()
+  const dialog = useDialog()
+  const sync = useSync()
+  const toast = useToast()
+  const { t } = useI18n()
+  return () =>
+    refresh(() => {
+      if (props.onConnected) return props.onConnected()
+      if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
+        toast.show({ variant: "info", message: t("toast.saved_credential", { providerID: props.providerID }) })
+        return dialog.clear()
+      }
+      dialog.replace(() => <DialogModel providerID={props.providerID} />)
+    })
+}
+
 interface AutoMethodProps {
+  onConnected?: () => void
   index: number
   providerID: string
   title: string
@@ -244,72 +291,108 @@ function AutoMethod(props: AutoMethodProps) {
   const { theme } = useTheme()
   const sdk = useSDK()
   const dialog = useDialog()
-  const sync = useSync()
+  const complete = createProviderCompletion(props)
   const toast = useToast()
   const clipboard = useClipboard()
+  const [connecting, setConnecting] = createSignal(false)
+  const active = { value: true }
+  onCleanup(() => {
+    active.value = false
+  })
+  const copyValue = () =>
+    props.authorization.instructions.match(/[A-Z0-9]{4}-[A-Z0-9]{4,5}/)?.[0] ?? props.authorization.url
 
   useBindings(() => ({
-    bindings: [
-      {
-        key: "c",
-        desc: t("dialog.keybind_copy_provider_code"),
-        group: t("category.dialog"),
-        cmd: () => {
-          const code =
-            props.authorization.instructions.match(/[A-Z0-9]{4}-[A-Z0-9]{4,5}/)?.[0] ?? props.authorization.url
-          clipboard
-            .write?.(code)
-            .then(() => toast.show({ message: t("toast.copied_to_clipboard"), variant: "info" }))
-            .catch(toast.error)
-        },
-      },
-    ],
+    bindings: copyValue()
+      ? [
+          {
+            key: "c",
+            desc: t("dialog.keybind_copy_provider_code"),
+            group: t("category.dialog"),
+            cmd: () => {
+              const code = copyValue()
+              clipboard
+                .write?.(code)
+                .then(() => toast.show({ message: t("toast.copied_to_clipboard"), variant: "info" }))
+                .catch(toast.error)
+            },
+          },
+        ]
+      : [],
   }))
 
-  onMount(async () => {
-    const result = await sdk.client.provider.oauth.callback({
-      providerID: props.providerID,
-      method: props.index,
-    })
-    if (result.error) {
-      toast.show({
-        variant: "error",
-        message:
-          "name" in result.error && result.error.name === "ProviderAuthOauthCallbackFailed"
-            ? t("toast.oauth_failed")
-            : JSON.stringify(result.error),
+  onMount(() => {
+    void (async () => {
+      const result = await sdk.client.provider.oauth.callback({
+        providerID: props.providerID,
+        method: props.index,
       })
+      if (!active.value) return
+      if (result.error) {
+        toast.show({
+          variant: "error",
+          message:
+            "name" in result.error && result.error.name === "ProviderAuthOauthCallbackFailed"
+              ? t("toast.oauth_failed")
+              : JSON.stringify(result.error),
+        })
+        dialog.clear()
+        return
+      }
+      setConnecting(true)
+      await complete()
+    })().catch((error) => {
+      if (!active.value) return
+      toast.error(error)
       dialog.clear()
-      return
-    }
-    await sdk.client.instance.dispose()
-    await sync.bootstrap()
-    dialog.replace(() => <DialogModel providerID={props.providerID} />)
+    })
   })
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          {props.title}
-        </text>
-        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-          {t("dialog.esc")}
-        </text>
-      </box>
-      <box gap={1}>
-        <Link href={props.authorization.url} fg={theme.primary} />
-        <text fg={theme.textMuted}>{props.authorization.instructions}</text>
-      </box>
-      <text fg={theme.textMuted}>{t("dialog.waiting_for_authorization")}</text>
-      <text fg={theme.text}>
-        c <span style={{ fg: theme.textMuted }}>{t("dialog.action_copy_short")}</span>
-      </text>
-    </box>
+    <Show
+      when={props.providerID === "deveco"}
+      fallback={
+        <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+          <box flexDirection="row" justifyContent="space-between" paddingLeft={props.providerID === "deveco" ? 2 : 0}>
+            <text attributes={TextAttributes.BOLD} fg={theme.text}>
+              {props.title}
+            </text>
+            <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+              {t("dialog.esc")}
+            </text>
+          </box>
+          <box gap={1}>
+            <Show when={props.authorization.url}>
+              <Link href={props.authorization.url} fg={theme.primary} />
+            </Show>
+            <text fg={theme.textMuted}>{props.authorization.instructions}</text>
+          </box>
+          <text fg={theme.textMuted}>{t("dialog.waiting_for_authorization")}</text>
+          <Show when={copyValue()}>
+            <text fg={theme.text}>
+              c <span style={{ fg: theme.textMuted }}>{t("dialog.action_copy_short")}</span>
+            </text>
+          </Show>
+        </box>
+      }
+    >
+      <DialogProviderProgress
+        title={props.title}
+        status={connecting() ? t("account.loading_models") : t("account.waiting_browser")}
+        description={connecting() ? undefined : t("account.continue_browser")}
+      >
+        <Show when={copyValue()}>
+          <text fg={theme.text}>
+            c <span style={{ fg: theme.textMuted }}>{t("dialog.action_copy_short")}</span>
+          </text>
+        </Show>
+      </DialogProviderProgress>
+    </Show>
   )
 }
 
 interface CodeMethodProps {
+  onConnected?: () => void
   index: number
   title: string
   providerID: string
@@ -319,8 +402,8 @@ function CodeMethod(props: CodeMethodProps) {
   const { t } = useI18n()
   const { theme } = useTheme()
   const sdk = useSDK()
-  const sync = useSync()
-  const dialog = useDialog()
+  const complete = createProviderCompletion(props)
+  const toast = useToast()
   const [error, setError] = createSignal(false)
 
   return (
@@ -334,9 +417,7 @@ function CodeMethod(props: CodeMethodProps) {
           code: value,
         })
         if (!error) {
-          await sdk.client.instance.dispose()
-          await sync.bootstrap()
-          dialog.replace(() => <DialogModel providerID={props.providerID} />)
+          await complete().catch(toast.error)
           return
         }
         setError(true)
@@ -355,6 +436,7 @@ function CodeMethod(props: CodeMethodProps) {
 }
 
 interface ApiMethodProps {
+  onConnected?: () => void
   providerID: string
   title: string
   metadata?: Record<string, string>
@@ -362,61 +444,73 @@ interface ApiMethodProps {
 }
 function ApiMethod(props: ApiMethodProps) {
   const { t } = useI18n()
-  const dialog = useDialog()
   const sdk = useSDK()
-  const sync = useSync()
+  const complete = createProviderCompletion(props)
   const toast = useToast()
   const { theme } = useTheme()
+  const [busy, setBusy] = createSignal(false)
+  const [saved, setSaved] = createSignal(false)
+  const active = { value: true }
+  onCleanup(() => {
+    active.value = false
+  })
 
   return (
     <DialogPrompt
       title={props.title}
+      busy={busy()}
+      busyText={saved() ? t("account.loading_models") : t("account.saving_key")}
       placeholder={t("dialog.placeholder_api_key")}
       description={
         {
           opencode: (
             <box gap={1}>
-              <text fg={theme.textMuted}>
-                {t("dialog.provider_opencode_zen_desc")}
-              </text>
+              <text fg={theme.textMuted}>{t("dialog.provider_opencode_zen_desc")}</text>
               <text fg={theme.text}>
-                {t("dialog.go_to_url")}<span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> to get a key
+                {t("dialog.go_to_url")}
+                <span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> to get a key
               </text>
             </box>
           ),
           "opencode-go": (
             <box gap={1}>
-              <text fg={theme.textMuted}>
-                {t("dialog.provider_opencode_go_desc")}
-              </text>
+              <text fg={theme.textMuted}>{t("dialog.provider_opencode_go_desc")}</text>
               <text fg={theme.text}>
-                {t("dialog.go_to_url")}<span style={{ fg: theme.primary }}>https://opencode.ai/go</span>{t("dialog.enable_opencode_go")}
+                {t("dialog.go_to_url")}
+                <span style={{ fg: theme.primary }}>https://opencode.ai/go</span>
+                {t("dialog.enable_opencode_go")}
               </text>
             </box>
           ),
         }[props.providerID] ?? undefined
       }
       onConfirm={async (value) => {
-        if (!value) return
-        await sdk.client.auth.set({
-          providerID: props.providerID,
-          auth: {
-            type: "api",
-            key: value,
-            ...(props.metadata ? { metadata: props.metadata } : {}),
-          },
-        })
-        await sdk.client.instance.dispose()
-        await sync.bootstrap()
-        if (props.custom && !sync.data.provider_next.all.some((provider) => provider.id === props.providerID)) {
-          toast.show({
-            variant: "info",
-            message: t("toast.saved_credential", { providerID: props.providerID }),
-          })
-          dialog.clear()
-          return
+        if (!value.trim() || busy()) return
+        setBusy(true)
+        setSaved(false)
+        try {
+          await sdk.client.auth.set(
+            {
+              providerID: props.providerID,
+              auth: {
+                type: "api",
+                key: value.trim(),
+                ...(props.metadata ? { metadata: props.metadata } : {}),
+              },
+            },
+            { throwOnError: true },
+          )
+          setSaved(true)
+          await complete()
+        } catch {
+          if (active.value)
+            toast.show({
+              variant: "error",
+              message: saved() ? t("account.key_loading_failed") : t("account.save_failed"),
+            })
+        } finally {
+          if (active.value) setBusy(false)
         }
-        dialog.replace(() => <DialogModel providerID={props.providerID} />)
       }}
     />
   )

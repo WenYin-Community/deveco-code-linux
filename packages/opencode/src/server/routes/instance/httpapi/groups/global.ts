@@ -1,3 +1,4 @@
+import { UnknownError } from "../errors"
 import { Config } from "@/config/config"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { EventV2 } from "@opencode-ai/core/event"
@@ -11,6 +12,17 @@ import { described } from "./metadata"
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
   version: Schema.String,
+})
+
+import { AgreementUpload } from "@/cli/deveco-agreement-sync"
+
+const ProductAgreement = Schema.Struct({
+  version: Schema.String,
+  termsUrl: Schema.String,
+  privacyUrl: Schema.String,
+  accepted: Schema.Boolean,
+  acceptedAt: Schema.optional(Schema.Number),
+  upload: AgreementUpload,
 })
 
 const SyncEventSchemas = EventV2.registry
@@ -75,6 +87,19 @@ export const GlobalPaths = {
 export const GlobalApi = HttpApi.make("global").add(
   HttpApiGroup.make("global")
     .add(
+      HttpApiEndpoint.get("productAgreement", "/global/product-agreement", {
+        success: ProductAgreement,
+      }).annotateMerge(OpenApi.annotations({ identifier: "global.productAgreement", summary: "Get product agreements" })),
+      HttpApiEndpoint.post("acceptProductAgreement", "/global/product-agreement", {
+        payload: Schema.Struct({ version: Schema.String, accepted: Schema.Literal(true), serviceRevision: Schema.optional(Schema.String) }),
+        success: ProductAgreement,
+        error: [HttpApiError.BadRequest, UnknownError],
+      }).annotateMerge(OpenApi.annotations({ identifier: "global.acceptProductAgreement", summary: "Accept product agreements on this server" })),
+      HttpApiEndpoint.post("retryAgreementUpload", "/global/product-agreement/retry", {
+        payload: Schema.Struct({ force: Schema.optional(Schema.Boolean) }),
+        success: ProductAgreement,
+        error: UnknownError,
+      }).annotateMerge(OpenApi.annotations({ identifier: "global.retryAgreementUpload", summary: "Retry the current account agreement upload" })),
       HttpApiEndpoint.get("health", GlobalPaths.health, {
         success: described(GlobalHealth, "Health information"),
       }).annotateMerge(

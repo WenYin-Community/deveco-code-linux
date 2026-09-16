@@ -76,7 +76,8 @@ afterEach(() => {
 })
 
 describe("DevEcoAuth.refreshToken — 使用 jwtToken 刷新 accessToken", () => {
-  test("从内存 userInfo 获取 jwtToken 并成功刷新", async () => {
+  test("持久凭证与内存身份一致时成功刷新", async () => {
+    mockLoadToken(async () => "jwt-from-memory")
     const spy = mockLoginRefresh(async (_jwt) => ({
       accessToken: "new-access",
       refreshToken: "new-refresh",
@@ -141,6 +142,7 @@ describe("DevEcoAuth.refreshToken — 使用 jwtToken 刷新 accessToken", () =>
   })
 
   test("刷新成功后更新内存中 userInfo 的 accessToken 和 refreshToken", async () => {
+    mockLoadToken(async () => "jwt")
     mockLoginRefresh(async () => ({ accessToken: "updated-access", refreshToken: "updated-refresh", isRealName: true }))
     ;(loginService as any).userInfo = {
       userId: "u1",
@@ -295,6 +297,21 @@ describe("ensureValidToken — accessToken 过期时通过 jwtToken 刷新", () 
     expect(b).toBe("new")
     expect(c).toBe("new")
     expect(spy.mock.calls).toHaveLength(1)
+  })
+
+  test("并发刷新已写入新凭据时复用磁盘 token", async () => {
+    setSystemTime(1_000_000)
+    await using tmp = await tmpdir()
+    Global.Path.data = tmp.path
+    await tokenStorage.saveToken(makeJwt({ userId: "same-user" }))
+    await seedAuth({ type: "oauth", access: "old", refresh: "r", expires: 1 })
+    mockDevecoRefresh(async () => {
+      await seedAuth({ type: "oauth", access: "winner", refresh: "winner-r", expires: 2_000_000 })
+      return { accessToken: "loser", refreshToken: "loser-r", isRealName: true }
+    })
+
+    expect(await ensureValidToken()).toBe("winner")
+    expect((await readAuth()).access).toBe("winner")
   })
 
   test("失败后 cooldown 期内跳过 refresh，cooldown 后重试", async () => {

@@ -7,6 +7,10 @@ async function log(effect: Effect.Effect<void>) {
 }
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { Global } from "@opencode-ai/core/global"
+import path from "path"
+import { createHash } from "node:crypto"
+import { tokenStorage } from "./deveco/token-storage"
 
 import HuaweiEndpoints from "../../huawei-endpoints.json"
 
@@ -334,6 +338,7 @@ export function catalogToProvider(catalog: DevEcoModelCatalog): ProjectedProvide
 // cachedProvider is cached alongside cachedCatalog so repeat callers get the
 // same object reference (the existing test suite asserts `toBe` on it).
 
+let cachedAccess: string | undefined
 let cachedCatalog: DevEcoModelCatalog | null = null
 let cachedProvider: ModelsDev.Provider | null = null
 
@@ -365,7 +370,8 @@ async function fetchModelConfig(accessToken: string): Promise<ApiResponse> {
 // ============ Public API ============
 
 export async function getDevEcoModelCatalog(accessToken: string): Promise<DevEcoModelCatalog | null> {
-  if (cachedCatalog) return cachedCatalog
+  if (cachedCatalog && cachedAccess === accessToken) return cachedCatalog
+  clearDevecoModelCache()
 
   try {
     const data = await fetchModelConfig(accessToken)
@@ -381,6 +387,7 @@ export async function getDevEcoModelCatalog(accessToken: string): Promise<DevEco
       return null
     }
 
+    cachedAccess = accessToken
     cachedCatalog = catalog
     cachedProvider = provider
     await log(
@@ -398,9 +405,44 @@ export async function getDevEcoModelCatalog(accessToken: string): Promise<DevEco
   }
 }
 
-export async function getDevecoProviderConfig(accessToken: string): Promise<ModelsDev.Provider | null> {
+export async function getDevecoProviderConfig(accessToken: string, options?: { cachedOnly?: boolean }): Promise<ModelsDev.Provider | null> {
+  const jwt = await tokenStorage.loadToken()
+  const owner = createHash("sha256").update(jwt ?? accessToken).digest("hex")
+  const file = path.join(Global.Path.cache, `deveco-models-${owner}.json`)
+  if (options?.cachedOnly) {
+    const stored = await Bun.file(file).json().catch(() => null)
+    if (!stored) return null
+    try {
+      const catalog = toCatalog(decodeResponse(stored, { onExcessProperty: "preserve" }))
+      const provider = catalogToProvider(catalog)
+      cachedAccess = accessToken
+      cachedCatalog = catalog
+      cachedProvider = provider
+      return cachedProvider
+    } catch {
+      return null
+    }
+  }
   await getDevEcoModelCatalog(accessToken)
+  const catalog = cachedCatalog
+  if (catalog) {
+    // Persist the cloud shape so cache reads pass the same schema validation.
+    const inner_models = catalog.groups.map((group) => ({
+      protocol: group.protocol,
+      group_name: group.name,
+      group_name_cn: group.nameCn,
+      model_configs: group.models.map((entry) => entry.source),
+      task_default_model_map: catalog.taskDefaultModelMap,
+    }))
+    await Bun.write(file, JSON.stringify({ code: 200, body: { version: catalog.version, inner_models } })).catch(() => {})
+  }
   return cachedProvider
+}
+
+export function clearDevecoModelCache() {
+  cachedAccess = undefined
+  cachedCatalog = null
+  cachedProvider = null
 }
 
 export function getTaskDefaultModelMap(): Record<string, string> | undefined {

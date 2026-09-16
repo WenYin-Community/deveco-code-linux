@@ -398,3 +398,83 @@ describe("provider HttpApi", () => {
     { ...projectOptions, init: writeProviderModelsMutationPlugin },
   )
 })
+
+
+describe("DevEco login discovery", () => {
+  it.instance(
+    "offers Huawei login without credentials or a model catalog, without marking it connected",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      yield* setEnvScoped("DEVECO_AUTH_CONTENT", "{}")
+      const response = yield* request("/provider", { headers: { "x-deveco-directory": directory } })
+      expect(response.status).toBe(200)
+      const body = yield* response.json
+      expect(providerByID(body, "all", "deveco")).toMatchObject({ id: "deveco", name: "DevEco Code", models: {} })
+      expect(isRecord(body) && Array.isArray(body.connected) && body.connected.includes("deveco")).toBe(false)
+      expect(isRecord(body) && isRecord(body.default) && "deveco" in body.default).toBe(false)
+      expect(providerList(body, "all").filter((item) => isRecord(item) && item.id === "deveco")).toHaveLength(1)
+    }),
+    projectOptions,
+    30000,
+  )
+  for (const config of [{ disabled_providers: ["deveco"] }, { enabled_providers: ["openai"] }]) {
+    it.instance(
+      `respects provider restrictions for Huawei login: ${JSON.stringify(config)}`,
+      Effect.gen(function* () {
+        const directory = (yield* TestInstance).directory
+        yield* setEnvScoped("DEVECO_AUTH_CONTENT", "{}")
+        const response = yield* request("/provider", { headers: { "x-deveco-directory": directory } })
+        expect(response.status).toBe(200)
+        expect(providerByID(yield* response.json, "all", "deveco")).toBeUndefined()
+      }),
+      { config: { ...projectOptions.config, ...config } },
+      30000,
+    )
+  }
+})
+
+
+describe("saved credential management", () => {
+  it.instance(
+    "lists metadata without secrets and removes only the selected credential",
+    Effect.gen(function* () {
+      const headers = { "content-type": "application/json" }
+      const first = "auth-menu-test-key"
+      const second = "auth-menu-test-oauth"
+      yield* Effect.addFinalizer(() => Effect.gen(function* () {
+        yield* request(`/auth/${first}`, { method: "DELETE" })
+        yield* request(`/auth/${second}`, { method: "DELETE" })
+      }).pipe(Effect.ignore))
+      const saved = yield* request(`/auth/${first}`, {
+        method: "PUT", headers, body: JSON.stringify({ type: "api", key: "test-secret-key" }),
+      })
+      expect(saved.status).toBe(200)
+      const oauth = yield* request(`/auth/${second}`, {
+        method: "PUT", headers,
+        body: JSON.stringify({ type: "oauth", access: "test-secret-access", refresh: "test-secret-refresh", expires: 1 }),
+      })
+      expect(oauth.status).toBe(200)
+      const response = yield* request("/auth")
+      expect(response.status).toBe(200)
+      const body = yield* response.json
+      expect(body).toContainEqual({ providerID: first, type: "api", removable: true })
+      expect(body).toContainEqual({ providerID: second, type: "oauth", removable: true })
+      expect(JSON.stringify(body)).not.toContain("test-secret")
+      const removed = yield* request(`/auth/${first}`, { method: "DELETE" })
+      expect(removed.status).toBe(200)
+      const remaining = yield* (yield* request("/auth")).json
+      expect(remaining).not.toContainEqual({ providerID: first, type: "api", removable: true })
+      expect(remaining).toContainEqual({ providerID: second, type: "oauth", removable: true })
+    }),
+    projectOptions,
+    30000,
+  )
+})
+
+
+it.instance("marks environment credential overrides as read-only", Effect.gen(function* () {
+  yield* setEnvScoped("DEVECO_AUTH_CONTENT", JSON.stringify({ example: { type: "api", key: "secret" } }))
+  const response = yield* request("/auth")
+  expect(response.status).toBe(200)
+  expect(yield* response.json).toEqual([{ providerID: "example", type: "api", removable: false }])
+}), projectOptions, 30000)

@@ -8,11 +8,28 @@ export function authFilePath() {
   return path.join(Global.Path.data, "auth.json")
 }
 
-export async function saveAuthToDisk(key: string, info: Record<string, unknown> | null) {
+export function loadDevecoAuthEntry(): Record<string, unknown> | undefined {
+  try {
+    if (!fs.existsSync(authFilePath())) return
+    const raw = JSON.parse(fs.readFileSync(authFilePath(), "utf-8")) as Record<string, unknown>
+    const data = LocalCrypto.decryptAuthData(raw) as Record<string, unknown>
+    const entry = data.deveco
+    if (typeof entry === "object" && entry !== null) return entry as Record<string, unknown>
+  } catch {
+  }
+}
+
+export async function saveAuthToDisk(key: string, info: Record<string, unknown> | null, expectedAccess?: string) {
   try {
     let data: Record<string, unknown> = {}
     if (fs.existsSync(authFilePath())) {
       data = LocalCrypto.decryptAuthData(JSON.parse(fs.readFileSync(authFilePath(), "utf8")) as Record<string, unknown>)
+    }
+    if (expectedAccess !== undefined) {
+      const current = data[key]
+      if (typeof current !== "object" || current === null || !("access" in current) || current.access !== expectedAccess) {
+        throw new Error("HUAWEI credentials changed while refreshing; discarded the old result")
+      }
     }
     if (info === null) {
       delete data[key]
@@ -30,20 +47,13 @@ export async function saveAuthToDisk(key: string, info: Record<string, unknown> 
     fs.renameSync(tmpPath, authFilePath())
   } catch (err) {
     logError("failed to save auth to disk", { service: "deveco", key, error: err instanceof Error ? err.message : String(err) })
+    throw err
   }
 }
 
 export function loadAccessTokenFromDisk(): string {
-  try {
-    if (!fs.existsSync(authFilePath())) return ""
-    const raw = JSON.parse(fs.readFileSync(authFilePath(), "utf-8")) as Record<string, unknown>
-    const data = LocalCrypto.decryptAuthData(raw) as Record<string, unknown>
-    const deveco = data.deveco as Record<string, unknown> | undefined
-    if (deveco?.type === "oauth" && typeof deveco.access === "string") {
-      return deveco.access
-    }
-  } catch {
-  }
+  const deveco = loadDevecoAuthEntry()
+  if (deveco?.type === "oauth" && typeof deveco.access === "string") return deveco.access
   return ""
 }
 
@@ -53,17 +63,8 @@ export function loadAccessTokenFromDisk(): string {
  * The refresh token may be empty (some login flows don't store it), so we only require access.
  */
 export function hasDevecoOAuthEntry(): boolean {
-  try {
-    if (!fs.existsSync(authFilePath())) return false
-    const raw = JSON.parse(fs.readFileSync(authFilePath(), "utf-8")) as Record<string, unknown>
-    const data = LocalCrypto.decryptAuthData(raw) as Record<string, unknown>
-    const deveco = data.deveco as Record<string, unknown> | undefined
-    return (
-      deveco?.type === "oauth" && typeof deveco.access === "string" && deveco.access.length > 0
-    )
-  } catch {
-    return false
-  }
+  const deveco = loadDevecoAuthEntry()
+  return deveco?.type === "oauth" && typeof deveco.access === "string" && deveco.access.length > 0
 }
 
 /**
@@ -71,13 +72,7 @@ export function hasDevecoOAuthEntry(): boolean {
  * Returns true/false if the field exists, or null if not yet cached.
  */
 export function loadIsRealNameFromDisk(): boolean | null {
-  try {
-    if (!fs.existsSync(authFilePath())) return null
-    const raw = JSON.parse(fs.readFileSync(authFilePath(), "utf-8")) as Record<string, unknown>
-    const data = LocalCrypto.decryptAuthData(raw) as Record<string, unknown>
-    const deveco = data.deveco as Record<string, unknown> | undefined
-    if (typeof deveco?.isRealName === "boolean") return deveco.isRealName
-  } catch {
-  }
+  const deveco = loadDevecoAuthEntry()
+  if (typeof deveco?.isRealName === "boolean") return deveco.isRealName
   return null
 }

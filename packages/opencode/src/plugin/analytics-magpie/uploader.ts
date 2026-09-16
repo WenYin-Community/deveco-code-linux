@@ -129,14 +129,16 @@ const defaultDependencies: UploaderDependencies = {
       salt: await getOrCreatePathRedactionSalt(),
     }),
   isEnabled: getAnalyticsMagpieEnabled,
-  getAuthToken: () =>
-    resolveMagpieAnalyticsAuth({
-      authInfo: readAuthFromDisk("deveco"),
+  getAuthToken: () => {
+    const authInfo = readAuthFromDisk("deveco")
+    return resolveMagpieAnalyticsAuth({
+      authInfo,
       now: Date.now(),
       refreshToken: () => devecoAuth.refreshToken(),
-      saveAuth: saveAuthToDisk,
+      saveAuth: (key, value) => saveAuthToDisk(key, value, authInfo?.access),
       diagnostic: writeMagpieLog,
-    }),
+    })
+  },
   fetch: globalThis.fetch,
 }
 

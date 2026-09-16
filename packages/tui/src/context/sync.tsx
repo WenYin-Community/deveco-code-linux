@@ -565,7 +565,9 @@ export const {
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
-          ]).then(() => {
+          ]).catch((error) => {
+            console.error("Optional startup data could not be loaded", error)
+          }).finally(() => {
             setStore("status", "complete")
           })
         })

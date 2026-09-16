@@ -51,8 +51,24 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
         connected,
       )
+      // Login choices must also exist before a cloud model catalog is available.
+      // Keep this entry out of connected/default so it cannot complete setup or select a model.
+      const loginProviders: Provider.Info[] = []
+      if (!providers.deveco && !disabled.has("deveco") && (!enabled || enabled.has("deveco"))) {
+        const methods = yield* svc.methods()
+        if (methods.deveco?.some((method) => method.type === "oauth")) {
+          loginProviders.push({
+            id: ProviderV2.ID.make("deveco"),
+            name: "DevEco Code",
+            source: "custom",
+            env: [],
+            options: {},
+            models: {},
+          })
+        }
+      }
       return {
-        all: Object.values(providers).map(Provider.toPublicInfo),
+        all: [...loginProviders, ...Object.values(providers).map(Provider.toPublicInfo)],
         default: Provider.defaultModelIDs(providers),
         connected: Object.keys(connected),
       }

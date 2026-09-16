@@ -109,6 +109,19 @@ export type QuestionRejected = {
   requestID: string
 }
 
+export type UnknownError = {
+  _tag: "UnknownError"
+  message: string
+  ref?: string
+}
+
+export type InvalidRequestError = {
+  _tag: "InvalidRequestError"
+  message: string
+  kind?: string
+  field?: string
+}
+
 export type OAuth = {
   type: "oauth"
   refresh: string
@@ -116,6 +129,7 @@ export type OAuth = {
   expires: number
   accountId?: string
   enterpriseUrl?: string
+  isRealName?: boolean
 }
 
 export type ApiAuth = {
@@ -136,13 +150,6 @@ export type Auth = OAuth | ApiAuth | WellKnownAuth
 
 export type EffectHttpApiErrorBadRequest = {
   _tag: "BadRequest"
-}
-
-export type InvalidRequestError = {
-  _tag: "InvalidRequestError"
-  message: string
-  kind?: string
-  field?: string
 }
 
 export type MoveSessionError = {
@@ -272,7 +279,7 @@ export type ProviderAuthError = {
   }
 }
 
-export type UnknownError = {
+export type UnknownError1 = {
   name: "UnknownError"
   data: {
     message: string
@@ -359,7 +366,7 @@ export type AssistantMessage = {
   }
   error?:
     | ProviderAuthError
-    | UnknownError
+    | UnknownError1
     | MessageOutputLengthError
     | MessageAbortedError
     | StructuredOutputError
@@ -1261,7 +1268,7 @@ export type GlobalEvent = {
           sessionID?: string
           error?:
             | ProviderAuthError
-            | UnknownError
+            | UnknownError1
             | MessageOutputLengthError
             | MessageAbortedError
             | StructuredOutputError
@@ -2882,11 +2889,6 @@ export type UnauthorizedError = {
   message: string
 }
 
-export type ForbiddenError = {
-  _tag: "ForbiddenError"
-  message: string
-}
-
 export type SessionsResponse = {
   data: Array<SessionV2Info>
   cursor: {
@@ -2906,6 +2908,11 @@ export type SessionNotFoundError = {
   message: string
 }
 
+export type ForbiddenError = {
+  _tag: "ForbiddenError"
+  message: string
+}
+
 export type ConflictError = {
   _tag: "ConflictError"
   message: string
@@ -2916,12 +2923,6 @@ export type ServiceUnavailableError = {
   _tag: "ServiceUnavailableError"
   message: string
   service?: string
-}
-
-export type UnknownError1 = {
-  _tag: "UnknownError"
-  message: string
-  ref?: string
 }
 
 export type SessionMessagesResponse = {
@@ -2943,6 +2944,14 @@ export type ProjectCopyError = {
   data: {
     message: string
     forceRequired?: boolean
+  }
+}
+
+export type UnknownError3 = {
+  name: "UnknownError"
+  data: {
+    message: string
+    ref?: string
   }
 }
 
@@ -4952,7 +4961,7 @@ export type EventSessionError = {
     sessionID?: string
     error?:
       | ProviderAuthError
-      | UnknownError
+      | UnknownError3
       | MessageOutputLengthError
       | MessageAbortedError
       | StructuredOutputError
@@ -5397,6 +5406,39 @@ export type BadRequestError = {
   }
 }
 
+export type AuthListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/auth"
+}
+
+export type AuthListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * UnknownError
+   */
+  500: UnknownError
+}
+
+export type AuthListError = AuthListErrors[keyof AuthListErrors]
+
+export type AuthListResponses = {
+  /**
+   * Success
+   */
+  200: Array<{
+    providerID: string
+    type: string
+    removable: boolean
+  }>
+}
+
+export type AuthListResponse = AuthListResponses[keyof AuthListResponses]
+
 export type AuthRemoveData = {
   body?: never
   path: {
@@ -5525,6 +5567,137 @@ export type ExperimentalControlPlaneMoveSessionResponses = {
 
 export type ExperimentalControlPlaneMoveSessionResponse =
   ExperimentalControlPlaneMoveSessionResponses[keyof ExperimentalControlPlaneMoveSessionResponses]
+
+export type GlobalProductAgreementData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/product-agreement"
+}
+
+export type GlobalProductAgreementErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type GlobalProductAgreementError = GlobalProductAgreementErrors[keyof GlobalProductAgreementErrors]
+
+export type GlobalProductAgreementResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: string
+    termsUrl: string
+    privacyUrl: string
+    accepted: boolean
+    acceptedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    upload: {
+      state: "not_signed" | "local" | "pending" | "uploaded" | "review_required"
+      revision?: string
+      lastAttemptAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      uploadedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      error?: string
+    }
+  }
+}
+
+export type GlobalProductAgreementResponse = GlobalProductAgreementResponses[keyof GlobalProductAgreementResponses]
+
+export type GlobalAcceptProductAgreementData = {
+  body?: {
+    version: string
+    accepted: true
+    serviceRevision?: string
+  }
+  path?: never
+  query?: never
+  url: "/global/product-agreement"
+}
+
+export type GlobalAcceptProductAgreementErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * UnknownError
+   */
+  500: UnknownError
+}
+
+export type GlobalAcceptProductAgreementError =
+  GlobalAcceptProductAgreementErrors[keyof GlobalAcceptProductAgreementErrors]
+
+export type GlobalAcceptProductAgreementResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: string
+    termsUrl: string
+    privacyUrl: string
+    accepted: boolean
+    acceptedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    upload: {
+      state: "not_signed" | "local" | "pending" | "uploaded" | "review_required"
+      revision?: string
+      lastAttemptAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      uploadedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      error?: string
+    }
+  }
+}
+
+export type GlobalAcceptProductAgreementResponse =
+  GlobalAcceptProductAgreementResponses[keyof GlobalAcceptProductAgreementResponses]
+
+export type GlobalRetryAgreementUploadData = {
+  body?: {
+    force?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/global/product-agreement/retry"
+}
+
+export type GlobalRetryAgreementUploadErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * UnknownError
+   */
+  500: UnknownError
+}
+
+export type GlobalRetryAgreementUploadError = GlobalRetryAgreementUploadErrors[keyof GlobalRetryAgreementUploadErrors]
+
+export type GlobalRetryAgreementUploadResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: string
+    termsUrl: string
+    privacyUrl: string
+    accepted: boolean
+    acceptedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    upload: {
+      state: "not_signed" | "local" | "pending" | "uploaded" | "review_required"
+      revision?: string
+      lastAttemptAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      uploadedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      error?: string
+    }
+  }
+}
+
+export type GlobalRetryAgreementUploadResponse =
+  GlobalRetryAgreementUploadResponses[keyof GlobalRetryAgreementUploadResponses]
 
 export type GlobalHealthData = {
   body?: never
@@ -9765,10 +9938,6 @@ export type V2LocationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2LocationGetError = V2LocationGetErrors[keyof V2LocationGetErrors]
@@ -9803,10 +9972,6 @@ export type V2AgentListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2AgentListError = V2AgentListErrors[keyof V2AgentListErrors]
@@ -9923,6 +10088,10 @@ export type V2SessionGetErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError
    */
   404: SessionNotFoundError
@@ -9965,6 +10134,10 @@ export type V2SessionPromptErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError
    */
   404: SessionNotFoundError
@@ -10006,6 +10179,10 @@ export type V2SessionCompactErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError
    */
   404: SessionNotFoundError
@@ -10044,6 +10221,10 @@ export type V2SessionWaitErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * SessionNotFoundError
    */
@@ -10084,13 +10265,17 @@ export type V2SessionContextErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError
    */
   404: SessionNotFoundError
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError
 }
 
 export type V2SessionContextError = V2SessionContextErrors[keyof V2SessionContextErrors]
@@ -10132,13 +10317,17 @@ export type V2SessionMessagesErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError
    */
   404: SessionNotFoundError
   /**
    * UnknownError
    */
-  500: UnknownError1
+  500: UnknownError
 }
 
 export type V2SessionMessagesError = V2SessionMessagesErrors[keyof V2SessionMessagesErrors]
@@ -10173,10 +10362,6 @@ export type V2ModelListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
   /**
    * ServiceUnavailableError
    */
@@ -10218,10 +10403,6 @@ export type V2ProviderListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
   /**
    * ServiceUnavailableError
    */
@@ -10265,10 +10446,6 @@ export type V2ProviderGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
   /**
    * ProviderNotFoundError
    */
@@ -10314,10 +10491,6 @@ export type V2IntegrationListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationListError = V2IntegrationListErrors[keyof V2IntegrationListErrors]
@@ -10357,10 +10530,6 @@ export type V2IntegrationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationGetError = V2IntegrationGetErrors[keyof V2IntegrationGetErrors]
@@ -10403,10 +10572,6 @@ export type V2IntegrationConnectKeyErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationConnectKeyError = V2IntegrationConnectKeyErrors[keyof V2IntegrationConnectKeyErrors]
@@ -10449,10 +10614,6 @@ export type V2IntegrationConnectOauthErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationConnectOauthError = V2IntegrationConnectOauthErrors[keyof V2IntegrationConnectOauthErrors]
@@ -10493,10 +10654,6 @@ export type V2IntegrationAttemptCancelErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptCancelError = V2IntegrationAttemptCancelErrors[keyof V2IntegrationAttemptCancelErrors]
@@ -10534,10 +10691,6 @@ export type V2IntegrationAttemptStatusErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptStatusError = V2IntegrationAttemptStatusErrors[keyof V2IntegrationAttemptStatusErrors]
@@ -10609,10 +10762,6 @@ export type V2IntegrationAttemptCompleteErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2IntegrationAttemptCompleteError =
@@ -10651,10 +10800,6 @@ export type V2CredentialRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2CredentialRemoveError = V2CredentialRemoveErrors[keyof V2CredentialRemoveErrors]
@@ -10693,10 +10838,6 @@ export type V2CredentialUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2CredentialUpdateError = V2CredentialUpdateErrors[keyof V2CredentialUpdateErrors]
@@ -10731,10 +10872,6 @@ export type V2PermissionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2PermissionRequestListError = V2PermissionRequestListErrors[keyof V2PermissionRequestListErrors]
@@ -10769,10 +10906,6 @@ export type V2PermissionSavedListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2PermissionSavedListError = V2PermissionSavedListErrors[keyof V2PermissionSavedListErrors]
@@ -10806,10 +10939,6 @@ export type V2PermissionSavedRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2PermissionSavedRemoveError = V2PermissionSavedRemoveErrors[keyof V2PermissionSavedRemoveErrors]
@@ -10841,6 +10970,10 @@ export type V2SessionPermissionListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * SessionNotFoundError
    */
@@ -10883,6 +11016,10 @@ export type V2SessionPermissionReplyErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError | PermissionNotFoundError
    */
   404: PermissionNotFoundError | SessionNotFoundError
@@ -10921,10 +11058,6 @@ export type V2FsReadErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2FsReadError = V2FsReadErrors[keyof V2FsReadErrors]
@@ -10960,10 +11093,6 @@ export type V2FsListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2FsListError = V2FsListErrors[keyof V2FsListErrors]
@@ -11004,10 +11133,6 @@ export type V2FsFindErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2FsFindError = V2FsFindErrors[keyof V2FsFindErrors]
@@ -11045,10 +11170,6 @@ export type V2CommandListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2CommandListError = V2CommandListErrors[keyof V2CommandListErrors]
@@ -11086,10 +11207,6 @@ export type V2SkillListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2SkillListError = V2SkillListErrors[keyof V2SkillListErrors]
@@ -11127,10 +11244,6 @@ export type V2EventSubscribeErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2EventSubscribeError = V2EventSubscribeErrors[keyof V2EventSubscribeErrors]
@@ -11165,10 +11278,6 @@ export type V2PtyListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2PtyListError = V2PtyListErrors[keyof V2PtyListErrors]
@@ -11214,10 +11323,6 @@ export type V2PtyCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2PtyCreateError = V2PtyCreateErrors[keyof V2PtyCreateErrors]
@@ -11258,10 +11363,6 @@ export type V2PtyRemoveErrors = {
    */
   401: UnauthorizedError
   /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
-  /**
    * PtyNotFoundError
    */
   404: PtyNotFoundError
@@ -11301,10 +11402,6 @@ export type V2PtyGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
   /**
    * PtyNotFoundError
    */
@@ -11354,10 +11451,6 @@ export type V2PtyUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
   /**
    * PtyNotFoundError
    */
@@ -11493,10 +11586,6 @@ export type V2QuestionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2QuestionRequestListError = V2QuestionRequestListErrors[keyof V2QuestionRequestListErrors]
@@ -11531,6 +11620,10 @@ export type V2SessionQuestionListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * SessionNotFoundError
    */
@@ -11570,6 +11663,10 @@ export type V2SessionQuestionReplyErrors = {
    */
   401: UnauthorizedError
   /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
+  /**
    * SessionNotFoundError | QuestionNotFoundError
    */
   404: QuestionNotFoundError | SessionNotFoundError
@@ -11605,6 +11702,10 @@ export type V2SessionQuestionRejectErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * ForbiddenError
+   */
+  403: ForbiddenError
   /**
    * SessionNotFoundError | QuestionNotFoundError
    */
@@ -11643,10 +11744,6 @@ export type V2ReferenceListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2ReferenceListError = V2ReferenceListErrors[keyof V2ReferenceListErrors]
@@ -11685,10 +11782,6 @@ export type V2ProjectCopyRemoveErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2ProjectCopyRemoveError = V2ProjectCopyRemoveErrors[keyof V2ProjectCopyRemoveErrors]
@@ -11725,10 +11818,6 @@ export type V2ProjectCopyCreateErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2ProjectCopyCreateError = V2ProjectCopyCreateErrors[keyof V2ProjectCopyCreateErrors]
@@ -11761,10 +11850,6 @@ export type V2ProjectCopyRefreshErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
-  /**
-   * ForbiddenError
-   */
-  403: ForbiddenError
 }
 
 export type V2ProjectCopyRefreshError = V2ProjectCopyRefreshErrors[keyof V2ProjectCopyRefreshErrors]

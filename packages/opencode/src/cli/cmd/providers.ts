@@ -254,6 +254,7 @@ export const ProvidersCommand = cmd({
       .command(ProvidersLoginCommand)
       .command(ProvidersLogoutCommand)
       .command(ProvidersResetCommand)
+      .command(ProvidersConsentCommand)
       .demandCommand(),
   async handler() {},
 })
@@ -528,6 +529,12 @@ export const ProvidersLogoutCommand = effectCmd({
     const authSvc = yield* Auth.Service
     const modelsDev = yield* ModelsDev.Service
 
+    if (args.provider === "deveco") {
+      yield* Effect.orDie(authSvc.remove("deveco"))
+      yield* Prompt.outro("Logout successful")
+      return
+    }
+
     UI.empty()
     const credentials: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
     yield* Prompt.intro("Remove credential")
@@ -604,5 +611,33 @@ export const ProvidersResetCommand = effectCmd({
 
     yield* Prompt.log.success(`Removed ${result.removed.length} local credential file(s)`)
     yield* Prompt.outro("Run `auth login` or add a provider in the TUI")
+  }),
+})
+
+export const ProvidersConsentCommand = effectCmd({
+  command: "consent",
+  describe: "review and accept the local product agreements",
+  instance: false,
+  builder: (yargs) => yargs.option("accept", {
+    type: "boolean",
+    describe: "accept the displayed product agreement version (for non-interactive use)",
+  }),
+  handler: Effect.fn("Cli.providers.consent")(function* (args) {
+    const { productAgreementDetails, acceptProductAgreement } = yield* Effect.promise(() => import("../deveco-product-agreement"))
+    const agreement = yield* Effect.promise(productAgreementDetails)
+    yield* Prompt.intro("DevEco Code product agreements")
+    yield* Prompt.log.info(`Terms: ${agreement.termsUrl}\nPrivacy: ${agreement.privacyUrl}\nVersion: ${agreement.version}`)
+    if (!args.accept) {
+      if (!process.stdin.isTTY) return yield* fail("Review the agreements, then run `deveco auth consent --accept` to accept them.")
+      const accepted = yield* promptValue(yield* Prompt.confirm({ message: "I have read and agree to these product agreements", initialValue: false }))
+      if (!accepted) return
+    }
+    yield* Effect.promise(() => acceptProductAgreement(agreement.version, agreement.upload.revision))
+    const status = yield* Effect.promise(productAgreementDetails)
+    yield* Prompt.outro(status.upload.state === "review_required"
+      ? "Product agreements accepted. Service agreements changed; run `deveco auth consent` again to review the latest revision."
+      : status.upload.state === "pending"
+        ? "Product agreements accepted locally. Upload is pending and will be retried; upload failure does not block model use."
+        : "Product agreements accepted")
   }),
 })

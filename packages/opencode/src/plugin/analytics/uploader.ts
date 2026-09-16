@@ -163,11 +163,12 @@ export class AnalyticsUploader {
   }
 
   private async resolveAuth(): Promise<string | null> {
+    const authInfo = readAuthFromDisk("deveco")
     return resolveAnalyticsAuth({
-      authInfo: readAuthFromDisk("deveco"),
+      authInfo,
       now: Date.now(),
       refreshToken: () => devecoAuth.refreshToken(),
-      saveAuth: saveAuthToDisk,
+      saveAuth: (key, value) => saveAuthToDisk(key, value, authInfo?.access),
       diagnostic: (message) => this.writeLog(message),
     })
   }
