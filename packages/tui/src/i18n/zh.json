@@ -67,7 +67,9 @@
     "collect_select_one": "请至少选择一个日志文件",
     "collect_no_files": "未找到日志文件",
     "collect_success": "日志上传成功",
-    "collect_failed": "日志上传失败"
+    "collect_failed": "日志上传失败",
+    "memory_deleted": "记忆已删除",
+    "memory_all_deleted": "全部记忆已删除"
   },
   "command": {
     "show_command_palette": "显示命令面板",
@@ -83,6 +85,7 @@
     "favorite_cycle_reverse": "反向循环切换收藏",
     "switch_agent": "切换智能体",
     "toggle_mcps": "切换 MCP",
+    "manage_memory": "管理记忆",
     "agent_cycle": "循环切换智能体",
     "variant_cycle": "循环切换变体",
     "switch_model_variant": "切换模型变体",
@@ -384,6 +387,7 @@
     "action_rename": "重命名",
     "action_pin_unpin": "置顶/取消置顶",
     "action_open": "打开",
+    "action_view_detail": "查看详情",
     "action_revert": "撤回",
     "action_copy": "复制",
     "action_fork": "分叉",
@@ -553,6 +557,30 @@
     "mcp_enabled": "✓ 已启用",
     "mcp_disabled": "○ 已禁用",
     "mcp_failed": "失败",
+    "title_memory": "记忆",
+    "memory_enabled": "✓ 已启用",
+    "memory_disabled": "○ 已禁用",
+    "memory_empty": "暂无记忆",
+    "memory_content_title": "记忆：{{name}}",
+    "memory_missing": "记忆文件已不存在",
+    "memory_config_note": "插件初始化时读取，重启后生效",
+    "memory_setting": {
+      "auto_memory": "自动记忆",
+      "auto_dream": "自动整理（Dream）",
+      "extraction": "自动提取记忆",
+      "recall": "记忆召回",
+      "recall_visible": "对话中显示召回",
+      "write_visible": "对话中显示写入",
+      "semantic_selection": "语义筛选",
+      "expiry": "记忆过期",
+      "skills": "技能沉淀",
+      "slash_commands": "记忆斜杠命令"
+    },
+    "action_delete_all": "全部删除",
+    "memory_delete_title": "删除记忆",
+    "memory_delete_message": "确定删除这条记忆文件？删除后插件无法再召回它。",
+    "memory_delete_all_title": "删除全部记忆",
+    "memory_delete_all_message": "确定删除该目录下的全部记忆文件？此操作不可恢复。",
     "placeholder_enter_text": "输入文本",
     "working": "处理中…",
     "placeholder_enter_filename": "输入文件名",
@@ -796,7 +824,10 @@
     "choose_workspace": "选择工作区",
     "plugins": "插件",
     "plugin_internal": "内部",
-    "plugin_external": "外部"
+    "plugin_external": "外部",
+    "memory": "记忆",
+    "memory_settings": "记忆配置",
+    "memory_items": "记忆列表"
   },
   "prompt": {
     "popover": {

@@ -67,7 +67,9 @@
     "collect_select_one": "Please select at least one log file",
     "collect_no_files": "No log files found",
     "collect_success": "Logs uploaded successfully",
-    "collect_failed": "Failed to upload logs"
+    "collect_failed": "Failed to upload logs",
+    "memory_deleted": "Memory deleted",
+    "memory_all_deleted": "All memories deleted"
   },
   "command": {
     "show_command_palette": "Show command palette",
@@ -83,6 +85,7 @@
     "favorite_cycle_reverse": "Favorite cycle reverse",
     "switch_agent": "Switch agent",
     "toggle_mcps": "Toggle MCPs",
+    "manage_memory": "Manage memory",
     "agent_cycle": "Agent cycle",
     "variant_cycle": "Variant cycle",
     "switch_model_variant": "Switch model variant",
@@ -383,6 +386,7 @@
     "action_rename": "rename",
     "action_pin_unpin": "pin/unpin",
     "action_open": "Open",
+    "action_view_detail": "View details",
     "action_revert": "Revert",
     "action_copy": "Copy",
     "action_fork": "Fork",
@@ -552,6 +556,30 @@
     "mcp_enabled": "✓ Enabled",
     "mcp_disabled": "○ Disabled",
     "mcp_failed": "failed",
+    "title_memory": "Memory",
+    "memory_enabled": "✓ Enabled",
+    "memory_disabled": "○ Disabled",
+    "memory_empty": "No memories yet",
+    "memory_content_title": "Memory: {{name}}",
+    "memory_missing": "Memory file no longer exists",
+    "memory_config_note": "Read at plugin init, restart to apply",
+    "memory_setting": {
+      "auto_memory": "Auto memory",
+      "auto_dream": "Auto dream (consolidation)",
+      "extraction": "Auto extraction",
+      "recall": "Memory recall",
+      "recall_visible": "Show recall in chat",
+      "write_visible": "Show memory writes in chat",
+      "semantic_selection": "Semantic selection",
+      "expiry": "Memory expiry",
+      "skills": "Skill extraction",
+      "slash_commands": "Memory slash commands"
+    },
+    "action_delete_all": "Delete all",
+    "memory_delete_title": "Delete memory",
+    "memory_delete_message": "Delete this memory file? The plugin cannot recall it afterwards.",
+    "memory_delete_all_title": "Delete all memories",
+    "memory_delete_all_message": "Delete every memory file in this directory? This cannot be undone.",
     "placeholder_enter_text": "Enter text",
     "working": "Working...",
     "placeholder_enter_filename": "Enter filename",
@@ -795,7 +823,10 @@
     "choose_workspace": "Choose workspace",
     "plugins": "Plugins",
     "plugin_internal": "Internal",
-    "plugin_external": "External"
+    "plugin_external": "External",
+    "memory": "Memory",
+    "memory_settings": "Memory settings",
+    "memory_items": "Memories"
   },
   "prompt": {
     "popover": {

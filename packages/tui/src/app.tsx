@@ -43,6 +43,7 @@ import { LocalProvider, useLocal } from "./context/local"
 import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
+import { showMemory } from "./component/dialog-memory"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogUsage } from "./component/dialog-usage"
 import { DialogThemeList } from "./component/dialog-theme-list"
@@ -691,6 +692,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "mcps",
         run: () => {
           dialog.replace(() => <DialogMcp />)
+        },
+      },
+      {
+        name: "memory.manage",
+        title: t("command.manage_memory"),
+        category: t("category.memory"),
+        slashName: "memory",
+        run: () => {
+          showMemory(dialog)
         },
       },
       {
