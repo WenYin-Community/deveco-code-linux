@@ -195,9 +195,8 @@ test("memory detail survives a file deleted from under it", async () => {
     await until(() => frame().includes("Memory file no longer exists"), "the missing state")
     expect(frame()).not.toContain("Store caches under")
     expect(frame()).toContain("Memory: cache")
-    // No delete affordances on a memory that is already gone, and the panel keeps the list width.
+    // No delete affordance on a memory that is already gone, and the panel keeps the list width.
     expect(frame()).not.toContain("delete ctrl+d")
-    expect(frame()).not.toContain("Delete all ctrl+shift+d")
     expect(escColumn(frame())).toBe(escColumn(list))
 
     // The bound delete keys route to the same guard: refresh instead of confirming a no-op.
@@ -267,7 +266,7 @@ test("memory dialog toggles settings and shows memory content", async () => {
     // wide as the list, otherwise the panel shrinks and jumps while the file loads.
     expect(escColumn(frame())).toBe(escColumn(list))
     expect(frame()).toContain("delete ctrl+d")
-    expect(frame()).toContain("Delete all ctrl+shift+d")
+    expect(frame()).not.toContain("Delete all")
 
     // Coming back from the content view the cursor stays on the memory it opened from: its hints
     // are showing and space re-opens the same file instead of the first row.
@@ -297,15 +296,14 @@ test("memory dialog toggles settings and shows memory content", async () => {
     expect(await index(dir)).not.toContain("Gone") // entries whose file is missing are dropped too
 
     // The deleted row is gone, so the list starts over on the first setting: nothing to delete.
-    expect(frame()).not.toContain("Delete all ctrl+shift+d")
     expect(frame()).not.toContain("delete ctrl+d")
     await app.mockInput.pressKey("END")
-    await until(() => frame().includes("Delete all ctrl+shift+d"), "the delete all hint")
-    await app.mockInput.pressKey("D", { ctrl: true, shift: true })
-    await until(() => frame().includes("Delete every memory file"), "the delete all confirmation")
+    await until(() => frame().includes("delete ctrl+d"), "the last memory row")
+    await app.mockInput.pressKey("d", { ctrl: true })
+    await until(() => frame().includes("Delete this memory file?"), "the delete confirmation")
     await app.mockInput.pressEnter()
-    await until(async () => (await files(dir)).length === 0, "every memory file to be deleted")
-    expect(await index(dir)).not.toContain("Slow builds")
+    await until(async () => (await files(dir)).length === 0, "the last memory file to be deleted")
+    await until(async () => !(await index(dir)).includes("Slow builds"), "the last index entry to be dropped")
     await until(() => frame().includes("No memories yet"), "the empty memories placeholder")
 
     await app.mockInput.pressEscape()

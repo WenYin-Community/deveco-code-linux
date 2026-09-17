@@ -125,11 +125,8 @@ describe("memory deletion", () => {
 
     expect((await Memory.list(dir)).map((item) => item.name)).toEqual(["keep"])
 
-    expect(await Memory.removeAll(dir)).toBe(1)
-    expect(await Memory.list(dir)).toEqual([])
-    expect(await Bun.file(path.join(dir, "MEMORY.md")).text()).toContain("# Project Memory Index")
     // Deleting a file that is already gone is not an error, same as the plugin's `rm -f`.
     await Memory.remove(path.join(dir, "drop.md"))
-    expect(await Memory.list(dir)).toEqual([])
+    expect(await Bun.file(path.join(dir, "keep.md")).exists()).toBe(true)
   })
 })

@@ -68,8 +68,7 @@
     "collect_no_files": "未找到日志文件",
     "collect_success": "日志上传成功",
     "collect_failed": "日志上传失败",
-    "memory_deleted": "记忆已删除",
-    "memory_all_deleted": "全部记忆已删除"
+    "memory_deleted": "记忆已删除"
   },
   "command": {
     "show_command_palette": "显示命令面板",
@@ -571,16 +570,10 @@
       "recall": "记忆召回",
       "recall_visible": "对话中显示召回",
       "write_visible": "对话中显示写入",
-      "semantic_selection": "语义筛选",
-      "expiry": "记忆过期",
-      "skills": "技能沉淀",
-      "slash_commands": "记忆斜杠命令"
+      "skills": "技能沉淀"
     },
-    "action_delete_all": "全部删除",
     "memory_delete_title": "删除记忆",
     "memory_delete_message": "确定删除这条记忆文件？删除后插件无法再召回它。",
-    "memory_delete_all_title": "删除全部记忆",
-    "memory_delete_all_message": "确定删除该目录下的全部记忆文件？此操作不可恢复。",
     "placeholder_enter_text": "输入文本",
     "working": "处理中…",
     "placeholder_enter_filename": "输入文件名",

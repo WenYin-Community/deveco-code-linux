@@ -68,8 +68,7 @@
     "collect_no_files": "No log files found",
     "collect_success": "Logs uploaded successfully",
     "collect_failed": "Failed to upload logs",
-    "memory_deleted": "Memory deleted",
-    "memory_all_deleted": "All memories deleted"
+    "memory_deleted": "Memory deleted"
   },
   "command": {
     "show_command_palette": "Show command palette",
@@ -570,16 +569,10 @@
       "recall": "Memory recall",
       "recall_visible": "Show recall in chat",
       "write_visible": "Show memory writes in chat",
-      "semantic_selection": "Semantic selection",
-      "expiry": "Memory expiry",
-      "skills": "Skill extraction",
-      "slash_commands": "Memory slash commands"
+      "skills": "Skill extraction"
     },
-    "action_delete_all": "Delete all",
     "memory_delete_title": "Delete memory",
     "memory_delete_message": "Delete this memory file? The plugin cannot recall it afterwards.",
-    "memory_delete_all_title": "Delete all memories",
-    "memory_delete_all_message": "Delete every memory file in this directory? This cannot be undone.",
     "placeholder_enter_text": "Enter text",
     "working": "Working...",
     "placeholder_enter_filename": "Enter filename",

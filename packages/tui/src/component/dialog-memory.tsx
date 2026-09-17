@@ -119,7 +119,7 @@ export function DialogMemory(props: { current?: string }) {
 
   function open(option: DialogSelectOption<string>) {
     if (!option.value.startsWith(ITEM)) return
-    showDetail(dialog, option.value.slice(ITEM.length), snapshot()?.dir ?? "")
+    showDetail(dialog, option.value.slice(ITEM.length))
   }
 
   function removeMemory(file: string) {
@@ -136,25 +136,6 @@ export function DialogMemory(props: { current?: string }) {
       // row has nothing to restore the cursor onto, a cancelled one does.
       () => showMemory(dialog),
       () => showMemory(dialog, ITEM + file),
-    )
-  }
-
-  function clearMemories() {
-    const dir = snapshot()?.dir
-    if (!dir) return
-    // Read the cursor row up front: the list is unmounted while the confirmation is showing.
-    const at = active()
-    void confirmDelete(
-      {
-        dialog,
-        toast,
-        title: t("dialog.memory_delete_all_title"),
-        message: t("dialog.memory_delete_all_message"),
-        success: t("toast.memory_all_deleted"),
-      },
-      () => Memory.removeAll(dir),
-      () => showMemory(dialog),
-      () => showMemory(dialog, at),
     )
   }
 
@@ -207,20 +188,14 @@ export function DialogMemory(props: { current?: string }) {
           hidden: !active().startsWith(ITEM),
           onTrigger: (option) => removeMemory(option.value.slice(ITEM.length)),
         },
-        {
-          command: "dialog.memory.delete_all",
-          title: t("dialog.action_delete_all"),
-          hidden: !active().startsWith(ITEM),
-          onTrigger: clearMemories,
-        },
       ]}
       onSelect={(option) => (option.value.startsWith(SETTING) ? toggle(option) : open(option))}
     />
   )
 }
 
-function showDetail(dialog: DialogContext, file: string, dir: string) {
-  dialog.replace(() => <MemoryDetail file={file} dir={dir} />)
+function showDetail(dialog: DialogContext, file: string) {
+  dialog.replace(() => <MemoryDetail file={file} />)
   // replace() resets the geometry, so re-apply the list size to keep both views the same.
   dialog.setSize("large")
 }
@@ -231,7 +206,7 @@ function afterEvent(fn: () => void) {
   return () => setTimeout(fn, 0)
 }
 
-function MemoryDetail(props: { file: string; dir: string }) {
+function MemoryDetail(props: { file: string }) {
   const { theme, syntax } = useTheme()
   const { t } = useI18n()
   const dialog = useDialog()
@@ -252,11 +227,10 @@ function MemoryDetail(props: { file: string; dir: string }) {
   const actionBindings = useKeymapSelector((keymap) =>
     keymap.getCommandBindings({
       visibility: "registered",
-      commands: ["dialog.memory.delete", "dialog.memory.delete_all"],
+      commands: ["dialog.memory.delete"],
     }),
   )
   const deleteHint = createMemo(() => formatKeyBindings(actionBindings().get("dialog.memory.delete"), tuiConfig))
-  const deleteAllHint = createMemo(() => formatKeyBindings(actionBindings().get("dialog.memory.delete_all"), tuiConfig))
 
   useBindings(() => ({
     commands: [
@@ -266,16 +240,9 @@ function MemoryDetail(props: { file: string; dir: string }) {
         category: t("category.memory"),
         run: remove,
       },
-      {
-        name: "dialog.memory.delete_all",
-        title: t("dialog.action_delete_all"),
-        category: t("category.memory"),
-        run: removeAll,
-      },
     ],
     bindings: [
       ...tuiConfig.keybinds.get("dialog.memory.delete"),
-      ...tuiConfig.keybinds.get("dialog.memory.delete_all"),
       {
         key: "escape",
         desc: t("dialog.close_dialog"),
@@ -305,25 +272,7 @@ function MemoryDetail(props: { file: string; dir: string }) {
       },
       () => Memory.remove(props.file),
       () => showMemory(dialog),
-      () => showDetail(dialog, props.file, props.dir),
-    )
-  }
-
-  function removeAll() {
-    if (unavailable()) return back()
-    // The list always knows its directory; without it there is nothing safe to delete.
-    if (!props.dir) return
-    return confirmDelete(
-      {
-        dialog,
-        toast,
-        title: t("dialog.memory_delete_all_title"),
-        message: t("dialog.memory_delete_all_message"),
-        success: t("toast.memory_all_deleted"),
-      },
-      () => Memory.removeAll(props.dir),
-      () => showMemory(dialog),
-      () => showDetail(dialog, props.file, props.dir),
+      () => showDetail(dialog, props.file),
     )
   }
 
@@ -403,12 +352,6 @@ function MemoryDetail(props: { file: string; dir: string }) {
               <b>{t("dialog.action_delete")}</b>{" "}
             </span>
             <span style={{ fg: theme.textMuted }}>{deleteHint()}</span>
-          </text>
-          <text onMouseUp={afterEvent(removeAll)}>
-            <span style={{ fg: theme.text }}>
-              <b>{t("dialog.action_delete_all")}</b>{" "}
-            </span>
-            <span style={{ fg: theme.textMuted }}>{deleteAllHint()}</span>
           </text>
         </box>
       </Show>

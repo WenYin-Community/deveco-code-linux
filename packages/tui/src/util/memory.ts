@@ -37,10 +37,7 @@ export const SETTINGS: Setting[] = [
   { key: "memoryRecall.enabled", id: "recall", fallback: true },
   { key: "memoryRecall.visibleRecall", id: "recall_visible", fallback: true },
   { key: "memoryRecall.visibleWrite", id: "write_visible", fallback: true },
-  { key: "semanticSelection.enabled", id: "semantic_selection", fallback: true },
-  { key: "autoMemory.expiry.enabled", id: "expiry", fallback: true },
   { key: "skills.enabled", id: "skills", fallback: false },
-  { key: "slashCommands.enabled", id: "slash_commands", fallback: true },
 ]
 
 export type MemoryItem = {
@@ -262,13 +259,4 @@ export async function remove(file: string) {
   // `rm -f` semantics, like the plugin's own delete: a file that is already gone is not an error.
   await rm(file, { force: true })
   await pruneIndex(path.dirname(file))
-}
-
-/** Delete every memory file in the directory; MEMORY.md itself belongs to the plugin. */
-export async function removeAll(dir: string) {
-  const names = await readdir(dir).catch(() => [] as string[])
-  const files = names.filter(isMemoryFile)
-  await Promise.all(files.map((name) => rm(path.join(dir, name), { force: true })))
-  await pruneIndex(dir)
-  return files.length
 }
