@@ -199,7 +199,9 @@ describe("devecocli proxy router", () => {
       "emulator start Pura 90": { stdout: "emulator started" },
       "run --skip-build --device Pura 90": { stdout: "app started" },
     })
-    const result = await executeDevecoCliProxy(["run", "--skip-build"], "C:\\project", cli.run)
+    const result = await executeDevecoCliProxy(["run", "--skip-build"], "C:\\project", cli.run, {
+      waitEmulatorReady: async () => "",
+    })
 
     expect(cli.calls.at(-1)).toEqual(["run", "--skip-build", "--device", "Pura 90"])
     expect(result.stdout).toContain("app started")
@@ -213,7 +215,9 @@ describe("devecocli proxy router", () => {
       "run --skip-build --device Pura 90 --module entry --uninstall": { stdout: "app started" },
     })
     const args = ["run", "--skip-build", "--device", "Pura 90", "--module", "entry", "--uninstall"]
-    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run, {
+      waitEmulatorReady: async () => "",
+    })
 
     expect(cli.calls).toEqual([
       ["device", "list", "--format", "json"],
@@ -223,6 +227,28 @@ describe("devecocli proxy router", () => {
     ])
     expect(result.stdout).toContain('$ devecocli emulator start "Pura 90"')
     expect(result.stdout).toContain('$ devecocli run --skip-build --device "Pura 90" --module entry --uninstall')
+    expect(result.stdout).toContain("app started")
+  })
+
+  test("waits for emulator readiness before running after start", async () => {
+    const cli = runner({
+      "device list --format json": { stdout: "[]" },
+      "emulator list --format json": { stdout: JSON.stringify([{ name: "Pura 90", status: "stopped", serial: "-" }]) },
+      "emulator start Pura 90": { stdout: "emulator started" },
+      "run --skip-build --device Pura 90": { stdout: "app started" },
+    })
+    const waitEmulatorReady = async (name: string) => {
+      expect(name).toBe("Pura 90")
+      expect(cli.calls.some((call) => call[0] === "emulator" && call[1] === "start")).toBe(true)
+      expect(cli.calls.some((call) => call[0] === "run")).toBe(false)
+      return `ready ${name}`
+    }
+    const result = await executeDevecoCliProxy(["run", "--skip-build"], "C:\\project", cli.run, {
+      waitEmulatorReady,
+    })
+
+    expect(cli.calls.at(-1)).toEqual(["run", "--skip-build", "--device", "Pura 90"])
+    expect(result.stdout).toContain("ready Pura 90")
     expect(result.stdout).toContain("app started")
   })
 

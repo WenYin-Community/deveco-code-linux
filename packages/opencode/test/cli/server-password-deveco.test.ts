@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { readSource, fileExists } from "../lib/source-reader"
 
 describe("web.ts DEVECO_SERVER_PASSWORD regression guard", () => {
@@ -31,6 +31,10 @@ describe("serve.ts DEVECO_SERVER_PASSWORD regression guard", () => {
 })
 
 describe("core/auth.ts DEVECO_AUTH_CONTENT regression guard", () => {
+  afterEach(() => {
+    delete process.env.DEVECO_AUTH_CONTENT
+  })
+
   test("source file references DEVECO_AUTH_CONTENT env var", () => {
     expect(fileExists("packages/core/src/auth.ts")).toBe(true)
     const source = readSource("packages/core/src/auth.ts")

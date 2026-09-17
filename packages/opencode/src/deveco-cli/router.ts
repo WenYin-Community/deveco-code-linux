@@ -48,9 +48,10 @@ type Device = {
 
 type SelectedDevice = Device & { serial: string }
 
-type LogClearDependencies = {
+type ProxyDependencies = {
   findHome?: () => Promise<string | undefined>
   runCommand?: (cmd: string[]) => Promise<CliResult>
+  waitEmulatorReady?: (name: string, before: Device[]) => Promise<string>
 }
 
 const SPECIAL_RUN_FLAGS = new Set(["--apply", "--hotreload", "--hotreload-apply", "--help", "-h"])
@@ -68,7 +69,7 @@ export async function executeDevecoCliProxy(
   args: string[],
   cwd: string,
   runner: CliRunner = runBundledDevecoCli,
-  dependencies: LogClearDependencies = {},
+  dependencies: ProxyDependencies = {},
 ): Promise<CliResult & { fullOutput?: string }> {
   if (args[0] === "log" && args[1] === "clear") {
     return executeLogClear(args.slice(2), cwd, runner, dependencies)
@@ -96,7 +97,7 @@ export async function executeDevecoCliProxy(
     return executeBuild(args, cwd, runner)
   }
   if (args[0] === "run" && shouldEnhanceRun(args.slice(1))) {
-    return executeRun(args, cwd, runner)
+    return executeRun(args, cwd, runner, dependencies)
   }
   return runner(args, cwd)
 }
@@ -158,7 +159,7 @@ async function executeLogClear(
   args: string[],
   cwd: string,
   runner: CliRunner,
-  dependencies: LogClearDependencies,
+  dependencies: ProxyDependencies,
 ): Promise<CliResult> {
   const target = optionValue(args, "--device")
   if (!validLogClearArgs(args, target)) return logClearUsage()
@@ -498,7 +499,7 @@ async function executeBuild(args: string[], cwd: string, runner: CliRunner) {
   }
 }
 
-async function executeRun(args: string[], cwd: string, runner: CliRunner): Promise<CliResult> {
+async function executeRun(args: string[], cwd: string, runner: CliRunner, dependencies: ProxyDependencies): Promise<CliResult> {
   const deviceList = await runner(["device", "list", "--format", "json"], cwd, { skipVersionCheck: true })
   if (deviceList.exitCode !== 0) return runner(args, cwd)
 
@@ -518,24 +519,77 @@ async function executeRun(args: string[], cwd: string, runner: CliRunner): Promi
     const device = devices[0]
     const runArgs = [...args, "--device", device.serial ?? device.name]
     if (device.status === "running") return runner(runArgs, cwd)
-    return startEmulatorAndRun(device, runArgs, cwd, runner)
+    return startEmulatorAndRun(device, runArgs, cwd, runner, active, dependencies)
   }
 
   const emulator = emulators.find((device) => matches(device, target))
   if (!emulator) return runner(args, cwd)
   if (emulator.status === "running") return runner(args, cwd)
 
-  return startEmulatorAndRun(emulator, args, cwd, runner)
+  return startEmulatorAndRun(emulator, args, cwd, runner, active, dependencies)
 }
 
-async function startEmulatorAndRun(device: Device, args: string[], cwd: string, runner: CliRunner) {
+const EMULATOR_READY_TIMEOUT_MS = 120_000
+const EMULATOR_READY_POLL_INTERVAL_MS = 3_000
+const EMULATOR_READY_PROBE_TIMEOUT_MS = 10_000
+
+// `emulator start` returns as soon as the emulator process is launched, but
+// hdc cannot install or launch until the transport is up and the device has
+// booted. Polling `hdc list targets` for a target that was not connected
+// before the start bridges that cold-boot gap so the subsequent `run` does not
+// block indefinitely on an unreachable target.
+async function waitEmulatorReady(name: string, before: Device[]): Promise<string> {
+  const home = await findDevEcoHome()
+  if (!home) return ""
+  const hdc = hdcPath(home)
+  if (!(await Bun.file(hdc).exists())) return ""
+  const known = new Set(
+    before.flatMap((device) => [device.serial, device.name]).filter((v): v is string => Boolean(v)),
+  )
+  const deadline = Date.now() + EMULATOR_READY_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const fresh = (await probeHdcTargets(hdc, EMULATOR_READY_PROBE_TIMEOUT_MS)).find(
+      (serial) => !known.has(serial),
+    )
+    if (fresh) return `Emulator "${name}" is reachable on hdc target ${fresh}.`
+    await Bun.sleep(EMULATOR_READY_POLL_INTERVAL_MS)
+  }
+  return `Emulator "${name}" started, but hdc reported no new target within ${EMULATOR_READY_TIMEOUT_MS / 1000}s; proceeding may fail.`
+}
+
+async function probeHdcTargets(hdc: string, timeoutMs: number): Promise<string[]> {
+  const proc = Bun.spawn({ cmd: [hdc, "list", "targets"], stdout: "pipe", stderr: "pipe" })
+  const timer = setTimeout(() => proc.kill(), timeoutMs)
+  try {
+    const stdout = proc.stdout ? await Bun.readableStreamToText(proc.stdout) : ""
+    await proc.exited
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function startEmulatorAndRun(
+  device: Device,
+  args: string[],
+  cwd: string,
+  runner: CliRunner,
+  before: Device[],
+  dependencies: ProxyDependencies,
+) {
   const start = await runner(["emulator", "start", device.name], cwd, { skipVersionCheck: true })
   if (start.exitCode !== 0) {
     return { stdout: commandOutput(["emulator", "start", device.name], start), stderr: "", exitCode: start.exitCode }
   }
+  const ready = await (dependencies.waitEmulatorReady ?? waitEmulatorReady)(device.name, before)
   const run = await runner(args, cwd)
   return {
-    stdout: [commandOutput(["emulator", "start", device.name], start), commandOutput(args, run)]
+    stdout: [commandOutput(["emulator", "start", device.name], start), ready, commandOutput(args, run)]
       .filter(Boolean)
       .join("\n\n"),
     stderr: "",
