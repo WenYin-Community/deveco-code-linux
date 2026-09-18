@@ -451,6 +451,60 @@ it.live(
 )
 
 it.instance(
+  "codegenie repository is excluded from snapshots",
+  Effect.gen(function* () {
+    const tmp = yield* bootstrap()
+    yield* mkdirp(`${tmp.path}/.codegenie`)
+    yield* exec(`${tmp.path}/.codegenie`, ["git", "init"])
+    yield* write(`${tmp.path}/.codegenie/checkpoint.txt`, "before")
+    yield* exec(`${tmp.path}/.codegenie`, ["git", "add", "checkpoint.txt"])
+    yield* exec(`${tmp.path}/.codegenie`, [
+      "git",
+      "-c",
+      "user.name=Snapshot Test",
+      "-c",
+      "user.email=snapshot@example.com",
+      "commit",
+      "-m",
+      "init",
+    ])
+    yield* exec(tmp.path, ["git", "add", ".codegenie"])
+    yield* exec(tmp.path, [
+      "git",
+      "-c",
+      "user.name=Snapshot Test",
+      "-c",
+      "user.email=snapshot@example.com",
+      "commit",
+      "-m",
+      "track codegenie gitlink",
+    ])
+
+    const snapshot = yield* Snapshot.Service
+    const before = yield* snapshot.track()
+    expect(before).toBeTruthy()
+    yield* write(`${tmp.path}/.codegenie/checkpoint.txt`, "after")
+    // Gitlinks record HEAD, so commit the change to make a tracked gitlink differ.
+    yield* exec(`${tmp.path}/.codegenie`, ["git", "add", "checkpoint.txt"])
+    yield* exec(`${tmp.path}/.codegenie`, [
+      "git",
+      "-c",
+      "user.name=Snapshot Test",
+      "-c",
+      "user.email=snapshot@example.com",
+      "commit",
+      "-m",
+      "advance codegenie head",
+    ])
+    expect((yield* snapshot.patch(before!)).files).toEqual([])
+    expect(yield* snapshot.diff(before!)).toBe("")
+    expect(yield* snapshot.track()).toBe(before)
+  }),
+  { git: true },
+  { timeout: 30_000 },
+)
+
+it.instance(
   "gitignore changes",
   withTrackedSnapshot(({ tmp, snapshot, before }) =>
     Effect.gen(function* () {

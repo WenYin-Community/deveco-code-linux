@@ -34,6 +34,8 @@ const limit = 2 * 1024 * 1024
 const core = ["-c", "core.longpaths=true", "-c", "core.symlinks=true"]
 const cfg = ["-c", "core.autocrlf=false", ...core]
 const quote = [...cfg, "-c", "core.quotepath=false"]
+const excluded = ".codegenie"
+const pathspec = [".", `:(exclude)${excluded}`]
 interface GitResult {
   readonly code: ChildProcessSpawner.ExitCode
   readonly text: string
@@ -62,6 +64,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const locks = new Map<string, Semaphore.Semaphore>()
+    const sanitized = new Set<string>()
 
     const lock = (key: string) => {
       const hit = locks.get(key)
@@ -130,17 +133,23 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         })
 
         const drop = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return
-          yield* git(
+          if (!files.length) return true
+          const result = yield* git(
             [
               ...cfg,
-              ...args(["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
+              ...args(["rm", "--cached", "-r", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
             ],
             {
               cwd: state.directory,
               stdin: feed(files),
             },
           )
+          if (result.code === 0) return true
+          yield* Effect.logWarning("failed to remove snapshot files", {
+            exitCode: result.code,
+            stderr: result.stderr,
+          })
+          return false
         })
 
         const stage = Effect.fnUntraced(function* (files: string[]) {
@@ -184,6 +193,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           const target = path.join(state.gitdir, "info", "exclude")
           const text = [
             file ? (yield* read(file)).trimEnd() : "",
+            `/${excluded}/`,
             ...list.map((item) => `/${item.replaceAll("\\", "/")}`),
           ]
             .filter(Boolean)
@@ -234,6 +244,12 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
         const add = Effect.fnUntraced(function* () {
           yield* sync()
+          // A seeded or legacy snapshot index may already contain .codegenie as a
+          // gitlink. Remove it before diff-files can recurse into its nested repo.
+          if (!sanitized.has(state.gitdir)) {
+            if (!(yield* drop([excluded]))) return
+            sanitized.add(state.gitdir)
+          }
           const [diff, other] = yield* Effect.all(
             [
               git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
@@ -351,7 +367,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             Effect.gen(function* () {
               yield* add()
               const result = yield* git(
-                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", ...pathspec])],
                 {
                   cwd: state.directory,
                 },
@@ -385,6 +401,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               yield* Effect.logInfo("restore", { commit: snapshot })
               const result = yield* git([...core, ...args(["read-tree", snapshot])], { cwd: state.worktree })
               if (result.code === 0) {
+                if (!(yield* drop([excluded]))) return
                 const checkout = yield* git([...core, ...args(["checkout-index", "-a", "-f"])], {
                   cwd: state.worktree,
                 })
@@ -527,7 +544,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           return yield* locked(
             Effect.gen(function* () {
               yield* add()
-              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", "."])], {
+              const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", ...pathspec])], {
                 cwd: state.worktree,
               })
               if (result.code !== 0) {
@@ -685,7 +702,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               const status = new Map<string, "added" | "deleted" | "modified">()
 
               const statuses = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", ...pathspec])],
                 { cwd: state.directory },
               )
 
@@ -697,7 +714,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               }
 
               const numstat = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
+                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", ...pathspec])],
                 {
                   cwd: state.directory,
                 },
