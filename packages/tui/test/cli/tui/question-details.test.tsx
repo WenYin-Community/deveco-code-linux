@@ -10,6 +10,7 @@ import { tmpdir } from "../../fixture/fixture"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { eventSource } from "../../fixture/tui-sdk"
+import { ClipboardProvider, type ClipboardService } from "../../../src/context/clipboard"
 
 const request = {
   id: "que_test",
@@ -34,7 +35,7 @@ async function until(check: () => boolean, describe: string, timeout = 2000) {
   }
 }
 
-async function mountQuestion(root: string) {
+async function mountQuestion(root: string, clipboard?: ClipboardService) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
@@ -82,9 +83,11 @@ async function mountQuestion(root: string) {
                       events={eventSource()}
                       fetch={(async () => new Response("{}", { headers: { "content-type": "application/json" } })) as unknown as typeof fetch}
                     >
-                      <DialogProvider>
-                        <QuestionPrompt request={request} directory={root} />
-                      </DialogProvider>
+                      <ClipboardProvider value={clipboard}>
+                        <DialogProvider>
+                          <QuestionPrompt request={request} directory={root} />
+                        </DialogProvider>
+                      </ClipboardProvider>
                     </SDKProvider>
                   </ToastProvider>
                 </ThemeProvider>
@@ -123,6 +126,36 @@ test("question popup opens memory details in a dialog and esc returns", async ()
     app.mockInput.pressEscape()
     await until(() => !frame().includes("Memory details"), "the dialog to close")
     expect(frame()).toContain("ctrl+o view details")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("drag-selecting details text copies it to the clipboard on release", async () => {
+  await using tmp = await tmpdir()
+  const writes: string[] = []
+  const clipboard: ClipboardService = {
+    write: (text) => {
+      writes.push(text)
+      return Promise.resolve()
+    },
+  }
+  const { app, frame } = await mountQuestion(tmp.path, clipboard)
+  try {
+    await until(() => frame().includes("ctrl+o view details"), "the ctrl+o details hint")
+    app.mockInput.pressKey("o", { ctrl: true })
+    await until(() => frame().includes("stale_memory.md"), "the rendered file path")
+
+    // The shared Dialog panel stops mouse-up propagation to prevent click-outside-close,
+    // which would otherwise swallow the provider-level copy-on-select. The detail content box
+    // copies the active selection on release before that cut can happen.
+    const lines = frame().split("\n")
+    const y = lines.findIndex((line) => line.includes("Skip tool-call narration"))
+    const x = lines[y]!.indexOf("Skip tool-call")
+    await app.mockMouse.drag(x, y, x + 12, y)
+
+    await until(() => writes.length > 0, "the clipboard write")
+    expect(writes[0]).toContain("Skip tool")
   } finally {
     app.renderer.destroy()
   }

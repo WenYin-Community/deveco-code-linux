@@ -11,6 +11,7 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { eventSource } from "../../fixture/tui-sdk"
 import { Locale } from "../../../src/util/locale"
 import * as Memory from "../../../src/util/memory"
+import { ClipboardProvider, type ClipboardService } from "../../../src/context/clipboard"
 
 async function until(check: () => boolean | Promise<boolean>, describe: string, timeout = 4000) {
   const start = Date.now()
@@ -35,7 +36,7 @@ async function readConfig(file: string) {
     .catch(() => ({}))) as Record<string, { enabled?: boolean }>
 }
 
-async function mountMemory(root: string, height = 40, width = 120) {
+async function mountMemory(root: string, height = 40, width = 120, clipboard?: ClipboardService) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
@@ -128,9 +129,11 @@ async function mountMemory(root: string, height = 40, width = 120) {
                       }
                     >
                       <ProjectProvider>
-                        <DialogProvider>
-                          <Launcher />
-                        </DialogProvider>
+                        <ClipboardProvider value={clipboard}>
+                          <DialogProvider>
+                            <Launcher />
+                          </DialogProvider>
+                        </ClipboardProvider>
                       </ProjectProvider>
                     </SDKProvider>
                   </ToastProvider>
@@ -237,10 +240,10 @@ test("memory dialog toggles settings and shows memory content", async () => {
     await until(() => row(frame(), "Auto memory").includes("✓ Enabled"), "the enabled state to flip back")
 
     // The last row is a memory, so its footer swaps the toggle hint for the memory actions, and
-    // the row shows when the memory was updated instead of its description.
+    // the row shows when the memory was created instead of its description.
     await app.mockInput.pressKey("END")
     await until(() => frame().includes("delete ctrl+d"), "the memory row to be selected")
-    expect(row(frame(), "Cache dir")).toContain(Locale.datetime(CACHE_STAMP))
+    expect(row(frame(), "Cache dir")).toContain(Locale.datetime(CACHE_STAMP - 86400000))
     expect(row(frame(), "Cache dir")).not.toContain("Use one shared cache dir")
     expect(frame()).toContain("View details space")
     expect(frame()).not.toContain("toggle space")
@@ -340,6 +343,50 @@ test("hovering the memory list does not slide it around", async () => {
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 40 })
       expect(header()).toBe(at)
     }
+  } finally {
+    app.renderer.destroy()
+  }
+}, 30000)
+
+test("drag-selecting detail content and the file path copies to the clipboard", async () => {
+  await using tmp = await tmpdir()
+  const writes: string[] = []
+  const clipboard: ClipboardService = {
+    write: (text) => {
+      writes.push(text)
+      return Promise.resolve()
+    },
+  }
+  const { app, frame } = await mountMemory(tmp.path, 40, 120, clipboard)
+  try {
+    await until(() => frame().includes("Auto memory"), "the memory settings")
+    await app.mockInput.pressKey("END")
+    await until(() => frame().includes("View details space"), "the memory row to be selected")
+    await app.mockInput.pressKey(" ")
+    await until(() => frame().includes("Store caches under"), "the detail body")
+
+    // The shared Dialog panel stops mouse-up propagation to prevent click-outside-close,
+    // which would otherwise swallow the provider-level copy-on-select. The panel root copies the
+    // active selection on release before that cut can happen.
+    const lines = frame().split("\n")
+    const y = lines.findIndex((line) => line.includes("Store caches under"))
+    const x = lines[y]!.indexOf("Store caches under")
+    await app.mockMouse.drag(x, y, x + 12, y)
+
+    await until(() => writes.length > 0, "the body clipboard write")
+    expect(writes[0]).toContain("Store caches")
+
+    // The file path row lives outside the scrollbox; the panel-root handler must cover it too.
+    // The path wraps and truncates with the random tmp slug, so target the stable "memory"
+    // segment (lowercase appears only in the path, not the title "Memory:" or body).
+    writes.length = 0
+    const pathLines = frame().split("\n")
+    const py = pathLines.findIndex((line) => line.includes("memory"))
+    const px = pathLines[py]!.indexOf("memory")
+    await app.mockMouse.drag(px, py, px + 6, py)
+
+    await until(() => writes.length > 0, "the file path clipboard write")
+    expect(writes[0]).toContain("memory")
   } finally {
     app.renderer.destroy()
   }

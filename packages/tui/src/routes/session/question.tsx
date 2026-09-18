@@ -8,6 +8,9 @@ import type { QuestionAnswer, QuestionRequest } from "@opencode-ai/sdk/v2"
 import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useDialog } from "../../ui/dialog"
+import { useToast } from "../../ui/toast"
+import { useClipboard } from "../../context/clipboard"
+import * as Selection from "../../util/selection"
 import { useTuiConfig } from "../../config"
 import { useBindings, useOpencodeModeStack } from "../../keymap"
 import { useI18n } from "../../i18n"
@@ -16,6 +19,9 @@ const QUESTION_MODE = "question"
 
 function QuestionDetails(props: { content: string }) {
   const dialog = useDialog()
+  const renderer = useRenderer()
+  const toast = useToast()
+  const clipboard = useClipboard()
   const { theme, syntax } = useTheme()
   const { t } = useI18n()
   const dimensions = useTerminalDimensions()
@@ -36,7 +42,13 @@ function QuestionDetails(props: { content: string }) {
           {t("dialog.esc")}
         </text>
       </box>
-      <scrollbox height={height()}>
+      <scrollbox
+        height={height()}
+        // The shared Dialog panel stops mouse-up propagation to prevent click-outside-close,
+        // which also blocks the provider-level copy-on-select. Copy here, on the content box,
+        // before the event bubbles up and is cut.
+        onMouseUp={() => Selection.copy(renderer, toast, clipboard)}
+      >
         <box paddingLeft={1} paddingRight={1}>
           <markdown
             syntaxStyle={syntax()}

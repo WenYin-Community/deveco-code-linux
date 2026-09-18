@@ -1,13 +1,15 @@
 import { For, createEffect, createMemo, createResource, createSignal, Show } from "solid-js"
 import path from "node:path"
 import { TextAttributes } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption, type DialogSelectRef } from "../ui/dialog-select"
 import { useTheme } from "../context/theme"
 import { useProject } from "../context/project"
 import { useTuiPaths } from "../context/runtime"
 import { useToast } from "../ui/toast"
+import { useClipboard } from "../context/clipboard"
+import * as Selection from "../util/selection"
 import { useBindings, formatKeyBindings, useKeymapSelector } from "../keymap"
 import { useTuiConfig } from "../config"
 import { useI18n } from "../i18n"
@@ -216,7 +218,9 @@ function MemoryDetail(props: { file: string }) {
   const { theme, syntax } = useTheme()
   const { t } = useI18n()
   const dialog = useDialog()
+  const renderer = useRenderer()
   const toast = useToast()
+  const clipboard = useClipboard()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
   const scope = useMemoryScope()
@@ -316,7 +320,16 @@ function MemoryDetail(props: { file: string }) {
   const height = createMemo(() => Math.max(6, Math.floor(dimensions().height / 2) - 6))
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
+    <box
+      paddingLeft={2}
+      paddingRight={2}
+      gap={1}
+      // The shared Dialog panel stops mouse-up propagation to prevent click-outside-close,
+      // which also blocks the provider-level copy-on-select. Copy here, on the panel root,
+      // before the event bubbles up and is cut — covers the metadata, the markdown body, and
+      // the file path row alike.
+      onMouseUp={() => Selection.copy(renderer, toast, clipboard)}
+    >
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {t("dialog.memory_content_title", { name: item()?.header.name ?? path.basename(props.file, ".md") })}
