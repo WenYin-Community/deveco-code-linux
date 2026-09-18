@@ -205,7 +205,7 @@ test("memory detail survives a file deleted from under it", async () => {
     // The bound delete keys route to the same guard: refresh instead of confirming a no-op.
     await app.mockInput.pressKey("d", { ctrl: true })
     await until(() => frame().includes("Memory settings"), "the refreshed list")
-    expect(frame()).not.toContain("Delete this memory file?")
+    expect(frame()).not.toContain("Delete memory:")
     expect(frame()).not.toContain("Cache dir")
     expect(await files(dir)).toEqual(["build.md"])
 
@@ -284,13 +284,13 @@ test("memory dialog toggles settings and shows memory content", async () => {
 
     // A cancelled deletion keeps the cursor there too.
     await app.mockInput.pressKey("d", { ctrl: true })
-    await until(() => frame().includes("Delete this memory file?"), "the delete confirmation")
+    await until(() => frame().includes("Delete memory: Cache dir"), "the delete confirmation")
     await app.mockInput.pressEscape()
     await until(() => frame().includes("View details space"), "the list after cancelling")
     expect(await files(dir)).toEqual(["build.md", "cache.md"])
 
     await app.mockInput.pressKey("d", { ctrl: true })
-    await until(() => frame().includes("Delete this memory file?"), "the delete confirmation")
+    await until(() => frame().includes("Delete memory: Cache dir"), "the delete confirmation")
     await app.mockInput.pressEnter()
     await until(async () => (await files(dir)).join() === "build.md", "the memory file to be deleted")
     await until(async () => !(await index(dir)).includes("Cache dir"), "the index entry to be dropped")
@@ -303,7 +303,7 @@ test("memory dialog toggles settings and shows memory content", async () => {
     await app.mockInput.pressKey("END")
     await until(() => frame().includes("delete ctrl+d"), "the last memory row")
     await app.mockInput.pressKey("d", { ctrl: true })
-    await until(() => frame().includes("Delete this memory file?"), "the delete confirmation")
+    await until(() => frame().includes("Delete memory: Slow builds"), "the delete confirmation")
     await app.mockInput.pressEnter()
     await until(async () => (await files(dir)).length === 0, "the last memory file to be deleted")
     await until(async () => !(await index(dir)).includes("Slow builds"), "the last index entry to be dropped")

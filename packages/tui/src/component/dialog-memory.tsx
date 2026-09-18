@@ -130,12 +130,12 @@ export function DialogMemory(props: { current?: string }) {
     showDetail(dialog, option.value.slice(ITEM.length))
   }
 
-  function removeMemory(file: string) {
+  function removeMemory(file: string, name: string) {
     return confirmDelete(
       {
         dialog,
         toast,
-        title: t("dialog.memory_delete_title"),
+        title: t("dialog.memory_delete_title", { name }),
         message: t("dialog.memory_delete_message"),
         success: t("toast.memory_deleted"),
       },
@@ -195,7 +195,7 @@ export function DialogMemory(props: { current?: string }) {
           command: "dialog.memory.delete",
           title: t("dialog.action_delete"),
           hidden: !active().startsWith(ITEM),
-          onTrigger: (option) => removeMemory(option.value.slice(ITEM.length)),
+          onTrigger: (option) => removeMemory(option.value.slice(ITEM.length), option.title),
         },
       ]}
       onSelect={(option) => (option.value.startsWith(SETTING) ? toggle(option) : open(option))}
@@ -274,11 +274,12 @@ function MemoryDetail(props: { file: string }) {
   function remove() {
     // Nothing left to delete: go back and let the list re-read the directory.
     if (unavailable()) return back()
+    const name = item()?.header.name ?? path.basename(props.file, ".md")
     return confirmDelete(
       {
         dialog,
         toast,
-        title: t("dialog.memory_delete_title"),
+        title: t("dialog.memory_delete_title", { name }),
         message: t("dialog.memory_delete_message"),
         success: t("toast.memory_deleted"),
       },

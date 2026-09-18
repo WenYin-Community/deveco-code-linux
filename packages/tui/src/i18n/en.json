@@ -571,7 +571,7 @@
       "write_visible": "Show memory writes in chat",
       "skills": "Skill extraction"
     },
-    "memory_delete_title": "Delete memory",
+    "memory_delete_title": "Delete memory: {{name}}",
     "memory_delete_message": "Delete this memory file? The plugin cannot recall it afterwards.",
     "placeholder_enter_text": "Enter text",
     "working": "Working...",

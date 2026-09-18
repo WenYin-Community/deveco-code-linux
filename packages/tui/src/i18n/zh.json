@@ -572,7 +572,7 @@
       "write_visible": "对话中显示写入",
       "skills": "技能沉淀"
     },
-    "memory_delete_title": "删除记忆",
+    "memory_delete_title": "删除记忆：{{name}}",
     "memory_delete_message": "确定删除这条记忆文件？删除后插件无法再召回它。",
     "placeholder_enter_text": "输入文本",
     "working": "处理中…",
