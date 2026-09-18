@@ -221,11 +221,10 @@ function buildExternalDirectoryRules(memoryRoot: string): PermissionRule[] {
   ]
 }
 
-function buildLockWriteRules(memoryRoot: string): PermissionRule[] {
-  const normalizedRoot = memoryRoot.replace(/\\/g, '/')
+function buildLockWriteRules(): PermissionRule[] {
   return LOCK_FILE_NAMES.map(name => ({
     permission: 'edit',
-    pattern: normalizedRoot + '/' + name,
+    pattern: '**/' + name,
     action: 'allow',
   }))
 }
@@ -250,7 +249,7 @@ export function getExtractionPermissionRules(includeSkills: boolean = false, mem
 
   if (memoryRoot) {
     rules.push(...buildExternalDirectoryRules(memoryRoot))
-    rules.push(...buildLockWriteRules(memoryRoot))
+    rules.push(...buildLockWriteRules())
   }
 
   if (includeSkills) {
@@ -288,7 +287,7 @@ export function getDreamPermissionRules(memoryRoot?: string, skillEnabled?: bool
 
   if (memoryRoot) {
     rules.push(...buildExternalDirectoryRules(memoryRoot))
-    rules.push(...buildLockWriteRules(memoryRoot))
+    rules.push(...buildLockWriteRules())
   }
 
   return rules
