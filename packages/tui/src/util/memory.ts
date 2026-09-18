@@ -196,11 +196,11 @@ export async function readItem(file: string) {
 }
 
 /**
- * The frontmatter stamp wins over the file mtime, same rule as the plugin's own listing, so a
- * rewritten or copied file keeps the date the memory was actually updated.
+ * The frontmatter stamp wins over the file mtime, same rule as the plugin's own listing. The
+ * created stamp is preferred so the list date stays stable across edits of the same memory.
  */
 async function touched(header: Record<string, string>, file: string) {
-  const stamp = Number(header.updated ?? header.created)
+  const stamp = Number(header.created ?? header.updated)
   if (Number.isFinite(stamp) && stamp > 0) return stamp
   return (await stat(file).catch(() => undefined))?.mtimeMs ?? 0
 }

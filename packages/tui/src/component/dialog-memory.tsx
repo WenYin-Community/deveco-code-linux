@@ -100,9 +100,10 @@ export function DialogMemory(props: { current?: string }) {
         : data.memories.map((memory) => ({
             value: ITEM + memory.file,
             title: memory.name,
-            // The date is what tells memories apart at a glance; type and description are
-            // metadata and belong to the content view.
+            // The date is what tells memories apart at a glance; the type sits at the row end
+            // like the settings' enabled state, the description body belongs to the content view.
             description: Locale.datetime(memory.mtime),
+            footer: memory.type,
             category: t("category.memory_items"),
           }))),
     ]
