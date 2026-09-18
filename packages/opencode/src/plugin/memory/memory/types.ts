@@ -58,7 +58,7 @@ export const DEFAULT_MEMORY_EXPIRY_CONFIG: MemoryExpiryConfig = {
   twoStep: true,
 }
 
-interface PendingExpiryEntry {
+export interface PendingExpiryEntry {
   name: string
   type: MemoryType
   mtime: number

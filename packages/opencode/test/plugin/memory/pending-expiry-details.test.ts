@@ -40,10 +40,11 @@ it("renders every pending memory so the confirmation can be checked", async () =
     // no name row: the heading already carries it, same as the /memory detail view
     expect(details).not.toContain("~~name~~")
     expect(details).not.toContain("**metadata**")
-    // one section per marked memory, and a marked memory whose file is gone still shows up
-    expect(details).toContain("## Memory: gone")
-    expect(details).toContain("(memory file is missing on disk)")
-    expect(details!.split("\n\n---\n\n")).toHaveLength(2)
+    // one section per marked memory; an entry whose file is gone is dropped at the
+    // readPendingExpiry choke point so it never inflates the count shown to the user
+    expect(details).not.toContain("## Memory: gone")
+    expect(details).not.toContain("(memory file is missing on disk)")
+    expect(details!.split("\n\n---\n\n")).toHaveLength(1)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

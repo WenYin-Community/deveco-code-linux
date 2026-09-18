@@ -12,6 +12,7 @@ import type {
   MemoryIndexEntry,
   TruncationConfig,
   MemoryType,
+  PendingExpiryEntry,
   PendingExpiryFile,
 } from "./types"
 import {
@@ -179,7 +180,14 @@ export class MemoryStorage {
       const content = await fs.readFile(filepath, 'utf-8')
       const parsed = JSON.parse(content)
       if (!parsed || !Array.isArray(parsed.pendingDeletions)) { return null }
-      return parsed as PendingExpiryFile
+      // Entries whose memory file is already gone (deleted via the memory dialog or by hand)
+      // would otherwise inflate every pending-expiry count; drop them at this choke point.
+      const pendingDeletions = (await Promise.all(
+        (parsed.pendingDeletions as PendingExpiryEntry[]).map(async (entry) =>
+          (await this.read(entry.name)) ? entry : null,
+        ),
+      )).filter((entry): entry is PendingExpiryEntry => entry !== null)
+      return { ...parsed, pendingDeletions }
     } catch {
       return null
     }
