@@ -29,15 +29,19 @@ it("renders every pending memory so the confirmation can be checked", async () =
   try {
     await markPending(storage)
     const details = await readPendingExpiryDetails(storage)
-    expect(details).toContain("**name**: no-var")
-    // name / description are bold-labelled, metadata is a one-field-per-line code list
-    expect(details).toContain("**description**: Use const instead of var")
-    expect(details).toContain("Use const instead of var")
-    expect(details).toContain("always const")
-    // one line per metadata field
-    expect(details).toContain("**metadata**\n- `type: feedback`\n- `sessionId: ses_dream`\n- `modified: ")
+    // /memory detail format: "Memory: {name}" heading, aligned frontmatter rows, body, file path
+    expect(details).toContain("## Memory: no-var")
+    expect(details).toContain("~~description~~  Use const instead of var")
+    expect(details).toContain("~~type~~         feedback")
+    expect(details).toContain("~~created~~      ")
+    expect(details).toContain("~~updated~~      ")
+    expect(details).toContain("Never declare with var, always const.")
+    expect(details).toContain(`~~${path.join(root, "no_var.md")}~~`)
+    // no name row: the heading already carries it, same as the /memory detail view
+    expect(details).not.toContain("~~name~~")
+    expect(details).not.toContain("**metadata**")
     // one section per marked memory, and a marked memory whose file is gone still shows up
-    expect(details).toContain("**name**: gone")
+    expect(details).toContain("## Memory: gone")
     expect(details).toContain("(memory file is missing on disk)")
     expect(details!.split("\n\n---\n\n")).toHaveLength(2)
   } finally {

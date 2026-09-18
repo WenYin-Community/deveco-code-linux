@@ -6,7 +6,7 @@ import { normalizeProjectPath, getGlobalDataDir } from './util/path';
 import { MemoryInjection } from './memory/injection';
 import { SessionInjectionSnapshotCache, computeInjectionBlocks } from './memory/injectionSnapshot';
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
-import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType } from './memory/types';
+import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType, type Memory } from './memory/types';
 // Auto Dream imports
 import { initAutoDream, executeAutoDream, handleChatMessageTrigger, checkAllGates, isConsolidationInProgress, markDreamDone } from './autoDream/autoDream';
 import { isForkedSession, unregisterForkSession, getForkSessionAgent, LOCK_FILE_NAMES } from './util/forkManager';
@@ -93,34 +93,44 @@ async function getPendingExpiryNotice(state: PluginState, sessionID?: string): P
 }
 
 /**
- * Details for the pending-expiry confirmation: one section per marked memory (name / description
- * / body / metadata) joined into a single Markdown document. Read from storage, never from the
- * model, so a destructive prompt cannot be paraphrased. Null when nothing is pending.
+ * Details for the pending-expiry confirmation: one section per marked memory, rendered in the
+ * same layout as the /memory detail view — "Memory: {name}" heading, frontmatter rows with
+ * aligned keys (created/updated as datetimes), body, then the file path. Read from storage,
+ * never from the model, so a destructive prompt cannot be paraphrased. Null when nothing is
+ * pending.
  */
 export async function readPendingExpiryDetails(storage: MemoryStorage): Promise<string | null> {
     const pending = await storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return null;
     const sections = [];
     for (const d of pending.pendingDeletions) {
-        const memory = await storage.read(d.name);
-        // Memory files carry no authoring session, so the only session id in scope is the
-        // dream run that marked these for deletion.
-        const modified = memory?.mtime ? new Date(memory.mtime).toISOString().slice(0, 16).replace('T', ' ') : 'unknown';
-        sections.push([
-            // Bold-labelled name and description, plain body, inline-code metadata values: three
-            // markdown scopes, three distinct theme colours, no TUI styling.
-            `**name**: ${d.name}`,
-            `**description**: ${(memory?.description?.trim() || '(empty)').replace(/\s*\n\s*/g, ' ')}`,
-            memory?.content?.trim() || '(memory file is missing on disk)',
-            [
-                '**metadata**',
-                `\`type: ${memory?.type ?? d.type}\``,
-                `\`sessionId: ${pending.dreamSessionID || '(not recorded)'}\``,
-                `\`modified: ${modified}\``,
-            ].join('\n- '),
-        ].join('\n\n'));
+        sections.push(formatExpirySection(d.name, await storage.read(d.name)));
     }
     return sections.join('\n\n---\n\n');
+}
+
+function formatExpirySection(name: string, memory: Memory | null): string {
+    if (!memory) return `## Memory: ${name}\n\n(memory file is missing on disk)`;
+    const stamp = (value?: number) => (value ? new Date(value).toISOString().slice(0, 16).replace('T', ' ') : '');
+    // Same rows the /memory detail view shows: every frontmatter field except name, empty values
+    // dropped, `time` falling back to mtime when the file carries no stamps.
+    const rows: Array<[string, string]> = [
+        ['description', memory.description.replace(/\s*\n\s*/g, ' ')],
+        ['type', memory.type],
+        ['created', stamp(memory.created)],
+        ['updated', stamp(memory.updated)],
+    ];
+    if (memory.pin) rows.push(['pin', 'true']);
+    if (memory.ttl !== undefined) rows.push(['ttl', String(memory.ttl)]);
+    const filled = rows.filter(([, value]) => value !== '');
+    if (!memory.created && !memory.updated) filled.push(['time', stamp(memory.mtime)]);
+    const width = Math.max(...filled.map(([key]) => key.length)) + 2;
+    // Strikethrough-scope keys over padded plain values: the TUI theme maps markup.strikethrough
+    // to the same muted gray the /memory detail view uses for keys (the style system has no strike
+    // attribute, so nothing is struck through). The trailing two spaces are markdown hard breaks
+    // so every row stays on its own line.
+    const meta = filled.map(([key, value]) => `~~${key}~~${' '.repeat(width - key.length)}${value}  `).join('\n');
+    return [`## Memory: ${memory.name}`, '', meta, '', memory.content.trim(), '', `~~${memory.filepath}~~`].join('\n');
 }
 
 interface ExpiryQuestion {

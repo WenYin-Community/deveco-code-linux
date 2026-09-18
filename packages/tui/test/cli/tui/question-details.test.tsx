@@ -20,7 +20,7 @@ const request = {
       header: "Expiry",
       options: [{ label: "Keep all", description: "Cancel the deletions" }],
       details:
-        "**name**: stale-memory\n\n**description**: Skip tool-call narration\n\nDo not explain tool calls.\n\n**metadata**\n- `type: feedback`\n- `sessionId: ses_dream`\n- `modified: 2026-07-05 08:11`",
+        "## Memory: stale-memory\n\n~~description~~  Skip tool-call narration  \n~~type~~         feedback  \n~~created~~      2026-07-01 08:00  \n~~updated~~      2026-07-05 08:11\n\nDo not explain tool calls.\n\n~~/tmp/memory/stale_memory.md~~",
     },
   ],
 } as unknown as QuestionRequest
@@ -109,16 +109,16 @@ test("question popup opens memory details in a dialog and esc returns", async ()
 
     app.mockInput.pressKey("o", { ctrl: true })
     // markdown rendering is async: wait for the last block of the document
-    await until(() => frame().includes("sessionId: ses_dream"), "the rendered metadata line")
+    await until(() => frame().includes("stale_memory.md"), "the rendered file path")
     expect(frame()).toContain("Memory details")
+    // the /memory detail layout: heading, aligned frontmatter rows, body, file path
+    expect(frame()).toContain("Memory: stale-memory")
     expect(frame()).toContain("Skip tool-call narration")
-    expect(frame()).toContain("sessionId: ses_dream")
-    // markdown rendering, not the raw source: label, quote, list and code markers are consumed
-    expect(frame()).toContain("name: stale-memory")
-    expect(frame()).not.toContain("**name**")
-    expect(frame()).not.toContain("**description**")
-    expect(frame()).not.toContain("**metadata**")
-    expect(frame()).not.toContain("`")
+    expect(frame()).toContain("description  Skip tool-call narration")
+    expect(frame()).toContain("type         feedback")
+    expect(frame()).toContain("created      2026-07-01 08:00")
+    // markdown rendering, not the raw source: heading, strikethrough and code markers are consumed
+    expect(frame()).not.toContain("~~")
 
     app.mockInput.pressEscape()
     await until(() => !frame().includes("Memory details"), "the dialog to close")
