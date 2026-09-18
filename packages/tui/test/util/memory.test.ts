@@ -79,7 +79,7 @@ describe("memory files", () => {
     // The frontmatter stamp beats the 1s file mtime, same rule the plugin uses.
     expect(items.map((item) => item.name)).toEqual(["old skill", "new"])
     expect(items[0].mtime).toBe(5000)
-    expect(items[0].description).toBe("line one line two")
+    expect(items[0].description).toBe("line one\nline two")
 
     const detail = await Memory.readItem(items[0].file)
     expect(detail?.header.type).toBe("project")
@@ -93,39 +93,71 @@ describe("memory files", () => {
 })
 
 describe("memory deletion", () => {
-  test("removing memories prunes the MEMORY.md index and survives missing files", async () => {
+  // Byte-for-byte the header the plugin's writeEntrypoint emits, so the rebuild can be asserted
+  // exactly: any drift here means the TUI and the plugin index writers diverged.
+  const CANONICAL_HEADER = [
+    "# Project Memory Index",
+    "",
+    "This file serves as an index to all project memories.",
+    "Memories are automatically loaded when relevant to the current context.",
+    "",
+    "## Memory Types",
+    "",
+    "- **user**: User preferences, role, and working style",
+    "- **feedback**: Behavioral guidance (do's and don'ts)",
+    "- **project**: Project context, goals, and technical decisions",
+    "- **reference**: External resources and documentation",
+    "",
+    "## Memories",
+    "",
+  ]
+
+  test("removing a memory rebuilds the index the way the plugin's updateEntrypoint does", async () => {
     const value = await scope()
     const dir = Memory.memoryDir({}, value)
     await mkdir(dir, { recursive: true })
-    await writeFile(path.join(dir, "keep.md"), "---\nname: keep\ndescription: d\ntype: project\n---\nkeep body\n")
-    await writeFile(path.join(dir, "drop.md"), "---\nname: drop\ndescription: d\ntype: project\n---\ndrop body\n")
+    await writeFile(
+      path.join(dir, "keep.md"),
+      "---\nname: keep\ndescription: d\ntype: project\nupdated: 2000\n---\nkeep body\n",
+    )
+    await writeFile(
+      path.join(dir, "drop.md"),
+      "---\nname: drop\ndescription: d\ntype: feedback\nupdated: 1000\n---\ndrop body\n",
+    )
+    // No name in the frontmatter: the plugin's readFrontmatter drops it, so the rebuild must too.
+    await writeFile(path.join(dir, "broken.md"), "---\ndescription: d\ntype: project\n---\nno name\n")
+    // Drift the old index on purpose: hand-written header, ghost entry, manual note.
     await writeFile(
       path.join(dir, "MEMORY.md"),
-      [
-        "# Project Memory Index",
-        "",
-        "## Memories",
-        "",
-        "- [keep](keep.md) d",
-        "- [drop](drop.md) d",
-        "",
-        "- [ghost](ghost.md) d",
-        "",
-      ].join("\n"),
+      "# hand written index\n\n- [drop](drop.md) d\n- [ghost](ghost.md) d\nmanual note\n",
     )
 
     await Memory.remove(path.join(dir, "drop.md"))
-    expect(await Bun.file(path.join(dir, "drop.md")).exists()).toBe(false)
-    const index = await Bun.file(path.join(dir, "MEMORY.md")).text()
-    expect(index).toContain("[keep](keep.md)")
-    // Both the deleted file and the entry that was already dangling disappear.
-    expect(index).not.toContain("drop.md")
-    expect(index).not.toContain("ghost.md")
 
-    expect((await Memory.list(dir)).map((item) => item.name)).toEqual(["keep"])
+    expect(await Bun.file(path.join(dir, "drop.md")).exists()).toBe(false)
+    // Canonical template, broken file dropped, ghost and drift gone, trailing newline.
+    expect(await Bun.file(path.join(dir, "MEMORY.md")).text()).toBe(
+      CANONICAL_HEADER.concat(["- [keep](keep.md) d", ""]).join("\n"),
+    )
 
     // Deleting a file that is already gone is not an error, same as the plugin's `rm -f`.
     await Memory.remove(path.join(dir, "drop.md"))
     expect(await Bun.file(path.join(dir, "keep.md")).exists()).toBe(true)
+  })
+
+  test("the rebuild honors the plugin's index limits from the config", async () => {
+    const value = await scope()
+    const dir = Memory.memoryDir({}, value)
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, "a.md"), "---\nname: a\ndescription: d\ntype: project\n---\nbody\n")
+
+    // Same resolution order as the plugin: top-level, then autoMemory.*, then default.
+    await Memory.remove(path.join(dir, "a.md"), { autoMemory: { maxEntrypointLines: 3 } })
+    expect(await Bun.file(path.join(dir, "MEMORY.md")).text()).toBe(
+      ["# Project Memory Index", "", "This file serves as an index to all project memories."].join("\n") + "\n",
+    )
+
+    await Memory.remove(path.join(dir, "a.md"), { maxEntrypointBytes: 30 })
+    expect(await Bun.file(path.join(dir, "MEMORY.md")).text()).toBe("# Project Memory Index\n\n")
   })
 })

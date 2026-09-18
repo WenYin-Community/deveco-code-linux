@@ -41,6 +41,16 @@ export function showMemory(dialog: DialogContext, current?: string) {
   dialog.replace(() => <DialogMemory current={current} />)
 }
 
+/** The same home/directory pair the plugin's config files resolve against. */
+function useMemoryScope() {
+  const project = useProject()
+  const paths = useTuiPaths()
+  return createMemo(() => ({
+    home: project.instance.path().home || paths.home,
+    directory: project.instance.path().directory || paths.cwd,
+  }))
+}
+
 function State(props: { enabled: boolean }) {
   const { theme } = useTheme()
   const { t } = useI18n()
@@ -51,8 +61,6 @@ function State(props: { enabled: boolean }) {
 export function DialogMemory(props: { current?: string }) {
   const { t } = useI18n()
   const dialog = useDialog()
-  const project = useProject()
-  const paths = useTuiPaths()
   const toast = useToast()
   const [busy, setBusy] = createSignal(false)
   // Where the pointer is, for the action hints: a setting row offers toggle, a memory row offers view
@@ -61,10 +69,7 @@ export function DialogMemory(props: { current?: string }) {
 
   dialog.setSize("large")
 
-  const scope = createMemo(() => ({
-    home: project.instance.path().home || paths.home,
-    directory: project.instance.path().directory || paths.cwd,
-  }))
+  const scope = useMemoryScope()
 
   const [snapshot, { refetch }] = createResource(scope, async (scope) => {
     const config = await Memory.readConfig(scope)
@@ -131,7 +136,7 @@ export function DialogMemory(props: { current?: string }) {
         message: t("dialog.memory_delete_message"),
         success: t("toast.memory_deleted"),
       },
-      () => Memory.remove(file),
+      () => Memory.remove(file, snapshot()?.config ?? {}),
       // The list reloads its snapshot on mount, so re-opening it is also the refresh. A deleted
       // row has nothing to restore the cursor onto, a cancelled one does.
       () => showMemory(dialog),
@@ -213,6 +218,7 @@ function MemoryDetail(props: { file: string }) {
   const toast = useToast()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
+  const scope = useMemoryScope()
   const [item] = createResource(() => Memory.readItem(props.file))
   // The plugin, dream cleanup or another window can delete the file between the list snapshot and
   // this read, so "gone" and "unreadable" are states to render, not crashes. Everything else in
@@ -270,7 +276,7 @@ function MemoryDetail(props: { file: string }) {
         message: t("dialog.memory_delete_message"),
         success: t("toast.memory_deleted"),
       },
-      () => Memory.remove(props.file),
+      async () => Memory.remove(props.file, await Memory.readConfig(scope())),
       () => showMemory(dialog),
       () => showDetail(dialog, props.file),
     )

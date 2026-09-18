@@ -134,13 +134,19 @@ function isMemoryFile(name: string) {
 }
 
 function unquote(value: string) {
-  if (!value.startsWith('"') || !value.endsWith('"')) return value
+  // Same quote handling as the plugin's parseFrontmatterValue: both quote styles, same unescapes.
+  const quote = value.at(0)
+  if ((quote !== '"' && quote !== "'") || !value.endsWith(quote)) return value
   return value.slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
 }
 
+// Same cap as the plugin's readFrontmatter: a longer frontmatter block parses as invalid.
+const FRONTMATTER_MAX_LINES = 30
+
 /** Parse the leading frontmatter block. Returns null for files the plugin would ignore. */
 export function parseFrontmatter(content: string): { header: Record<string, string>; body: string } | null {
-  const match = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(content)
+  // The closing fence must be followed by a newline, same as the plugin's regex.
+  const match = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/.exec(content)
   if (!match) return null
   const header: Record<string, string> = {}
   for (const line of match[1].split("\n")) {
@@ -157,24 +163,26 @@ export async function list(dir: string): Promise<MemoryItem[]> {
   const items = await Promise.all(
     files.filter(isMemoryFile).map(async (name) => {
       const file = path.join(dir, name)
-      const parsed = parseFrontmatter(
-        await Bun.file(file)
-          .text()
-          .catch(() => ""),
-      )
+      const content = (await Bun.file(file)
+        .text()
+        .catch(() => ""))
+        .split("\n")
+        .slice(0, FRONTMATTER_MAX_LINES)
+        .join("\n")
+      const parsed = parseFrontmatter(content)
       if (!parsed) return null
       return {
         name: parsed.header.name,
-        description: parsed.header.description.replace(/\s+/g, " ").trim(),
+        // Raw on purpose: the index writer must emit exactly what the plugin's readFrontmatter parsed.
+        description: parsed.header.description,
         type: parsed.header.type,
         mtime: await touched(parsed.header, file),
         file,
       } satisfies MemoryItem
     }),
   )
-  return items
-    .filter((item): item is MemoryItem => item !== null)
-    .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name))
+  // The plugin sorts by stamp only (stable sort), no name tie-break.
+  return items.filter((item): item is MemoryItem => item !== null).sort((a, b) => b.mtime - a.mtime)
 }
 
 /** Returns `undefined` when the file is gone: this dialog is not the only writer of the directory. */
@@ -198,27 +206,61 @@ async function touched(header: Record<string, string>, file: string) {
 }
 
 /**
- * Drop MEMORY.md index lines whose file is gone. The plugin rewrites the whole index on its next
- * write, but until then a dangling entry would still be recalled.
+ * Rebuild MEMORY.md from a directory rescan, byte-for-byte the way the plugin's
+ * `updateEntrypoint` does: same header template, same sort, same limits. Limit keys resolve
+ * like the plugin's mergeAutoMemoryConfig: top-level first, then `autoMemory.*`, then default.
  */
-export async function pruneIndex(dir: string) {
-  const entrypoint = path.join(dir, ENTRYPOINT_NAME)
-  const lines = (
-    await Bun.file(entrypoint)
-      .text()
-      .catch(() => "")
-  ).split("\n")
-  const entries = lines.map((line) => ({ line, file: /^- \[[^\]]+\]\(([^)]+)\)/.exec(line)?.[1] }))
-  const alive = await Promise.all(
-    entries.map(async (entry) => !entry.file || (await Bun.file(path.join(dir, entry.file)).exists())),
-  )
-  const kept = entries.filter((_, i) => alive[i]).map((entry) => entry.line)
-  if (kept.length === lines.length) return
-  await Bun.write(entrypoint, kept.join("\n"))
+export async function rebuildIndex(dir: string, config: Config = {}) {
+  const am = isRecord(config.autoMemory) ? config.autoMemory : {}
+  const limit = (key: string, def: number) => {
+    const raw = config[key] ?? am[key] ?? def
+    return typeof raw === "number" ? raw : def
+  }
+  const maxFiles = limit("maxMemoryFiles", 200)
+  const maxLines = limit("maxEntrypointLines", 200)
+  const maxBytes = limit("maxEntrypointBytes", 25000)
+
+  const entries = (await list(dir))
+    .slice(0, maxFiles)
+    .map((item) => `- [${item.name}](${path.basename(item.file)}) ${item.description}`)
+  let content = [
+    "# Project Memory Index",
+    "",
+    "This file serves as an index to all project memories.",
+    "Memories are automatically loaded when relevant to the current context.",
+    "",
+    "## Memory Types",
+    "",
+    "- **user**: User preferences, role, and working style",
+    "- **feedback**: Behavioral guidance (do's and don'ts)",
+    "- **project**: Project context, goals, and technical decisions",
+    "- **reference**: External resources and documentation",
+    "",
+    "## Memories",
+    "",
+    ...entries,
+  ].join("\n")
+
+  const contentLines = content.split("\n")
+  if (contentLines.length > maxLines) content = contentLines.slice(0, maxLines).join("\n")
+  if (Buffer.byteLength(content, "utf-8") > maxBytes) {
+    // Truncate at line boundaries to avoid splitting multi-byte UTF-8 characters.
+    const kept: string[] = []
+    let totalBytes = 0
+    for (const line of content.split("\n")) {
+      const lineBytes = Buffer.byteLength(line + "\n", "utf-8")
+      if (totalBytes + lineBytes > maxBytes) break
+      kept.push(line)
+      totalBytes += lineBytes
+    }
+    content = kept.join("\n")
+  }
+
+  await Bun.write(path.join(dir, ENTRYPOINT_NAME), content + "\n")
 }
 
-export async function remove(file: string) {
+export async function remove(file: string, config: Config = {}) {
   // `rm -f` semantics, like the plugin's own delete: a file that is already gone is not an error.
   await rm(file, { force: true })
-  await pruneIndex(path.dirname(file))
+  await rebuildIndex(path.dirname(file), config)
 }
