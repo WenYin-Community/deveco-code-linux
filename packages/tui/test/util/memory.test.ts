@@ -13,19 +13,15 @@ async function scope() {
 }
 
 describe("memory config", () => {
-  test("falls back to plugin defaults, aliases and project overrides", () => {
+  test("falls back to plugin defaults and aliases", () => {
     expect(Memory.isEnabled({}, AUTO_MEMORY)).toBe(true)
     expect(Memory.isEnabled({}, SKILLS)).toBe(false)
     // The plugin reads a top-level `enabled` before `autoMemory.enabled`.
     expect(Memory.isEnabled({ enabled: false }, AUTO_MEMORY)).toBe(false)
     expect(Memory.isEnabled({ enabled: false, autoMemory: { enabled: true } }, AUTO_MEMORY)).toBe(true)
-    expect(Memory.merge({ skills: { enabled: true }, autoMemory: { expiry: { ttl: 1 } } }, { skills: false })).toEqual({
-      skills: false,
-      autoMemory: { expiry: { ttl: 1 } },
-    })
   })
 
-  test("toggles write to the user file and drop project overrides for the same key", async () => {
+  test("reads only the user file and toggles write back to it", async () => {
     const value = await scope()
     await mkdir(path.join(value.home, ".deveco"), { recursive: true })
     await mkdir(path.join(value.directory, ".deveco"), { recursive: true })
@@ -37,14 +33,17 @@ describe("memory config", () => {
       path.join(value.directory, ".deveco", "memory-config.json"),
       JSON.stringify({ skills: { enabled: false } }),
     )
-    expect(Memory.isEnabled((await Memory.readConfig(value)).config, SKILLS)).toBe(false)
+    // A project-level memory config is no longer read.
+    expect(Memory.isEnabled(await Memory.readConfig(value), SKILLS)).toBe(true)
 
-    await Memory.writeSetting(value, SKILLS, true)
+    await Memory.writeSetting(value, SKILLS, false)
 
-    expect(await Bun.file(path.join(value.directory, ".deveco", "memory-config.json")).json()).toEqual({ skills: {} })
+    expect(await Bun.file(path.join(value.directory, ".deveco", "memory-config.json")).json()).toEqual({
+      skills: { enabled: false },
+    })
     const user = await Bun.file(path.join(value.home, ".deveco", "memory-config.json")).json()
-    expect(user).toEqual({ skills: { enabled: true }, autoMemory: { expiry: { ttl: 1 } } })
-    expect(Memory.isEnabled((await Memory.readConfig(value)).config, SKILLS)).toBe(true)
+    expect(user).toEqual({ skills: { enabled: false }, autoMemory: { expiry: { ttl: 1 } } })
+    expect(Memory.isEnabled(await Memory.readConfig(value), SKILLS)).toBe(false)
   })
 })
 

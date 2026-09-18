@@ -67,7 +67,7 @@ export function DialogMemory(props: { current?: string }) {
   }))
 
   const [snapshot, { refetch }] = createResource(scope, async (scope) => {
-    const { config } = await Memory.readConfig(scope)
+    const config = await Memory.readConfig(scope)
     const dir = Memory.memoryDir(config, scope)
     return { config, dir, memories: await Memory.list(dir) }
   })

@@ -406,25 +406,6 @@ async function loadMemoryConfigFile(configPath: string): Promise<PluginConfig> {
     }
 }
 
-async function loadMemoryConfigs(directory: string): Promise<PluginConfig> {
-    // Merge order: user-level < project-level < options (later overrides earlier)
-    const userConfig = await loadMemoryConfigFile(`${getGlobalDataDir()}/${MEMORY_CONFIG_FILENAME}`)
-    const projectConfig = directory
-        ? await loadMemoryConfigFile(`${directory}/.deveco/${MEMORY_CONFIG_FILENAME}`)
-        : {}
-    // Deep merge top-level config sections so nested keys aren't lost
-    const merged: Record<string, unknown> = { ...userConfig }
-    for (const [key, value] of Object.entries(projectConfig)) {
-        const existing = merged[key]
-        if (existing && typeof existing === 'object' && typeof value === 'object' && !Array.isArray(value)) {
-            merged[key] = { ...(existing as Record<string, unknown>), ...(value as Record<string, unknown>) }
-        } else {
-            merged[key] = value
-        }
-    }
-    return merged as PluginConfig
-}
-
 // ============================================================================
 // Hook Helper Functions
 // ============================================================================
@@ -927,7 +908,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
     const projectID = normalizeProjectPath(rawDirectory);
     const directory = input.directory || rawDirectory;
     const client = input.client;
-    const fileConfig = await loadMemoryConfigs(directory)
+    const fileConfig = await loadMemoryConfigFile(`${getGlobalDataDir()}/${MEMORY_CONFIG_FILENAME}`)
     const mergedOptions = { ...fileConfig, ...options } as PluginConfig
     logger.info('[PluginInit]', 'rawDirectory:', rawDirectory, 'projectID:', projectID, 'normalized:', projectID !== rawDirectory);
     const slashCommandsEnabled = (mergedOptions.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;

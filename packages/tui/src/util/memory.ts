@@ -48,11 +48,8 @@ export type MemoryItem = {
   file: string
 }
 
-export function configPaths(scope: Scope) {
-  return {
-    user: path.join(scope.home, DATA_DIR_NAME, CONFIG_FILENAME),
-    project: path.join(scope.directory, DATA_DIR_NAME, CONFIG_FILENAME),
-  }
+function userConfigFile(scope: Scope) {
+  return path.join(scope.home, DATA_DIR_NAME, CONFIG_FILENAME)
 }
 
 function isRecord(value: unknown): value is Config {
@@ -74,20 +71,6 @@ export function isEnabled(config: Config, setting: Setting) {
   return setting.fallback
 }
 
-// Mirrors the plugin's one-level merge: user file, then project sections overridden shallowly.
-export function merge(user: Config, project: Config): Config {
-  const merged: Config = { ...user }
-  for (const [key, value] of Object.entries(project)) {
-    const current = merged[key]
-    if (isRecord(current) && isRecord(value)) {
-      merged[key] = { ...current, ...value }
-      continue
-    }
-    merged[key] = value
-  }
-  return merged
-}
-
 function written(config: Config, key: string, value: unknown): Config {
   const parts = key.split(".")
   const root = { ...config }
@@ -103,22 +86,6 @@ function written(config: Config, key: string, value: unknown): Config {
   return root
 }
 
-function cleared(config: Config, key: string): Config {
-  const parts = key.split(".")
-  const root = { ...config }
-  let node = root
-  for (const part of parts.slice(0, -1)) {
-    const child = node[part]
-    if (!isRecord(child)) return root
-    const next = { ...child }
-    node[part] = next
-    node = next
-  }
-  const leaf = parts.at(-1) ?? ""
-  delete node[leaf]
-  return root
-}
-
 async function readConfigFile(file: string): Promise<Config> {
   const parsed = await Bun.file(file)
     .json()
@@ -127,21 +94,16 @@ async function readConfigFile(file: string): Promise<Config> {
 }
 
 export async function readConfig(scope: Scope) {
-  const files = configPaths(scope)
-  const [user, project] = await Promise.all([readConfigFile(files.user), readConfigFile(files.project)])
-  return { files, config: merge(user, project) }
+  return await readConfigFile(userConfigFile(scope))
 }
 
 /**
- * Write a toggle to the user-level file and drop any project override for the same key, so the
- * value shown in the dialog is the one the plugin will resolve on its next init.
+ * Write a toggle to the user-level file; there is no project-level memory config anymore.
  */
 export async function writeSetting(scope: Scope, setting: Setting, value: boolean) {
-  const files = configPaths(scope)
-  const project = await readConfigFile(files.project)
-  if (read(project, setting.key) !== undefined) await writeJsonAtomic(files.project, cleared(project, setting.key))
-  await writeJsonAtomic(files.user, written(await readConfigFile(files.user), setting.key, value))
-  return files.user
+  const file = userConfigFile(scope)
+  await writeJsonAtomic(file, written(await readConfigFile(file), setting.key, value))
+  return file
 }
 
 // Same slug the plugin uses for global storage mode, see util/path.ts in the memory plugin.
