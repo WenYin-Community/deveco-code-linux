@@ -170,6 +170,7 @@ export function DialogMemory(props: { current?: string }) {
       title={t("dialog.title_memory")}
       options={options()}
       current={props.current}
+      showCurrentMarker={false}
       onMove={(option) => setCurrent(option.value)}
       // The note is about config changes, and the footer row is narrow: on a memory row the
       // action hints need that space instead.

@@ -57,6 +57,9 @@ export interface DialogSelectProps<T> {
   }[]
   bindings?: readonly Binding<Renderable, KeyEvent>[]
   current?: T
+  /** Whether to render the `current` marker (● dot, accent color, padding shift). Keep the cursor
+   * restore behavior regardless; only suppress the visual. Defaults to true. */
+  showCurrentMarker?: boolean
 }
 
 export interface DialogSelectOption<T = any> {
@@ -647,6 +650,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                     {(option) => {
                       const active = createMemo(() => !props.locked && isDeepEqual(option.value, selected()?.value))
                       const current = createMemo(() => isDeepEqual(option.value, props.current))
+                      const marked = createMemo(() => current() && (props.showCurrentMarker ?? true))
                       return (
                         <box
                           flexDirection="column"
@@ -678,7 +682,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         >
                           <box
                             flexDirection="row"
-                            paddingLeft={current() || option.gutter ? 1 : 3}
+                            paddingLeft={marked() || option.gutter ? 1 : 3}
                             paddingRight={3}
                             gap={1}
                             backgroundColor={
@@ -689,7 +693,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                                 : RGBA.fromInts(0, 0, 0, 0)
                             }
                           >
-                            <Show when={!current() && option.margin}>
+                            <Show when={!marked() && option.margin}>
                               <box position="absolute" left={1} flexShrink={0}>
                                 {option.margin}
                               </box>
@@ -702,7 +706,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               truncateTitle={option.truncateTitle}
                               description={option.description !== category ? option.description : undefined}
                               active={active()}
-                              current={current()}
+                              current={marked()}
                               muted={actionFocused()}
                               disabled={option.disabled}
                               gutter={option.gutter}
