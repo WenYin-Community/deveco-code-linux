@@ -25,11 +25,22 @@ function QuestionDetails(props: { content: string }) {
   const { theme, syntax } = useTheme()
   const { t } = useI18n()
   const dimensions = useTerminalDimensions()
+  // Split on the section sentinel so each pending memory renders as its own framed block —
+  // a full border makes file boundaries obvious where a single rule line read as splitting
+  // one file. Without the sentinel (a single section) this is a one-element list.
+  const sections = createMemo(() =>
+    props.content
+      .split("<!--memory-section-->")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  )
   // Each markdown block needs a row plus a gap; wrapped text still overflows into the
-  // scrollbar, so this only has to avoid a mostly-empty panel.
+  // scrollbar, so this only has to avoid a mostly-empty panel. Add overhead per framed
+  // section (top/bottom border + padding) so multi-file content isn't scrolled out.
   const height = createMemo(() => {
     const lines = props.content.split("\n").filter((line) => line.trim().length > 0).length
-    return Math.max(6, Math.min(lines * 2 + 2, Math.floor(dimensions().height * 0.6)))
+    const framed = sections().length * 5
+    return Math.max(6, Math.min(lines * 2 + 2 + framed, Math.floor(dimensions().height * 0.85)))
   })
 
   return (
@@ -49,15 +60,26 @@ function QuestionDetails(props: { content: string }) {
         // before the event bubbles up and is cut.
         onMouseUp={() => Selection.copy(renderer, toast, clipboard)}
       >
-        <box paddingLeft={1} paddingRight={1}>
-          <markdown
-            syntaxStyle={syntax()}
-            internalBlockMode="top-level"
-            content={props.content}
-            tableOptions={{ style: "grid" }}
-            fg={theme.markdownText}
-            bg={theme.backgroundPanel}
-          />
+        <box paddingLeft={1} paddingRight={1} gap={1}>
+          <For each={sections()}>
+            {(section) => (
+              <box
+                border={["top", "bottom", "left", "right"]}
+                borderColor={theme.border}
+                flexDirection="column"
+                padding={1}
+              >
+                <markdown
+                  syntaxStyle={syntax()}
+                  internalBlockMode="top-level"
+                  content={section}
+                  tableOptions={{ style: "grid" }}
+                  fg={theme.markdownText}
+                  bg={theme.backgroundPanel}
+                />
+              </box>
+            )}
+          </For>
         </box>
       </scrollbox>
       <box paddingBottom={1} />

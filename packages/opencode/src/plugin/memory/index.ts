@@ -102,15 +102,21 @@ async function getPendingExpiryNotice(state: PluginState, sessionID?: string): P
 export async function readPendingExpiryDetails(storage: MemoryStorage): Promise<string | null> {
     const pending = await storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return null;
+    // Sequence numbers on each heading mark file boundaries clearer than a single thematic-break
+    // line, which read as splitting one file rather than separating two.
     const sections = [];
-    for (const d of pending.pendingDeletions) {
-        sections.push(formatExpirySection(d.name, await storage.read(d.name)));
+    for (const [i, d] of pending.pendingDeletions.entries()) {
+        sections.push(formatExpirySection(i + 1, d.name, await storage.read(d.name)));
     }
-    return sections.join('\n\n---\n\n');
+    // Sections are split by the TUI on the sentinel so each pending memory renders in its
+    // own framed block — a full border marks file boundaries where a single rule line read
+    // as splitting one file. The sentinel is an HTML comment so it renders as nothing if it
+    // ever reaches a plain markdown view.
+    return sections.join('\n\n<!--memory-section-->\n\n');
 }
 
-function formatExpirySection(name: string, memory: Memory | null): string {
-    if (!memory) return `## Memory: ${name}\n\n(memory file is missing on disk)`;
+function formatExpirySection(index: number, name: string, memory: Memory | null): string {
+    if (!memory) return `## ${index}. Memory: ${name}\n\n(memory file missing or frontmatter invalid)`;
     const stamp = (value?: number) => (value ? new Date(value).toISOString().slice(0, 16).replace('T', ' ') : '');
     // Same rows the /memory detail view shows: every frontmatter field except name, empty values
     // dropped, `time` falling back to mtime when the file carries no stamps.
@@ -130,7 +136,7 @@ function formatExpirySection(name: string, memory: Memory | null): string {
     // attribute, so nothing is struck through). The trailing two spaces are markdown hard breaks
     // so every row stays on its own line.
     const meta = filled.map(([key, value]) => `~~${key}~~${' '.repeat(width - key.length)}${value}  `).join('\n');
-    return [`## Memory: ${memory.name}`, '', meta, '', memory.content.trim(), '', `~~${memory.filepath}~~`].join('\n');
+    return [`## ${index}. Memory: ${memory.name}`, '', meta, '', memory.content.trim(), '', `~~${memory.filepath}~~`].join('\n');
 }
 
 interface ExpiryQuestion {

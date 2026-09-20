@@ -182,11 +182,10 @@ export class MemoryStorage {
       if (!parsed || !Array.isArray(parsed.pendingDeletions)) { return null }
       // Entries whose memory file is already gone (deleted via the memory dialog or by hand)
       // would otherwise inflate every pending-expiry count; drop them at this choke point.
-      const pendingDeletions = (await Promise.all(
-        (parsed.pendingDeletions as PendingExpiryEntry[]).map(async (entry) =>
-          (await this.read(entry.name)) ? entry : null,
-        ),
-      )).filter((entry): entry is PendingExpiryEntry => entry !== null)
+      // One readdir + Set lookup beats read()-ing each entry; existence (not parseability) is the filter.
+      const existing = new Set(await fs.readdir(this.memoryPath))
+      const pendingDeletions = (parsed.pendingDeletions as PendingExpiryEntry[])
+        .filter((entry) => existing.has(memoryNameToFilename(entry.name)))
       return { ...parsed, pendingDeletions }
     } catch {
       return null
