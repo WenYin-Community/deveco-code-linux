@@ -241,6 +241,14 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
       expect(ids).toContain("read")
       expect(ids).toContain("broken_plugin_tool")
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.opencode,
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      expect(tools.find((tool) => tool.id === "read")?.source).toBe("builtin")
+      expect(tools.find((tool) => tool.id === "broken_plugin_tool")?.source).toBe("custom")
     }),
   )
 
@@ -313,6 +321,7 @@ describe("tool.registry", () => {
       })
       const promptTool = promptTools.find((tool) => tool.id === "sql")
       if (!promptTool) throw new Error("custom sql tool was not returned for prompts")
+      expect(promptTool.source).toBe("custom")
       expect(ToolJsonSchema.fromTool(promptTool)).toMatchObject({
         properties: {
           query: { type: "string", description: "SQL query to execute" },

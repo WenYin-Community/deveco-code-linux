@@ -134,9 +134,11 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
   }
 
   const operations = value.operations;
+  // Pending events written before customTools was introduced remain uploadable.
   if (
     !isRecord(operations) ||
-    !hasExactKeys(operations, ['builtinTools', 'mcpTools', 'skillTools']) ||
+    !hasExactKeys(operations, ['builtinTools', 'mcpTools', 'skillTools', ...(Object.hasOwn(operations, 'customTools') ? ['customTools'] : [])]) ||
+    (Object.hasOwn(operations, 'customTools') && (!Array.isArray(operations.customTools) || !operations.customTools.every(isToolSummary))) ||
     !Array.isArray(operations.builtinTools) ||
     !operations.builtinTools.every(isToolSummary) ||
     !Array.isArray(operations.mcpTools) ||

@@ -235,3 +235,120 @@ test("returns null build project event when the turn had no build", async () => 
 
   expect(collector.buildProjectEvent()).toBe(null)
 })
+
+test("classifies tools by origin and keeps custom, MCP, and skill counts separate", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-tool-categories",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+  const builtin = [
+    "invalid",
+    "question",
+    "bash",
+    "read",
+    "glob",
+    "grep",
+    "edit",
+    "write",
+    "task",
+    "webfetch",
+    "todowrite",
+    "websearch",
+    "apply_patch",
+    "spec_write",
+    "lsp",
+    "plan_enter",
+    "plan_write",
+    "plan_exit",
+    "hdc_log",
+    "switch_cwd",
+    "build_project",
+    "start_app",
+    "arkts_check",
+    "verify_ui",
+    "get_ui_verification_log",
+    "save_ui_screenshot",
+    "debug_exit",
+  ]
+  const fallback = ["my_check", "mcp_custom_tool", "customtool", "ls", "plan", "todo", "batch"]
+  for (const name of [...builtin, ...fallback, "skill"]) {
+    collector.recordToolExecution(name, 10, true)
+    collector.recordToolExecution(name, 20, false)
+  }
+
+  collector.recordToolExecution("deveco_build_project", 10, true, false, "mcp")
+  collector.recordToolExecution("read", 10, true, false, "custom")
+  collector.recordToolExecution("skill", 10, true, false, "custom")
+  collector.recordToolExecution("read", 10, true, false, "mcp")
+  collector.recordToolExecution("future_builtin", 10, true, false, "builtin")
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.operations).toEqual({
+    builtinTools: [...builtin.map((name) => ({ name, count: 2 })), { name: "future_builtin", count: 1 }],
+    mcpTools: [
+      { name: "deveco_build_project", count: 1 },
+      { name: "read", count: 1 },
+    ],
+    customTools: [
+      ...fallback.map((name) => ({ name, count: 2 })),
+      { name: "read", count: 1 },
+      { name: "skill", count: 1 },
+    ],
+    skillTools: [{ name: "skill", count: 2 }],
+  })
+  expect(event?.toolExecutions).toHaveLength((builtin.length + fallback.length + 1) * 2 + 5)
+  expect(event?.toolExecutions.slice(0, 2)).toEqual([
+    { toolName: "invalid", duration: 10, isSuccess: true, timestamp: expect.any(Number) },
+    { toolName: "invalid", duration: 20, isSuccess: false, timestamp: expect.any(Number) },
+  ])
+})
+
+test("uses skill names for details and counts without changing tool identity", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-skill-names",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+    uiVerificationModel: null,
+  })
+  for (const name of ["arkts-error-fixes", "arkts-error-fixes", "read", "build_project", "", "   ", undefined]) {
+    collector.recordToolExecution("skill", 10, true, false, "builtin", name)
+  }
+  collector.recordToolExecution("skill", 10, true, false, "custom", "custom-skill")
+  collector.recordToolExecution("skill", 10, true, false, "mcp", "mcp-skill")
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.operations).toEqual({
+    builtinTools: [],
+    skillTools: [
+      { name: "arkts-error-fixes", count: 2 },
+      { name: "read", count: 1 },
+      { name: "build_project", count: 1 },
+      { name: "skill", count: 3 },
+    ],
+    customTools: [{ name: "skill", count: 1 }],
+    mcpTools: [{ name: "skill", count: 1 }],
+  })
+  expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual([
+    "arkts-error-fixes",
+    "arkts-error-fixes",
+    "read",
+    "build_project",
+    "skill",
+    "skill",
+    "skill",
+    "skill",
+    "skill",
+  ])
+  expect(event?.isFirstBuildSuccess).toBeNull()
+  expect(event?.isFinalBuildSuccess).toBeNull()
+})

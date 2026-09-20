@@ -141,6 +141,7 @@ export const layer = Layer.effect(
             : Schema.Unknown
           return {
             id,
+            source: "custom",
             parameters,
             jsonSchema,
             description: def.description,
@@ -328,6 +329,7 @@ export const layer = Layer.effect(
               : undefined
           return {
             id: tool.id,
+            source: tool.source ?? "builtin",
             description: [output.description, tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined]
               .filter(Boolean)
               .join("\n"),

@@ -16,6 +16,7 @@ export interface Operations {
   builtinTools: ToolSummary[]
   mcpTools: ToolSummary[]
   skillTools: ToolSummary[]
+  customTools: ToolSummary[]
 }
 
 export interface AnalyticsEnvironmentFields {
@@ -161,7 +162,7 @@ export interface SessionContext {
   outputTokens: number
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
-  toolCounts: Map<string, number>
+  toolCounts: Map<string, { name: string; category: keyof Operations; count: number }>
   buildProjectInfo: BuildProjectInfo[]
   buildResults: BuildResults
 }
@@ -192,27 +193,39 @@ export interface HuaweiTracePayload {
   timestamp: number
 }
 
+// Keep aligned with the built-in tool IDs in tool/registry.ts, including conditional tools.
 export const BUILTIN_TOOLS = new Set([
+  "invalid",
+  "question",
   "bash",
   "read",
   "write",
   "edit",
   "glob",
   "grep",
-  "ls",
   "lsp",
-  "plan",
+  "plan_enter",
+  "plan_write",
+  "plan_exit",
   "task",
-  "todo",
+  "todowrite",
   "skill",
-  "batch",
+  "webfetch",
+  "websearch",
+  "apply_patch",
+  "spec_write",
+  "hdc_log",
+  "switch_cwd",
+  "build_project",
+  "start_app",
+  "arkts_check",
+  "verify_ui",
+  "get_ui_verification_log",
+  "save_ui_screenshot",
+  "debug_exit",
 ])
 
 export const SKILL_TOOLS = new Set(["skill"])
-
-export function isMcpTool(toolName: string): boolean {
-  return toolName.includes("_") || toolName.startsWith("mcp_")
-}
 
 export function isSkillTool(toolName: string): boolean {
   return SKILL_TOOLS.has(toolName)

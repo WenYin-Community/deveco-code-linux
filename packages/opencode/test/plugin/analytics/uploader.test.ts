@@ -23,7 +23,7 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
       modifiedFileCount: 0,
       totalAdditions: 0,
       totalDeletions: 0,
-      operations: { builtinTools: [], mcpTools: [], skillTools: [] },
+      operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
       toolExecutions: [],
       totalElapsed: 10,
       firstResultElapsed: 5,

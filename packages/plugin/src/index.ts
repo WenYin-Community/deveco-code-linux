@@ -275,7 +275,7 @@ export interface Hooks {
     output: { env: Record<string, string> },
   ) => Promise<void>
   "tool.execute.after"?: (
-    input: { tool: string; sessionID: string; callID: string; args: any },
+    input: { tool: string; sessionID: string; callID: string; args: any; source?: "builtin" | "custom" | "mcp" },
     output: {
       title: string
       output: string

@@ -48,7 +48,7 @@ const builtEvent: AiSessionEvent = {
   modifiedFileCount: 0,
   totalAdditions: 0,
   totalDeletions: 0,
-  operations: { builtinTools: [], mcpTools: [], skillTools: [] },
+  operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
   toolExecutions: [],
   totalElapsed: 10,
   firstResultElapsed: 5,
@@ -410,7 +410,7 @@ test("records successful devecocli build metadata", async () => {
     },
   )
 
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true, false, undefined, undefined)
   expect(harness.recordBuildExecution).toHaveBeenCalledWith(true)
 })
 
@@ -428,6 +428,7 @@ test("records failed devecocli build metadata", async () => {
     },
   )
 
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true, false, undefined, undefined)
   expect(harness.recordBuildExecution).toHaveBeenCalledWith(false)
 })
 
@@ -452,7 +453,7 @@ test("records build_project compile failure as a successful tool execution", asy
     },
   )
 
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, false, undefined, undefined)
 })
 
 test("still flags non-build tools whose output contains error text", async () => {
@@ -465,7 +466,7 @@ test("still flags non-build tools whose output contains error text", async () =>
     { title: "", output: "npm ERR! Error: missing script", metadata: {} },
   )
 
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, false)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, false, undefined, undefined)
 })
 
 test("captures the ui_verification model from the config hook and starts sessions with it", async () => {
@@ -614,7 +615,7 @@ test("records build success from the authoritative metadata exit code", async ()
   const entry = harness.recordBuildProjectInfo.mock.calls[0]?.[0]
   expect(entry?.isSuccess).toBe(true)
   expect(entry?.exitCode).toBe(0)
-  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("build_project", expect.any(Number), true, true, undefined, undefined)
 })
 
 test("strips the local full-output path pointer from truncated build logs", async () => {
@@ -699,4 +700,47 @@ test("session idle skips the build project event for non-deveco providers", asyn
   // Provider gate fails before the privacy read, so Improvement is never consulted.
   expect(harness.toolImprovementEnabled).toHaveBeenCalledTimes(0)
   expect(harness.diagnostics).toContain("Build project event skipped: provider=openai")
+})
+
+test("passes explicit tool origin to session collection", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+  for (const source of ["builtin", "custom", "mcp"] as const) {
+    await hooks["tool.execute.before"]!({ tool: "my_check", sessionID: "session-1", callID: source }, { args: {} })
+    await hooks["tool.execute.after"]!(
+      { tool: "my_check", sessionID: "session-1", callID: source, args: {}, source },
+      { title: "Check", output: "ok", metadata: {} },
+    )
+    expect(harness.recordToolExecution).toHaveBeenLastCalledWith(
+      "my_check",
+      expect.any(Number),
+      true,
+      false,
+      source,
+      undefined,
+    )
+  }
+})
+
+test("takes the skill name from arguments rather than result metadata", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "deveco")
+  for (const name of ["arkts-error-fixes", undefined, 123]) {
+    await hooks["tool.execute.before"]!(
+      { tool: "skill", sessionID: "session-1", callID: "skill-1" },
+      { args: { name } },
+    )
+    await hooks["tool.execute.after"]!(
+      { tool: "skill", sessionID: "session-1", callID: "skill-1", args: { name }, source: "builtin" },
+      { title: "Skill", output: "Loaded", metadata: { name: "different-name" } },
+    )
+    expect(harness.recordToolExecution).toHaveBeenLastCalledWith(
+      "skill",
+      expect.any(Number),
+      true,
+      false,
+      "builtin",
+      typeof name === "string" ? name : undefined,
+    )
+  }
 })

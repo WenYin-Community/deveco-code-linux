@@ -57,6 +57,7 @@ export interface Def<
   M extends Metadata = Metadata,
 > {
   id: string
+  source?: "builtin" | "custom"
   description: string
   parameters: Parameters
   jsonSchema?: JSONSchema7

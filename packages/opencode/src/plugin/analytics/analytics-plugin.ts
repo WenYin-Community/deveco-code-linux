@@ -28,7 +28,14 @@ interface AnalyticsCollectorDependency {
   recordBuildProjectInfo(entry: BuildProjectInfo): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
-  recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess?: boolean): void
+  recordToolExecution(
+    toolName: string,
+    duration: number,
+    isSuccess: boolean,
+    isBuildSuccess?: boolean,
+    source?: "builtin" | "custom" | "mcp",
+    skillName?: string,
+  ): void
   recordBuildExecution(isBuildSuccess: boolean): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
@@ -337,6 +344,8 @@ class AnalyticsRuntime {
       duration,
       isSuccess,
       input.tool === "build_project" && isSuccess && buildSucceeded,
+      input.source,
+      input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
     )
     this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
     this.recordDevecoBuilds(metadata)
@@ -352,7 +361,14 @@ class AnalyticsRuntime {
     isSuccess: boolean,
   ) {
     if (input.tool !== "build_project" || typeof output.output !== "string") {
-      this.dependencies.collector.recordToolExecution(input.tool, duration, isSuccess)
+      this.dependencies.collector.recordToolExecution(
+        input.tool,
+        duration,
+        isSuccess,
+        false,
+        input.source,
+        input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
+      )
       return
     }
     this.dependencies.collector.recordBuildProjectInfo({

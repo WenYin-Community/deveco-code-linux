@@ -437,7 +437,7 @@ export const layer = Layer.effect(
       if (result) {
         yield* plugin.trigger(
           "tool.execute.after",
-          { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
+          { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs, source: "builtin" },
           result,
         )
       }

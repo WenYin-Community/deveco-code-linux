@@ -13,7 +13,7 @@ import type {
   Operations,
   SessionContext,
 } from "./types"
-import { isBuiltinTool, isMcpTool, isSkillTool } from "./types"
+import { isBuiltinTool, isSkillTool } from "./types"
 
 export type SessionStart = {
   sessionID: string
@@ -154,15 +154,39 @@ export class SessionCollector {
 
   // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
   // isBuildSuccess: only meaningful for build_project — true when output contains "build successful".
-  recordToolExecution(toolName: string, duration: number, isSuccess: boolean, isBuildSuccess = false): void {
+  recordToolExecution(
+    toolName: string,
+    duration: number,
+    isSuccess: boolean,
+    isBuildSuccess = false,
+    source?: "builtin" | "custom" | "mcp",
+    skillName?: string,
+  ): void {
     if (!this.context) return
+    const category: keyof Operations =
+      source === "mcp"
+        ? "mcpTools"
+        : source === "custom"
+          ? "customTools"
+          : isSkillTool(toolName)
+            ? "skillTools"
+            : source === "builtin" || isBuiltinTool(toolName)
+              ? "builtinTools"
+              : "customTools"
+    // Use the original tool identity for classification and build tracking.
+    const name = category === "skillTools" && skillName?.trim() ? skillName : toolName
     this.context.toolExecutions.push({
-      toolName,
+      toolName: name,
       duration,
       isSuccess,
       timestamp: Date.now(),
     })
-    this.context.toolCounts.set(toolName, (this.context.toolCounts.get(toolName) || 0) + 1)
+    const key = `${category}\0${name}`
+    this.context.toolCounts.set(key, {
+      name,
+      category,
+      count: (this.context.toolCounts.get(key)?.count ?? 0) + 1,
+    })
     // Skip build result tracking when the tool execution itself failed — no build actually ran.
     if (toolName === "build_project" && isSuccess)
       this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
@@ -262,25 +286,11 @@ export class SessionCollector {
   }
 
   private buildOperations(): Operations {
-    const builtinTools = new Map<string, number>()
-    const mcpTools = new Map<string, number>()
-    const skillTools = new Map<string, number>()
-
-    this.context?.toolCounts.forEach((count, toolName) => {
-      if (isSkillTool(toolName)) skillTools.set(toolName, count)
-      else if (isMcpTool(toolName)) mcpTools.set(toolName, count)
-      else if (isBuiltinTool(toolName)) builtinTools.set(toolName, count)
-      else mcpTools.set(toolName, count)
+    const operations: Operations = { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] }
+    this.context?.toolCounts.forEach(({ name, category, count }) => {
+      operations[category].push({ name, count })
     })
-
-    const summaries = (entries: Map<string, number>): { name: string; count: number }[] =>
-      Array.from(entries, ([name, count]) => ({ name, count }))
-
-    return {
-      builtinTools: summaries(builtinTools),
-      mcpTools: summaries(mcpTools),
-      skillTools: summaries(skillTools),
-    }
+    return operations
   }
 
   clear(): void {

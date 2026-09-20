@@ -10,6 +10,7 @@ import {
   enqueuePendingEvent,
   getPendingEvents,
   loadStorage,
+  preparePendingBatch,
 } from "@/plugin/analytics/storage"
 import { tmpdir } from "../../fixture/fixture"
 
@@ -36,7 +37,7 @@ function event(): AiSessionEvent {
     modifiedFileCount: 0,
     totalAdditions: 0,
     totalDeletions: 0,
-    operations: { builtinTools: [], mcpTools: [], skillTools: [] },
+    operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
     toolExecutions: [],
     totalElapsed: 10,
     firstResultElapsed: 5,
@@ -238,4 +239,33 @@ test('build project queue rejects events with unknown fields', async () => {
   await fs.writeFile(file, JSON.stringify(encrypted))
 
   expect((await loadStorage()).pendingEvents).toEqual([])
+})
+
+test("queue accepts legacy and custom tool summaries but rejects malformed categories", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const legacy = { builtinTools: [], mcpTools: [], skillTools: [] }
+  const operations = [
+    legacy,
+    { ...legacy, customTools: [{ name: "my_check", count: 2 }] },
+    { ...legacy, customTools: "invalid" },
+    { ...legacy, customTools: [{ name: "my_check", count: "2" }] },
+    { ...legacy, customTools: [], unexpected: [] },
+  ]
+  await fs.writeFile(file, JSON.stringify(LocalCrypto.encryptForLocalStorage(JSON.stringify({
+    schemaVersion: ANALYTICS_SCHEMA_VERSION,
+    pendingEvents: operations.map((operations, index) => ({
+      action: ANALYTICS_ACTION.AI_SESSION,
+      event: { ...event(), operations },
+      uid: `uid-${index}`,
+      queueId: `queue-${index}`,
+      sealed: false,
+    })),
+    lastFlush: 1,
+  }))))
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-0", "queue-1"])
+  expect(pending[1]?.event).toMatchObject({ operations: { customTools: [{ name: "my_check", count: 2 }] } })
 })
