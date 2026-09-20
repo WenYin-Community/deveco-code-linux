@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { readdir, rm, stat } from "node:fs/promises"
+import { open, readdir, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import { writeJsonAtomic } from "./persistence"
 
@@ -142,6 +142,9 @@ function unquote(value: string) {
 
 // Same cap as the plugin's readFrontmatter: a longer frontmatter block parses as invalid.
 const FRONTMATTER_MAX_LINES = 30
+// Safety bound: a body with very few newlines (a huge single-line dump) would read to EOF
+// otherwise, since the line cap never fires. Generous vs any real frontmatter; bounds the scan.
+const FRONTMATTER_MAX_BYTES = 1 << 16
 
 /** Parse the leading frontmatter block. Returns null for files the plugin would ignore. */
 export function parseFrontmatter(content: string): { header: Record<string, string>; body: string } | null {
@@ -158,31 +161,59 @@ export function parseFrontmatter(content: string): { header: Record<string, stri
   return { header, body: match[2] }
 }
 
+// Read only the leading lines a frontmatter parse needs: stop at the line cap, the byte
+// ceiling, or EOF — whichever first. Same line semantics as the plugin's
+// content.split("\n").slice(0, max), without reading the whole file first.
+async function readHeadLines(file: string): Promise<string> {
+  let handle
+  try {
+    handle = await open(file, "r")
+    let buf = ""
+    const chunk = Buffer.alloc(4096)
+    let pos = 0
+    for (;;) {
+      if (pos >= FRONTMATTER_MAX_BYTES) break
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, pos)
+      if (bytesRead === 0) break
+      buf += chunk.subarray(0, bytesRead).toString("utf-8")
+      pos += bytesRead
+      if (buf.split("\n").length - 1 >= FRONTMATTER_MAX_LINES) break
+    }
+    return buf.split("\n").slice(0, FRONTMATTER_MAX_LINES).join("\n")
+  } catch {
+    return ""
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
 export async function list(dir: string): Promise<MemoryItem[]> {
-  const files = await readdir(dir).catch(() => [] as string[])
-  const items = await Promise.all(
-    files.filter(isMemoryFile).map(async (name) => {
-      const file = path.join(dir, name)
-      const content = (await Bun.file(file)
-        .text()
-        .catch(() => ""))
-        .split("\n")
-        .slice(0, FRONTMATTER_MAX_LINES)
-        .join("\n")
-      const parsed = parseFrontmatter(content)
-      if (!parsed) return null
-      return {
-        name: parsed.header.name,
-        // Raw on purpose: the index writer must emit exactly what the plugin's readFrontmatter parsed.
-        description: parsed.header.description,
-        type: parsed.header.type,
-        mtime: await touched(parsed.header, file),
-        file,
-      } satisfies MemoryItem
+  const files = (await readdir(dir).catch(() => [] as string[])).filter(isMemoryFile)
+  // Worker pool caps concurrent open/stat FDs so many files can't exhaust descriptors and
+  // silently drop entries. 32 is one FD per worker (read then stat never overlap), well under
+  // even tight container ulimits (256); bump only if profiling shows I/O starved.
+  const items: MemoryItem[] = []
+  let i = 0
+  await Promise.all(
+    Array.from({ length: Math.min(32, files.length) }, async () => {
+      while (i < files.length) {
+        const idx = i++
+        const file = path.join(dir, files[idx])
+        const parsed = parseFrontmatter(await readHeadLines(file))
+        if (!parsed) continue
+        items.push({
+          name: parsed.header.name,
+          // Raw on purpose: the index writer must emit exactly what the plugin's readFrontmatter parsed.
+          description: parsed.header.description,
+          type: parsed.header.type,
+          mtime: await touched(parsed.header, file),
+          file,
+        })
+      }
     }),
   )
   // The plugin sorts by stamp only (stable sort), no name tie-break.
-  return items.filter((item): item is MemoryItem => item !== null).sort((a, b) => b.mtime - a.mtime)
+  return items.sort((a, b) => b.mtime - a.mtime)
 }
 
 /** Returns `undefined` when the file is gone: this dialog is not the only writer of the directory. */

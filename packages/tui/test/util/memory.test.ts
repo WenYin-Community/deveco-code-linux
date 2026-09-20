@@ -90,6 +90,24 @@ describe("memory files", () => {
     await rm(items[0].file, { force: true })
     expect(await Memory.readItem(items[0].file)).toBeUndefined()
   })
+
+  test("caps the read so a big body and an over-line frontmatter don't load", async () => {
+    const value = await scope()
+    const dir = Memory.memoryDir({}, value)
+    await mkdir(dir, { recursive: true })
+    // A 5MB single-line body has only a handful of lines, so the line cap alone never fires;
+    // the byte ceiling has to bound the scan. The frontmatter still parses.
+    await writeFile(
+      path.join(dir, "big.md"),
+      "---\nname: Big\ndescription: d\ntype: project\n---\n\n" + "x".repeat(5_000_000) + "\n",
+    )
+    // A block over the line cap is rejected, same as the plugin's readFrontmatter.
+    const over =
+      "---\n" + Array.from({ length: 40 }, (_, i) => `k${i}: v${i}`).join("\n") + "\nname: Long\ndescription: d\ntype: project\n---\n\nbody\n"
+    await writeFile(path.join(dir, "long.md"), over)
+    const items = await Memory.list(dir)
+    expect(items.map((i) => i.name)).toEqual(["Big"])
+  })
 })
 
 describe("memory deletion", () => {
