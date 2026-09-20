@@ -91,10 +91,30 @@ jobs:
           PLUGIN_DIR="integrations/deveco-code/build/compatibility-packages"
           COMMIT_SHA=$(git rev-parse HEAD)
 
-          RELEASE_INFO=$(curl -sS \
+          RELEASE_RESPONSE=$(mktemp)
+          RELEASE_HTTP_CODE=$(curl -sS -o "$RELEASE_RESPONSE" -w "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" \
             "$API/repos/$OWNER/$REPO/releases/tags/$TAG")
-          RELEASE_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name // empty')
+          RELEASE_INFO=$(cat "$RELEASE_RESPONSE")
+          rm -f "$RELEASE_RESPONSE"
+
+          case "$RELEASE_HTTP_CODE" in
+            2*)
+              if ! echo "$RELEASE_INFO" | jq -e 'type == "object"' >/dev/null 2>&1; then
+                echo "ERROR: GitCode returned a non-JSON release response (HTTP $RELEASE_HTTP_CODE): $RELEASE_INFO"
+                exit 1
+              fi
+              RELEASE_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name // empty')
+              ;;
+            404)
+              RELEASE_INFO='{}'
+              RELEASE_TAG=""
+              ;;
+            *)
+              echo "ERROR: Failed to query release $TAG (HTTP $RELEASE_HTTP_CODE). Response: $RELEASE_INFO"
+              exit 1
+              ;;
+          esac
 
           if [ -z "$RELEASE_TAG" ]; then
             RELEASE_BODY="IntelliJ/DevEco Studio 插件 $PLUGIN_VERSION。包含 IDE 243 和 261 的 macOS ARM64、macOS x64、Windows x64 安装包。"
@@ -104,11 +124,25 @@ jobs:
               --arg body "$RELEASE_BODY" \
               --arg commit "$COMMIT_SHA" \
               '{tag_name:$tag,name:$name,body:$body,prerelease:false,release_status:"latest",target_commitish:$commit}')
-            RELEASE_INFO=$(curl -sS -X POST \
+            RELEASE_RESPONSE=$(mktemp)
+            RELEASE_HTTP_CODE=$(curl -sS -o "$RELEASE_RESPONSE" -w "%{http_code}" -X POST \
               -H "Authorization: Bearer $TOKEN" \
               -H "Content-Type: application/json" \
               -d "$RELEASE_PAYLOAD" \
               "$API/repos/$OWNER/$REPO/releases")
+            RELEASE_INFO=$(cat "$RELEASE_RESPONSE")
+            rm -f "$RELEASE_RESPONSE"
+            case "$RELEASE_HTTP_CODE" in
+              2*) ;;
+              *)
+                echo "ERROR: Failed to create release $TAG (HTTP $RELEASE_HTTP_CODE). Response: $RELEASE_INFO"
+                exit 1
+                ;;
+            esac
+            if ! echo "$RELEASE_INFO" | jq -e 'type == "object"' >/dev/null 2>&1; then
+              echo "ERROR: GitCode returned a non-JSON create response (HTTP $RELEASE_HTTP_CODE): $RELEASE_INFO"
+              exit 1
+            fi
             RELEASE_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name // empty')
             if [ -z "$RELEASE_TAG" ]; then
               echo "ERROR: Failed to create release. Response: $RELEASE_INFO"
@@ -125,9 +159,23 @@ jobs:
             fi
 
             echo "Uploading $FILENAME ..."
-            UPLOAD_INFO=$(curl -sS \
+            UPLOAD_RESPONSE=$(mktemp)
+            UPLOAD_HTTP_CODE=$(curl -sS -o "$UPLOAD_RESPONSE" -w "%{http_code}" \
               -H "Authorization: Bearer $TOKEN" \
               "$API/repos/$OWNER/$REPO/releases/$TAG/upload_url?file_name=$FILENAME")
+            UPLOAD_INFO=$(cat "$UPLOAD_RESPONSE")
+            rm -f "$UPLOAD_RESPONSE"
+            case "$UPLOAD_HTTP_CODE" in
+              2*) ;;
+              *)
+                echo "ERROR: Failed to get upload URL for $FILENAME (HTTP $UPLOAD_HTTP_CODE). Response: $UPLOAD_INFO"
+                exit 1
+                ;;
+            esac
+            if ! echo "$UPLOAD_INFO" | jq -e '(type == "string") or (type == "object")' >/dev/null 2>&1; then
+              echo "ERROR: GitCode returned a non-JSON upload URL response (HTTP $UPLOAD_HTTP_CODE): $UPLOAD_INFO"
+              exit 1
+            fi
             OBS_URL=$(echo "$UPLOAD_INFO" | jq -r 'if type == "string" then . elif .url? then .url elif .upload_url? then .upload_url else empty end')
             if [ -z "$OBS_URL" ]; then
               echo "ERROR: No upload URL for $FILENAME. Response: $UPLOAD_INFO"
