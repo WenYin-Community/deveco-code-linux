@@ -33,7 +33,7 @@ stages:
               CLOSED=0
               SKIPPED=0
               NOW_EPOCH=$(date +%s)
-              TWO_HOURS=$((2 * 60 * 60))
+              SIX_HOURS=$((6 * 60 * 60))
 
               check_and_close() {
                 TYPE="$1"
@@ -76,8 +76,8 @@ stages:
                   fi
 
                   AGE=$((NOW_EPOCH - COMMENT_EPOCH))
-                  if [ "$AGE" -lt "$TWO_HOURS" ]; then
-                    echo "  Still within 2-hour window ($(( AGE / 60 ))m elapsed)"
+                  if [ "$AGE" -lt "$SIX_HOURS" ]; then
+                    echo "  Still within 6-hour window ($(( AGE / 60 ))m elapsed)"
                     SKIPPED=$((SKIPPED + 1))
                     continue
                   fi
@@ -85,7 +85,7 @@ stages:
                   echo "  Closing: compliance window expired ($KIND)"
 
                   {
-                    echo "此${KIND}已被自动关闭，因为未在 2 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
+                    echo "此${KIND}已被自动关闭，因为未在 6 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
                     echo ""
                     echo "欢迎按照规范重新提交${KIND}。"
                   } | GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null

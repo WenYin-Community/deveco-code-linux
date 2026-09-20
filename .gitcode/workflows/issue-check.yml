@@ -2,7 +2,7 @@ name: Issue Check
 
 on:
   schedule:
-    - cron: '0 0/5 * * * ?'
+    - cron: '0 0/30 * * * ?'
   workflow_dispatch:
     inputs:
       issue_number:
@@ -61,7 +61,7 @@ stages:
               if [ -n "$ISSUE_INPUT" ]; then
                 ISSUES_TO_CHECK="$ISSUE_INPUT"
               else
-                SINCE=$(date -u -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+                SINCE=$(date -u -d '60 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
                 echo "Polling for new issues since $SINCE"
 
                 RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
@@ -71,7 +71,7 @@ stages:
               import json, sys
               from datetime import datetime, timezone, timedelta
               data = json.load(sys.stdin)
-              cutoff = datetime.now(timezone.utc) - timedelta(minutes=10)
+              cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
               for issue in data:
                   if issue.get('pull_request') is not None:
                       continue
@@ -207,7 +207,7 @@ stages:
 
               如果 Issue 不合规，以以下内容开头：
               <!-- issue-compliance -->
-              然后说明需要修复的问题，并告知有 2 小时时间编辑 Issue，否则将被自动关闭。同时添加 waiting_on_author 标签。
+              然后说明需要修复的问题，并告知有 6 小时时间编辑 Issue，否则将被自动关闭。同时添加 waiting_on_author 标签。
 
               如果发现重复，附上可能重复的 Issue 链接。
 
@@ -222,7 +222,7 @@ stages:
               **需要修复的问题：**
               - [具体原因]
 
-              请在 **2 小时内**编辑此 Issue 以解决上述问题，否则将被自动关闭。
+              请在 **6 小时内**编辑此 Issue 以解决上述问题，否则将被自动关闭。
 
               [发现重复时，附加:]
               ---
