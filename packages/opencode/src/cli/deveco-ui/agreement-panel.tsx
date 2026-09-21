@@ -45,6 +45,16 @@ export function AgreementPanel(props: { onComplete?: () => void; maxHeight?: num
         props.onComplete?.()
         return
       }
+      // needsConsent is false — but the panel may be holding a stale snapshot
+      // from before the gate re-ran. Refetch to catch server-side state changes
+      // (e.g. upload transitioned to review_required) before forwarding to
+      // onComplete. Without this, the panel shows "Continue" while the gate
+      // expects the user to accept a new revision — a silent deadlock.
+      await refetch()
+      if (needsConsent()) {
+        setState("checked", false)
+        return
+      }
       props.onComplete?.()
     } catch (error) {
       setState("error", error instanceof Error ? error.message : t("account.update_failed"))

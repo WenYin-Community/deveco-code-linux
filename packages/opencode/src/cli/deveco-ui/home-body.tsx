@@ -80,15 +80,44 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
 
   const bodySlotHeight = createMemo(() => homeBodySlotRows(dimensions().height))
 
+  // Composite key describing the gate's current decision.
+  // Used with <Show keyed> to force-remount DevEcoOnboarding when the gate
+  // re-runs and decides a different destination step. Without this, the second
+  // gate run writes new initialStep/sessionExpired/initialRealName values that
+  // the already-mounted onboarding component never consumes, causing a deadlock
+  // where Continue loops back to the same panel forever.
+  // Every part of the key is written by `applyGate` on every run, so the key
+  // always describes the latest decision and never a leftover flag from an
+  // earlier one.
+  const devecoGateKey = createMemo(() =>
+    `${devecoInitialStep()}:${devecoRealName()}:${devecoSessionExpired()}:${devecoInitialAuthError() ?? ""}`,
+  )
+
   /**
-   * Finish the auth check: show entry screen (with optional session-expired flag)
-   * or the privacy agreement screen.
+   * Where the onboarding slot should go once the gate has run. Every exit of
+   * `runDevecoCheck` produces exactly one of these.
    */
-  const finishCheck = (sessionExpired: boolean, step: "entry" | "privacy" = "entry") => {
-    if (sessionExpired) setDevecoSessionExpired(true)
-    setDevecoInitialStep(step)
-    setDevecoReady(false)
+  type GateDestination = {
+    step: "ready" | "realname" | "entry" | "deveco-home" | "privacy" | "product-privacy"
+    sessionExpired?: boolean
+    authError?: string
+  }
+
+  /**
+   * Apply one gate decision. Every derived signal is written in a single
+   * synchronous block, including clearing the transient ones, so that:
+   *   - a re-run gate cannot leave a stale real-name / session-expired /
+   *     auth-error flag behind to shadow the new destination, and
+   *   - `devecoGateKey` changes exactly once per run, i.e. at most one remount.
+   */
+  const applyGate = (destination: GateDestination) => {
+    setDevecoInitialStep(destination.step === "ready" || destination.step === "realname" ? "entry" : destination.step)
+    setDevecoRealName(destination.step === "realname")
+    setDevecoSessionExpired(destination.step === "entry" && destination.sessionExpired === true)
+    setDevecoInitialAuthError(destination.step === "entry" ? destination.authError : undefined)
+    setAuthCanEnter(destination.step === "ready")
     setAuthCheckDone(true)
+    setDevecoReady(destination.step === "ready")
   }
 
   const runDevecoCheck = async () => {
@@ -105,33 +134,22 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       Object.keys(provider.models).length > 0,
     )
     if (hasThirdParty) {
-      if (!product.data?.accepted) {
-        setDevecoInitialStep("product-privacy")
-        setDevecoReady(false)
-        setAuthCheckDone(true)
-        return
-      }
-      setAuthCanEnter(true)
-      setAuthCheckDone(true)
-      setDevecoReady(true)
-      return
+      if (!product.data?.accepted) return applyGate({ step: "product-privacy" })
+      return applyGate({ step: "ready" })
     }
 
     if (hasDevecoOAuthEntry() && !product.data?.accepted) {
-      setDevecoInitialStep("product-privacy")
-      setDevecoReady(false)
-      setAuthCheckDone(true)
-      return
+      return applyGate({ step: "product-privacy" })
     }
 
     if (!hasDevecoOAuthEntry()) {
-      return finishCheck(false)
+      return applyGate({ step: "entry" })
     }
 
     const session = await devecoAuth.getSession()
 
     if (!session) {
-      return finishCheck(false)
+      return applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
     }
 
     let accessToken = session.accessToken
@@ -141,15 +159,18 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     if (validToken) {
       accessToken = validToken
     } else if (!accessToken) {
-      return finishCheck(await devecoAuth.isJwtExpired() === true)
+      return applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
     } else {
       // ensureValidToken() returned null but we have a cached access token.
       // This means a refresh was attempted and the server rejected the jwtToken.
       // Regardless of local exp, treat as session expired — the server no longer
       // trusts this token. Continuing would fall through to the real-name check
       // which also uses the same invalid jwtToken, creating a dead-end loop.
-      setDevecoInitialAuthError(t("account.refresh_session_failed"))
-      return finishCheck(await devecoAuth.isJwtExpired() === true)
+      return applyGate({
+        step: "entry",
+        sessionExpired: await devecoAuth.isJwtExpired() === true,
+        authError: t("account.refresh_session_failed"),
+      })
     }
 
     // Check real-name status from disk cache first; only call API if uncertain.
@@ -159,10 +180,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     }
     if (!isRealName) {
       logWarn("real-name verification failed, blocking entry", { service: "deveco" })
-      setDevecoRealName(true)
-      setDevecoReady(false)
-      setAuthCheckDone(true)
-      return
+      return applyGate({ step: "realname" })
     }
 
     const userId = session.userId || (await devecoAuth.getUserId()) || ""
@@ -171,27 +189,21 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     if (!devecoHomeChecked) {
       devecoHomeChecked = true
       if (!(await hasConfiguredDevEcoHome())) {
-        setDevecoInitialStep("deveco-home")
-        setDevecoReady(false)
-        setAuthCheckDone(true)
-        return
+        return applyGate({ step: "deveco-home" })
       }
     }
 
     const result = await sdk.client.global.retryAgreementUpload({ force: false })
-    if (result.data?.upload.state === "review_required") return finishCheck(false, "privacy")
+    if (result.data?.upload.state === "review_required") return applyGate({ step: "privacy" })
     if (result.error) {
       logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
     }
-    setAuthCanEnter(true)
-    setAuthCheckDone(true)
-    setDevecoReady(true)
+    applyGate({ step: "ready" })
 
     } catch (err) {
       if (err instanceof UnsupportedRegionError) {
         logError("runDevecoCheck blocked: unsupported account region", { service: "deveco" })
-        setDevecoInitialAuthError(CHINA_ACCOUNT_ONLY_MESSAGE)
-        return finishCheck(false)
+        return applyGate({ step: "entry", authError: CHINA_ACCOUNT_ONLY_MESSAGE })
       }
       // Any unhandled error must not
       // leave the UI stuck on "Checking login status…".  Fall back to the entry
@@ -199,7 +211,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       logError("runDevecoCheck failed", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
       // Even if an error occurred, check if JWT is expired so we can show the
       // appropriate "session expired" message instead of the generic login prompt.
-      finishCheck(await devecoAuth.isJwtExpired() === true)
+      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
     }
   }
 
@@ -346,18 +358,20 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
                   <pluginRuntime.Slot name="home_bottom" />
                 </box>
               </Show>
-              <Show when={devecoReady() === false}>
-                <DevEcoOnboarding
-                  onComplete={() => {
-                    devecoChecked = false
-                    void runDevecoCheck()
-                  }}
-                  bodySlotHeight={bodySlotHeight()}
-                  initialStep={devecoInitialStep()}
-                  sessionExpired={devecoSessionExpired()}
-                  initialRealName={devecoRealName()}
-                  initialAuthError={devecoInitialAuthError()}
-                />
+              <Show when={devecoReady() === false ? devecoGateKey() : undefined} keyed>
+                {(_) => (
+                  <DevEcoOnboarding
+                    onComplete={() => {
+                      devecoChecked = false
+                      void runDevecoCheck()
+                    }}
+                    bodySlotHeight={bodySlotHeight()}
+                    initialStep={devecoInitialStep()}
+                    sessionExpired={devecoSessionExpired()}
+                    initialRealName={devecoRealName()}
+                    initialAuthError={devecoInitialAuthError()}
+                  />
+                )}
               </Show>
             </box>
           </box>

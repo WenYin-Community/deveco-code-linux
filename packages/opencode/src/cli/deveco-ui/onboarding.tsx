@@ -13,6 +13,7 @@ import { DialogSelect } from '@opencode-ai/tui/ui/dialog-select';
 import { DialogPrompt } from '@opencode-ai/tui/ui/dialog-prompt';
 import { Link } from '@opencode-ai/tui/ui/link';
 import { useToast } from '@opencode-ai/tui/ui/toast';
+import { useBindings } from '@opencode-ai/tui/keymap';
 import { Spinner } from '@opencode-ai/tui/component/spinner';
 import open from 'open';
 import { devecoAuth, ACCESS_TOKEN_EXPIRES_MS, saveAuthToDisk } from '@/plugin/deveco';
@@ -300,7 +301,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const [providerQuery, setProviderQuery] = createSignal('');
   const [pid, setPid] = createSignal<string | null>(null);
   const [key, setKey] = createSignal('');
-  let input: TextareaRenderable | undefined;
+  const [keyInput, setKeyInput] = createSignal<TextareaRenderable | undefined>();
   let providerScroll: ScrollBoxRenderable | undefined;
 
   // DEVECO_HOME configuration step signals
@@ -586,7 +587,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
     if (!id) {
       return;
     }
-    const value = (input?.plainText ?? key()).trim();
+    const value = (keyInput()?.plainText ?? key()).trim();
     if (!value) {
       return;
     }
@@ -596,6 +597,27 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       toast.show({ variant: 'error', message: t("account.save_failed") });
     }).finally(() => setKeySubmitBusy(false));
   };
+
+  const clearApiKey = () => {
+    setKey('');
+    keyInput()?.clear();
+  };
+
+  // Ctrl+C clears a non-empty API key input and quits the application once it is empty. The
+  // global `app_exit` binding lives at the renderer root, so clearing has to be scoped to the
+  // focused textarea to take priority over it, mirroring the prompt's `prompt.clear` binding.
+  // Leaving the binding disabled on an empty input hands Ctrl+C back to `app_exit`.
+  useBindings(() => ({
+    target: keyInput,
+    enabled: step() === 'key' && !keySubmitBusy() && key().length > 0,
+    bindings: [
+      {
+        key: 'ctrl+c',
+        desc: t("account.clear_key"),
+        cmd: clearApiKey,
+      },
+    ],
+  }));
 
   const handleProviderSelect = async (providerId: string) => {
     const methods = sync.data.provider_auth[providerId] ?? DEFAULT_AUTH_METHODS;
@@ -850,18 +872,6 @@ if (st === 'entry') {
     if (st === 'key') {
       if (keySubmitBusy()) {
         evt.preventDefault();
-        if (evt.ctrl && evt.name === 'c') void exit();
-        return;
-      }
-      if (evt.ctrl && evt.name === 'c') {
-        if (key().length > 0) {
-          evt.preventDefault();
-          setKey('');
-          input?.clear();
-          return;
-        }
-        evt.preventDefault();
-        void exit();
         return;
       }
       if (evt.name === 'escape') {
@@ -1109,7 +1119,7 @@ if (st === 'entry') {
             >
               <textarea
                 focused={!keySubmitBusy()}
-                ref={(r: TextareaRenderable) => (input = r)}
+                ref={(r: TextareaRenderable) => setKeyInput(r)}
                 width='100%'
                 minHeight={1}
                 maxHeight={4}
@@ -1122,7 +1132,7 @@ if (st === 'entry') {
                 textColor={theme.text}
                 focusedTextColor={theme.text}
                 cursorColor={theme.text}
-                onContentChange={() => setKey(input?.plainText ?? '')}
+                onContentChange={() => setKey(keyInput()?.plainText ?? '')}
                 onSubmit={() => trySubmitApiKey()}
               />
             </box>
