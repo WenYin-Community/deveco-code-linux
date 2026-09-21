@@ -98,13 +98,11 @@ mock.module("@opencode-ai/tui/plugin/runtime", () => ({
 
 type UploadState = "not_signed" | "local" | "pending" | "review_required" | "uploaded"
 
-async function mount(options: { uploadState: UploadState; revision?: string; thirdParty?: boolean; accepted?: boolean }) {
-  env.session = true
-  const tmp = await tmpdir()
-  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
+type MountOptions = { uploadState: UploadState; revision?: string; thirdParty?: boolean; accepted?: boolean }
 
-  // Server-side agreement state. `accepted` flips on POST, mirroring the local
-  // acceptance the panel performs through the real endpoint.
+// Server-side agreement state. `accepted` flips on POST, mirroring the local
+// acceptance the panel performs through the real endpoint.
+function createAgreementFetcher(options: MountOptions) {
   const server = { accepted: options.accepted ?? false, retries: 0 }
   const details = () => ({
     version: "1",
@@ -131,11 +129,14 @@ async function mount(options: { uploadState: UploadState; revision?: string; thi
     }
     return json({})
   }) as typeof fetch
+  return { fetcher, server }
+}
 
-  const sync = {
+function createSyncData(options: MountOptions, tmpPath: string) {
+  return {
     status: "complete",
     ready: true,
-    path: { directory: tmp.path },
+    path: { directory: tmpPath },
     bootstrap: async () => {},
     data: {
       local_auth_error: undefined,
@@ -149,14 +150,16 @@ async function mount(options: { uploadState: UploadState; revision?: string; thi
       provider_next: { all: [], connected: [], default: {} },
     },
   } as unknown as ReturnType<typeof useSync>
+}
 
-  function Harness() {
+function makeHarness(tmpPath: string, fetcher: typeof fetch, sync: ReturnType<typeof useSync>) {
+  return function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
     const config = createTuiResolvedConfig()
     onCleanup(registerOpencodeKeymap(keymap, renderer, config))
     return (
-      <TestTuiContexts cwd={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
+      <TestTuiContexts cwd={tmpPath} paths={{ home: tmpPath, state: tmpPath, worktree: tmpPath }}>
         <OpencodeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={config}>
             <KVProvider>
@@ -187,21 +190,28 @@ async function mount(options: { uploadState: UploadState; revision?: string; thi
       </TestTuiContexts>
     )
   }
+}
 
-  const setup = await testRender(() => <Harness />, { width: 100, height: 40, kittyKeyboard: true })
+async function waitForFrame(setup: Awaited<ReturnType<typeof testRender>>, text: string) {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    if (frame.includes(text)) return frame
+    await Bun.sleep(10)
+  }
+  throw new Error(setup.captureCharFrame())
+}
+
+function makePanelHelpers(
+  setup: Awaited<ReturnType<typeof testRender>>,
+  server: { retries: number },
+  tmp: Awaited<ReturnType<typeof tmpdir>>,
+) {
   return {
     setup,
     retries: () => server.retries,
-    async frame(text: string) {
-      const deadline = Date.now() + 2000
-      while (Date.now() < deadline) {
-        await setup.renderOnce()
-        const frame = setup.captureCharFrame()
-        if (frame.includes(text)) return frame
-        await Bun.sleep(10)
-      }
-      throw new Error(setup.captureCharFrame())
-    },
+    frame: (text: string) => waitForFrame(setup, text),
     async settle() {
       await Bun.sleep(30)
       await setup.renderOnce()
@@ -212,6 +222,17 @@ async function mount(options: { uploadState: UploadState; revision?: string; thi
       await tmp[Symbol.asyncDispose]()
     },
   }
+}
+
+async function mount(options: MountOptions) {
+  env.session = true
+  const tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
+  const { fetcher, server } = createAgreementFetcher(options)
+  const sync = createSyncData(options, tmp.path)
+  const Harness = makeHarness(tmp.path, fetcher, sync)
+  const setup = await testRender(() => <Harness />, { width: 100, height: 40, kittyKeyboard: true })
+  return makePanelHelpers(setup, server, tmp)
 }
 
 test("accepting the product agreement advances to the DevEco Studio step instead of looping on the panel", async () => {

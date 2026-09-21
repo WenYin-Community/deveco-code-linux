@@ -24,40 +24,31 @@ mock.module("@opencode-ai/tui/context/local", () => ({
   useLocal: () => ({ model: { set: () => {} } }),
 }))
 
-async function mount() {
-  const tmp = await tmpdir()
-  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
-  const exits: string[] = []
-  const completions: string[] = []
-  const { fetch: fetcher } = createFetch(() => json({}))
-  const sync = {
-    data: {
-      provider: [],
-      config: {},
-      provider_next: { all: [], connected: [], default: {} },
-      provider_auth: {},
-    },
-    bootstrap: async () => {},
-  } as unknown as ReturnType<typeof useSync>
+// Mirror of the global "app_exit" binding registered by packages/tui/src/app.tsx:
+// Ctrl+C quits the application whenever the home prompt is not the focused input.
+function AppExitBinding() {
+  const exit = useExit()
+  useBindings(() => ({
+    mode: DEVECO_BASE_MODE,
+    bindings: [{ key: "ctrl+c", desc: "Exit the application", cmd: () => exit() }],
+  }))
+  return null
+}
 
-  // Mirror of the global "app_exit" binding registered by packages/tui/src/app.tsx:
-  // Ctrl+C quits the application whenever the home prompt is not the focused input.
-  function AppExitBinding() {
-    const exit = useExit()
-    useBindings(() => ({
-      mode: DEVECO_BASE_MODE,
-      bindings: [{ key: "ctrl+c", desc: "Exit the application", cmd: () => exit() }],
-    }))
-    return null
-  }
-
-  function Harness() {
+function makeHarness(
+  tmpPath: string,
+  fetcher: typeof fetch,
+  sync: ReturnType<typeof useSync>,
+  exits: string[],
+  completions: string[],
+) {
+  return function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
     const config = createTuiResolvedConfig()
     onCleanup(registerOpencodeKeymap(keymap, renderer, config))
     return (
-      <TestTuiContexts cwd={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
+      <TestTuiContexts cwd={tmpPath} paths={{ home: tmpPath, state: tmpPath, worktree: tmpPath }}>
         <OpencodeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={config}>
             <KVProvider>
@@ -83,22 +74,30 @@ async function mount() {
       </TestTuiContexts>
     )
   }
+}
 
-  const setup = await testRender(() => <Harness />, { width: 100, height: 36, kittyKeyboard: true })
+async function waitForFrame(setup: Awaited<ReturnType<typeof testRender>>, text: string) {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    if (frame.includes(text)) return frame
+    await Bun.sleep(10)
+  }
+  throw new Error(setup.captureCharFrame())
+}
+
+function makePanelHelpers(
+  setup: Awaited<ReturnType<typeof testRender>>,
+  exits: string[],
+  completions: string[],
+  tmp: Awaited<ReturnType<typeof tmpdir>>,
+) {
   return {
     setup,
     exits: () => exits.length,
     completions: () => completions.length,
-    async frame(text: string) {
-      const deadline = Date.now() + 2000
-      while (Date.now() < deadline) {
-        await setup.renderOnce()
-        const frame = setup.captureCharFrame()
-        if (frame.includes(text)) return frame
-        await Bun.sleep(10)
-      }
-      throw new Error(setup.captureCharFrame())
-    },
+    frame: (text: string) => waitForFrame(setup, text),
     async settle() {
       await Bun.sleep(20)
       await setup.renderOnce()
@@ -109,6 +108,26 @@ async function mount() {
       await tmp[Symbol.asyncDispose]()
     },
   }
+}
+
+async function mount() {
+  const tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
+  const exits: string[] = []
+  const completions: string[] = []
+  const { fetch: fetcher } = createFetch(() => json({}))
+  const sync = {
+    data: {
+      provider: [],
+      config: {},
+      provider_next: { all: [], connected: [], default: {} },
+      provider_auth: {},
+    },
+    bootstrap: async () => {},
+  } as unknown as ReturnType<typeof useSync>
+  const Harness = makeHarness(tmp.path, fetcher, sync, exits, completions)
+  const setup = await testRender(() => <Harness />, { width: 100, height: 36, kittyKeyboard: true })
+  return makePanelHelpers(setup, exits, completions, tmp)
 }
 
 test("ctrl+c clears a pasted API key instead of quitting the application", async () => {
