@@ -1272,7 +1272,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
   return {
     ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
+    variants: mapValues(ProviderTransform.reasoningVariants(model, base) ?? ProviderTransform.variants(base), (v) => v),
   }
 }
 

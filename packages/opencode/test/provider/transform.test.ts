@@ -2991,6 +2991,194 @@ describe("ProviderTransform.variants", () => {
     })
   })
 
+  test("glm-5.3 returns effort variants from catalog for openai-compatible", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }
+    const target = createMockModel({
+      id: "zhipuai/glm-5.3",
+      providerID: "zhipuai",
+      api: {
+        id: "glm-5.3",
+        url: "https://open.bigmodel.cn/api/paas/v4",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningEffort: "low" },
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    })
+  })
+
+  test("glm-5.3 returns effort variants from catalog for openrouter", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }
+    const target = createMockModel({
+      id: "openrouter/z-ai/glm-5.3",
+      providerID: "openrouter",
+      api: {
+        id: "z-ai/glm-5.3",
+        url: "https://openrouter.ai/api/v1",
+        npm: "@openrouter/ai-sdk-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoning: { effort: "low" } },
+      high: { reasoning: { effort: "high" } },
+      max: { reasoning: { effort: "max" } },
+    })
+  })
+
+  test("glm-5.3 returns effort variants from catalog for anthropic-compatible", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }
+    const target = createMockModel({
+      id: "zai-coding-plan/glm-5.3",
+      providerID: "zai-coding-plan",
+      api: {
+        id: "glm-5.3",
+        url: "https://api.z.ai/api/anthropic",
+        npm: "@ai-sdk/anthropic",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { effort: "low" },
+      high: { effort: "high" },
+      max: { effort: "max" },
+    })
+  })
+
+  test("glm-5.3 returns effort variants from catalog for bedrock", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }
+    const target = createMockModel({
+      id: "test/glm-5.3",
+      api: {
+        id: "glm-5.3",
+        url: "https://api.test.com",
+        npm: "@ai-sdk/amazon-bedrock",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningConfig: { type: "enabled", maxReasoningEffort: "low" } },
+      high: { reasoningConfig: { type: "enabled", maxReasoningEffort: "high" } },
+      max: { reasoningConfig: { type: "enabled", maxReasoningEffort: "max" } },
+    })
+  })
+
+  test("reasoningVariants returns undefined when catalog has no reasoning_options", () => {
+    const catalogModel = { reasoning_options: undefined }
+    const target = createMockModel({
+      id: "test/glm-5.3",
+      api: { id: "glm-5.3", url: "https://api.test.com", npm: "@ai-sdk/openai-compatible" },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toBeUndefined()
+  })
+
+  test("reasoningVariants returns undefined when catalog has empty reasoning_options array, letting variants() fall back (local deviation from upstream)", () => {
+    const catalogModel = { reasoning_options: [] }
+    const target = createMockModel({
+      id: "test/glm-5.3",
+      api: { id: "glm-5.3", url: "https://api.test.com", npm: "@ai-sdk/openai-compatible" },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toBeUndefined()
+  })
+
+  test("merge-gateway-ai-sdk-provider returns flat reasoningEffort for anthropic models", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "medium", "high"] }] }
+    const target = createMockModel({
+      id: "merge-gateway/anthropic/claude-sonnet-4-6",
+      api: {
+        id: "anthropic/claude-sonnet-4-6",
+        url: "https://api.merge-gateway.com",
+        npm: "merge-gateway-ai-sdk-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningEffort: "low" },
+      medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" },
+    })
+  })
+
+  test("merge-gateway-ai-sdk-provider returns flat reasoningEffort for non-anthropic models", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high"] }] }
+    const target = createMockModel({
+      id: "merge-gateway/openai/gpt-5",
+      api: {
+        id: "openai/gpt-5",
+        url: "https://api.merge-gateway.com",
+        npm: "merge-gateway-ai-sdk-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningEffort: "low" },
+      high: { reasoningEffort: "high" },
+    })
+  })
+
+  test("gitlab-ai-provider returns reasoningEffort for gpt family", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high"] }] }
+    const target = createMockModel({
+      id: "gitlab/gpt-5",
+      family: "gpt",
+      api: {
+        id: "gpt-5",
+        url: "https://cloud.gitlab.ai",
+        npm: "gitlab-ai-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningEffort: "low" },
+      high: { reasoningEffort: "high" },
+    })
+  })
+
+  test("gitlab-ai-provider returns adaptive thinking for claude family", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high"] }] }
+    const target = createMockModel({
+      id: "gitlab/claude-sonnet-4",
+      family: "claude",
+      api: {
+        id: "claude-sonnet-4",
+        url: "https://cloud.gitlab.ai",
+        npm: "gitlab-ai-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { thinking: { type: "adaptive", effort: "low" } },
+      high: { thinking: { type: "adaptive", effort: "high" } },
+    })
+  })
+
+  test("gitlab-ai-provider returns undefined for unsupported families", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high"] }] }
+    const target = createMockModel({
+      id: "gitlab/gemini-3-pro",
+      family: "gemini",
+      api: {
+        id: "gemini-3-pro",
+        url: "https://cloud.gitlab.ai",
+        npm: "gitlab-ai-provider",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({})
+  })
+
+  test("glm-5.3-flash also returns variants from catalog", () => {
+    const catalogModel = { reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }] }
+    const target = createMockModel({
+      id: "zhipuai/glm-5.3-flash",
+      providerID: "zhipuai",
+      api: {
+        id: "glm-5.3-flash",
+        url: "https://open.bigmodel.cn/api/paas/v4",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    expect(ProviderTransform.reasoningVariants(catalogModel as any, target)).toEqual({
+      low: { reasoningEffort: "low" },
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    })
+  })
+
   test("mistral models with reasoning support return variants", () => {
     const model = createMockModel({
       id: "mistral/mistral-small-latest",
