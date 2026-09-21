@@ -9,21 +9,13 @@ import { z } from "zod"
 // Re-export z for use in other modules
 export { z }
 
-// Memory type (simple string union, not a zod schema at module level)
-export type MemoryType = "user" | "feedback" | "project" | "reference"
-
-// Memory header interface (frontmatter metadata)
-export interface MemoryHeader {
-  name: string
-  description: string
-  type: MemoryType
-  created?: number
-  updated?: number
-  filepath?: string
-  mtime?: number
-  pin?: boolean
-  ttl?: number
-}
+import type {
+  MemoryType,
+  MemoryHeader,
+  MemoryFrontmatter,
+  MemoryIndexEntry,
+} from "@opencode-ai/core/memory"
+export type { MemoryType, MemoryHeader, MemoryFrontmatter, MemoryIndexEntry }
 
 // Full memory entry with content
 export interface Memory extends MemoryHeader {
@@ -77,14 +69,6 @@ export interface PendingExpiryFile {
 export interface RelevantMemory extends MemoryHeader {
   relevance?: number // 0-1 relevance score
   contentPreview?: string // First 200 chars of content for keyword matching
-}
-
-// Memory index entry (for MEMORY.md)
-export interface MemoryIndexEntry {
-  name: string
-  filename: string
-  description: string
-  type: MemoryType
 }
 
 // ============================================================================
@@ -161,17 +145,6 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   storageMode: "global",
   truncation: DEFAULT_TRUNCATION_CONFIG,
   expiry: DEFAULT_MEMORY_EXPIRY_CONFIG,
-}
-
-// Frontmatter structure for memory files
-export interface MemoryFrontmatter {
-  name: string
-  description: string
-  type: MemoryType
-  created?: number
-  updated?: number
-  pin?: boolean
-  ttl?: number
 }
 
 // Memory type descriptions with Why/How to apply structure

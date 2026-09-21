@@ -1,56 +1,34 @@
-import { expect, describe, it, beforeEach, afterEach } from "bun:test"
-import fs from "fs/promises"
+import { expect, describe, it } from "bun:test"
 import path from "path"
 import os from "os"
 import {
-  slugifyProjectID,
-  normalizeProjectPath,
   getMemoryPath,
   getGlobalDataDir,
   ENTRYPOINT_NAME,
   MEMORY_DIR_NAME,
 } from "../../../src/plugin/memory/util/path"
 
-describe("path utilities", () => {
-  it("slugifyProjectID produces consistent output", () => {
-    const slug1 = slugifyProjectID("/home/user/my-project")
-    const slug2 = slugifyProjectID("/home/user/my-project")
-    expect(slug1).toBe(slug2)
-  })
-
-  it("slugifyProjectID produces different output for different paths", () => {
-    const slug1 = slugifyProjectID("/home/user/project-a")
-    const slug2 = slugifyProjectID("/home/user/project-b")
-    expect(slug1).not.toBe(slug2)
-  })
-
-  it("normalizeProjectPath resolves and normalizes", () => {
-    const result = normalizeProjectPath("/home/user/../user/project")
-    expect(result).not.toContain("..")
-  })
-
-  it("normalizeProjectPath preserves 'default'", () => {
-    expect(normalizeProjectPath("default")).toBe("default")
-  })
-
-  it("getGlobalDataDir returns ~/.deveco", () => {
+describe("getGlobalDataDir", () => {
+  it("returns ~/.deveco", () => {
     const dir = getGlobalDataDir()
     expect(dir).toBe(path.join(os.homedir(), '.deveco'))
   })
+})
 
-  it("getMemoryPath global mode uses ~/.deveco", () => {
+describe("getMemoryPath", () => {
+  it("global mode uses ~/.deveco", () => {
     const memPath = getMemoryPath("/home/user/project", "/home/user/project", "global")
     expect(memPath).toContain(path.join(os.homedir(), '.deveco'))
     expect(memPath).toContain(MEMORY_DIR_NAME)
   })
 
-  it("getMemoryPath project mode uses .deveco", () => {
+  it("project mode uses .deveco", () => {
     const memPath = getMemoryPath("test", "/home/user/project", "project")
     expect(memPath).toContain(".deveco")
     expect(memPath).toContain(MEMORY_DIR_NAME)
   })
 
-  it("getMemoryPath custom dir overrides everything", () => {
+  it("custom dir overrides everything", () => {
     const memPath = getMemoryPath("test", "/home/user/project", "global", "/custom/path")
     expect(memPath).toBe("/custom/path")
   })

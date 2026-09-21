@@ -1,7 +1,17 @@
-import { createHash } from "node:crypto"
 import { open, readdir, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import { writeJsonAtomic } from "./persistence"
+import {
+  FRONTMATTER_MAX_LINES,
+  buildMemoryIndexContent,
+  isMemoryFile as isMemoryFilePath,
+  normalizeProjectPath,
+  parseFrontmatter as parseFrontmatterCore,
+  slugifyProjectID,
+  truncateMemoryIndexContent,
+  type MemoryFrontmatter,
+  type MemoryType,
+} from "@opencode-ai/core/memory"
 
 // The memory plugin owns this configuration file and reads it at plugin init.
 // ponytail: the TUI reads the plugin files straight off disk because it runs beside the
@@ -43,7 +53,7 @@ export const SETTINGS: Setting[] = [
 export type MemoryItem = {
   name: string
   description: string
-  type: string
+  type: MemoryType
   mtime: number
   file: string
 }
@@ -106,16 +116,6 @@ export async function writeSetting(scope: Scope, setting: Setting, value: boolea
   return file
 }
 
-// Same slug the plugin uses for global storage mode, see util/path.ts in the memory plugin.
-export function slugify(id: string) {
-  const hash = createHash("sha256").update(id).digest("hex").slice(0, 12)
-  const safe = id
-    .replace(/[\\/:]/g, "_")
-    .replace(/[^a-zA-Z0-9_-]/g, "")
-    .slice(0, 64)
-  return safe + "_" + hash
-}
-
 export function memoryDir(config: Config, scope: Scope) {
   const custom = read(config, "customMemoryDir") ?? read(config, "autoMemory.customMemoryDir")
   if (typeof custom === "string" && custom !== "") return custom
@@ -125,37 +125,8 @@ export function memoryDir(config: Config, scope: Scope) {
     scope.home,
     DATA_DIR_NAME,
     MEMORY_DIR_NAME,
-    slugify(path.resolve(scope.directory).replace(/\\/g, "/")),
+    slugifyProjectID(normalizeProjectPath(scope.directory)),
   )
-}
-
-function isMemoryFile(name: string) {
-  return name.endsWith(".md") && name !== ENTRYPOINT_NAME && !name.startsWith(".")
-}
-
-function unquote(value: string) {
-  // Same quote handling as the plugin's parseFrontmatterValue: both quote styles, same unescapes.
-  const quote = value.at(0)
-  if ((quote !== '"' && quote !== "'") || !value.endsWith(quote)) return value
-  return value.slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
-}
-
-// Same cap as the plugin's readFrontmatter: a longer frontmatter block parses as invalid.
-const FRONTMATTER_MAX_LINES = 30
-
-/** Parse the leading frontmatter block. Returns null for files the plugin would ignore. */
-export function parseFrontmatter(content: string): { header: Record<string, string>; body: string } | null {
-  // The closing fence must be followed by a newline, same as the plugin's regex.
-  const match = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/.exec(content)
-  if (!match) return null
-  const header: Record<string, string> = {}
-  for (const line of match[1].split("\n")) {
-    const separator = line.indexOf(":")
-    if (separator === -1) continue
-    header[line.slice(0, separator).trim()] = unquote(line.slice(separator + 1).trim())
-  }
-  if (!header.name || !header.description || !header.type) return null
-  return { header, body: match[2] }
 }
 
 // Read only the leading lines a frontmatter parse needs: stop at the line cap or EOF —
@@ -184,7 +155,7 @@ async function readHeadLines(file: string): Promise<string> {
 }
 
 export async function list(dir: string): Promise<MemoryItem[]> {
-  const files = (await readdir(dir).catch(() => [] as string[])).filter(isMemoryFile)
+  const files = (await readdir(dir).catch(() => [] as string[])).filter(isMemoryFilePath)
   // Worker pool caps concurrent open/stat FDs so many files can't exhaust descriptors and
   // silently drop entries. 32 is one FD per worker (read then stat never overlap), well under
   // even tight container ulimits (256); bump only if profiling shows I/O starved.
@@ -195,14 +166,14 @@ export async function list(dir: string): Promise<MemoryItem[]> {
       while (i < files.length) {
         const idx = i++
         const file = path.join(dir, files[idx])
-        const parsed = parseFrontmatter(await readHeadLines(file))
-        if (!parsed) continue
+        const parsed = parseFrontmatterCore(await readHeadLines(file))
+        if (!parsed.frontmatter) continue
         items.push({
-          name: parsed.header.name,
+          name: parsed.frontmatter.name,
           // Raw on purpose: the index writer must emit exactly what the plugin's readFrontmatter parsed.
-          description: parsed.header.description,
-          type: parsed.header.type,
-          mtime: await touched(parsed.header, file),
+          description: parsed.frontmatter.description,
+          type: parsed.frontmatter.type,
+          mtime: await touched(parsed.frontmatter, file),
           file,
         })
       }
@@ -217,8 +188,8 @@ export async function readItem(file: string) {
   const entry = Bun.file(file)
   if (!(await entry.exists())) return undefined
   const content = await entry.text()
-  const parsed = parseFrontmatter(content)
-  const header = parsed?.header ?? {}
+  const parsed = parseFrontmatterCore(content)
+  const header = parsed?.frontmatter ?? undefined
   return { header, body: parsed?.body ?? content, mtime: await touched(header, file) }
 }
 
@@ -228,9 +199,9 @@ export async function readItem(file: string) {
  * ponytail: keep this field order identical to the plugin or rebuildIndex() diverges from
  * updateEntrypoint() and the two writers produce different MEMORY.md orderings.
  */
-async function touched(header: Record<string, string>, file: string) {
-  const stamp = Number(header.updated ?? header.created)
-  if (Number.isFinite(stamp) && stamp > 0) return stamp
+async function touched(header: MemoryFrontmatter | undefined, file: string) {
+  const stamp = header?.updated ?? header?.created
+  if (stamp !== undefined && stamp > 0) return stamp
   return (await stat(file).catch(() => undefined))?.mtimeMs ?? 0
 }
 
@@ -251,39 +222,17 @@ export async function rebuildIndex(dir: string, config: Config = {}) {
 
   const entries = (await list(dir))
     .slice(0, maxFiles)
-    .map((item) => `- [${item.name}](${path.basename(item.file)}) ${item.description}`)
-  let content = [
-    "# Project Memory Index",
-    "",
-    "This file serves as an index to all project memories.",
-    "Memories are automatically loaded when relevant to the current context.",
-    "",
-    "## Memory Types",
-    "",
-    "- **user**: User preferences, role, and working style",
-    "- **feedback**: Behavioral guidance (do's and don'ts)",
-    "- **project**: Project context, goals, and technical decisions",
-    "- **reference**: External resources and documentation",
-    "",
-    "## Memories",
-    "",
-    ...entries,
-  ].join("\n")
-
-  const contentLines = content.split("\n")
-  if (contentLines.length > maxLines) content = contentLines.slice(0, maxLines).join("\n")
-  if (Buffer.byteLength(content, "utf-8") > maxBytes) {
-    // Truncate at line boundaries to avoid splitting multi-byte UTF-8 characters.
-    const kept: string[] = []
-    let totalBytes = 0
-    for (const line of content.split("\n")) {
-      const lineBytes = Buffer.byteLength(line + "\n", "utf-8")
-      if (totalBytes + lineBytes > maxBytes) break
-      kept.push(line)
-      totalBytes += lineBytes
-    }
-    content = kept.join("\n")
-  }
+    .map((item) => ({
+      name: item.name,
+      description: item.description,
+      type: item.type,
+      filename: path.basename(item.file),
+    }))
+  const content = truncateMemoryIndexContent(
+    buildMemoryIndexContent(entries),
+    maxLines,
+    maxBytes,
+  )
 
   await Bun.write(path.join(dir, ENTRYPOINT_NAME), content + "\n")
 }

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Memory } from "../../src/util/memory"
+import { slugifyProjectID } from "@opencode-ai/core/memory"
 
 const AUTO_MEMORY = Memory.SETTINGS[0]
 const SKILLS = Memory.SETTINGS.find((item) => item.key === "skills.enabled") as Memory.Setting
@@ -51,8 +52,8 @@ describe("memory directory naming", () => {
   // Golden values from the memory plugin's getMemoryPath: separators become _, other unsafe
   // characters are dropped, the id is truncated to 64 chars and suffixed with a sha256 prefix.
   test("matches the plugin slug", () => {
-    expect(Memory.slugify("/Users/dev/my project")).toBe("_Users_dev_myproject_5086e948293f")
-    expect(Memory.slugify("/" + "a".repeat(200))).toBe("_" + "a".repeat(63) + "_f7b36aaa140c")
+    expect(slugifyProjectID("/Users/dev/my project")).toBe("_Users_dev_myproject_5086e948293f")
+    expect(slugifyProjectID("/" + "a".repeat(200))).toBe("_" + "a".repeat(63) + "_f7b36aaa140c")
   })
 })
 
@@ -60,7 +61,7 @@ describe("memory files", () => {
   test("lists parsed entries newest first and skips files the plugin ignores", async () => {
     const value = await scope()
     const dir = Memory.memoryDir({}, value)
-    expect(dir).toBe(path.join(value.home, ".deveco", "memory", Memory.slugify(path.resolve(value.directory))))
+    expect(dir).toBe(path.join(value.home, ".deveco", "memory", slugifyProjectID(path.resolve(value.directory))))
     expect(Memory.memoryDir({ customMemoryDir: "/tmp/mem" }, value)).toBe("/tmp/mem")
     expect(Memory.memoryDir({ storageMode: "project" }, value)).toBe(path.join(value.directory, ".deveco", "memory"))
 
@@ -82,7 +83,7 @@ describe("memory files", () => {
     expect(items[0].description).toBe("line one\nline two")
 
     const detail = await Memory.readItem(items[0].file)
-    expect(detail?.header.type).toBe("project")
+    expect(detail?.header?.type).toBe("project")
     expect(detail?.mtime).toBe(5000)
     expect(detail?.body).toContain("body text")
 

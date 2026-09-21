@@ -274,7 +274,7 @@ function MemoryDetail(props: { file: string }) {
   function remove() {
     // Nothing left to delete: go back and let the list re-read the directory.
     if (unavailable()) return back()
-    const name = item()?.header.name ?? path.basename(props.file, ".md")
+    const name = item()?.header?.name ?? path.basename(props.file, ".md")
     return confirmDelete(
       {
         dialog,
@@ -299,16 +299,24 @@ function MemoryDetail(props: { file: string }) {
   // updated are epoch ms, and both get the date shown because the pair has to stay comparable.
   const meta = createMemo(() => {
     const detail = item()
-    const header = detail?.header ?? {}
-    const rows = Object.entries(header)
-      .map(([key, value]) => ({ key, value: showStamp(key, value) }))
-      .filter((row) => row.key !== "name" && row.value !== "")
+    const header = detail?.header
+    const rows: { key: string; value: string }[] = header
+      ? [
+          { key: "description", value: String(header.description) },
+          { key: "type", value: String(header.type) },
+          ...(header.created ? [{ key: "created", value: showStamp("created", String(header.created)) }] : []),
+          ...(header.updated ? [{ key: "updated", value: showStamp("updated", String(header.updated)) }] : []),
+          ...(header.pin ? [{ key: "pin", value: String(header.pin) }] : []),
+          ...(header.ttl !== undefined ? [{ key: "ttl", value: String(header.ttl) }] : []),
+        ]
+      : []
+    const filtered = rows.filter((row) => row.key !== "name" && row.value !== "")
     // A memory written before the plugin stamped files only has the mtime left.
-    if (!header.created && !header.updated && detail?.mtime) {
-      rows.push({ key: "time", value: Locale.datetime(detail.mtime) })
+    if (!header?.created && !header?.updated && detail?.mtime) {
+      filtered.push({ key: "time", value: Locale.datetime(detail.mtime) })
     }
-    const width = rows.reduce((max, row) => Math.max(max, row.key.length), 0) + 1
-    return rows.map((row) => ({ ...row, key: row.key.padEnd(width) }))
+    const width = filtered.reduce((max, row) => Math.max(max, row.key.length), 0) + 1
+    return filtered.map((row) => ({ ...row, key: row.key.padEnd(width) }))
   })
 
   function showStamp(key: string, value: string) {
@@ -334,7 +342,7 @@ function MemoryDetail(props: { file: string }) {
     >
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          {t("dialog.memory_content_title", { name: item()?.header.name ?? path.basename(props.file, ".md") })}
+          {t("dialog.memory_content_title", { name: item()?.header?.name ?? path.basename(props.file, ".md") })}
         </text>
         <text fg={theme.textMuted} onMouseUp={afterEvent(back)}>
           {t("dialog.esc")}

@@ -28,8 +28,9 @@ import {
   parseFrontmatter,
   createMemoryContent,
   readFrontmatter,
-  formatMemoryIndexEntry,
   isMemoryFile,
+  buildMemoryIndexContent,
+  truncateMemoryIndexContent,
   ENTRYPOINT_NAME,
 } from "../util/path"
 import { logger } from "../util/logger"
@@ -372,56 +373,11 @@ export class MemoryStorage {
    */
   private async writeEntrypoint(entries: MemoryIndexEntry[]): Promise<void> {
     const entrypointPath = getEntrypointPath(this.memoryPath)
-    const lines = [
-      "# Project Memory Index",
-      "",
-      "This file serves as an index to all project memories.",
-      "Memories are automatically loaded when relevant to the current context.",
-      "",
-      "## Memory Types",
-      "",
-      "- **user**: User preferences, role, and working style",
-      "- **feedback**: Behavioral guidance (do's and don'ts)",
-      "- **project**: Project context, goals, and technical decisions",
-      "- **reference**: External resources and documentation",
-      "",
-      "## Memories",
-      "",
-    ]
-
-    for (const entry of entries) {
-      lines.push(
-        formatMemoryIndexEntry({
-          name: entry.name,
-          description: entry.description,
-          type: entry.type,
-          filepath: entry.filename,
-        }),
-      )
-    }
-
-    let content = lines.join("\n")
-
-    // Truncate if exceeds limits
-    const contentLines = content.split("\n")
-    if (contentLines.length > this.config.maxEntrypointLines) {
-      content = contentLines.slice(0, this.config.maxEntrypointLines).join("\n")
-    }
-    if (Buffer.byteLength(content, "utf-8") > this.config.maxEntrypointBytes) {
-      // Truncate at line boundaries to avoid splitting multi-byte UTF-8 characters
-      const maxBytes = this.config.maxEntrypointBytes
-      const allLines = content.split("\n")
-      const kept: string[] = []
-      let totalBytes = 0
-      for (const line of allLines) {
-        const lineBytes = Buffer.byteLength(line + "\n", "utf-8")
-        if (totalBytes + lineBytes > maxBytes) { break }
-        kept.push(line)
-        totalBytes += lineBytes
-      }
-      content = kept.join("\n")
-    }
-
+    const content = truncateMemoryIndexContent(
+      buildMemoryIndexContent(entries),
+      this.config.maxEntrypointLines,
+      this.config.maxEntrypointBytes,
+    )
     await fs.writeFile(entrypointPath, content + "\n", "utf-8")
   }
 
