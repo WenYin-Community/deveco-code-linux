@@ -89,7 +89,7 @@ async function getPendingExpiryNotice(state: PluginState, sessionID?: string): P
     // This notice is what produces the expiry question, so mark the session: only its next
     // matching `question` call gets the real memory bodies attached as `details`.
     state.pendingExpiryNotice.add(sessionID || 'default');
-    return `\n\n---\n⚠️ **Pending expiry**: ${count} memories marked for deletion.\n\n**You MUST immediately use the \`question\` tool to present the user with interactive approve/reject choices.** Do not just describe the expiry passively — ask the user to decide: "确认删除" (call \`dream-approve\`) or "保留" (call \`dream-reject\`). Ask with the count only: do not list memory names, ages or bodies — the prompt itself shows the details.`;
+    return `\n\n---\n⚠️ **Pending expiry**: ${count} memories marked for deletion.\n\n**You MUST immediately use the \`question\` tool to present the user with interactive approve/reject choices.** Do not just describe the expiry passively — ask the user to decide: "确认删除" (call \`dream-approve\`) or "保留" (call \`dream-reject\`). Ask with the count only: do not list memory names, ages or bodies — the prompt itself shows the details.\n\n**IMPORTANT:** Start the question text with the exact marker \`[pending-expiry-confirm]\` so the details panel can be attached to the right question.`;
 }
 
 /**
@@ -104,10 +104,9 @@ export async function readPendingExpiryDetails(storage: MemoryStorage): Promise<
     if (!pending || pending.pendingDeletions.length === 0) return null;
     // Sequence numbers on each heading mark file boundaries clearer than a single thematic-break
     // line, which read as splitting one file rather than separating two.
-    const sections = [];
-    for (const [i, d] of pending.pendingDeletions.entries()) {
-        sections.push(formatExpirySection(i + 1, d.name, await storage.read(d.name)));
-    }
+    const sections = (await Promise.all(
+        pending.pendingDeletions.map((d, i) => storage.read(d.name).then(memory => formatExpirySection(i + 1, d.name, memory))),
+    ));
     // Sections are split by the TUI on the sentinel so each pending memory renders in its
     // own framed block — a full border marks file boundaries where a single rule line read
     // as splitting one file. The sentinel is an HTML comment so it renders as nothing if it
@@ -146,10 +145,10 @@ interface ExpiryQuestion {
     details?: string
 }
 
-/** Only the expiry prompt gets the details panel, so match its wording rather than any deletion. */
+/** Match the exact marker the notice instructs the model to include, so only the real expiry
+ *  question gets the details panel — never an unrelated "delete this file?" prompt. */
 function isExpiryQuestion(question: ExpiryQuestion) {
-    const text = [question.question, question.header, ...(question.options ?? []).map((o) => o.label)].join(' ').toLowerCase();
-    return /expiry|expire|dream-approve|dream-reject|delete|deletion|memory|memories|删除|过期|保留|记忆/.test(text);
+    return question.question?.includes('[pending-expiry-confirm]') ?? false
 }
 
 async function showPendingExpiryToast(state: PluginState): Promise<void> {
@@ -947,7 +946,11 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
         'tool.execute.before': async (input, output) => {
             if (input.tool !== 'question' || !state.expiryConfig?.enabled) return;
             const sid = input.sessionID || 'default';
+            // Only the flagged session's next question call is eligible, then clear the flag
+            // unconditionally so dismiss / pre-notice /memory clear / non-matching questions
+            // cannot leak the flag and re-attach stale details on later calls (see #3).
             if (!state.pendingExpiryNotice.has(sid)) return;
+            state.pendingExpiryNotice.delete(sid);
             const questions = (output.args?.questions as ExpiryQuestion[] | undefined) ?? [];
             const target = questions.find(isExpiryQuestion);
             if (!target) return;
@@ -955,7 +958,6 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                 const details = await readPendingExpiryDetails(state.storage);
                 if (!details) return;
                 target.details = details;
-                state.pendingExpiryNotice.delete(sid);
             } catch (e) {
                 logger.error('[Expiry]', 'Failed to attach pending expiry details:', e instanceof Error ? e.message : String(e));
             }

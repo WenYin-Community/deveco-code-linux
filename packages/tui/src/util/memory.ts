@@ -142,9 +142,6 @@ function unquote(value: string) {
 
 // Same cap as the plugin's readFrontmatter: a longer frontmatter block parses as invalid.
 const FRONTMATTER_MAX_LINES = 30
-// Safety bound: a body with very few newlines (a huge single-line dump) would read to EOF
-// otherwise, since the line cap never fires. Generous vs any real frontmatter; bounds the scan.
-const FRONTMATTER_MAX_BYTES = 1 << 16
 
 /** Parse the leading frontmatter block. Returns null for files the plugin would ignore. */
 export function parseFrontmatter(content: string): { header: Record<string, string>; body: string } | null {
@@ -161,9 +158,9 @@ export function parseFrontmatter(content: string): { header: Record<string, stri
   return { header, body: match[2] }
 }
 
-// Read only the leading lines a frontmatter parse needs: stop at the line cap, the byte
-// ceiling, or EOF — whichever first. Same line semantics as the plugin's
-// content.split("\n").slice(0, max), without reading the whole file first.
+// Read only the leading lines a frontmatter parse needs: stop at the line cap or EOF —
+// same semantics as the plugin's content.split("\n").slice(0, max), without reading the
+// whole file first.
 async function readHeadLines(file: string): Promise<string> {
   let handle
   try {
@@ -172,7 +169,6 @@ async function readHeadLines(file: string): Promise<string> {
     const chunk = Buffer.alloc(4096)
     let pos = 0
     for (;;) {
-      if (pos >= FRONTMATTER_MAX_BYTES) break
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, pos)
       if (bytesRead === 0) break
       buf += chunk.subarray(0, bytesRead).toString("utf-8")
@@ -227,11 +223,13 @@ export async function readItem(file: string) {
 }
 
 /**
- * The frontmatter stamp wins over the file mtime, same rule as the plugin's own listing. The
- * created stamp is preferred so the list date stays stable across edits of the same memory.
+ * The frontmatter stamp wins over the file mtime, same rule as the plugin's readFrontmatter:
+ * updated first (so the list reflects the most recent edit), then created, then fs mtime.
+ * ponytail: keep this field order identical to the plugin or rebuildIndex() diverges from
+ * updateEntrypoint() and the two writers produce different MEMORY.md orderings.
  */
 async function touched(header: Record<string, string>, file: string) {
-  const stamp = Number(header.created ?? header.updated)
+  const stamp = Number(header.updated ?? header.created)
   if (Number.isFinite(stamp) && stamp > 0) return stamp
   return (await stat(file).catch(() => undefined))?.mtimeMs ?? 0
 }
@@ -295,3 +293,5 @@ export async function remove(file: string, config: Config = {}) {
   await rm(file, { force: true })
   await rebuildIndex(path.dirname(file), config)
 }
+
+export * as Memory from "./memory"

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import * as Memory from "../../src/util/memory"
+import { Memory } from "../../src/util/memory"
 
 const AUTO_MEMORY = Memory.SETTINGS[0]
 const SKILLS = Memory.SETTINGS.find((item) => item.key === "skills.enabled") as Memory.Setting
