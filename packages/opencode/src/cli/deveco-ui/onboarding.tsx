@@ -253,7 +253,7 @@ async function runProviderOAuth(
   }
 }
 
-export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean; initialAuthError?: string }) {
+export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean; initialAuthError?: string; reviewRequired?: boolean }) {
   const { theme } = useTheme();
   const { t } = useI18n();
   const sync = useSync();
@@ -896,7 +896,13 @@ if (st === 'entry') {
       justifyContent='center'
     >
       <Show when={step() === 'privacy' || step() === 'product-privacy'}>
-        <AgreementPanel maxHeight={props.bodySlotHeight} onComplete={() => step() === 'product-privacy' ? continueSetup() : props.onComplete()} />
+        <OnboardingContent>
+          <AgreementPanel
+            maxHeight={props.bodySlotHeight}
+            review={props.reviewRequired}
+            onComplete={() => step() === 'product-privacy' ? continueSetup() : props.onComplete()}
+          />
+        </OnboardingContent>
       </Show>
       <Show when={step() === 'entry'}>
         <OnboardingContent>

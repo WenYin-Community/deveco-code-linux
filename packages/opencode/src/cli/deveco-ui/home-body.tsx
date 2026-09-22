@@ -13,6 +13,7 @@ import { useI18n } from "@opencode-ai/tui/i18n"
  * upstream (generic) Home layout.
  */
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -52,8 +53,18 @@ import { logWarn, logError } from "@/plugin/deveco/log"
 // TODO: what is the best way to do this?
 let once = false
 
-// Cache DEVECO_HOME check — only check on initial startup, skip on /new
+// Cache DEVECO_HOME check — only check on initial startup, skip on /new.
+// Deliberately module-level: the flag has to outlive a Home remount.
 let devecoHomeChecked = false
+
+/**
+ * Reset the sticky DEVECO_HOME check. The flag is process-global, so a test
+ * process that mounts several Home bodies would otherwise let the first case
+ * consume the check and silently skip it for every later one.
+ */
+export function resetDevecoHomeCheck() {
+  devecoHomeChecked = false
+}
 
 const placeholder = {
   normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
@@ -77,6 +88,13 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   let devecoChecked = false
   const [devecoRealName, setDevecoRealName] = createSignal(false)
   const [devecoInitialAuthError, setDevecoInitialAuthError] = createSignal<string | undefined>(undefined)
+  // Required service-agreement revision the latest gate run observed, or
+  // `undefined` when no review is outstanding. `step === "privacy"` already
+  // implies a review is required, so the revision is what actually differs
+  // between two consecutive privacy decisions — e.g. when the background
+  // agreement sync pushes a newer required revision while the panel is already
+  // on screen. That difference is what has to force a remount.
+  const [devecoReviewRevision, setDevecoReviewRevision] = createSignal<string | undefined>(undefined)
 
   const bodySlotHeight = createMemo(() => homeBodySlotRows(dimensions().height))
 
@@ -88,9 +106,12 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   // where Continue loops back to the same panel forever.
   // Every part of the key is written by `applyGate` on every run, so the key
   // always describes the latest decision and never a leftover flag from an
-  // earlier one.
+  // earlier one. The consent revision is part of it because a `privacy` step
+  // can be re-decided as `privacy`: without that field the key would be
+  // unchanged, the panel would keep its stale "accepted" snapshot and the
+  // Continue click would appear to do nothing.
   const devecoGateKey = createMemo(() =>
-    `${devecoInitialStep()}:${devecoRealName()}:${devecoSessionExpired()}:${devecoInitialAuthError() ?? ""}`,
+    `${devecoInitialStep()}:${devecoRealName()}:${devecoSessionExpired()}:${devecoInitialAuthError() ?? ""}:${devecoReviewRevision() ?? ""}`,
   )
 
   /**
@@ -101,23 +122,30 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     step: "ready" | "realname" | "entry" | "deveco-home" | "privacy" | "product-privacy"
     sessionExpired?: boolean
     authError?: string
+    reviewRevision?: string
   }
 
   /**
    * Apply one gate decision. Every derived signal is written in a single
-   * synchronous block, including clearing the transient ones, so that:
+   * `batch` block, including clearing the transient ones, so that:
    *   - a re-run gate cannot leave a stale real-name / session-expired /
    *     auth-error flag behind to shadow the new destination, and
    *   - `devecoGateKey` changes exactly once per run, i.e. at most one remount.
+   * The `batch` matters: outside it each setter flushes the derived memos on
+   * its own, so the keyed `<Show>` would remount on every intermediate value
+   * and each of those throwaway instances would re-run its own `onMount` work.
    */
   const applyGate = (destination: GateDestination) => {
-    setDevecoInitialStep(destination.step === "ready" || destination.step === "realname" ? "entry" : destination.step)
-    setDevecoRealName(destination.step === "realname")
-    setDevecoSessionExpired(destination.step === "entry" && destination.sessionExpired === true)
-    setDevecoInitialAuthError(destination.step === "entry" ? destination.authError : undefined)
-    setAuthCanEnter(destination.step === "ready")
-    setAuthCheckDone(true)
-    setDevecoReady(destination.step === "ready")
+    batch(() => {
+      setDevecoInitialStep(destination.step === "ready" || destination.step === "realname" ? "entry" : destination.step)
+      setDevecoRealName(destination.step === "realname")
+      setDevecoSessionExpired(destination.step === "entry" && destination.sessionExpired === true)
+      setDevecoInitialAuthError(destination.step === "entry" ? destination.authError : undefined)
+      setDevecoReviewRevision(destination.step === "privacy" ? destination.reviewRevision : undefined)
+      setAuthCanEnter(destination.step === "ready")
+      setAuthCheckDone(true)
+      setDevecoReady(destination.step === "ready")
+    })
   }
 
   const runDevecoCheck = async () => {
@@ -149,6 +177,11 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     const session = await devecoAuth.getSession()
 
     if (!session) {
+      // An OAuth entry exists but no session was stored, so the session was dropped
+      // rather than never created — report it the same way the `!accessToken` branch
+      // below does instead of showing the generic sign-in prompt. The earlier
+      // `!hasDevecoOAuthEntry()` exit deliberately does not do this: with no entry
+      // there is no session that could have expired.
       return applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
     }
 
@@ -194,7 +227,8 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     }
 
     const result = await sdk.client.global.retryAgreementUpload({ force: false })
-    if (result.data?.upload.state === "review_required") return applyGate({ step: "privacy" })
+    if (result.data?.upload.state === "review_required")
+      return applyGate({ step: "privacy", reviewRevision: result.data.upload.revision })
     if (result.error) {
       logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
     }
@@ -344,10 +378,13 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
                     <pluginRuntime.Slot name="home_prompt" mode="replace">
                       <Prompt
                         ref={(r) => {
-                          if (r) {
-                            prompt = r
-                            promptRef.set(r)
-                          }
+                          // `Prompt` calls this with `undefined` from its own cleanup, and
+                          // `PromptRefProvider` outlives it. Dropping the falsy value would
+                          // leave a detached prompt behind: `app.exitConfirm` would then arm
+                          // that invisible prompt instead of exiting, and `app_exit` stays
+                          // disabled while the stale prompt looks focused with text.
+                          prompt = r
+                          promptRef.set(r)
                         }}
                         hint={Hint}
                         placeholders={placeholder}
@@ -370,6 +407,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
                     sessionExpired={devecoSessionExpired()}
                     initialRealName={devecoRealName()}
                     initialAuthError={devecoInitialAuthError()}
+                    reviewRequired={devecoReviewRevision() !== undefined}
                   />
                 )}
               </Show>

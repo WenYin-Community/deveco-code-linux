@@ -20,7 +20,7 @@ import { PromptRefProvider } from "@opencode-ai/tui/context/prompt"
 import { RouteProvider } from "@opencode-ai/tui/context/route"
 import { DialogProvider } from "@opencode-ai/tui/ui/dialog"
 import { ToastProvider } from "@opencode-ai/tui/ui/toast"
-import { DevEcoHomeBody } from "@/cli/deveco-ui/home-body"
+import { DevEcoHomeBody, resetDevecoHomeCheck } from "@/cli/deveco-ui/home-body"
 
 /**
  * Gate wiring under test (home-body ↔ onboarding):
@@ -98,12 +98,30 @@ mock.module("@opencode-ai/tui/plugin/runtime", () => ({
 
 type UploadState = "not_signed" | "local" | "pending" | "review_required" | "uploaded"
 
-type MountOptions = { uploadState: UploadState; revision?: string; thirdParty?: boolean; accepted?: boolean }
+type MountOptions = {
+  uploadState: UploadState
+  revision?: string
+  thirdParty?: boolean
+  accepted?: boolean
+  env?: Partial<typeof env>
+}
 
 // Server-side agreement state. `accepted` flips on POST, mirroring the local
 // acceptance the panel performs through the real endpoint.
+//
+// `uploadState`/`revision` model what a plain read reports. `retryState`/
+// `retryRevision` model what the gate's upload retry discovers — the retry is the
+// call that pushes a newly required revision into the local report, so it is
+// allowed to disagree with the last read and it updates it.
 function createAgreementFetcher(options: MountOptions) {
-  const server = { accepted: options.accepted ?? false, retries: 0 }
+  const server = {
+    accepted: options.accepted ?? false,
+    uploadState: options.uploadState,
+    revision: options.revision,
+    retryState: options.uploadState,
+    retryRevision: options.revision,
+    retries: 0,
+  }
   const details = () => ({
     version: "1",
     termsUrl: "https://example.com/terms",
@@ -111,8 +129,8 @@ function createAgreementFetcher(options: MountOptions) {
     acceptedAt: server.accepted ? 1 : undefined,
     accepted: server.accepted,
     upload: {
-      state: server.accepted ? options.uploadState : ("not_signed" as UploadState),
-      revision: options.revision,
+      state: server.accepted ? server.uploadState : ("not_signed" as UploadState),
+      revision: server.revision,
     },
   })
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -125,7 +143,9 @@ function createAgreementFetcher(options: MountOptions) {
     }
     if (path === "/global/product-agreement/retry") {
       server.retries++
-      return json({ accepted: server.accepted, upload: { state: options.uploadState, revision: options.revision } })
+      server.uploadState = server.retryState
+      server.revision = server.retryRevision
+      return json({ accepted: server.accepted, upload: { state: server.retryState, revision: server.retryRevision } })
     }
     return json({})
   }) as typeof fetch
@@ -205,11 +225,12 @@ async function waitForFrame(setup: Awaited<ReturnType<typeof testRender>>, text:
 
 function makePanelHelpers(
   setup: Awaited<ReturnType<typeof testRender>>,
-  server: { retries: number },
+  server: ReturnType<typeof createAgreementFetcher>["server"],
   tmp: Awaited<ReturnType<typeof tmpdir>>,
 ) {
   return {
     setup,
+    server,
     retries: () => server.retries,
     frame: (text: string) => waitForFrame(setup, text),
     async settle() {
@@ -225,7 +246,11 @@ function makePanelHelpers(
 }
 
 async function mount(options: MountOptions) {
-  env.session = true
+  // Reset every field, not just the one a case happens to touch: the harness shares
+  // one module-level `env` across cases, so a leftover `realName = false` would fail
+  // the next case for the wrong reason. Same for the sticky DEVECO_HOME flag.
+  Object.assign(env, { studioConfigured: false, realName: true, session: true }, options.env)
+  resetDevecoHomeCheck()
   const tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
   const { fetcher, server } = createAgreementFetcher(options)
@@ -236,7 +261,6 @@ async function mount(options: MountOptions) {
 }
 
 test("accepting the product agreement advances to the DevEco Studio step instead of looping on the panel", async () => {
-  env.studioConfigured = false
   await using panel = await mount({ uploadState: "local" })
 
   // First gate run: the agreement is not accepted yet, so the panel offers consent.
@@ -255,9 +279,12 @@ test("accepting the product agreement advances to the DevEco Studio step instead
   expect(next).not.toContain("Agreements and privacy")
 })
 
-test("a re-run gate that needs a new revision keeps consent reachable", async () => {
-  env.studioConfigured = true
-  await using panel = await mount({ uploadState: "review_required", revision: "2" })
+test("accepting a revision the server has not cleared keeps the consent screen up", async () => {
+  await using panel = await mount({
+    uploadState: "review_required",
+    revision: "2",
+    env: { studioConfigured: true },
+  })
 
   const first = await panel.frame("Agreements and privacy")
   expect(first).toContain("I have read and agree")
@@ -266,20 +293,52 @@ test("a re-run gate that needs a new revision keeps consent reachable", async ()
   await panel.frame("[✓]")
   panel.setup.mockInput.pressEnter()
 
-  // The re-run gate lands on the privacy step with a pending service revision.
-  // A fresh panel starts unchecked, so "[ ]" can only appear after the remount —
-  // waiting on the checkbox copy would match the panel that is still on screen.
+  // Accepting revision 2 does not clear the requirement — the server still asks for
+  // a review. The panel re-reads after the POST and puts the consent screen back up
+  // rather than forwarding a completion the gate would immediately have to undo. That
+  // read starts unchecked, so "[ ]" can only appear after it happened.
   const next = await panel.frame("[ ]")
   expect(next).toContain("I have read and agree")
   expect(next).toContain("Space: check · Enter: agree and continue")
   expect(next).not.toContain("Continue")
-  expect(panel.retries()).toBeGreaterThan(0)
+})
+
+test("a revision published while the panel is on screen still reaches it", async () => {
+  // The panel is mounted and offering Continue, because its snapshot was taken when
+  // revision 2 was accepted. The gate's own upload retry then discovers revision 3 and
+  // re-decides `privacy` — the same step as before. Without the gate's consent revision
+  // in the remount key the key is unchanged, nothing remounts, and the Continue click
+  // leaves the panel showing exactly what it showed before.
+  await using panel = await mount({
+    uploadState: "review_required",
+    revision: "2",
+    accepted: true,
+    env: { studioConfigured: true },
+  })
+
+  const first = await panel.frame("I have read and agree")
+  expect(first).toContain("Space: check · Enter: agree and continue")
+  // The gate's verdict reaches the panel: it renders as a re-review, not a first signing.
+  expect(first).toContain("Agreements updated")
+
+  // Revision 2 is accepted locally, so a plain read no longer asks for consent. The
+  // next upload retry is what discovers revision 3.
+  panel.server.uploadState = "pending"
+  panel.server.retryState = "review_required"
+  panel.server.retryRevision = "3"
+
+  await panel.setup.mockInput.typeText(" ")
+  await panel.frame("[✓]")
+  panel.setup.mockInput.pressEnter()
+
+  // A remounted panel starts unchecked, so "[ ]" can only come from a fresh instance.
+  const next = await panel.frame("[ ]")
+  expect(next).toContain("I have read and agree")
+  expect(next).not.toContain("Continue")
 })
 
 test("a re-run gate that blocks on real-name verification shows the real-name step", async () => {
-  env.studioConfigured = false
-  env.realName = false
-  await using panel = await mount({ uploadState: "local" })
+  await using panel = await mount({ uploadState: "local", env: { realName: false } })
 
   const first = await panel.frame("Agreements and privacy")
   expect(first).toContain("I have read and agree")
@@ -292,11 +351,9 @@ test("a re-run gate that blocks on real-name verification shows the real-name st
   // real-name decision has to arrive with a fresh instance.
   const next = await panel.frame("Real-name authentication required")
   expect(next).not.toContain("Agreements and privacy")
-  env.realName = true
 })
 
 test("third-party provider users still reach the ready state without an onboarding detour", async () => {
-  env.studioConfigured = false
   await using panel = await mount({ uploadState: "local", thirdParty: true })
 
   const first = await panel.frame("Agreements and privacy")
@@ -317,9 +374,11 @@ test("a later gate decision is not shadowed by the real-name flag of an earlier 
   // onboarding only reads while mounting. Once the user completes real-name in
   // the browser and the gate re-runs, the spent flag must not drag the UI back
   // to the real-name page — that would be the same deadlock in a new costume.
-  env.realName = false
-  env.studioConfigured = true
-  await using panel = await mount({ uploadState: "local", accepted: true })
+  await using panel = await mount({
+    uploadState: "local",
+    accepted: true,
+    env: { realName: false, studioConfigured: true },
+  })
 
   await panel.frame("Real-name authentication required")
 

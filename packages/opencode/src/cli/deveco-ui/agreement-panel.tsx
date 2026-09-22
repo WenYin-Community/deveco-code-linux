@@ -22,6 +22,26 @@ export function AgreementPanel(props: { onComplete?: () => void; maxHeight?: num
   })
   const needsConsent = () =>
     !agreement.error && (!agreement()?.accepted || agreement()?.upload.state === "review_required")
+  const acceptConsent = async (current: NonNullable<ReturnType<typeof agreement>>) => {
+    await sdk.client.global.acceptProductAgreement(
+      {
+        version: current.version,
+        accepted: true,
+        serviceRevision: current.upload.revision,
+      },
+      { throwOnError: true },
+    )
+    await refetch()
+    // A newer revision can be published while the acceptance is in flight, and
+    // the refetch above is the only read that sees it. Re-check before
+    // forwarding so both completion paths protect the same invariant: never
+    // hand the gate a completion while consent is still outstanding.
+    if (needsConsent()) {
+      setState("checked", false)
+      return
+    }
+    props.onComplete?.()
+  }
   const act = async () => {
     if (state.busy) return
     if (agreement.error) {
@@ -33,28 +53,14 @@ export function AgreementPanel(props: { onComplete?: () => void; maxHeight?: num
     setState({ busy: true, error: "" })
     try {
       if (needsConsent()) {
-        await sdk.client.global.acceptProductAgreement(
-          {
-            version: current.version,
-            accepted: true,
-            serviceRevision: current.upload.revision,
-          },
-          { throwOnError: true },
-        )
-        await refetch()
-        props.onComplete?.()
+        await acceptConsent(current)
         return
       }
-      // needsConsent is false — but the panel may be holding a stale snapshot
-      // from before the gate re-ran. Refetch to catch server-side state changes
-      // (e.g. upload transitioned to review_required) before forwarding to
-      // onComplete. Without this, the panel shows "Continue" while the gate
-      // expects the user to accept a new revision — a silent deadlock.
-      await refetch()
-      if (needsConsent()) {
-        setState("checked", false)
-        return
-      }
+      // Nothing to accept: the gate owns the authoritative agreement state, so hand
+      // the decision straight back to it. Re-reading here would only return the
+      // pre-click snapshot — it is the gate's own upload retry that discovers a new
+      // required revision — and a forced GET would turn a local step transition
+      // into a network failure surface.
       props.onComplete?.()
     } catch (error) {
       setState("error", error instanceof Error ? error.message : t("account.update_failed"))
@@ -77,7 +83,7 @@ export function AgreementPanel(props: { onComplete?: () => void; maxHeight?: num
     ],
   }))
   return (
-    <box flexDirection="column" width="100%" padding={1} gap={1}>
+    <box flexDirection="column" width="100%" padding={1} gap={1} alignItems="center">
       <text fg={theme.text}>
         <b>{props.review ? t("account.review_title") : t("account.agreements_privacy")}</b>
       </text>
@@ -93,7 +99,7 @@ export function AgreementPanel(props: { onComplete?: () => void; maxHeight?: num
       <Show when={!agreement.error && agreement()}>
         {(current) => (
           <>
-            <box flexDirection="column" gap={1}>
+            <box flexDirection="column" gap={1} alignItems="center">
               <Link href={current().termsUrl}>{t("account.terms")}</Link>
               <Link href={current().privacyUrl}>{t("account.privacy_notice")}</Link>
             </box>
