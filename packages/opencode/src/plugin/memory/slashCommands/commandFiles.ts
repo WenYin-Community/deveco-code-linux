@@ -78,28 +78,22 @@ function getGlobalConfigPaths(): string[] {
   const home = os.homedir();
   const paths: string[] = [];
 
-  // Create commands for both deveco and opencode CLIs
-  const cliNames = ['deveco', 'opencode'];
+  // Only manage deveco CLI paths; opencode CLI is out of scope.
+  const cliName = 'deveco';
 
   // Windows: use APPDATA (matches xdg-basedir behavior)
   // Linux/Mac: use XDG_CONFIG_HOME or ~/.config
   if (process.platform === 'win32') {
     const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    for (const cli of cliNames) {
-      paths.push(path.join(appdata, cli, 'commands'));
-    }
+    paths.push(path.join(appdata, cliName, 'commands'));
   } else {
     const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
-    for (const cli of cliNames) {
-      paths.push(path.join(xdgConfig, cli, 'commands'));
-    }
+    paths.push(path.join(xdgConfig, cliName, 'commands'));
   }
 
-  // Also create in legacy ~/.config/<cli> for backward compatibility on Windows
+  // Also clean legacy ~/.config/<cli> for backward compatibility on Windows
   if (process.platform === 'win32') {
-    for (const cli of cliNames) {
-      paths.push(path.join(home, '.config', cli, 'commands'));
-    }
+    paths.push(path.join(home, '.config', cliName, 'commands'));
   }
 
   return paths;

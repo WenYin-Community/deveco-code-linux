@@ -86,7 +86,6 @@ export function DialogMemory(props: { current?: string }) {
       ...Memory.SETTINGS.map((setting) => ({
         value: SETTING + setting.key,
         title: t(`dialog.memory_setting.${setting.id}`),
-        description: setting.key,
         footer: <State enabled={Memory.isEnabled(data.config, setting)} />,
         category: t("category.memory_settings"),
       })),

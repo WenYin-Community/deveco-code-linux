@@ -565,7 +565,7 @@
     "memory_config_note": "插件初始化时读取，重启后生效",
     "memory_setting": {
       "auto_memory": "自动记忆",
-      "auto_dream": "自动整理（Dream）",
+      "auto_dream": "自动梦境整合",
       "extraction": "自动提取记忆",
       "recall": "记忆召回",
       "recall_visible": "对话中显示召回",
