@@ -22,7 +22,7 @@ stages:
     jobs:
       post-guide:
         name: 发布 PR 命令使用指南
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, slave=slave_0]
         env:
           GITCODE_API: https://api.gitcode.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
