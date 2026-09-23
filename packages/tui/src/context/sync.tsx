@@ -585,6 +585,21 @@ export const {
         })
     }
 
+    async function refreshProviders(signal?: AbortSignal) {
+      const workspace = project.workspace.current()
+      const providerList = await sdk.client.provider.refresh({ workspace }, { throwOnError: true, signal })
+      const [providers, providerAuth] = await Promise.all([
+        sdk.client.config.providers({ workspace }, { throwOnError: true, signal }),
+        sdk.client.provider.auth({ workspace }, { throwOnError: true, signal }),
+      ])
+      batch(() => {
+        setStore("provider", reconcile(providers.data.providers))
+        setStore("provider_default", reconcile(providers.data.default))
+        setStore("provider_next", reconcile(providerList.data))
+        setStore("provider_auth", reconcile(providerAuth.data))
+      })
+    }
+
     onMount(() => {
       void bootstrap()
     })
@@ -711,6 +726,9 @@ export const {
           syncingSessions.set(sessionID, task)
           return task
         },
+      },
+      provider: {
+        refresh: refreshProviders,
       },
       bootstrap,
     }

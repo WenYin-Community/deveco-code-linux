@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../../../fixture/fixture"
-import { mount, wait } from "./sync-fixture"
+import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 
 function branchEvent(branch: string, workspace?: string): GlobalEvent {
@@ -56,6 +56,45 @@ describe("tui sync", () => {
       await wait(() => sync.data.vcs?.branch === "feature")
 
       expect(sync.data.vcs?.branch).toBe("feature")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("provider refresh only reloads provider state", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const calls: string[] = []
+    let refreshing = false
+    const { app, sync } = await mount((url): Response | undefined => {
+      if (!refreshing) return undefined
+      calls.push(url.pathname)
+      if (url.pathname === "/provider/refresh") {
+        return json({
+          all: [{ id: "openai", name: "OpenAI", source: "api", env: [], options: {}, models: {} }],
+          default: { openai: "gpt-test" },
+          connected: ["openai"],
+        })
+      }
+      if (url.pathname === "/config/providers") {
+        return json({
+          providers: [{ id: "openai", name: "OpenAI", source: "api", env: [], options: {}, models: {} }],
+          default: { openai: "gpt-test" },
+        })
+      }
+      if (url.pathname === "/provider/auth") return json({ openai: [{ type: "api", label: "API key" }] })
+      return undefined
+    }, tmp.path)
+
+    try {
+      refreshing = true
+      await sync.provider.refresh()
+
+      expect(calls[0]).toBe("/provider/refresh")
+      expect(calls.slice(1).sort()).toEqual(["/config/providers", "/provider/auth"])
+      expect(sync.data.provider_next.connected).toEqual(["openai"])
+      expect(sync.data.provider[0]?.id).toBe("openai")
+      expect(sync.data.provider_auth.openai?.[0]?.type).toBe("api")
     } finally {
       app.renderer.destroy()
     }

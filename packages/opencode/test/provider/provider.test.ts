@@ -98,6 +98,9 @@ const languageBaseURL = (language: unknown) => (language as { config: { baseURL:
 
 const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer))
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
+const credentialChanges = testEffect(
+  Layer.mergeAll(providerLayer(), Auth.defaultLayer, Env.defaultLayer, Plugin.defaultLayer),
+)
 
 const alphaProviderConfig = {
   provider: {
@@ -1811,6 +1814,29 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     expect(noneProviders[ProviderV2.ID.make("opencode")]).toBeUndefined()
     expect(keyedCount).toBeGreaterThan(0)
   }).pipe(provideMultiInstance),
+)
+
+credentialChanges.instance(
+  "provider refresh applies credential changes without disposing the instance",
+  Effect.gen(function* () {
+    yield* set("OPENAI_API_KEY", "")
+    const auth = yield* Auth.Service
+    const provider = yield* Provider.Service
+    yield* auth.remove("openai")
+    yield* provider.refresh()
+    expect((yield* list)[ProviderV2.ID.openai]).toBeUndefined()
+
+    yield* auth.set("openai", { type: "api", key: "test-key" })
+    expect((yield* list)[ProviderV2.ID.openai]).toBeUndefined()
+    yield* provider.refresh()
+    expect((yield* list)[ProviderV2.ID.openai]).toBeDefined()
+
+    yield* auth.remove("openai")
+    expect((yield* list)[ProviderV2.ID.openai]).toBeDefined()
+    yield* provider.refresh()
+    expect((yield* list)[ProviderV2.ID.openai]).toBeUndefined()
+  }),
+  30000,
 )
 
 for (const { available, expired } of [{ available: true, expired: false }, { available: false, expired: false }, { available: false, expired: true }, { available: true, expired: true }]) {

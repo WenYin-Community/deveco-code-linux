@@ -23,8 +23,7 @@ async function mount(
     language?: string
     configured?: boolean
     save?: () => Promise<Response>
-    dispose?: () => Promise<Response>
-    bootstrap?: () => Promise<void>
+    refresh?: () => Promise<void>
   },
 ) {
   const tmp = await tmpdir()
@@ -42,11 +41,12 @@ async function mount(
       provider_auth: {},
       console_state: { consoleManagedProviders: [], activeOrgName: "" },
     },
-    bootstrap: options?.bootstrap ?? (async () => {}),
+    provider: {
+      refresh: options?.refresh ?? (async () => {}),
+    },
   } as unknown as ReturnType<typeof useSync>
   const fetcher = (async (input: RequestInfo | URL) => {
     const pathname = new URL(input instanceof Request ? input.url : String(input)).pathname
-    if (pathname === "/instance/dispose" && options?.dispose) return options.dispose()
     if (pathname === "/auth") return auth()
     if (pathname === "/auth/openai" && options?.save) return options.save()
     return Response.json({})
@@ -144,7 +144,7 @@ test("auth shows sign-in and sign-out together for a saved Huawei account", asyn
 
 test("sign-out describes provider refresh after removing the credential", async () => {
   const panel = await mount(async () => Response.json([{ providerID: "deveco", type: "oauth", removable: true }]), {
-    bootstrap: () => new Promise(() => {}),
+    refresh: () => new Promise(() => {}),
   })
   try {
     await panel.frame("Account saved")
@@ -254,7 +254,9 @@ test("API key submission shows progress and prevents duplicate writes", async ()
 
 test("a refresh failure after saving a key keeps the saved-credential error distinct", async () => {
   const panel = await mount(async () => Response.json([]), {
-    dispose: async () => new Response("unavailable", { status: 500 }),
+    refresh: async () => {
+      throw new Error("unavailable")
+    },
   })
   try {
     await panel.frame("Not connected")

@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import path from "path"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
 import { TestInstance } from "../fixture/fixture"
 import { markPluginDependenciesReady } from "../fixture/plugin"
@@ -16,6 +17,7 @@ const testStateLayer = Layer.effectDiscard(
 )
 
 const it = testEffect(Layer.mergeAll(testStateLayer, FSUtil.defaultLayer, httpApiLayer))
+const context = Context.empty() as Context.Context<unknown>
 const projectOptions = { config: { formatter: false, lsp: false } }
 const providerID = "test-oauth-parity"
 const oauthURL = "https://example.com/oauth"
@@ -260,6 +262,30 @@ function setEnvScoped(key: string, value: string) {
 }
 
 describe("provider HttpApi", () => {
+  it.instance(
+    "refreshes provider state and returns the updated provider list",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const response = yield* Effect.promise(() =>
+        HttpApiApp.webHandler().handler(
+          new Request("http://localhost/provider/refresh", {
+            method: "POST",
+            headers: { "x-deveco-directory": directory },
+          }),
+          context,
+        ),
+      )
+
+      expect(response.status).toBe(200)
+      const body = yield* Effect.promise(() => response.json())
+      expect(isRecord(body) && Array.isArray(body.all)).toBe(true)
+      expect(isRecord(body) && Array.isArray(body.connected)).toBe(true)
+      expect(isRecord(body) && isRecord(body.default)).toBe(true)
+    }),
+    projectOptions,
+    30000,
+  )
+
   it.instance.skip(
     "returns public v2 provider not found errors",
     Effect.gen(function* () {

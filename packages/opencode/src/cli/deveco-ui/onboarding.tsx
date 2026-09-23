@@ -5,6 +5,7 @@ import { useKeyboard, useTerminalDimensions } from '@opentui/solid';
 import { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
 import { useTheme } from '@opencode-ai/tui/context/theme';
 import { useSync } from '@opencode-ai/tui/context/sync';
+import { useProject } from '@opencode-ai/tui/context/project';
 import { useExit } from '@opencode-ai/tui/context/exit';
 import { useDialog } from '@opencode-ai/tui/ui/dialog';
 import { useSDK } from '@opencode-ai/tui/context/sdk';
@@ -257,6 +258,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   const { theme } = useTheme();
   const { t } = useI18n();
   const sync = useSync();
+  const project = useProject();
   const exit = useExit();
   const dialog = useDialog();
   const sdk = useSDK();
@@ -511,8 +513,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       const { getDevecoProviderConfig, clearDevecoModelCache } = await import('@/plugin/deveco-models');
       clearDevecoModelCache();
       await getDevecoProviderConfig(access);
-      await sdk.client.instance.dispose();
-      await sync.bootstrap();
+      await sync.provider.refresh();
       setAuthBusy(false);
       // Check real-name verification status
       if (result.userInfo && !result.userInfo.isRealName) {
@@ -561,8 +562,7 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
 
   const finishOnboarding = async (providerId: string) => {
     setKeySubmitStatus(t("account.loading_models"));
-    await sdk.client.instance.dispose();
-    await sync.bootstrap();
+    await sync.provider.refresh();
     const provider = sync.data.provider.find((item) => item.id === providerId);
     const modelID = sync.data.provider_default[providerId] ?? Object.values(provider?.models ?? {})[0]?.id;
     if (!modelID) {
@@ -570,8 +570,16 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
       return;
     }
     setKeySubmitStatus(t("account.applying_model"));
-    if (sync.data.config.model?.startsWith('deveco/')) {
-      await sdk.client.config.update({ config: { model: `${providerId}/${modelID}` } }, { throwOnError: true });
+    const workspace = project.workspace.current();
+    const config = await sdk.client.config.get(
+      { workspace },
+      { throwOnError: true },
+    );
+    if (config.data.model?.startsWith('deveco/')) {
+      await sdk.client.config.update(
+        { workspace, config: { model: `${providerId}/${modelID}` } },
+        { throwOnError: true },
+      );
     }
     local.model.set({ providerID: providerId, modelID }, { recent: true });
     props.onComplete();
