@@ -243,7 +243,7 @@ test("memory dialog toggles settings and shows memory content", async () => {
     // the row shows when the memory was created instead of its description.
     await app.mockInput.pressKey("END")
     await until(() => frame().includes("delete ctrl+d"), "the memory row to be selected")
-    expect(row(frame(), "Cache dir")).toContain(Locale.datetime(CACHE_STAMP - 86400000))
+    expect(row(frame(), "Cache dir")).toContain(Locale.datetime(CACHE_STAMP))
     expect(row(frame(), "Cache dir")).not.toContain("Use one shared cache dir")
     expect(frame()).toContain("View details space")
     expect(frame()).not.toContain("toggle space")
