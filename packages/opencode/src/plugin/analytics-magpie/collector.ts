@@ -1,8 +1,9 @@
 import fs from "fs"
 import path from "path"
 import { Runtime } from "@opencode-ai/core/runtime"
+import { resolveImprovementConsent } from "../deveco/improvement-consent"
 import { redactAnalyticsEventPaths } from "./path-redaction"
-import { getAnalyticsMagpieEnabled, getOrCreatePathRedactionSalt, getOsArch, getOsName, getOsVersion } from "./storage"
+import { getOrCreatePathRedactionSalt, getOsArch, getOsName, getOsVersion } from "./storage"
 import type {
   AnalyticsEvent,
   AssistantExecution,
@@ -89,7 +90,13 @@ export interface TextPartSnapshot {
 }
 
 export interface CollectorDependencies {
-  analyticsEnabled: () => Promise<boolean>
+  /**
+   * Internal seam (T2.6 / design §9.5): eligibility per *account*, not per
+   * device. The plugin pins each session to the account that started it
+   * (D13) and passes that userId here, so an in-flight session keeps judging
+   * by its initiating account even after the user switches accounts.
+   */
+  analyticsEnabledFor(userId: string): Promise<boolean>
   getPathRedactionSalt: () => Promise<string>
   getOsArch: () => string
   getOsName: () => string
@@ -97,7 +104,12 @@ export interface CollectorDependencies {
 }
 
 const defaultDependencies: CollectorDependencies = {
-  analyticsEnabled: getAnalyticsMagpieEnabled,
+  analyticsEnabledFor: (userId) =>
+    // Granted-only: declined and undecided both mean "do not collect" (FR-6).
+    // resolveImprovementConsent keeps its own 30s TTL cache, so per-turn
+    // re-judging stays cheap and same-account withdrawal lands within TTL
+    // (or immediately via the RPC cache invalidation, design §4.3).
+    resolveImprovementConsent(userId).then((consent) => consent === "granted"),
   getPathRedactionSalt: getOrCreatePathRedactionSalt,
   getOsArch,
   getOsName,
@@ -359,8 +371,8 @@ export class SessionCollector {
     if (!loggedIn) this.clear()
   }
 
-  async shouldCollect(): Promise<boolean> {
-    return this.loggedIn && (await this.dependencies.analyticsEnabled())
+  async shouldCollect(userId: string): Promise<boolean> {
+    return this.loggedIn && (await this.dependencies.analyticsEnabledFor(userId))
   }
 
   startTurn(input: {

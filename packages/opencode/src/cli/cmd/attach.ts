@@ -83,7 +83,23 @@ export const AttachCommand = cmd({
     const { run } = await import("../tui/layer")
     const { createLegacyTuiPluginHost } = await import("@/plugin/tui/runtime")
     const { registerDevEcoTuiExtensions } = await import("@/cli/deveco-ui/register")
-    registerDevEcoTuiExtensions()
+    const { invalidateImprovementConsentCache } = await import("@/plugin/deveco/improvement-consent")
+    // T2.7 (review catch I11): bind the improvement-change callback like
+    // tui.ts does, adapted to the attach topology. There is no worker thread
+    // here and the remote server exposes no setAnalyticsMagpieEnabled HTTP
+    // endpoint (a new API was ruled out, design §9.6), so the worker-RPC
+    // binding cannot be replicated verbatim. Mirror its cache-invalidation
+    // half locally: every consent judgment in this TUI process re-reads the
+    // record immediately, while the collecting server process converges via
+    // the 30s TTL (ADR-5). The runtime collection switch is deliberately NOT
+    // flipped locally — this process hosts no magpie plugin, and driving the
+    // local uploader from here could race a same-machine server over the
+    // shared pending-event queue.
+    registerDevEcoTuiExtensions({
+      onToolImprovementEnabledChange: async () => {
+        invalidateImprovementConsentCache()
+      },
+    })
     await Effect.runPromise(
       run({
         url: args.url,

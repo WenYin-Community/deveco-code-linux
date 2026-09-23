@@ -5,7 +5,8 @@ import { OAUTH_DUMMY_KEY } from "@/auth"
 import { Global } from "@opencode-ai/core/global"
 import { GlobalBus } from "@/bus/global"
 import { logError } from "./log"
-import { TOOL_IMPROVEMENT_HEADER, readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
+import { TOOL_IMPROVEMENT_HEADER } from "@/cli/deveco-privacy-settings"
+import { isImprovementConsentGranted } from "./improvement-consent"
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
 
 import { devecoAuth } from "./auth"
@@ -157,7 +158,10 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
             }
 
             if (currentAuth?.type === "oauth" && isHuaweiInferenceRequest(finalInput)) {
-              headers.set(TOOL_IMPROVEMENT_HEADER, String(await readToolImprovementEnabled()))
+              // T2.3 / FR-6: the header reflects the *current account's*
+              // improvement consent (granted → "true"; declined/undecided/
+              // signed out → "false").
+              headers.set(TOOL_IMPROVEMENT_HEADER, String(await isImprovementConsentGranted()))
             } else {
               headers.delete(TOOL_IMPROVEMENT_HEADER)
             }

@@ -43,8 +43,10 @@ import { Prompt, type PromptRef } from "@opencode-ai/tui/component/prompt"
 import { usePluginRuntime } from "@opencode-ai/tui/plugin/runtime"
 import { HomeSessionDestinationProvider } from "@opencode-ai/tui/routes/home/session-destination"
 import { Toast, useToast } from "@opencode-ai/tui/ui/toast"
-import type { SyncObject } from "@opencode-ai/tui/deveco-extensions"
+import { useDialog } from "@opencode-ai/tui/ui/dialog"
+import { getDevEcoExtensions, type SyncObject } from "@opencode-ai/tui/deveco-extensions"
 import { devecoAuth, hasDevecoOAuthEntry, ensureValidToken, loadIsRealNameFromDisk, UnsupportedRegionError, CHINA_ACCOUNT_ONLY_MESSAGE } from "@/plugin/deveco"
+import { getCurrentImprovementConsent } from "@/plugin/deveco/improvement-consent"
 import { hasConfiguredDevEcoHome } from "@/tool/lib/env"
 import { DevEcoOnboarding } from "./onboarding"
 import { logWarn, logError } from "@/plugin/deveco/log"
@@ -71,7 +73,12 @@ const placeholder = {
   shell: ["ls -la", "git status", "pwd"],
 }
 
-export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number }) {
+export function DevEcoHomeBody(props: {
+  sync: SyncObject
+  bodySlotHeight: number
+  /** Threaded through DevEcoOnboarding into the AgreementPanel (design §6.6 / B5). */
+  onImprovementChange?: (enabled: boolean) => void | Promise<void>
+}) {
   const sync = props.sync
   const kv = useKV()
   const sdk = useSDK()
@@ -79,6 +86,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
   const dimensions = useTerminalDimensions()
   const { t } = useI18n()
   const toast = useToast()
+  const dialog = useDialog()
 
   const [devecoReady, setDevecoReady] = createSignal<boolean | null>(null)
   const [devecoInitialStep, setDevecoInitialStep] = createSignal<"entry" | "privacy" | "product-privacy" | "deveco-home">("entry")
@@ -162,16 +170,22 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       Object.keys(provider.models).length > 0,
     )
     if (hasThirdParty) {
-      if (!product.data?.accepted) return applyGate({ step: "product-privacy" })
-      return applyGate({ step: "ready" })
+      if (!product.data?.accepted) {
+        applyGate({ step: "product-privacy" })
+        return
+      }
+      applyGate({ step: "ready" })
+      return
     }
 
     if (hasDevecoOAuthEntry() && !product.data?.accepted) {
-      return applyGate({ step: "product-privacy" })
+      applyGate({ step: "product-privacy" })
+      return
     }
 
     if (!hasDevecoOAuthEntry()) {
-      return applyGate({ step: "entry" })
+      applyGate({ step: "entry" })
+      return
     }
 
     const session = await devecoAuth.getSession()
@@ -182,7 +196,8 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
       // below does instead of showing the generic sign-in prompt. The earlier
       // `!hasDevecoOAuthEntry()` exit deliberately does not do this: with no entry
       // there is no session that could have expired.
-      return applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      return
     }
 
     let accessToken = session.accessToken
@@ -192,18 +207,20 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     if (validToken) {
       accessToken = validToken
     } else if (!accessToken) {
-      return applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      return
     } else {
       // ensureValidToken() returned null but we have a cached access token.
       // This means a refresh was attempted and the server rejected the jwtToken.
       // Regardless of local exp, treat as session expired — the server no longer
       // trusts this token. Continuing would fall through to the real-name check
       // which also uses the same invalid jwtToken, creating a dead-end loop.
-      return applyGate({
+      applyGate({
         step: "entry",
         sessionExpired: await devecoAuth.isJwtExpired() === true,
         authError: t("account.refresh_session_failed"),
       })
+      return
     }
 
     // Check real-name status from disk cache first; only call API if uncertain.
@@ -213,7 +230,8 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     }
     if (!isRealName) {
       logWarn("real-name verification failed, blocking entry", { service: "deveco" })
-      return applyGate({ step: "realname" })
+      applyGate({ step: "realname" })
+      return
     }
 
     const userId = session.userId || (await devecoAuth.getUserId()) || ""
@@ -222,13 +240,15 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     if (!devecoHomeChecked) {
       devecoHomeChecked = true
       if (!(await hasConfiguredDevEcoHome())) {
-        return applyGate({ step: "deveco-home" })
+        applyGate({ step: "deveco-home" })
+        return
       }
     }
 
     const result = await sdk.client.global.retryAgreementUpload({ force: false })
     if (result.data?.upload.state === "review_required")
-      return applyGate({ step: "privacy", reviewRevision: result.data.upload.revision })
+      applyGate({ step: "privacy", reviewRevision: result.data.upload.revision })
+      return
     if (result.error) {
       logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
     }
@@ -237,7 +257,8 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     } catch (err) {
       if (err instanceof UnsupportedRegionError) {
         logError("runDevecoCheck blocked: unsupported account region", { service: "deveco" })
-        return applyGate({ step: "entry", authError: CHINA_ACCOUNT_ONLY_MESSAGE })
+        applyGate({ step: "entry", authError: CHINA_ACCOUNT_ONLY_MESSAGE })
+        return
       }
       // Any unhandled error must not
       // leave the UI stuck on "Checking login status…".  Fall back to the entry
@@ -258,6 +279,39 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
     if (sync.status === "complete" && authCanEnter()) {
       setDevecoReady(true)
     }
+  })
+
+  /**
+   * Improvement consent fallback (design §6.3): the only ask surface for paths
+   * that never re-enter onboarding — in-app login (A3), CLI login then TUI
+   * (A4), and upgraded installs (C1). The onboarding AgreementPanel (A1) is a
+   * separate surface; once a decision exists, neither shows again (D6).
+   */
+  let improvementPrompted = false
+  createEffect(() => {
+    if (sync.status !== "complete") return
+    // Login/logout both bootstrap a sync refresh; reading the provider list
+    // here re-runs this effect after those refreshes
+    void sync.data.provider_next.all.length
+    // I3: while onboarding (incl. its privacy step's AgreementPanel) is
+    // visible, this effect must not open a second ask surface on top of it
+    if (devecoReady() !== true) return
+    if (!hasDevecoOAuthEntry()) {
+      improvementPrompted = false // logged out — re-arm for the next login
+      return
+    }
+    if (improvementPrompted) return
+    // Set the guard before the async check: the effect re-runs when the
+    // provider list mutates and must not stack a second dialog
+    improvementPrompted = true
+    void (async () => {
+      if ((await getCurrentImprovementConsent()) !== undefined) return // decided → no ask
+      const ImprovementConsentDialog = getDevEcoExtensions().improvementConsentDialog
+      if (ImprovementConsentDialog) {
+        // The dialog closes itself on confirm; esc leaves no record (F4)
+        dialog.replace(() => <ImprovementConsentDialog onComplete={() => dialog.clear()} />)
+      }
+    })()
   })
 
   const mcpError = createMemo(() => {
@@ -408,6 +462,7 @@ export function DevEcoHomeBody(props: { sync: SyncObject; bodySlotHeight: number
                     initialRealName={devecoRealName()}
                     initialAuthError={devecoInitialAuthError()}
                     reviewRequired={devecoReviewRevision() !== undefined}
+                    onImprovementChange={props.onImprovementChange}
                   />
                 )}
               </Show>

@@ -270,7 +270,7 @@ test("accepting the product agreement advances to the DevEco Studio step instead
   // First gate run: the agreement is not accepted yet, so the panel offers consent.
   const first = await panel.frame("Agreements and privacy")
   expect(first).toContain("I have read and agree")
-  expect(first).toContain("Space: check · Enter: agree and continue")
+  expect(first).toContain("↑↓: select · Space: check · Enter: confirm")
 
   await panel.setup.mockInput.typeText(" ")
   await panel.frame("[✓]")
@@ -303,7 +303,7 @@ test("accepting a revision the server has not cleared keeps the consent screen u
   // read starts unchecked, so "[ ]" can only appear after it happened.
   const next = await panel.frame("[ ]")
   expect(next).toContain("I have read and agree")
-  expect(next).toContain("Space: check · Enter: agree and continue")
+  expect(next).toContain("↑↓: select · Space: check · Enter: confirm")
   expect(next).not.toContain("Continue")
 })
 
@@ -321,7 +321,7 @@ test("a revision published while the panel is on screen still reaches it", async
   })
 
   const first = await panel.frame("I have read and agree")
-  expect(first).toContain("Space: check · Enter: agree and continue")
+  expect(first).toContain("↑↓: select · Space: check · Enter: confirm")
   // The gate's verdict reaches the panel: it renders as a re-review, not a first signing.
   expect(first).toContain("Agreements updated")
 

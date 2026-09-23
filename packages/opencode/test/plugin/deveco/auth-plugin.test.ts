@@ -16,12 +16,14 @@ import { regionPolicy } from "@/plugin/deveco/region-policy"
 // 真实 @/plugin/deveco/session：sessionChatIdMap 是可变 Map，测试直接操作同一个 Map 实例。
 // 真实 @/plugin/deveco/token-refresh：先 spyOn ensureValidToken，再动态导入 auth-plugin，
 // 让 auth-plugin 的 ESM live binding 读取被 spy 包装后的导出。
+// T4.3：请求头取值已切账号级（T2.3），spy 相应从 readToolImprovementEnabled（设备级 kv）
+// 迁移到 improvement-consent 的 isImprovementConsentGranted。
 
 let improvementEnabled = true
 const tokenRefresh = await import("@/plugin/deveco/token-refresh")
-const privacySettings = await import("@/cli/deveco-privacy-settings")
-const readToolImprovementEnabledSpy = spyOn(privacySettings, "readToolImprovementEnabled").mockImplementation(() =>
-  Promise.resolve(improvementEnabled),
+const improvementConsent = await import("@/plugin/deveco/improvement-consent")
+const isImprovementConsentGrantedSpy = spyOn(improvementConsent, "isImprovementConsentGranted").mockImplementation(
+  () => Promise.resolve(improvementEnabled),
 )
 const access = await import("@/plugin/deveco/access")
 const accessSpy = spyOn(access, "requireDevEcoAccess")
@@ -97,7 +99,7 @@ afterAll(() => {
   ensureValidTokenSpy.mockRestore()
   regionCheckSpy.mockRestore()
   accessSpy.mockRestore()
-  readToolImprovementEnabledSpy.mockRestore()
+  isImprovementConsentGrantedSpy.mockRestore()
 })
 
 async function getFetchFn(

@@ -27,7 +27,16 @@ export type SyncObject = ReturnType<typeof useSync>
  * authentication + agreement are complete, it renders the standard prompt UI.
  * When not, it renders the onboarding flow (privacy / entry / provider / key).
  */
-export type DevEcoHomeBody = (props: { sync: SyncObject; bodySlotHeight: number }) => JSX.Element
+export type DevEcoHomeBody = (props: {
+  sync: SyncObject
+  bodySlotHeight: number
+  /**
+   * Improvement opt-in threading (design §6.6 / B5): forwarded by home-body
+   * through DevEcoOnboarding into the AgreementPanel's improvement checkbox,
+   * so confirming the panel notifies the worker (same channel /privacy uses).
+   */
+  onImprovementChange?: (enabled: boolean) => void | Promise<void>
+}) => JSX.Element
 
 /**
  * Reads the local auth store and returns a sentinel error message if it is
@@ -60,6 +69,13 @@ export type DevEcoAgreementReviewDialog = (props: { onComplete: () => void }) =>
 /** Real-name dialog shown when a built-in model request hits a real-name verification failure. */
 export type DevEcoRealNameDialog = (props: { onComplete: () => void }) => JSX.Element
 
+/**
+ * Improvement consent ask (design §6.4). Opened by the home-body fallback
+ * effect after a login when the current account has no improvement decision
+ * yet (covers in-app login, CLI-login-then-TUI, and upgraded installs).
+ */
+export type DevEcoImprovementConsentDialog = (props: { onComplete: () => void }) => JSX.Element
+
 /** Log collection dialog. Shown via the `/collect` command or crash detection. */
 export type DevEcoCollectDialog = (props: { triggerType?: string }) => JSX.Element
 
@@ -81,6 +97,7 @@ export type DevEcoExtensions = {
   pluralize?: DevEcoPluralize
   privacyDialog?: DevEcoPrivacyDialog
   agreementReviewDialog?: DevEcoAgreementReviewDialog
+  improvementConsentDialog?: DevEcoImprovementConsentDialog
   isAgreementReviewError?: (message: string) => boolean
   realNameDialog?: DevEcoRealNameDialog
   isRealNameError?: (message: string) => boolean

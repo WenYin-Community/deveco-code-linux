@@ -3,6 +3,7 @@ import path from "path"
 import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { Global } from "@opencode-ai/core/global"
 import { devecoAuth } from "../deveco"
+import { getCurrentImprovementConsent, loadUserIdFromDisk } from "../deveco/improvement-consent"
 import {
   globalCollector,
   type AssistantUpdate,
@@ -41,6 +42,17 @@ type AnalyticsMagpieCollectorDependency = Pick<
 export interface AnalyticsMagpiePluginDependencies {
   collector: AnalyticsMagpieCollectorDependency
   collectionEnabled(): Promise<boolean>
+  /**
+   * 账号级同意的**三态**读取（P1/N6 修正）：`undefined` = 未登录**或**未表态。
+   * 缺省时退化为 `collectionEnabled()` 的布尔语义（false 一律按 declined 处理）。
+   */
+  consentDecision?(): Promise<"granted" | "declined" | undefined>
+  /**
+   * Current account resolver (T2.6 / design §9.5): offline userId from local
+   * credentials. Read fresh on every session admission — caching it would
+   * delay new sessions from picking up an account switch (D1).
+   */
+  currentAccount(): Promise<string | null>
   runtimeEnabled(): boolean
   runtimeEpoch(): number
   setCollectionEnabled(enabled: boolean): Promise<void>
@@ -190,7 +202,10 @@ export function createSerialEventQueue(onError: (error: unknown) => void | Promi
   }
 }
 
-let collectionEnabled = true
+// FR-1 defense-in-depth: off until init() syncs the real account-scoped
+// decision. The previous default of true collected during the window between
+// module load and init() completing.
+let collectionEnabled = false
 let collectionEpoch = 0
 
 export async function setAnalyticsMagpieCollectionEnabled(enabled: boolean): Promise<void> {
@@ -317,6 +332,15 @@ function resolveTurnQuery(output: ChatMessageOutput): string {
 
 class AnalyticsMagpiePluginInstance {
   private readonly ownedSessions = new Set<string>()
+  /**
+   * Session-level account pinning (T2.6 / D13 / design §9.5): sessionID → the
+   * account that was current when the session was first admitted. Every later
+   * turn of that session judges eligibility by the *pinned* account's consent
+   * record, so switching accounts mid-session does not change an in-flight
+   * session's decision. Cleared when the session goes idle (upload done) or
+   * the instance disposes.
+   */
+  private readonly sessionAccount = new Map<string, string>()
   private readonly enqueueEvent: ReturnType<typeof createSerialEventQueue>
   private disposed = false
   private released = false
@@ -336,7 +360,30 @@ class AnalyticsMagpiePluginInstance {
     try {
       await this.dependencies.collector.init()
       await this.isolate("switch initialization", async () => {
-        await this.dependencies.setCollectionEnabled(await this.dependencies.collectionEnabled())
+        // P1 fix (2026-09-23): only latch a *definite* decision.
+        //
+        // `isImprovementConsentGranted()` is false both when the account declined
+        // and when no account can be resolved (signed out / unreadable token).
+        // Latching that second case to false is unrecoverable: the switch is only
+        // flipped again by the consent-write RPC, and signing in to an account
+        // that already has a grant writes nothing — so the process would silently
+        // never collect (FR-6 backwards). Leaving it open while the account is
+        // unresolvable is safe: every entry point still resolves the account
+        // afterwards (`ensureEligible` requires a non-null account), and that
+        // account gate is the real privacy boundary.
+        const decision = this.dependencies.consentDecision
+          ? await this.dependencies.consentDecision()
+          : (await this.dependencies.collectionEnabled())
+            ? "granted"
+            : "declined"
+        // 只在**明确拒绝**（declined）时关闭。未登录或**未表态**都保持开启：
+        // 未登录时 collectionEnabled() 也是 false，但"解析不出账号"与"用户拒绝"
+        // 是两件事；把它钉成 false 后，本进程内再登录一个已授权账号（不写记录 →
+        // 不触发 RPC）就再也不会采集（P1）。同理，未表态的账号登出后再登录一个
+        // 已授权账号也会如此（N6）。真边界是每事件的账号门：ensureEligible 要求
+        // account !== null 且该账号 shouldCollect()，因此保持开启不会造成
+        // "未同意却采集"；上传侧另有 uploader 的 isEnabled 门。
+        await this.dependencies.setCollectionEnabled(decision !== "declined")
       })
       const loggedIn = (await this.refreshIdentityEligibility()) ?? false
       await this.diagnostic(
@@ -400,15 +447,48 @@ class AnalyticsMagpiePluginInstance {
     return eligible
   }
 
-  private async ensureEligible(epoch: number): Promise<boolean> {
+  private async ensureEligible(epoch: number, account: string | null): Promise<boolean> {
     if (!this.isCurrentEpoch(epoch)) return false
     if (!(await this.refreshIdentityEligibility(epoch))) return false
     if (!this.isCurrentEpoch(epoch)) return false
-    const eligible = await this.dependencies.collector.shouldCollect()
+    // null account = no resolvable account (signed out or broken credentials)
+    // → never eligible, matching the pre-T2.6 undefined-consent outcome.
+    const eligible = account !== null && (await this.dependencies.collector.shouldCollect(account))
     if (!this.isCurrentEpoch(epoch)) return false
     if (eligible) return true
     this.dependencies.collector.clear()
     return false
+  }
+
+  /**
+   * Resolve the account a judgment belongs to (D13): the session's pinned
+   * account if it has one, otherwise the current on-disk account (which also
+   * *pins* it for that session — first admission). Events without a session
+   * (e.g. a sessionless file.edited) fall back to the current account without
+   * pinning anything, mirroring the closest pre-change behavior.
+   */
+  private async pinnedAccount(sessionID: string | undefined): Promise<string | null> {
+    if (sessionID === undefined) return await this.dependencies.currentAccount()
+    const pinned = this.sessionAccount.get(sessionID)
+    if (pinned) return pinned
+    const userId = await this.dependencies.currentAccount()
+    if (userId) this.sessionAccount.set(sessionID, userId)
+    return userId
+  }
+
+  /**
+   * Drop a session's pin and its admission marker (R3 / D13 step 3).
+   *
+   * Invariant this establishes: a pin only ever lives for a session we admitted
+   * (`ownedSessions`), and every admitted session releases it when it goes idle
+   * — regardless of whether that idle event still passes the eligibility gate.
+   * Without the unconditional release, an ineligible idle leaves the entry in
+   * `sessionAccount` forever (the session never produces another owned event),
+   * so a long-lived serve/worker process grows one entry per revoked session.
+   */
+  private releaseSession(sessionID: string): void {
+    this.sessionAccount.delete(sessionID)
+    this.ownedSessions.delete(sessionID)
   }
 
   private async persistSession(sessionID: string, epoch: number): Promise<void> {
@@ -435,9 +515,20 @@ class AnalyticsMagpiePluginInstance {
     const value = event as Record<string, unknown>
     const eventType = typeof value.type === "string" ? value.type : ""
     const props = record(value.properties)
-    if (!this.ownsEvent(eventType, props) || !(await this.ensureEligible(epoch))) return
+    if (!this.ownsEvent(eventType, props)) return
     const idleSessionID = resolveIdleSessionID(eventType, props)
-    if (idleSessionID) return this.persistSession(idleSessionID, epoch)
+    const account = await this.pinnedAccount(this.eventSessionID(eventType, props))
+    // R3: release the pin *before* the eligibility gate. An idle event for a
+    // session whose pinned account is no longer eligible (consent revoked,
+    // credentials gone) returns below without persisting — tying the release to
+    // that path would keep one Map entry per such session until dispose(), an
+    // unbounded leak in long-lived serve/worker processes.
+    if (idleSessionID) this.releaseSession(idleSessionID)
+    if (!(await this.ensureEligible(epoch, account))) return
+    if (idleSessionID) {
+      await this.persistSession(idleSessionID, epoch)
+      return
+    }
     if (eventType === "message.part.delta") return this.recordTextDelta(props, receivedAt)
     if (eventType === "message.updated") return this.recordAssistant(props, receivedAt)
     if (eventType === "message.part.updated") return this.recordPart(props, receivedAt)
@@ -448,32 +539,40 @@ class AnalyticsMagpiePluginInstance {
     }
   }
 
-  private ownsEvent(eventType: string, props: Record<string, unknown> | undefined): boolean {
+  /**
+   * Extract the session an event belongs to, using the same mapping ownsEvent
+   * applies (idle/delta/part events → their session; message.updated → the
+   * assistant message's session; session.created → the parent session).
+   * undefined means the event has no session to pin an account to.
+   */
+  private eventSessionID(eventType: string, props: Record<string, unknown> | undefined): string | undefined {
     const idleSessionID = resolveIdleSessionID(eventType, props)
-    if (idleSessionID) return this.ownedSessions.has(idleSessionID)
+    if (idleSessionID) return idleSessionID
+    if (eventType === "message.updated") return assistantIdentity(props)?.sessionID
+    if (eventType === "message.part.delta") return typeof props?.sessionID === "string" ? props.sessionID : undefined
+    if (eventType === "message.part.updated") {
+      const part = record(props?.part)
+      return typeof part?.sessionID === "string" ? part.sessionID : undefined
+    }
+    if (eventType === "session.created") {
+      const info = record(props?.info)
+      return typeof info?.parentID === "string" ? info.parentID : undefined
+    }
+    if (eventType === "file.edited") return typeof props?.sessionID === "string" ? props.sessionID : undefined
+    if (eventType === "session.error") return typeof props?.sessionID === "string" ? props.sessionID : undefined
+    return undefined
+  }
+
+  private ownsEvent(eventType: string, props: Record<string, unknown> | undefined): boolean {
     if (eventType === "message.updated") {
       const identity = assistantIdentity(props)
       return (
         identity !== undefined && identity.info.providerID === "deveco" && this.ownedSessions.has(identity.sessionID)
       )
     }
-    if (eventType === "message.part.delta") {
-      return typeof props?.sessionID === "string" && this.ownedSessions.has(props.sessionID)
-    }
-    if (eventType === "message.part.updated") {
-      const part = record(props?.part)
-      return typeof part?.sessionID === "string" && this.ownedSessions.has(part.sessionID)
-    }
-    if (eventType === "session.created") {
-      const info = record(props?.info)
-      return typeof info?.parentID === "string" && this.ownedSessions.has(info.parentID)
-    }
-    if (eventType === "file.edited") {
-      return typeof props?.sessionID !== "string" || this.ownedSessions.has(props.sessionID)
-    }
-    return (
-      eventType === "session.error" && typeof props?.sessionID === "string" && this.ownedSessions.has(props.sessionID)
-    )
+    const sessionID = this.eventSessionID(eventType, props)
+    if (eventType === "file.edited") return sessionID === undefined || this.ownedSessions.has(sessionID)
+    return sessionID !== undefined && this.ownedSessions.has(sessionID)
   }
 
   private recordTextDelta(props: Record<string, unknown> | undefined, receivedAt: number): void {
@@ -534,14 +633,19 @@ class AnalyticsMagpiePluginInstance {
     epoch: number,
   ): Promise<void> {
     if (!admitted || this.dependencies.runtimeEpoch() !== epoch) return
-    if (!(await this.ensureEligible(epoch))) {
+    // D13 step 1+2 (design §9.5): resolve (and pin on first admission) the
+    // account this session belongs to, then judge every turn by it.
+    const account = await this.pinnedAccount(input.sessionID)
+    if (!(await this.ensureEligible(epoch, account))) {
       this.ownedSessions.delete(input.sessionID)
+      this.sessionAccount.delete(input.sessionID)
       this.dependencies.collector.clearSession(input.sessionID)
       return
     }
     const model = resolveTurnModel(input.model, output.message)
     if (model.providerID !== "deveco") {
       this.ownedSessions.delete(input.sessionID)
+      this.sessionAccount.delete(input.sessionID)
       this.dependencies.collector.clearSession(input.sessionID)
       return
     }
@@ -579,7 +683,15 @@ class AnalyticsMagpiePluginInstance {
     admitted: boolean,
     epoch: number,
   ): Promise<void> {
-    if (!admitted || this.dependencies.runtimeEpoch() !== epoch || !(await this.ensureEligible(epoch))) return
+    if (!admitted || this.dependencies.runtimeEpoch() !== epoch) return
+    const account = await this.pinnedAccount(input.sessionID)
+    const eligible = await this.ensureEligible(epoch, account)
+    // R3: tool hooks fire for *every* session, so this hook can be the only
+    // place that pins an account for a session we never admitted — and no idle
+    // event we own will ever release that entry. Pins are only meaningful for
+    // admitted sessions, whose idle releases them (see releaseSession).
+    if (!this.ownedSessions.has(input.sessionID)) this.releaseSession(input.sessionID)
+    if (!eligible) return
     if (!["edit", "multiedit", "write", "apply_patch"].includes(input.tool)) return
     const filediff = record(output.metadata)?.filediff
     if (!filediff || typeof filediff !== "object") return
@@ -616,6 +728,7 @@ class AnalyticsMagpiePluginInstance {
     this.disposed = true
     return this.enqueueEvent(async () => {
       this.ownedSessions.forEach((sessionID) => this.dependencies.collector.clearSession(sessionID))
+      this.sessionAccount.clear()
       await this.releaseInstance()
     })
   }
@@ -637,6 +750,8 @@ export function createAnalyticsMagpiePlugin(dependencies: AnalyticsMagpiePluginD
 const AnalyticsMagpiePlugin = createAnalyticsMagpiePlugin({
   collector: globalCollector,
   collectionEnabled: getAnalyticsMagpieEnabled,
+  consentDecision: getCurrentImprovementConsent,
+  currentAccount: loadUserIdFromDisk,
   runtimeEnabled: () => collectionEnabled,
   runtimeEpoch: () => collectionEpoch,
   setCollectionEnabled: setAnalyticsMagpieCollectionEnabled,

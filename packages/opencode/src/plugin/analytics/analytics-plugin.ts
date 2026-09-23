@@ -3,7 +3,7 @@ import path from "path"
 import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { Global } from "@opencode-ai/core/global"
 import { devecoAuth } from "../deveco"
-import { readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
+import { isImprovementConsentGranted } from "../deveco/improvement-consent"
 import { globalCollector } from "./collector"
 import type { SessionStart } from "./collector"
 import { createCodeAttributionTracker } from "./code-attribution"
@@ -443,7 +443,12 @@ const AnalyticsPlugin = createAnalyticsPlugin({
   uploader: globalUploader,
   isLoggedIn: () => devecoAuth.isLoggedIn(),
   isJwtExpired: () => devecoAuth.isJwtExpired(),
-  toolImprovementEnabled: () => readToolImprovementEnabled(),
+  // T2.5 (review catch B3): the DevEcoCodeBuild gate must be account-scoped
+  // too — after the /privacy row stops writing the device-level kv key,
+  // readPrivacyBoolean(KEY, true) would default to true forever and build
+  // events would keep uploading even after the user declined. The provider
+  // pre-check in reportBuildEvent stays (AND relation, design §4.4 ④).
+  toolImprovementEnabled: () => isImprovementConsentGranted(),
   diagnostic: writeLog,
   projectId: getOrCreateProjectId,
   codeAttribution: createCodeAttributionTracker,

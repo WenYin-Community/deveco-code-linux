@@ -8,9 +8,11 @@
  * by injecting implementations rather than importing them directly.
  */
 import { registerDevEcoExtensions } from "@opencode-ai/tui/deveco-extensions"
+import { mergeProps } from "solid-js"
 import { DevEcoHomeBody } from "./home-body"
 import { AgreementReviewDialog, ProductAgreementGate } from "./agreement-panel"
 import { DialogRealName } from "./dialog-realname"
+import { ImprovementConsentDialog } from "./improvement-consent-dialog"
 import { DialogPrivacyConnected } from "./dialog-privacy"
 import { DialogCollect } from "./dialog-collect"
 import { openComplainPage } from "./complain"
@@ -53,12 +55,20 @@ export function registerDevEcoTuiExtensions(
 ): void {
   registerDevEcoExtensions({
     agreementGate: ProductAgreementGate,
-    homeBody: DevEcoHomeBody,
+    // homeBody wraps DevEcoHomeBody so the improvement-change callback threads
+    // down register → home-body → onboarding → AgreementPanel (design §6.6 B5).
+    // mergeProps (not `{...props}`) keeps the caller's getters reactive: Solid
+    // compiles dynamic JSX attributes into getters, and a spread would evaluate
+    // them once at construction.
+    homeBody: (props) =>
+      DevEcoHomeBody(mergeProps(props, { onImprovementChange: options.onToolImprovementEnabledChange })),
     readLocalAuthError,
     openComplainPage,
     pluralize,
     privacyDialog: () => DialogPrivacyConnected({ onToolImprovementEnabledChange: options.onToolImprovementEnabledChange }),
     agreementReviewDialog: AgreementReviewDialog,
+    improvementConsentDialog: (props) =>
+      ImprovementConsentDialog(mergeProps(props, { onImprovementChange: options.onToolImprovementEnabledChange })),
     isAgreementReviewError: (message) => message.includes(AGREEMENT_REVIEW_REQUIRED_MESSAGE),
     realNameDialog: DialogRealName,
     isRealNameError: (message) => /HUAWEI real-name|real-name verification/i.test(message),

@@ -13,6 +13,7 @@ import {
   setAnalyticsMagpieCollectionEnabled,
   shutdownAnalyticsMagpieCollection,
 } from "@/plugin/analytics-magpie/analytics-plugin"
+import { invalidateImprovementConsentCache } from "@/plugin/deveco/improvement-consent"
 
 Heap.start()
 
@@ -74,6 +75,10 @@ export const rpc = {
   },
   async setAnalyticsMagpieEnabled(input: { enabled: boolean }) {
     await setAnalyticsMagpieCollectionEnabled(input.enabled)
+    // T2.4 / design §4.3: the TUI process just persisted the new decision;
+    // drop this process's consent cache so the next header/eligibility
+    // judgment reads the fresh record instead of waiting out the 30s TTL.
+    invalidateImprovementConsentCache()
   },
   async shutdown() {
     const { stopUiVerificationMcp } = await import("@/tool/ui-verification")

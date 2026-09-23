@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
-import { readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
+import { isImprovementConsentGranted } from "../deveco/improvement-consent"
 import { LocalCrypto } from "@/security/local-crypto"
 import { MAGPIE_ANALYTICS_ACTION } from "./types"
 import { isAnalyticsSourceType } from "../analytics/types"
@@ -458,8 +458,15 @@ export async function getOrCreatePathRedactionSalt(): Promise<string> {
   })
 }
 
+/**
+ * Magpie eligibility (T2.1 / ADR-6): account-scoped improvement consent.
+ * Not signed in → false; signed in → whether the current account granted
+ * improvement data sharing. The public signature is unchanged — uploader and
+ * plugin call sites keep working; only the source of truth moved from the
+ * device-level kv key to the per-account consent record.
+ */
 export async function getAnalyticsMagpieEnabled(): Promise<boolean> {
-  return readToolImprovementEnabled()
+  return isImprovementConsentGranted()
 }
 
 export function getOsArch(): string {

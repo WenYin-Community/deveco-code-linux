@@ -254,7 +254,17 @@ async function runProviderOAuth(
   }
 }
 
-export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight?: number; initialStep?: OnboardingStep; sessionExpired?: boolean; initialRealName?: boolean; initialAuthError?: string; reviewRequired?: boolean }) {
+export function DevEcoOnboarding(props: {
+  onComplete: () => void
+  bodySlotHeight?: number
+  initialStep?: OnboardingStep
+  sessionExpired?: boolean
+  initialRealName?: boolean
+  initialAuthError?: string
+  reviewRequired?: boolean
+  /** Threaded into the AgreementPanel's improvement checkbox (design §6.6 / B5). */
+  onImprovementChange?: (enabled: boolean) => void | Promise<void>
+}) {
   const { theme } = useTheme();
   const { t } = useI18n();
   const sync = useSync();
@@ -278,7 +288,10 @@ export function DevEcoOnboarding(props: { onComplete: () => void; bodySlotHeight
   let productReturnStep: 'auth' | 'providers' | 'complete' = props.initialStep === 'product-privacy' ? 'complete' : 'auth';
 
   const continueSetup = () => {
-    if (productReturnStep === 'complete') return props.onComplete();
+    if (productReturnStep === 'complete') {
+      props.onComplete();
+      return;
+    }
     setStep(productReturnStep);
     if (productReturnStep === 'auth') {
       authReturnStep = 'entry';
@@ -909,6 +922,7 @@ if (st === 'entry') {
             maxHeight={props.bodySlotHeight}
             review={props.reviewRequired}
             onComplete={() => step() === 'product-privacy' ? continueSetup() : props.onComplete()}
+            onImprovementChange={props.onImprovementChange}
           />
         </OnboardingContent>
       </Show>

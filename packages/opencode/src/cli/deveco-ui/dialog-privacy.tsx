@@ -1,14 +1,31 @@
 import { useI18n } from "@opencode-ai/tui/i18n"
-import { createMemo, createResource } from "solid-js"
+import { createMemo, createResource, onMount } from "solid-js"
+import { createStore } from "solid-js/store"
 import { DialogSelect } from "@opencode-ai/tui/ui/dialog-select"
 import { useDialog } from "@opencode-ai/tui/ui/dialog"
 import { useSDK } from "@opencode-ai/tui/context/sdk"
+import { useTheme } from "@opencode-ai/tui/context/theme"
 import open from "open"
 import { useKV } from "@opencode-ai/tui/context/kv"
 import { AGREEMENT_DEFAULTS } from "@/cli/deveco-legal"
-import { ANALYTICS_ENABLED_KEY, TOOL_IMPROVEMENT_ENABLED_KEY } from "@/cli/deveco-privacy-settings"
+import { ANALYTICS_ENABLED_KEY } from "@/cli/deveco-privacy-settings"
+import { hasDevecoOAuthEntry } from "@/plugin/deveco"
+import { logWarn } from "@/plugin/deveco/log"
+import {
+  getCurrentImprovementConsent,
+  loadUserIdFromDisk,
+  setCurrentImprovementConsent,
+} from "@/plugin/deveco/improvement-consent"
 import { AgreementReviewDialog } from "./agreement-panel"
 
+/**
+ * @deprecated No production caller left: the Improvement row is account-scoped
+ * and writes through `improvement-consent.ts` (T3.4). This helper toggles a
+ * caller-supplied device-level flag and is kept only because it is a public
+ * export; **do not add new callers** — account-scoped consent must go through
+ * `setCurrentImprovementConsent`, otherwise a per-device value can disagree
+ * with the account the telemetry is attributed to.
+ */
 export function toggleToolImprovementEnabled(input: {
   current: boolean
   set(enabled: boolean): void
@@ -32,13 +49,60 @@ export function DialogPrivacy(
   } = {},
 ) {
   const { t } = useI18n()
+  const { theme } = useTheme()
   const kv = useKV()
   const dialog = useDialog()
   const [agreement] = createResource(() => props.loadAgreement?.())
 
   const analyticsEnabled = () => kv.get("analytics_enabled", true)
   const crashUploadEnabled = () => kv.get("crash_upload_enabled", true)
-  const toolImprovementEnabled = () => kv.get(TOOL_IMPROVEMENT_ENABLED_KEY, true)
+
+  // Improvement row (design §6.5 / D8): account-scoped read/write. Locked
+  // (greyed, "sign in to configure") when no account can be identified —
+  // either no OAuth entry, or the two login signals diverge (auth.json has an
+  // entry but token.enc yields no userId — S7); there must be no writable
+  // path that could attach a record to no account (ST-3).
+  const [imp, setImp] = createStore({ granted: false, locked: true, error: "", busy: false })
+  onMount(async () => {
+    if (!hasDevecoOAuthEntry()) return
+    // S7 boundary (design §6.5): auth.json still has an oauth entry while
+    // token.enc yields no userId (token-storage deletes it when decryption
+    // fails). The row is locked (D8) like the signed-out case — and the
+    // divergence gets a log line, otherwise this state is undiagnosable.
+    if (!(await loadUserIdFromDisk())) {
+      logWarn("improvement consent row locked: oauth entry present but userId unresolvable", { service: "deveco" })
+      return
+    }
+    const consent = await getCurrentImprovementConsent()
+    setImp({ granted: consent === "granted", locked: false })
+  })
+
+  const toggleImprovement = async () => {
+    if (imp.locked) return
+    // P3 fix (2026-09-23): guard against overlapping writes. Space repeats (or a
+    // fast double press) would otherwise start two writes whose completion order
+    // is not guaranteed, leaving the row and the disk disagreeing. Mirrors the
+    // consent dialog's `state.busy` guard.
+    if (imp.busy) return
+    const next = !imp.granted
+    setImp({ granted: next, busy: true }) // optimistic
+    try {
+      // I-4: false = not written (userId unresolvable / write failure) → roll
+      // the row back and surface the error; never fail silently (S7)
+      if (!(await setCurrentImprovementConsent(next))) {
+        setImp({ granted: !next, error: t("account.improvement_update_failed") })
+        return
+      }
+      setImp("error", "")
+      try {
+        await props.onToolImprovementEnabledChange?.(next)
+      } catch {
+        // Collection settings remain local-first when the worker is unavailable.
+      }
+    } finally {
+      setImp("busy", false)
+    }
+  }
 
   const toggle = (value: string) => {
     if (value === "toggle-analytics") {
@@ -46,11 +110,7 @@ export function DialogPrivacy(
       return
     }
     if (value === "toggle-tool-improvement") {
-      toggleToolImprovementEnabled({
-        current: toolImprovementEnabled(),
-        set: (enabled) => kv.set(TOOL_IMPROVEMENT_ENABLED_KEY, enabled),
-        onChange: props.onToolImprovementEnabledChange,
-      })
+      void toggleImprovement()
       return
     }
     if (value === "toggle-crash-upload") kv.set("crash_upload_enabled", !crashUploadEnabled())
@@ -58,6 +118,17 @@ export function DialogPrivacy(
 
   let selected = "policy"
 
+  /**
+   * 行标题与旁边两行（Analytics / Crash）保持同一约定：**动词标题 + 动作描述**。
+   * 未登录时读不到存储的决定，动词会误导，故用中性名称；标题更短也让提示不被挤掉
+   * （本对话框宽 60 列，标题与描述并排）。
+   */
+  const improvementLabel = () =>
+    imp.locked
+      ? t("account.improvement_title")
+      : imp.granted
+        ? t("account.disable_improvement")
+        : t("account.enable_improvement")
   const options = createMemo(() => [
     ...(agreement()?.upload.state === "review_required"
       ? [{
@@ -94,8 +165,15 @@ export function DialogPrivacy(
       onSelect: () => toggle("toggle-analytics"),
     },
     {
-      title: toolImprovementEnabled() ? t("account.disable_improvement") : t("account.enable_improvement"),
-      description: toolImprovementEnabled() ? t("account.stop_prompts") : t("account.share_prompts"),
+      // Account-scoped improvement row (T3.4). DialogSelect drops `disabled`
+      // options from the list entirely, so the D8 locked state is expressed by
+      // muting the title — the row must stay visible with the "sign in to
+      // configure" hint (UI-7) while `toggleImprovement` refuses to write (S7).
+      title: improvementLabel(),
+      titleView: <span style={{ fg: imp.locked ? theme.textMuted : theme.text }}>{improvementLabel()}</span>,
+      description: imp.locked
+        ? t("account.improvement_login_required")
+        : imp.error || (imp.granted ? t("account.stop_prompts") : t("account.share_prompts")),
       value: "toggle-tool-improvement",
       category: t("account.sharing"),
       onSelect: () => toggle("toggle-tool-improvement"),
