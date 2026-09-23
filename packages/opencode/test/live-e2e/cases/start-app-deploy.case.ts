@@ -131,7 +131,7 @@ async function runCreate(workspace: string, env: Record<string, string | undefin
   return runProcess(
     [
       process.execPath,
-      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "cli.js"),
       "create",
       "--project-path",
       path.join(workspace, APP_NAME),

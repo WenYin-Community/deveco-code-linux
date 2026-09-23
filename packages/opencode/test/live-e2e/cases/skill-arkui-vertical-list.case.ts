@@ -13,7 +13,7 @@ const DEVECO_SKILLS_DIR = path.join(os.homedir(), ".local", "share", "deveco", "
 
 // Pre-create the ArkTS project directly with the bundled CLI so the model can
 // focus on writing UI code.
-const DEVECO_CLI_ENTRY = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
+const DEVECO_CLI_ENTRY = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "cli.js")
 const APP_NAME = "UserList"
 const BUNDLE_NAME = "com.example.userlist"
 

@@ -29,12 +29,19 @@ const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", "deveco.exe")
 const devecoCliPackageName = "@deveco/deveco-cli"
+const devecoCliBinName = "devecocli"
 
 function resolveLocalDevecoCliEntry() {
   const packageJsonPath = require.resolve(`${devecoCliPackageName}/package.json`)
-  const entry = path.join(path.dirname(packageJsonPath), "dist", "cli.js")
-  if (fs.existsSync(entry)) return entry
-  throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry at ${entry}.`)
+  const packageRoot = path.dirname(packageJsonPath)
+  const bin = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).bin
+  // The platform-split shell package declares `bin.devecocli` at its root; bundled builds ship `dist/cli.js`.
+  const declared = typeof bin === "string" ? bin : bin?.[devecoCliBinName]
+  const entry = [declared && path.join(packageRoot, declared), path.join(packageRoot, "dist", "cli.js")]
+    .filter(Boolean)
+    .find((candidate) => fs.existsSync(candidate))
+  if (entry) return entry
+  throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry under ${packageRoot}.`)
 }
 
 function writeDevecoCliEntryMarker(installRoot) {

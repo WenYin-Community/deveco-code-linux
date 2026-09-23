@@ -11,7 +11,7 @@ async function createBuildProject(workspace: string) {
   const create = Bun.spawn(
     [
       process.execPath,
-      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
+      path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "cli.js"),
       "create",
       "--project-path",
       projectRoot,

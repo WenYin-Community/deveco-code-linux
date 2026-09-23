@@ -10,8 +10,9 @@ import path from "path"
 
 export const DEVECO_CLI_VENDOR_DIRNAME = "deveco-cli"
 
-const PACKAGE_NAMES = ["@deveco/deveco-cli", "@deveco-test/deveco-cli"] as const
-const PACKAGE_JSON_NAME = "@deveco/deveco-cli"
+const PACKAGE_NAME = "@deveco/deveco-cli"
+const PACKAGE_PATH = PACKAGE_NAME.split("/")
+const BIN_NAME = "devecocli"
 
 /** Known platform-specific packages some cli versions pull in (install only for current target). */
 const DEVECO_CLI_RIPGREP_BY_TARGET = [
@@ -31,14 +32,19 @@ function registryArgs(): string[] {
 }
 
 export function resolveDevecoCliEntry(packageRoot: string): string {
+  // The platform-split shell package declares `bin.devecocli` at its root; bundled builds ship `dist/cli.js`.
+  const manifestPath = path.join(packageRoot, "package.json")
+  if (fs.existsSync(manifestPath)) {
+    const bin = (JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { bin?: string | Record<string, string> }).bin
+    const declared = typeof bin === "string" ? bin : bin?.[BIN_NAME]
+    if (declared && fs.existsSync(path.join(packageRoot, declared))) return path.join(packageRoot, declared)
+  }
   return path.join(packageRoot, "dist", "cli.js")
 }
 
 export function resolveVendoredDevecoCliEntry(vendorRoot: string): string | undefined {
-  for (const name of PACKAGE_NAMES) {
-    const candidate = path.join(vendorRoot, "node_modules", ...name.split("/"), "dist", "cli.js")
-    if (fs.existsSync(candidate)) return candidate
-  }
+  const nested = resolveDevecoCliEntry(path.join(vendorRoot, "node_modules", ...PACKAGE_PATH))
+  if (fs.existsSync(nested)) return nested
   const direct = resolveDevecoCliEntry(vendorRoot)
   if (fs.existsSync(direct)) return direct
   return undefined
@@ -58,10 +64,8 @@ async function readPackageVersion(packageRoot: string): Promise<string> {
 }
 
 function packageRootInVendor(vendorRoot: string): string | undefined {
-  for (const name of PACKAGE_NAMES) {
-    const candidate = path.join(vendorRoot, "node_modules", ...name.split("/"))
-    if (fs.existsSync(path.join(candidate, "package.json"))) return candidate
-  }
+  const candidate = path.join(vendorRoot, "node_modules", ...PACKAGE_PATH)
+  if (fs.existsSync(path.join(candidate, "package.json"))) return candidate
   if (fs.existsSync(path.join(vendorRoot, "package.json")) && fs.existsSync(resolveDevecoCliEntry(vendorRoot))) {
     return vendorRoot
   }
@@ -117,12 +121,18 @@ async function readOptionalDependencyNames(cliPackageRoot: string): Promise<stri
   return Object.keys(pkg.optionalDependencies ?? {})
 }
 
+// Optional dependencies named after a platform (`-<os>-<arch>`) only apply to that
+// target; unsuffixed ones such as `@deveco/deveco-cli-common` apply to every target.
+function matchesVendorTarget(name: string, target: DevecoCliVendorTarget) {
+  const match = /-(darwin|linux|win32|openharmony)-(x64|arm64)$/.exec(name)
+  if (!match) return true
+  return match[1] === target.os && match[2] === target.arch
+}
+
 function readInstalledRipgrepVersion(vendorRoot: string): string | undefined {
   const candidates = [
     path.join(vendorRoot, "node_modules", "@vscode", "ripgrep", "package.json"),
-    ...PACKAGE_NAMES.map((name) =>
-      path.join(vendorRoot, "node_modules", ...name.split("/"), "node_modules", "@vscode", "ripgrep", "package.json"),
-    ),
+    path.join(vendorRoot, "node_modules", ...PACKAGE_PATH, "node_modules", "@vscode", "ripgrep", "package.json"),
   ]
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue
@@ -166,7 +176,7 @@ async function writeVendorPackageJson(destRoot: string, version: string) {
         name: "deveco-cli-vendor",
         private: true,
         dependencies: {
-          [PACKAGE_JSON_NAME]: version,
+          [PACKAGE_NAME]: version,
         },
       },
       null,
@@ -180,7 +190,7 @@ async function installDevecoCliVendor(destRoot: string, version: string, target:
   await fs.promises.mkdir(destRoot, { recursive: true })
   await writeVendorPackageJson(destRoot, version)
 
-  console.log(`  bun install --production --os=${target.os} --cpu=${target.arch} @deveco/deveco-cli@${version}`)
+  console.log(`  bun install --production --os=${target.os} --cpu=${target.arch} ${PACKAGE_NAME}@${version}`)
   await $`bun install --production --os=${target.os} --cpu=${target.arch} ${registryArgs()}`.cwd(destRoot)
 
   const entry = resolveVendoredDevecoCliEntry(destRoot)
@@ -194,13 +204,16 @@ async function installDevecoCliVendor(destRoot: string, version: string, target:
   }
 
   // Ensure optionalDependencies declared for this package that match target naming are present when possible.
-  const optionalNames = await readOptionalDependencyNames(cliRoot)
+  const optionalNames = (await readOptionalDependencyNames(cliRoot)).filter((name) => matchesVendorTarget(name, target))
   for (const name of optionalNames) {
     if (hasPackage(destRoot, name)) continue
-    // Best-effort: try installing with target os/cpu; ignore failures for unrelated optionals.
+    // Best-effort: install the exact release version without touching the vendor manifest, so
+    // package.json only lists what the primary install resolved. Ignore unrelated failures.
     try {
-      console.log(`  Ensuring optional ${name} for ${target.os}-${target.arch}...`)
-      await $`bun add --production --os=${target.os} --cpu=${target.arch} ${registryArgs()} ${name}`.cwd(destRoot)
+      console.log(`  Ensuring optional ${name}@${version} for ${target.os}-${target.arch}...`)
+      await $`bun add --production --no-save --os=${target.os} --cpu=${target.arch} ${registryArgs()} ${name}@${version}`.cwd(
+        destRoot,
+      )
     } catch (error) {
       console.log(`  optional ${name} skipped: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -276,24 +289,19 @@ export async function bundleDevecoCliVendor(opts: {
   return { entry, version: cache.version, bytes }
 }
 
-export function resolveDevecoCliVersionFromPackageJson(pkg: {
-  dependencies?: Record<string, string>
-}): string {
-  const raw = pkg.dependencies?.[PACKAGE_JSON_NAME]
+export function resolveDevecoCliVersionFromPackageJson(pkg: { dependencies?: Record<string, string> }): string {
+  const raw = pkg.dependencies?.[PACKAGE_NAME]
   if (!raw) {
-    throw new Error(`Missing dependency "${PACKAGE_JSON_NAME}" in package.json`)
+    throw new Error(`Missing dependency "${PACKAGE_NAME}" in package.json`)
   }
-  // Support "1.2.2" and "npm:@deveco-test/deveco-cli@1.3.0-Test.12"
+  // Support "1.3.4" and "npm:@deveco/deveco-cli@1.3.4"
   const npmAlias = raw.match(/@([^@]+)$/)
   if (raw.startsWith("npm:") && npmAlias) return npmAlias[1]
   return raw
 }
 
 export async function readInstalledDevecoCliVersion(packageDir: string): Promise<string | undefined> {
-  for (const name of PACKAGE_NAMES) {
-    const candidate = path.join(packageDir, "node_modules", ...name.split("/"), "package.json")
-    if (!fs.existsSync(candidate)) continue
-    return readPackageVersion(path.dirname(candidate))
-  }
-  return undefined
+  const candidate = path.join(packageDir, "node_modules", ...PACKAGE_PATH, "package.json")
+  if (!fs.existsSync(candidate)) return undefined
+  return readPackageVersion(path.dirname(candidate))
 }

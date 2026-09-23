@@ -8,7 +8,7 @@ description: >-
 
 `devecocli` wraps DevEco Studio's `hvigor`, `ohpm`, `hdc`, emulator toolchain, and bundled skills installer.
 
-This is DevEco Code's Router-aware skill, synchronized with `@deveco/deveco-cli@1.3.2`. DevEco Code invokes its bundled CLI through a proxy; the create, build, docs, run, and log behavior below includes local adaptations. Maintain this repository copy when upgrading the CLI; do not replace it with the npm package's unmodified skill.
+This is DevEco Code's Router-aware skill, synchronized with `@deveco/deveco-cli@1.3.4`. DevEco Code invokes its bundled CLI through a proxy; the create, build, docs, run, and log behavior below includes local adaptations. Maintain this repository copy when upgrading the CLI; do not replace it with the npm package's unmodified skill.
 
 Available commands: `build`, `check`, `run`, `update`, `device`, `emulator`, `ui`, `skills`, `log`, `create`, `init`, `serve`, `docs`, `signature`, `auth`.
 

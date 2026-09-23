@@ -28,15 +28,28 @@ function exists(file: string) {
   return fsSync.existsSync(file)
 }
 
+/**
+ * The CLI entry moved between layouts: bundled builds ship `dist/cli.js`, while the
+ * platform-split shell package declares `bin.devecocli` at the package root.
+ */
+function resolveDevecoCliEntryInPackage(packageRoot: string): string | undefined {
+  const manifestPath = path.join(packageRoot, "package.json")
+  const bin = exists(manifestPath) ? JSON.parse(fsSync.readFileSync(manifestPath, "utf8")).bin : undefined
+  const declared = typeof bin === "string" ? bin : bin?.[SHIM_NAME]
+  const candidates = [
+    declared ? path.join(packageRoot, declared) : undefined,
+    path.join(packageRoot, "dist", "cli.js"),
+  ].filter((candidate): candidate is string => candidate !== undefined)
+  const entry = candidates.find(exists)
+  return entry ? path.resolve(entry) : undefined
+}
+
 export function resolveVendoredDevecoCliEntry(installRoot: string): string | undefined {
   const vendorRoot = path.join(installRoot, "vendor", VENDOR_CLI_DIRNAME)
-  const nested = [
-    path.join(vendorRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js"),
-    path.join(vendorRoot, "node_modules", "@deveco-test", "deveco-cli", "dist", "cli.js"),
-    path.join(vendorRoot, "dist", "cli.js"),
-  ]
+  const nested = [path.join(vendorRoot, "node_modules", ...PACKAGE_NAME.split("/")), vendorRoot]
   for (const candidate of nested) {
-    if (exists(candidate)) return path.resolve(candidate)
+    const entry = resolveDevecoCliEntryInPackage(candidate)
+    if (entry) return entry
   }
   return undefined
 }
@@ -67,8 +80,7 @@ export function resolveInstalledDevecoCliEntryFromExecutable(executable: string)
 
 export function resolveLocalBuildDevecoCliEntry(executable: string): string | undefined {
   const packageRoot = path.resolve(path.dirname(executable), "..", "..", "..")
-  const entry = path.join(packageRoot, "node_modules", ...PACKAGE_NAME.split("/"), "dist", "cli.js")
-  return exists(entry) ? path.resolve(entry) : undefined
+  return resolveDevecoCliEntryInPackage(path.join(packageRoot, "node_modules", ...PACKAGE_NAME.split("/")))
 }
 
 let testEntryOverride: string | undefined
@@ -89,8 +101,8 @@ export function resolveBundledDevecoCliEntry(): string | undefined {
   // Development only: resolve the declared local dependency from this checkout.
   let current = path.dirname(fileURLToPath(import.meta.url))
   for (;;) {
-    const entry = path.join(current, "node_modules", ...PACKAGE_NAME.split("/"), "dist", "cli.js")
-    if (exists(entry)) return path.resolve(entry)
+    const entry = resolveDevecoCliEntryInPackage(path.join(current, "node_modules", ...PACKAGE_NAME.split("/")))
+    if (entry) return entry
     const parent = path.dirname(current)
     if (parent === current) break
     current = parent

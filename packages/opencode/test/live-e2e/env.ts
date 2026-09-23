@@ -9,7 +9,7 @@ export const repoRoot = path.resolve(opencodeRoot, "../..")
 export const cliEntry = path.join(opencodeRoot, "src/index.ts")
 export const latestReportDir = path.join(repoRoot, "reports", "live-e2e", "latest")
 export const artifactDir = path.join(latestReportDir, "artifacts")
-const bundledDevecoCliEntry = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "dist", "cli.js")
+const bundledDevecoCliEntry = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "cli.js")
 
 export function realUserEnv() {
   const env = { ...process.env }

@@ -324,10 +324,7 @@ describe("loadSkillsFromDisk fallback", () => {
       yield* writeVersionEffect("9.0.0")
       yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "deveco-cli"), { recursive: true }))
       yield* Effect.promise(() =>
-        fs.copyFile(
-          path.join(import.meta.dir, "../../node_modules/@deveco/deveco-cli/SKILL.md"),
-          path.join(skillsDir, "deveco-cli", "SKILL.md"),
-        ),
+        fs.writeFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "# stale native CLI skill\n"),
       )
       yield* Effect.promise(() =>
         fs.writeFile(path.join(skillsDir, "deveco-cli", ".version"), "deveco-cli"),

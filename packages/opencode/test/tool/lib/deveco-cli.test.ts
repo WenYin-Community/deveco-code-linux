@@ -90,6 +90,18 @@ describe("deveco-cli runtime", () => {
     expect(resolveBundledDevecoCliEntry()).toBe(path.resolve(cli))
   })
 
+  test("resolveVendoredDevecoCliEntry() honours bin.devecocli for the platform-split shell package", async () => {
+    await using tmp = await tmpdir()
+    const installRoot = path.join(tmp.path, "install")
+    const cliRoot = path.join(installRoot, "vendor", "deveco-cli", "node_modules", "@deveco", "deveco-cli")
+    const cli = path.join(cliRoot, "cli.js")
+    await fs.mkdir(cliRoot, { recursive: true })
+    await Bun.write(cli, "console.log('shell')\n")
+    await Bun.write(path.join(cliRoot, "package.json"), JSON.stringify({ bin: { devecocli: "cli.js" } }))
+
+    expect(resolveVendoredDevecoCliEntry(installRoot)).toBe(path.resolve(cli))
+  })
+
   test("resolveInstalledDevecoCliEntry() only accepts an absolute local marker", async () => {
     await using tmp = await tmpdir()
     const installRoot = path.join(tmp.path, "install")
@@ -212,7 +224,7 @@ describe("deveco-cli runtime", () => {
       JSON.stringify({
         name: "@deveco/deveco-code",
         dependencies: {
-          "@deveco/deveco-cli": "1.0.0",
+          "@deveco/deveco-cli": "1.3.4",
         },
         optionalDependencies: {
           [`@deveco/${platformPackage}`]: "1.0.0",
@@ -240,7 +252,7 @@ describe("deveco-cli runtime", () => {
     expect(await Bun.file(path.join(mainRoot, "bin", "deveco.exe")).exists()).toBe(true)
   })
 
-  test("published postinstall resolves a nested npm-aliased CLI dependency", async () => {
+  test("published postinstall resolves a nested platform-split CLI shell package", async () => {
     await using tmp = await tmpdir()
     const platform = process.platform === "win32" ? "windows" : process.platform
     const platformPackage = `deveco-code-${platform}-${process.arch}`
@@ -249,22 +261,26 @@ describe("deveco-cli runtime", () => {
     const cliRoot = path.join(mainRoot, "node_modules", "@deveco", "deveco-cli")
     const platformRoot = path.join(modules, "@deveco", platformPackage)
     const sourceBinary = path.join(platformRoot, "bin", process.platform === "win32" ? "deveco.exe" : "deveco")
-    const cliEntry = path.join(cliRoot, "dist", "cli.js")
+    // The shell package forwards to a platform implementation package, so its entry sits at the root.
+    const cliEntry = path.join(cliRoot, "cli.js")
 
     await fs.mkdir(path.dirname(sourceBinary), { recursive: true })
-    await fs.mkdir(path.dirname(cliEntry), { recursive: true })
+    await fs.mkdir(cliRoot, { recursive: true })
     await fs.mkdir(mainRoot, { recursive: true })
     await fs.copyFile(process.execPath, sourceBinary)
     if (process.platform !== "win32") await fs.chmod(sourceBinary, 0o755)
     await Bun.write(cliEntry, "console.log('test local')\n")
-    await Bun.write(path.join(cliRoot, "package.json"), JSON.stringify({ name: "@deveco-test/deveco-cli" }))
+    await Bun.write(
+      path.join(cliRoot, "package.json"),
+      JSON.stringify({ name: "@deveco/deveco-cli", bin: { devecocli: "cli.js" } }),
+    )
     await fs.copyFile(path.join(import.meta.dir, "../../../script/postinstall.mjs"), path.join(mainRoot, "postinstall.mjs"))
     await Bun.write(
       path.join(mainRoot, "package.json"),
       JSON.stringify({
         name: "@deveco/deveco-code",
         dependencies: {
-          "@deveco/deveco-cli": "npm:@deveco-test/deveco-cli@1.0.0",
+          "@deveco/deveco-cli": "1.3.4",
         },
         optionalDependencies: {
           [`@deveco/${platformPackage}`]: "1.0.0",
