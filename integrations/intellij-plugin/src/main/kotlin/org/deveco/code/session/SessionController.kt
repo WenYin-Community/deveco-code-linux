@@ -343,10 +343,8 @@ internal class SessionController(
     private var lastTodoUpdateMs: Long = 0
     var models by mutableStateOf(emptyList<ModelChoice>())
         private set
-    // Connection-filtered model list (backend models from loadSession,
-    // filtered to only connected providers). `models` mirrors this directly
-    // since blacklist filtering is removed — the backend config is the
-    // single source of truth for which models are available.
+    // Backend models filtered to connected providers and the blacklist;
+    // blacklistListener re-filters on change without re-fetching.
     @Volatile
     private var rawModels: List<ModelChoice> = emptyList()
     // Backend-sourced models (from ACP session config). Kept separately so
@@ -509,6 +507,21 @@ internal class SessionController(
         }
     }
 
+    // Re-filters models when the blacklist changes; falls back to the
+    // default model if the current selection was just blacklisted. Deferred
+    // to the end of an in-flight prompt, same as refreshModels.
+    private val blacklistListener: () -> Unit = {
+        if (prompting) {
+            pendingModelRefresh = true
+        } else {
+            rebuildRawModels()
+            val current = selectedModel
+            if (current != null && models.none { it.id == current.id }) {
+                selectFallbackModel()
+            }
+        }
+    }
+
     fun start() {
         // Idempotent: re-attached headless controllers are already started.
         if (started) return
@@ -516,6 +529,7 @@ internal class SessionController(
         service.addSessionListener(listener)
         service.addPermissionHandler(permissionHandler)
         modelStore.addGlobalModelListener(globalModelListener)
+        modelStore.addBlacklistListener(blacklistListener)
         messageBusConnection.subscribe(SESSION_REFRESH_TOPIC, SessionRefreshListener {
             refreshCommands()
             refreshModels()
@@ -634,8 +648,8 @@ internal class SessionController(
     // so loadSession() returns fresh data after any config change.
     // Filter by connection state: show models from providers with a
     // stored API key (in cachedCatalog), plus manual-type providers whose
-    // API key is optional. Called from updateModels (backend config
-    // changed) and refreshModels (SESSION_REFRESH_TOPIC).
+    // API key is optional. Then drop blacklisted models. Called from
+    // updateModels, refreshModels (SESSION_REFRESH_TOPIC) and blacklistListener.
     private fun rebuildRawModels() {
         val cachedCatalog = modelStore.getCachedCatalog()
         val connectedProviderIds = cachedCatalog.map { it.providerId.lowercase() }.toSet()
@@ -643,16 +657,20 @@ internal class SessionController(
             .filter { it.type == "manual" }
             .map { it.providerId.lowercase() }
             .toSet()
+        val blacklistedIds = modelStore.getBlacklist()
+            .map { "${it.providerId}/${it.modelId}" }
+            .toSet()
         rawModels = if (connectedProviderIds.isNotEmpty() || manualProviderIds.isNotEmpty()) {
             backendModels.filter {
-                it.providerId.lowercase() in connectedProviderIds ||
-                    it.providerId.lowercase() in manualProviderIds
+                (it.providerId.lowercase() in connectedProviderIds ||
+                    it.providerId.lowercase() in manualProviderIds) &&
+                    it.id !in blacklistedIds
             }
         } else {
-            backendModels
+            backendModels.filter { it.id !in blacklistedIds }
         }
         models = rawModels
-        log.info("rebuildRawModels: backendModels=${backendModels.size} cachedCatalogProviders=${connectedProviderIds} manualProviders=${manualProviderIds} models=${models.size} models=${models.map { it.id }}")
+        log.info("rebuildRawModels: backendModels=${backendModels.size} cachedCatalogProviders=${connectedProviderIds} manualProviders=${manualProviderIds} blacklisted=${blacklistedIds.size} models=${models.size} modelIds=${models.map { it.id }}")
     }
 
     // Called when the currently selected model is no longer in the filtered
@@ -1124,6 +1142,7 @@ internal class SessionController(
         service.removeSessionListener(listener)
         service.removePermissionHandler(permissionHandler)
         modelStore.removeGlobalModelListener(globalModelListener)
+        modelStore.removeBlacklistListener(blacklistListener)
         // Intentionally NOT calling service.unloadSession(sessionId) here.
         // Closing the ACP session holder while the backend still has pending
         // session/update notifications causes "Session not found" errors in the
