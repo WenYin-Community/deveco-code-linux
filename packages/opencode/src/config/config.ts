@@ -402,6 +402,12 @@ export const layer = Layer.effect(
         const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
+        // Surface invalid memory-config.json at startup; the memory plugin's loader
+        // would otherwise swallow parse errors and silently fall back to defaults.
+        const memoryConfigPath = path.join(Global.Path.home, ".deveco", "memory-config.json")
+        const memoryConfigText = yield* readConfigFile(memoryConfigPath)
+        if (memoryConfigText) ConfigParse.jsonc(memoryConfigText, memoryConfigPath)
+
         if (Runtime.current.configSources.explicit && Flag.DEVECO_CONFIG) {
           yield* merge(Flag.DEVECO_CONFIG, yield* loadFile(Flag.DEVECO_CONFIG, authEnv))
           yield* Effect.logDebug("loaded custom config", { path: Flag.DEVECO_CONFIG })

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { Jsonc } from "@opencode-ai/core/jsonc"
 import { Memory } from "../../src/util/memory"
 import { slugifyProjectID } from "@opencode-ai/core/memory"
 
@@ -45,6 +46,62 @@ describe("memory config", () => {
     const user = await Bun.file(path.join(value.home, ".deveco", "memory-config.json")).json()
     expect(user).toEqual({ skills: { enabled: false }, autoMemory: { expiry: { ttl: 1 } } })
     expect(Memory.isEnabled(await Memory.readConfig(value), SKILLS)).toBe(false)
+  })
+
+  test("preserves comments and formatting when patching an existing file", async () => {
+    const value = await scope()
+    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
+    const file = path.join(value.home, ".deveco", "memory-config.json")
+    const original = [
+      "{",
+      "  // auto memory settings",
+      '  "autoMemory": {',
+      '    "enabled": true,',
+      '    "maxMemoryFiles": 200',
+      "  },",
+      '  "skills": {',
+      '    "enabled": true',
+      "  }",
+      "}",
+    ].join("\n")
+    await writeFile(file, original)
+
+    await Memory.writeSetting(value, SKILLS, false)
+
+    const after = await Bun.file(file).text()
+    // Comments are preserved.
+    expect(after).toContain("// auto memory settings")
+    // Untouched keys are preserved.
+    expect(after).toContain('"maxMemoryFiles": 200')
+    // The toggled value changed.
+    const parsed = Jsonc.parse(after) as Record<string, unknown>
+    expect((parsed.skills as Record<string, unknown>).enabled).toBe(false)
+    expect((parsed.autoMemory as Record<string, unknown>).enabled).toBe(true)
+  })
+
+  test("creates a new file when none exists", async () => {
+    const value = await scope()
+    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
+    const file = path.join(value.home, ".deveco", "memory-config.json")
+    expect(await Bun.file(file).exists()).toBe(false)
+
+    await Memory.writeSetting(value, SKILLS, true)
+
+    const parsed = await Bun.file(file).json()
+    expect(parsed.skills.enabled).toBe(true)
+  })
+
+  test("throws and does not write when the file is invalid JSON", async () => {
+    const value = await scope()
+    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
+    const file = path.join(value.home, ".deveco", "memory-config.json")
+    const broken = "{ invalid json }"
+    await writeFile(file, broken)
+
+    await expect(Memory.writeSetting(value, SKILLS, false)).rejects.toThrow("is not valid")
+
+    // The corrupt content is left untouched; we don't silently overwrite or further corrupt it.
+    expect(await Bun.file(file).text()).toBe(broken)
   })
 })
 

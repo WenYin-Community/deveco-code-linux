@@ -62,6 +62,8 @@ function State(props: { enabled: boolean }) {
 
 export function DialogMemory(props: { current?: string }) {
   const { t } = useI18n()
+  const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const dialog = useDialog()
   const toast = useToast()
   const [busy, setBusy] = createSignal(false)
@@ -76,7 +78,8 @@ export function DialogMemory(props: { current?: string }) {
   const [snapshot, { refetch }] = createResource(scope, async (scope) => {
     const config = await Memory.readConfig(scope)
     const dir = Memory.memoryDir(config, scope)
-    return { config, dir, memories: await Memory.list(dir) }
+    const [memories, pendingExpiry] = await Promise.all([Memory.list(dir), Memory.readPendingExpiryNames(dir)])
+    return { config, dir, memories, pendingExpiry }
   })
 
   const options = createMemo<DialogSelectOption<string>[]>(() => {
@@ -98,15 +101,28 @@ export function DialogMemory(props: { current?: string }) {
               category: t("category.memory_items"),
             },
           ]
-        : data.memories.map((memory) => ({
-            value: ITEM + memory.file,
-            title: memory.name,
-            // The date is what tells memories apart at a glance; the type sits at the row end
-            // like the settings' enabled state, the description body belongs to the content view.
-            description: Locale.datetime(memory.mtime),
-            footer: memory.type,
-            category: t("category.memory_items"),
-          }))),
+        : data.memories.map((memory) => {
+            const expired = data.pendingExpiry.has(memory.name)
+            const suffix = expired ? `（${t("dialog.memory_expired")}）` : ""
+            const date = Locale.datetime(memory.mtime)
+            const footer = `${date.padStart(19)}${memory.type.padStart(9)}`
+            // Row: [padLeft:3] [title flexGrow, overflow:hidden] [gap:1] [footer flexShrink] [padRight:3]
+            // Title text has paddingLeft:3 internally, reducing its content area by 3.
+            const dialogWidth = Math.min(88, dimensions().width)
+            const available = dialogWidth - 3 - 3 - 1 - 3 - 3 - footer.length
+            const titleLen = memory.name.length + suffix.length
+            const title =
+              titleLen > available
+                ? Locale.truncateMiddle(memory.name, Math.max(4, available - suffix.length)) + suffix
+                : memory.name + suffix
+            return {
+              value: ITEM + memory.file,
+              title,
+              truncateTitle: false,
+              footer,
+              category: t("category.memory_items"),
+            }
+          })),
     ]
   })
 
@@ -225,6 +241,11 @@ function MemoryDetail(props: { file: string }) {
   const dimensions = useTerminalDimensions()
   const scope = useMemoryScope()
   const [item] = createResource(() => Memory.readItem(props.file))
+  const [pendingExpiry] = createResource(() => Memory.readPendingExpiryNames(path.dirname(props.file)))
+  const expired = createMemo(() => {
+    const detail = item()
+    return !!detail?.header?.name && pendingExpiry()?.has(detail.header.name) === true
+  })
   // The plugin, dream cleanup or another window can delete the file between the list snapshot and
   // this read, so "gone" and "unreadable" are states to render, not crashes. Everything else in
   // the panel stays put so both cases keep the same shape as the list.
@@ -341,7 +362,11 @@ function MemoryDetail(props: { file: string }) {
     >
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          {t("dialog.memory_content_title", { name: item()?.header?.name ?? path.basename(props.file, ".md") })}
+          {t("dialog.memory_content_title", {
+            name:
+              (item()?.header?.name ?? path.basename(props.file, ".md")) +
+              (expired() ? `（${t("dialog.memory_expired")}）` : ""),
+          })}
         </text>
         <text fg={theme.textMuted} onMouseUp={afterEvent(back)}>
           {t("dialog.esc")}

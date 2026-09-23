@@ -561,6 +561,7 @@
     "memory_empty": "No memories yet",
     "memory_content_title": "Memory: {{name}}",
     "memory_missing": "Memory file no longer exists",
+    "memory_expired": "Expired",
     "memory_config_note": "Read at plugin init, restart to apply",
     "memory_setting": {
       "auto_memory": "Auto memory",

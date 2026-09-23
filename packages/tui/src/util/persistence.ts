@@ -31,3 +31,16 @@ export async function writeJsonAtomic(filePath: string, value: unknown) {
     throw error
   })
 }
+
+export async function writeTextAtomic(filePath: string, content: string) {
+  await mkdir(path.dirname(filePath), { recursive: true })
+  const temporary = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`
+  await Bun.write(temporary, content).catch(async (error) => {
+    await rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  })
+  await rename(temporary, filePath).catch(async (error) => {
+    await rm(temporary, { force: true }).catch(() => undefined)
+    throw error
+  })
+}

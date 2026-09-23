@@ -628,6 +628,19 @@ it.instance("throws error for invalid JSON", () =>
   }),
 )
 
+it.instance("throws error for invalid memory-config.json", () =>
+  Effect.gen(function* () {
+    const memoryConfigPath = path.join(Global.Path.home, ".deveco", "memory-config.json")
+    yield* FSUtil.use.writeWithDirs(memoryConfigPath, "{ invalid json }")
+    try {
+      const exit = yield* Config.use.get().pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+    } finally {
+      yield* Effect.promise(() => fs.rm(memoryConfigPath, { force: true }))
+    }
+  }),
+)
+
 it.instance("handles agent configuration", () =>
   Effect.gen(function* () {
     const test = yield* TestInstance

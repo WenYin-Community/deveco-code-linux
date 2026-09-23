@@ -562,6 +562,7 @@
     "memory_empty": "暂无记忆",
     "memory_content_title": "记忆：{{name}}",
     "memory_missing": "记忆文件已不存在",
+    "memory_expired": "已过期",
     "memory_config_note": "插件初始化时读取，重启后生效",
     "memory_setting": {
       "auto_memory": "自动记忆",

@@ -1,6 +1,7 @@
 import { open, readdir, rm, stat } from "node:fs/promises"
 import path from "node:path"
-import { writeJsonAtomic } from "./persistence"
+import { Jsonc } from "@opencode-ai/core/jsonc"
+import { writeJsonAtomic, writeTextAtomic } from "./persistence"
 import {
   FRONTMATTER_MAX_LINES,
   buildMemoryIndexContent,
@@ -58,6 +59,19 @@ export type MemoryItem = {
   file: string
 }
 
+/** Reads .pending-expiry.json from the memory dir and returns the set of pending memory names. */
+export async function readPendingExpiryNames(dir: string): Promise<Set<string>> {
+  const raw = await Bun.file(path.join(dir, ".pending-expiry.json"))
+    .json()
+    .catch(() => null)
+  if (!raw || !Array.isArray(raw.pendingDeletions)) return new Set()
+  return new Set(
+    (raw.pendingDeletions as Array<{ name: string }>)
+      .map((entry) => entry.name)
+      .filter((name): name is string => typeof name === "string"),
+  )
+}
+
 function userConfigFile(scope: Scope) {
   return path.join(scope.home, DATA_DIR_NAME, CONFIG_FILENAME)
 }
@@ -103,16 +117,32 @@ async function readConfigFile(file: string): Promise<Config> {
   return isRecord(parsed) ? parsed : {}
 }
 
+async function readConfigText(file: string): Promise<string | undefined> {
+  const text = await Bun.file(file).text().catch(() => undefined)
+  return text && text.trim() ? text : undefined
+}
+
 export async function readConfig(scope: Scope) {
   return await readConfigFile(userConfigFile(scope))
 }
 
 /**
  * Write a toggle to the user-level file; there is no project-level memory config anymore.
+ * Patches the existing file text in place so comments, formatting, and other keys are preserved.
+ * If the file does not exist, a new one is created.
+ * Throws when the existing file is not valid JSONC so the caller can surface the error instead of
+ * silently writing back corrupt content.
  */
 export async function writeSetting(scope: Scope, setting: Setting, value: boolean) {
   const file = userConfigFile(scope)
-  await writeJsonAtomic(file, written(await readConfigFile(file), setting.key, value))
+  const existing = await readConfigText(file)
+  if (existing) {
+    Jsonc.validate(existing, file)
+    const patched = Jsonc.patch(existing, setting.key.split("."), value)
+    await writeTextAtomic(file, patched)
+  } else {
+    await writeJsonAtomic(file, written({}, setting.key, value))
+  }
   return file
 }
 
