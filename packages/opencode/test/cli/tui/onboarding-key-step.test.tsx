@@ -11,6 +11,7 @@ import { ThemeProvider } from "@opencode-ai/tui/context/theme"
 import { TuiConfigProvider } from "@opencode-ai/tui/config"
 import { DEVECO_BASE_MODE, OpencodeKeymapProvider, registerOpencodeKeymap, useBindings } from "@opencode-ai/tui/keymap"
 import { SDKProvider } from "@opencode-ai/tui/context/sdk"
+import { ProjectProvider } from "@opencode-ai/tui/context/project"
 import { SyncContext, useSync } from "@opencode-ai/tui/context/sync"
 import { KVProvider } from "@opencode-ai/tui/context/kv"
 import { I18nProvider } from "@opencode-ai/tui/i18n"
@@ -57,12 +58,14 @@ function makeHarness(
                   <ToastProvider>
                     <DialogProvider>
                       <SDKProvider url="http://127.0.0.1:9" fetch={fetcher} events={eventSource()}>
-                        <SyncContext.Provider value={sync}>
-                          <ExitProvider exit={() => exits.push("exit")}>
-                            <AppExitBinding />
-                            <DevEcoOnboarding initialStep="key" onComplete={() => completions.push("complete")} />
-                          </ExitProvider>
-                        </SyncContext.Provider>
+                        <ProjectProvider>
+                          <SyncContext.Provider value={sync}>
+                            <ExitProvider exit={() => exits.push("exit")}>
+                              <AppExitBinding />
+                              <DevEcoOnboarding initialStep="key" onComplete={() => completions.push("complete")} />
+                            </ExitProvider>
+                          </SyncContext.Provider>
+                        </ProjectProvider>
                       </SDKProvider>
                     </DialogProvider>
                   </ToastProvider>

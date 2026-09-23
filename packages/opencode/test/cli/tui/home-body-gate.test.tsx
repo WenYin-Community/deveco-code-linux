@@ -11,6 +11,7 @@ import { ThemeProvider } from "@opencode-ai/tui/context/theme"
 import { TuiConfigProvider } from "@opencode-ai/tui/config"
 import { OpencodeKeymapProvider, registerOpencodeKeymap } from "@opencode-ai/tui/keymap"
 import { SDKProvider } from "@opencode-ai/tui/context/sdk"
+import { ProjectProvider } from "@opencode-ai/tui/context/project"
 import { SyncContext, useSync } from "@opencode-ai/tui/context/sync"
 import { KVProvider } from "@opencode-ai/tui/context/kv"
 import { I18nProvider } from "@opencode-ai/tui/i18n"
@@ -158,6 +159,7 @@ function createSyncData(options: MountOptions, tmpPath: string) {
     ready: true,
     path: { directory: tmpPath },
     bootstrap: async () => {},
+    provider: { refresh: async () => {} },
     data: {
       local_auth_error: undefined,
       mcp: {},
@@ -188,17 +190,19 @@ function makeHarness(tmpPath: string, fetcher: typeof fetch, sync: ReturnType<ty
                   <ToastProvider>
                     <DialogProvider>
                       <SDKProvider url="http://127.0.0.1:9" fetch={fetcher}>
-                        <SyncContext.Provider value={sync}>
-                          <RouteProvider initialRoute={{ type: "home" }}>
-                            <ArgsProvider>
-                              <PromptRefProvider>
-                                <ExitProvider exit={() => {}}>
-                                  <DevEcoHomeBody sync={sync} bodySlotHeight={18} />
-                                </ExitProvider>
-                              </PromptRefProvider>
-                            </ArgsProvider>
-                          </RouteProvider>
-                        </SyncContext.Provider>
+                        <ProjectProvider>
+                          <SyncContext.Provider value={sync}>
+                            <RouteProvider initialRoute={{ type: "home" }}>
+                              <ArgsProvider>
+                                <PromptRefProvider>
+                                  <ExitProvider exit={() => {}}>
+                                    <DevEcoHomeBody sync={sync} bodySlotHeight={18} />
+                                  </ExitProvider>
+                                </PromptRefProvider>
+                              </ArgsProvider>
+                            </RouteProvider>
+                          </SyncContext.Provider>
+                        </ProjectProvider>
                       </SDKProvider>
                     </DialogProvider>
                   </ToastProvider>
