@@ -11,6 +11,9 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ApiVcsApplyError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
+import { SkillNotFoundError } from "../errors"
+import { Runtime } from "@opencode-ai/core/runtime"
+import path from "path"
 
 export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance", (handlers) =>
   Effect.gen(function* () {
@@ -32,6 +35,10 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         home: Global.Path.home,
         state: Global.Path.state,
         config: Global.Path.config,
+        projectConfig:
+          Runtime.current.mode === "deveco-studio"
+            ? Global.projectConfig(ctx.project.id)
+            : path.join(ctx.worktree, ".deveco"),
         worktree: ctx.worktree,
         directory: ctx.directory,
       }
@@ -85,6 +92,23 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       return yield* skill.all()
     })
 
+    const getSkillStatus = Effect.fn("InstanceHttpApi.skillStatus")(function* () {
+      return yield* skill.statuses()
+    })
+
+    const updateSkill = Effect.fn("InstanceHttpApi.skillUpdate")(function* (ctx: {
+      params: { name: string }
+      payload: Skill.UpdateInput
+    }) {
+      return yield* skill
+        .setEnabled(ctx.params.name, ctx.payload.scope, ctx.payload.enabled)
+        .pipe(
+          Effect.catchTag("Skill.NotFoundError", (error) =>
+            Effect.fail(new SkillNotFoundError({ name: error.name, message: error.message })),
+          ),
+        )
+    })
+
     const getLsp = Effect.fn("InstanceHttpApi.lsp")(function* () {
       return yield* lsp.status()
     })
@@ -104,6 +128,8 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
       .handle("command", getCommand)
       .handle("agent", getAgent)
       .handle("skill", getSkill)
+      .handle("skillStatus", getSkillStatus)
+      .handle("skillUpdate", updateSkill)
       .handle("lsp", getLsp)
       .handle("formatter", getFormatter)
   }),

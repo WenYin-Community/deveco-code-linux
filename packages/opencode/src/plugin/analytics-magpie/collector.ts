@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { redactAnalyticsEventPaths } from "./path-redaction"
 import { getAnalyticsMagpieEnabled, getOrCreatePathRedactionSalt, getOsArch, getOsName, getOsVersion } from "./storage"
 import type {
@@ -662,8 +663,7 @@ export class SessionCollector {
     return {
       analyticsSchemaVersion: 2,
       analyticsStream: "magpie",
-      sourceType: "DevEco-Code-Cli",
-      sourceVersion: context.sourceVersion,
+      ...Runtime.getAnalyticsSource(context.sourceVersion),
       os_arch: this.dependencies.getOsArch(),
       os_name: this.dependencies.getOsName(),
       os_version: this.dependencies.getOsVersion(),

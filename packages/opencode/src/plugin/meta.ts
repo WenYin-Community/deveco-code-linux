@@ -3,6 +3,7 @@ import { fileURLToPath } from "url"
 
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Global } from "@opencode-ai/core/global"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { Filesystem } from "@/util/filesystem"
 import { Flock } from "@opencode-ai/core/util/flock"
 
@@ -46,7 +47,9 @@ type Core = Omit<Entry, "first_time" | "last_time" | "time_changed" | "load_coun
 type Row = Touch & { core: Core }
 
 function storePath() {
-  return Flag.DEVECO_PLUGIN_META_FILE ?? path.join(Global.Path.state, "plugin-meta.json")
+  return Runtime.current.configSources.explicit && Flag.DEVECO_PLUGIN_META_FILE
+    ? Flag.DEVECO_PLUGIN_META_FILE
+    : path.join(Global.Path.state, "plugin-meta.json")
 }
 
 function lock(file: string) {

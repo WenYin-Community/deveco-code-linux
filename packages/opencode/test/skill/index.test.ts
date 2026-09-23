@@ -108,112 +108,150 @@ describe("NotFoundError", () => {
 })
 
 describe("available", () => {
-  it.live("returns all skills sorted when no agent provided", () =>
-    provideTmpdirInstance(
-      (dir) =>
-        Effect.gen(function* () {
-          yield* Effect.promise(() =>
-            Promise.all([
-              Bun.write(
-                path.join(dir, ".deveco", "skill", "z-skill", "SKILL.md"),
-                `---
-name: z-skill
-description: Last alphabetically.
----
-`,
-              ),
-              Bun.write(
-                path.join(dir, ".deveco", "skill", "a-skill", "SKILL.md"),
-                `---
-name: a-skill
-description: First alphabetically.
----
-`,
-              ),
-            ]),
-          )
-          const skill = yield* Skill.Service
-          const list = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
-          expect(list.find((x) => x.name === "a-skill")).toBeDefined()
-          expect(list.find((x) => x.name === "z-skill")).toBeDefined()
-          // Verify alphabetical sorting
-          const aIndex = list.findIndex((x) => x.name === "a-skill")
-          const zIndex = list.findIndex((x) => x.name === "z-skill")
-          expect(aIndex).toBeLessThan(zIndex)
-        }),
-      { git: true },
-    ),
-    30_000,
-  )
-
-  it.live("filters skills denied by agent permission", () =>
-    provideTmpdirInstance(
-      (dir) =>
-        Effect.gen(function* () {
-          yield* Effect.promise(() =>
-            Promise.all([
-              Bun.write(
-                path.join(dir, ".deveco", "skill", "allowed-skill", "SKILL.md"),
-                `---
-name: allowed-skill
-description: Allowed skill.
----
-`,
-              ),
-              Bun.write(
-                path.join(dir, ".deveco", "skill", "denied-skill", "SKILL.md"),
-                `---
-name: denied-skill
-description: Denied skill.
----
-`,
-              ),
-            ]),
-          )
-          const skill = yield* Skill.Service
-          const agent: Agent.Info = {
-            name: "test-agent",
-            mode: "all",
-            permission: [
-              { permission: "skill", pattern: "denied-skill", action: "deny" },
-            ],
-            options: {},
-          }
-          const list = yield* skill.available(agent)
-          expect(list.find((x) => x.name === "allowed-skill")).toBeDefined()
-          expect(list.find((x) => x.name === "denied-skill")).toBeUndefined()
-        }),
-      { git: true },
-    ),
-    30_000,
-  )
-
-  it.live("includes skills with 'ask' action", () =>
+  it.live("persists per-skill enable state and excludes disabled skills from use", () =>
     provideTmpdirInstance(
       (dir) =>
         Effect.gen(function* () {
           yield* Effect.promise(() =>
             Bun.write(
-              path.join(dir, ".deveco", "skill", "ask-skill", "SKILL.md"),
+              path.join(dir, ".deveco", "skill", "toggle-skill", "SKILL.md"),
               `---
-name: ask-skill
-description: Skill that requires ask.
+name: toggle-skill
+description: Toggle test skill.
 ---
 `,
             ),
           )
           const skill = yield* Skill.Service
-          const agent: Agent.Info = {
-            name: "test-agent",
-            mode: "all",
-            permission: [{ permission: "skill", pattern: "ask-skill", action: "ask" }],
-            options: {},
-          }
-          const list = yield* skill.available(agent)
-          expect(list.find((x) => x.name === "ask-skill")).toBeDefined()
+
+          const disabled = yield* skill.setEnabled("toggle-skill", "project", false)
+          expect(disabled.scope).toBe("project")
+          expect(disabled.enabled).toBe(false)
+          expect((yield* skill.statuses()).find((item) => item.name === "toggle-skill")?.enabled).toBe(false)
+          expect((yield* skill.all()).some((item) => item.name === "toggle-skill")).toBe(false)
+          expect((yield* skill.dirs()).some((item) => item.endsWith(path.join("skill", "toggle-skill")))).toBe(false)
+          expect(yield* skill.get("toggle-skill")).toBeUndefined()
+          expect((yield* Effect.flip(skill.require("toggle-skill")))._tag).toBe("Skill.NotFoundError")
+
+          const enabled = yield* skill.setEnabled("toggle-skill", "project", true)
+          expect(enabled.enabled).toBe(true)
+          expect((yield* skill.all()).some((item) => item.name === "toggle-skill")).toBe(true)
+          expect((yield* skill.dirs()).some((item) => item.endsWith(path.join("skill", "toggle-skill")))).toBe(true)
         }),
       { git: true },
     ),
+  )
+
+  it.live(
+    "returns all skills sorted when no agent provided",
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Promise.all([
+                Bun.write(
+                  path.join(dir, ".deveco", "skill", "z-skill", "SKILL.md"),
+                  `---
+name: z-skill
+description: Last alphabetically.
+---
+`,
+                ),
+                Bun.write(
+                  path.join(dir, ".deveco", "skill", "a-skill", "SKILL.md"),
+                  `---
+name: a-skill
+description: First alphabetically.
+---
+`,
+                ),
+              ]),
+            )
+            const skill = yield* Skill.Service
+            const list = (yield* skill.available()).filter((s) => s.location !== "<built-in>")
+            expect(list.find((x) => x.name === "a-skill")).toBeDefined()
+            expect(list.find((x) => x.name === "z-skill")).toBeDefined()
+            // Verify alphabetical sorting
+            const aIndex = list.findIndex((x) => x.name === "a-skill")
+            const zIndex = list.findIndex((x) => x.name === "z-skill")
+            expect(aIndex).toBeLessThan(zIndex)
+          }),
+        { git: true },
+      ),
+    30_000,
+  )
+
+  it.live(
+    "filters skills denied by agent permission",
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Promise.all([
+                Bun.write(
+                  path.join(dir, ".deveco", "skill", "allowed-skill", "SKILL.md"),
+                  `---
+name: allowed-skill
+description: Allowed skill.
+---
+`,
+                ),
+                Bun.write(
+                  path.join(dir, ".deveco", "skill", "denied-skill", "SKILL.md"),
+                  `---
+name: denied-skill
+description: Denied skill.
+---
+`,
+                ),
+              ]),
+            )
+            const skill = yield* Skill.Service
+            const agent: Agent.Info = {
+              name: "test-agent",
+              mode: "all",
+              permission: [{ permission: "skill", pattern: "denied-skill", action: "deny" }],
+              options: {},
+            }
+            const list = yield* skill.available(agent)
+            expect(list.find((x) => x.name === "allowed-skill")).toBeDefined()
+            expect(list.find((x) => x.name === "denied-skill")).toBeUndefined()
+          }),
+        { git: true },
+      ),
+    30_000,
+  )
+
+  it.live(
+    "includes skills with 'ask' action",
+    () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(
+                path.join(dir, ".deveco", "skill", "ask-skill", "SKILL.md"),
+                `---
+name: ask-skill
+description: Skill that requires ask.
+---
+`,
+              ),
+            )
+            const skill = yield* Skill.Service
+            const agent: Agent.Info = {
+              name: "test-agent",
+              mode: "all",
+              permission: [{ permission: "skill", pattern: "ask-skill", action: "ask" }],
+              options: {},
+            }
+            const list = yield* skill.available(agent)
+            expect(list.find((x) => x.name === "ask-skill")).toBeDefined()
+          }),
+        { git: true },
+      ),
     30_000,
   )
 })

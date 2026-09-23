@@ -55,6 +55,13 @@ const it = testEffect(
             return Effect.fail(new Skill.NotFoundError({ name, available: skills.map((skill) => skill.name) }))
           },
           all: () => Effect.succeed(skills),
+          statuses: () =>
+            Effect.succeed(skills.map((skill) => ({ ...skill, scope: "global" as const, enabled: true }))),
+          setEnabled: (name, scope, enabled) => {
+            const info = skills.find((skill) => skill.name === name)
+            if (info) return Effect.succeed({ ...info, scope, enabled })
+            return Effect.fail(new Skill.NotFoundError({ name, available: skills.map((skill) => skill.name) }))
+          },
           dirs: () => Effect.succeed([]),
           available: () => Effect.succeed(skills),
         }),

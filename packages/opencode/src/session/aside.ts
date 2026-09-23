@@ -10,7 +10,7 @@ import { SessionID, MessageID } from "@/session/schema"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Cause, Context, Effect, Layer, Stream } from "effect"
-import BTW_SYSTEM_PROMPT from "./prompt/btw.txt"
+import { SessionPromptProfile } from "./prompt/profile"
 
 export type BtwInput = {
   sessionID: SessionID
@@ -84,7 +84,7 @@ const live = Layer.effect(
         sessionID,
         model,
         agent: agentInfo,
-        system: [BTW_SYSTEM_PROMPT],
+        system: [SessionPromptProfile.current.btw],
         messages: [...modelMessages, { role: "user" as const, content: text }],
         tools: {},
         toolChoice: "none",

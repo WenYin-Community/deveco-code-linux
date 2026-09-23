@@ -8,9 +8,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
-import PROMPT_PLAN from "./prompt/plan.txt"
-import BUILD_SWITCH from "./prompt/build-switch.txt"
-import PLAN_MODE from "./prompt/plan-mode.txt"
+import { SessionPromptProfile } from "./prompt/profile"
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   messages: SessionV1.WithParts[]
@@ -30,7 +28,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: PROMPT_PLAN,
+        text: SessionPromptProfile.current.plan,
         synthetic: true,
       })
     }
@@ -41,7 +39,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
         messageID: userMessage.info.id,
         sessionID: userMessage.info.sessionID,
         type: "text",
-        text: BUILD_SWITCH,
+        text: SessionPromptProfile.current.buildSwitch,
         synthetic: true,
       })
     }
@@ -59,8 +57,8 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
       sessionID: userMessage.info.sessionID,
       type: "text",
       text: exists
-        ? `${BUILD_SWITCH}\n\nA plan file exists at ${plan}. You should execute on the plan defined within it`
-        : BUILD_SWITCH,
+        ? `${SessionPromptProfile.current.buildSwitch}\n\nA plan file exists at ${plan}. You should execute on the plan defined within it`
+        : SessionPromptProfile.current.buildSwitch,
       synthetic: true,
     })
     userMessage.parts.push(part)
@@ -78,7 +76,7 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
     messageID: userMessage.info.id,
     sessionID: userMessage.info.sessionID,
     type: "text",
-    text: PLAN_MODE.replace("${planInfo}", () =>
+    text: SessionPromptProfile.current.planMode.replace("${planInfo}", () =>
       exists
         ? `A plan file already exists at ${plan}. You can read it and make incremental edits using the edit tool.`
         : `No plan file exists yet. You should create your plan at ${plan} using the write tool.`,

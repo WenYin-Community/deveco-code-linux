@@ -1,5 +1,11 @@
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
 
+export type AnalyticsSourceType = "DevEco-Code-Cli" | "DevEco-Code-Plugin"
+
+export function isAnalyticsSourceType(value: unknown): value is AnalyticsSourceType {
+  return value === "DevEco-Code-Cli" || value === "DevEco-Code-Plugin"
+}
+
 export interface ToolExecution {
   toolName: string
   duration: number
@@ -20,7 +26,7 @@ export interface Operations {
 }
 
 export interface AnalyticsEnvironmentFields {
-  sourceType: "DevEco-Code-Cli"
+  sourceType: AnalyticsSourceType
   sourceVersion: string
   os_arch: string
   os_name: NodeJS.Platform

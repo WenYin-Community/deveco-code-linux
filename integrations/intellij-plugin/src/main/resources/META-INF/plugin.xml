@@ -1,0 +1,71 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+  <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+  <id>org.deveco.code.deveco-code-jetbrains-plugin</id>
+
+  <!-- Public plugin name should be written in Title Case.
+   Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
+  <name>DevEco Code</name>
+
+  <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+  <vendor url="https://developer.huawei.com/consumer/cn/deveco-studio/">DevEco</vendor>
+
+  <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+       Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+  <description><![CDATA[
+        DevEco Code coding-agent integration for DevEco Studio, with isolated
+        sessions and configuration.
+        ]]></description>
+
+  <!-- Product and plugin compatibility requirements.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.intellij.modules.compose</depends>
+  <depends>com.intellij.mcpServer</depends>
+  <dependencies>
+    <module name="intellij.platform.jewel.markdown.core" />
+    <module name="intellij.platform.jewel.markdown.extensions.gfmTables" />
+    <module name="intellij.platform.jewel.markdown.ideLafBridgeStyling" />
+  </dependencies>
+
+  <resource-bundle>messages.MyMessageBundle</resource-bundle>
+
+  <!-- Extensions defined by the plugin.
+       Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-point.html -->
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="DevEco Code" factoryClass="org.deveco.code.toolwindow.DevEcoToolWindowFactory"
+      anchor="left" icon="AllIcons.Toolwindows.ToolWindowPalette" />
+    <fileEditorProvider implementation="org.deveco.code.session.editor.SessionFileEditorProvider" />
+    <fileIconProvider implementation="org.deveco.code.session.editor.SessionFileIconProvider" />
+    <applicationConfigurable id="ai.coding" bundle="messages.MyMessageBundle"
+      key="settings.aiCoding.displayName" instance="org.deveco.code.settings.AICodingConfigurable" />
+    <projectConfigurable id="ai.coding.skill" parentId="ai.coding" bundle="messages.MyMessageBundle"
+      key="settings.skill.displayName" instance="org.deveco.code.settings.SkillSettingsConfigurable" />
+    <projectConfigurable id="ai.coding.models" parentId="ai.coding"
+      bundle="messages.MyMessageBundle" key="settings.models.displayName"
+      instance="org.deveco.code.settings.ModelSettingsConfigurable" />
+    <projectConfigurable id="ai.coding.archived" parentId="ai.coding"
+      bundle="messages.MyMessageBundle" key="settings.archived.displayName"
+      instance="org.deveco.code.settings.ArchivedSessionsConfigurable" />
+    <applicationConfigurable id="ai.coding.general" parentId="ai.coding" order="last" bundle="messages.MyMessageBundle" key="settings.general.displayName"
+                             instance="org.deveco.code.settings.GeneralSettingsConfigurable"/>
+    <notificationGroup id="DevEco Code Migration" displayType="BALLOON" />
+    <postStartupActivity implementation="org.deveco.code.action.NewSessionToolbarRegistrar" />
+  </extensions>
+
+  <actions>
+    <action id="org.deveco.code.action.NewSessionAction" class="org.deveco.code.action.NewSessionAction"
+      text="New Session" description="Create a new DevEco Code session">
+    </action>
+    <action id="org.deveco.code.action.NewSessionToolbarAction"
+      class="org.deveco.code.action.NewSessionToolbarAction" text="New Session"
+      description="Create a new DevEco Code session" icon="AllIcons.General.Add" />
+    <group id="org.deveco.code.action.JumpToChatAction" class="org.deveco.code.action.JumpToChatAction"
+      text="DevEco Code" popup="true">
+      <action id="org.deveco.code.action.QuickChatAction" class="org.deveco.code.action.QuickChatAction"
+        description="Send selected code to a new DevEco Code chat session" />
+      <add-to-group group-id="EditorPopupMenu" anchor="last" />
+    </group>
+  </actions>
+
+</idea-plugin>

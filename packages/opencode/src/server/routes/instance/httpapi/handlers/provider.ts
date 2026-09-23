@@ -2,6 +2,8 @@ import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
+import { InstanceState } from "@/effect/instance-state"
+import { markInstanceForDisposal } from "../lifecycle"
 
 import { mapValues } from "remeda"
 import { Effect, Schema } from "effect"
@@ -125,11 +127,33 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       return true
     })
 
+    const deleteModel = Effect.fn("ProviderHttpApi.deleteModel")(function* (ctx: {
+      params: { providerID: ProviderV2.ID; modelID: string }
+    }) {
+      const result = yield* cfg.deleteProviderModelGlobal(ctx.params.providerID, ctx.params.modelID)
+      if (result.changed) {
+        yield* markInstanceForDisposal(yield* InstanceState.context)
+      }
+      return result.changed
+    })
+
+    const deleteProvider = Effect.fn("ProviderHttpApi.deleteProvider")(function* (ctx: {
+      params: { providerID: ProviderV2.ID }
+    }) {
+      const result = yield* cfg.deleteProviderGlobal(ctx.params.providerID)
+      if (result.changed) {
+        yield* markInstanceForDisposal(yield* InstanceState.context)
+      }
+      return result.changed
+    })
+
     return handlers
       .handle("list", list)
       .handle("refresh", refresh)
       .handle("auth", auth)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
+      .handle("deleteModel", deleteModel)
+      .handle("deleteProvider", deleteProvider)
   }),
 )

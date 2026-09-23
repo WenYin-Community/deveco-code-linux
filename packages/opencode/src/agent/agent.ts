@@ -9,17 +9,7 @@ import { Truncate } from "@/tool/truncate"
 import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
-import PROMPT_GENERATE from "./generate.txt"
-import PROMPT_BUILD from "./prompt/build.txt"
-import PROMPT_DEBUG from "./prompt/debug.txt"
-import PROMPT_PLAN from "./prompt/plan.txt"
-import PROMPT_COMPACTION from "./prompt/compaction.txt"
-import PROMPT_EXPLORE from "./prompt/explore.txt"
-import PROMPT_SUMMARY from "./prompt/summary.txt"
-import PROMPT_TITLE from "./prompt/title.txt"
-import PROMPT_GOAL from "./prompt/goal.txt"
-import PROMPT_SPEC_VERIFY from "./prompt/spec-verify.txt"
-import PROMPT_SPEC_IMPLEMENTATION from "./prompt/spec-implementation.txt"
+import { AgentPromptProfile } from "./prompt/profile"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -169,7 +159,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
-            prompt: PROMPT_BUILD,
+            prompt: AgentPromptProfile.current.prompts.build,
           },
           debug: {
             name: "debug",
@@ -187,7 +177,7 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
             hidden: true,
-            prompt: PROMPT_DEBUG,
+            prompt: AgentPromptProfile.current.prompts.debug,
           },
           goal: {
             name: "goal",
@@ -208,7 +198,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
-            prompt: PROMPT_GOAL,
+            prompt: AgentPromptProfile.current.prompts.goal,
             color: "info",
           },
           "spec-implementation": {
@@ -225,7 +215,7 @@ export const layer = Layer.effect(
             mode: "subagent",
             native: true,
             hidden: true,
-            prompt: PROMPT_SPEC_IMPLEMENTATION,
+            prompt: AgentPromptProfile.current.prompts.specImplementation,
           },
           "spec-verify": {
             name: "spec-verify",
@@ -245,7 +235,7 @@ export const layer = Layer.effect(
             native: true,
             hidden: true,
             temperature: 0.2,
-            prompt: PROMPT_SPEC_VERIFY,
+            prompt: AgentPromptProfile.current.prompts.specVerify,
           },
           plan: {
             name: "plan",
@@ -271,7 +261,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
-            prompt: PROMPT_PLAN,
+            prompt: AgentPromptProfile.current.prompts.plan,
           },
           general: {
             name: "general",
@@ -305,7 +295,7 @@ export const layer = Layer.effect(
               user,
             ),
             description: `Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.`,
-            prompt: PROMPT_EXPLORE,
+            prompt: AgentPromptProfile.current.prompts.explore,
             options: {},
             mode: "subagent",
             native: true,
@@ -315,7 +305,7 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
             hidden: true,
-            prompt: PROMPT_COMPACTION,
+            prompt: AgentPromptProfile.current.prompts.compaction,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({
@@ -339,7 +329,7 @@ export const layer = Layer.effect(
               }),
               user,
             ),
-            prompt: PROMPT_TITLE,
+            prompt: AgentPromptProfile.current.prompts.title,
           },
           summary: {
             name: "summary",
@@ -354,8 +344,26 @@ export const layer = Layer.effect(
               }),
               user,
             ),
-            prompt: PROMPT_SUMMARY,
+            prompt: AgentPromptProfile.current.prompts.summary,
           },
+        }
+
+        const enabled = new Set<string>(AgentPromptProfile.current.agents)
+        for (const name of Object.keys(agents)) {
+          if (!enabled.has(name)) delete agents[name]
+        }
+
+        for (const [name, override] of Object.entries(AgentPromptProfile.current.overrides)) {
+          const item = agents[name]
+          if (!item) continue
+          item.description = override.description ?? item.description
+          item.mode = override.mode ?? item.mode
+          item.hidden = override.hidden ?? item.hidden
+          item.color = override.color ?? item.color
+          item.temperature = override.temperature ?? item.temperature
+          item.topP = override.topP ?? item.topP
+          item.steps = override.steps ?? item.steps
+          item.permission = Permission.merge(item.permission, Permission.fromConfig(override.permission ?? {}))
         }
 
         for (const [key, value] of Object.entries(cfg.agent ?? {})) {
@@ -413,7 +421,11 @@ export const layer = Layer.effect(
             agents,
             values(),
             sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
+              [
+                (x) =>
+                  cfg.default_agent ? x.name === cfg.default_agent : x.name === AgentPromptProfile.current.defaultAgent,
+                "desc",
+              ],
               [(x) => x.name, "asc"],
             ),
           )
@@ -428,6 +440,8 @@ export const layer = Layer.effect(
             if (agent.hidden === true) throw new Error(`default agent "${c.default_agent}" is hidden`)
             return agent
           }
+          const preferred = agents[AgentPromptProfile.current.defaultAgent]
+          if (preferred && preferred.mode !== "subagent" && preferred.hidden !== true) return preferred
           const visible = Object.values(agents).find((a) => a.mode !== "subagent" && a.hidden !== true)
           if (!visible) throw new Error("no primary visible agent found")
           return visible
@@ -471,7 +485,7 @@ export const layer = Layer.effect(
           ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
           : undefined
 
-        const system = [PROMPT_GENERATE]
+        const system = [AgentPromptProfile.current.prompts.generate]
         yield* plugin.trigger("experimental.chat.system.transform", { model: resolved }, { system })
         const existing = yield* InstanceState.useEffect(state, (s) => s.list())
 

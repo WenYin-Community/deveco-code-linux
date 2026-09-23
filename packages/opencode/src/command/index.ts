@@ -174,12 +174,19 @@ export const layer = Layer.effect(
 
     const get = Effect.fn("Command.get")(function* (name: string) {
       const s = yield* InstanceState.get(state)
-      return s.commands[name]
+      const item = s.commands[name]
+      if (!item || item.source !== "skill") return item
+      return (yield* skill.get(name)) ? item : undefined
     })
 
     const list = Effect.fn("Command.list")(function* () {
       const s = yield* InstanceState.get(state)
-      return Object.values(s.commands)
+      const result: Info[] = []
+      for (const item of Object.values(s.commands)) {
+        if (item.source === "skill" && !(yield* skill.get(item.name))) continue
+        result.push(item)
+      }
+      return result
     })
 
     return Service.of({ get, list })

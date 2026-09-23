@@ -6,6 +6,7 @@ import { Global } from "@opencode-ai/core/global"
 import { unique } from "remeda"
 import * as Effect from "effect/Effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Runtime } from "@opencode-ai/core/runtime"
 
 export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   name: string,
@@ -20,23 +21,30 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   })).toReversed()
 })
 
-export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
+export const directories = Effect.fn("ConfigPaths.directories")(function* (
+  directory: string,
+  worktree?: string,
+  projectID?: string,
+) {
   const afs = yield* FSUtil.Service
   return unique([
     Global.Path.config,
-    ...(!Flag.DEVECO_DISABLE_PROJECT_CONFIG
+    ...(Runtime.current.configSources.project && !Flag.DEVECO_DISABLE_PROJECT_CONFIG
       ? yield* afs.up({
           targets: [".deveco"],
           start: directory,
           stop: worktree,
         })
       : []),
-    ...(yield* afs.up({
-      targets: [".deveco"],
-      start: Global.Path.home,
-      stop: Global.Path.home,
-    })),
-    ...(Flag.DEVECO_CONFIG_DIR ? [Flag.DEVECO_CONFIG_DIR] : []),
+    ...(Runtime.current.configSources.home
+      ? yield* afs.up({
+          targets: [".deveco"],
+          start: Global.Path.home,
+          stop: Global.Path.home,
+        })
+      : []),
+    ...(Runtime.current.configSources.explicit && Flag.DEVECO_CONFIG_DIR ? [Flag.DEVECO_CONFIG_DIR] : []),
+    ...(Runtime.current.mode === "deveco-studio" && projectID ? [Global.projectConfig(projectID)] : []),
   ])
 })
 

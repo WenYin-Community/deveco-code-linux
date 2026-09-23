@@ -11,6 +11,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { Global } from "@opencode-ai/core/global"
+import { Runtime } from "@opencode-ai/core/runtime"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
 
@@ -21,44 +22,45 @@ import type { MessageID } from "./schema"
 // DNS-rebinding resistance is out of scope here; the blocklist matches the
 // common internal/metadata targets.
 const SSRF_BLOCKED_HOSTS = new Set([
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
-  '::1',
-  '169.254.169.254', // AWS / Azure / GCP IMDS
-  'metadata',
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "169.254.169.254", // AWS / Azure / GCP IMDS
+  "metadata",
 ])
 
 // WHATWG URL.hostname keeps the brackets on IPv6 literals (e.g. "[::1]"),
 // so strip them before matching against the blocklist/private-host patterns.
-const SSRF_PRIVATE_HOST = /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)|^169\.254\.|^f[cd][0-9a-f]{2}:|^fe[89ab][0-9a-f]:/i;
+const SSRF_PRIVATE_HOST =
+  /^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)|^169\.254\.|^f[cd][0-9a-f]{2}:|^fe[89ab][0-9a-f]:/i
 
 // Block decimal-integer IPv4 bypasses: a host like "2130706433" is 127.0.0.1
 // written as a single 32-bit integer. WHATWG URL does not normalize this back
 // to dotted-decimal, so the dotted-pattern regex would miss it.
-const SSRF_DECIMAL_IP = /^\d{1,10}$/;
+const SSRF_DECIMAL_IP = /^\d{1,10}$/
 
 export function isSsrfSafeUrl(url: string): boolean {
-  let parsed: URL;
+  let parsed: URL
   try {
-    parsed = new URL(url);
+    parsed = new URL(url)
   } catch {
-    return false;
+    return false
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return false;
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false
   }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "")
   if (SSRF_BLOCKED_HOSTS.has(host)) {
-    return false;
+    return false
   }
   if (SSRF_PRIVATE_HOST.test(host)) {
-    return false;
+    return false
   }
   if (SSRF_DECIMAL_IP.test(host)) {
-    return false;
+    return false
   }
-  return true;
+  return true
 }
 
 function extract(messages: SessionV1.WithParts[]) {
@@ -106,7 +108,9 @@ export const layer: Layer.Layer<
     const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
     const globalFiles = [
       path.join(global.config, "AGENTS.md"),
-      ...(!flags.disableClaudeCodePrompt ? [path.join(global.home, ".claude", "CLAUDE.md")] : []),
+      ...(Runtime.current.configSources.homeClaudeInstructions && !flags.disableClaudeCodePrompt
+        ? [path.join(global.home, ".claude", "CLAUDE.md")]
+        : []),
     ]
     const instructionFiles = [
       "AGENTS.md",
@@ -123,9 +127,9 @@ export const layer: Layer.Layer<
       ),
     )
 
-const relative = Effect.fnUntraced(function* (instruction: string) {
+    const relative = Effect.fnUntraced(function* (instruction: string) {
       const ctx = yield* InstanceState.context
-      if (!Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
+      if (Runtime.current.configSources.projectInstructions && !Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
         return yield* fs
           .globUp(instruction, ctx.directory, ctx.worktree)
           .pipe(Effect.catch(() => Effect.succeed([] as string[])))
@@ -168,7 +172,7 @@ const relative = Effect.fnUntraced(function* (instruction: string) {
       }
 
       // The first project-level match wins so we don't stack AGENTS.md/CLAUDE.md from every ancestor.
-      if (!Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
+      if (Runtime.current.configSources.projectInstructions && !Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
         for (const file of instructionFiles) {
           const matches = yield* fs
             .findUp(file, ctx.directory, ctx.worktree)

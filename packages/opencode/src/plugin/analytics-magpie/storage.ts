@@ -7,6 +7,7 @@ import { Global } from "@opencode-ai/core/global"
 import { readToolImprovementEnabled } from "@/cli/deveco-privacy-settings"
 import { LocalCrypto } from "@/security/local-crypto"
 import { MAGPIE_ANALYTICS_ACTION } from "./types"
+import { isAnalyticsSourceType } from "../analytics/types"
 import type {
   AnalyticsEvent,
   AssistantExecution,
@@ -265,7 +266,7 @@ function hasValidAnalyticsMetadata(value: Record<string, unknown>): boolean {
     value.analyticsStream === "magpie" &&
     value.pathRedactionVersion === 1 &&
     value.pathRedactionMode === "hmac-sha256-installation" &&
-    value.sourceType === "DevEco-Code-Cli" &&
+    isAnalyticsSourceType(value.sourceType) &&
     typeof value.sourceVersion === "string" &&
     typeof value.os_arch === "string" &&
     typeof value.os_name === "string" &&

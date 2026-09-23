@@ -25,12 +25,7 @@ import path from "path"
 import { LocalCrypto } from "../../../src/security/local-crypto"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
 import { controlledPtyInput, http, route } from "./dsl"
-import {
-  cleanupExercisePaths,
-  exerciseConfigDirectory,
-  exerciseDatabasePath,
-  exerciseGlobalRoot,
-} from "./environment"
+import { cleanupExercisePaths, exerciseConfigDirectory, exerciseDatabasePath, exerciseGlobalRoot } from "./environment"
 import { color, printHeader, printResults } from "./report"
 import { coverageResult, parseOptions, routeKey, routeKeys, selectedScenarios } from "./routing"
 import { runScenario } from "./runner"
@@ -141,6 +136,47 @@ const scenarios: Scenario[] = [
   http.protected.get("/command", "command.list").json(200, array, "status"),
   http.protected.get("/agent", "app.agents").json(200, array, "status"),
   http.protected.get("/skill", "app.skills").json(200, array, "status"),
+  http.protected.get("/skill/status", "app.skills.status").json(200, array, "status"),
+  http.protected
+    .patch("/skill/{name}", "app.skills.update")
+    .mutating()
+    .probe({ path: "/config", body: {} })
+    .seeded(() => Effect.succeed({ name: "arkts-error-fixes" }))
+    .at((ctx) => ({
+      path: route("/skill/{name}", { name: ctx.state.name }),
+      headers: ctx.headers(),
+      body: { scope: "global", enabled: true },
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.name === ctx.state.name, "skill update should return the selected skill")
+      check(body.enabled === true, "skill update should return the persisted enabled state")
+    }),
+  http.protected
+    .patch("/skill/{name}", "app.skills.update.project")
+    .mutating()
+    .probe({ path: "/config", body: {} })
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const name = "httpapi-project-skill"
+        yield* ctx.file(
+          path.join(".deveco", "skills", name, "SKILL.md"),
+          `---\nname: ${name}\ndescription: HTTP API project toggle test.\n---\n`,
+        )
+        return { name }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/skill/{name}", { name: ctx.state.name }),
+      headers: ctx.headers(),
+      body: { scope: "project", enabled: false },
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      check(body.name === ctx.state.name, "project skill update should return the selected skill")
+      check(body.scope === "project", "project skill update should preserve project scope")
+      check(body.enabled === false, "project skill update should return the persisted disabled state")
+    }),
   http.protected.get("/lsp", "lsp.status").json(200, array),
   http.protected.get("/formatter", "formatter.status").json(200, array),
   http.protected.get("/config", "config.get").json(200, undefined, "status"),
@@ -639,9 +675,7 @@ const scenarios: Scenario[] = [
     .at(() => ({ path: route("/auth/{providerID}", { providerID: "test" }), body: { type: "api", key: "test-key" } }))
     .jsonEffect(200, () =>
       Effect.gen(function* () {
-        const raw = yield* Effect.promise(() =>
-          Bun.file(path.join(Global.Path.data, "auth.json")).json(),
-        )
+        const raw = yield* Effect.promise(() => Bun.file(path.join(Global.Path.data, "auth.json")).json())
         const auth = LocalCrypto.decryptAuthData(raw as Record<string, unknown>)
         object(auth)
         check(isRecord(auth.test) && auth.test.key === "test-key", "auth set should write isolated auth file")
@@ -661,9 +695,7 @@ const scenarios: Scenario[] = [
     .at(() => ({ path: route("/auth/{providerID}", { providerID: "test" }) }))
     .jsonEffect(200, () =>
       Effect.gen(function* () {
-        const raw = yield* Effect.promise(() =>
-          Bun.file(path.join(Global.Path.data, "auth.json")).json(),
-        )
+        const raw = yield* Effect.promise(() => Bun.file(path.join(Global.Path.data, "auth.json")).json())
         const auth = LocalCrypto.decryptAuthData(raw as Record<string, unknown>)
         object(auth)
         check(auth.test === undefined, "auth remove should delete provider from isolated auth file")

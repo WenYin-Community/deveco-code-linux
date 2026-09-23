@@ -263,12 +263,13 @@ async function uploadLogTracePoint(
     const osName = getOsName();
     const osVersion = getOsVersion();
     const version = getVersion();
+    const { sourceType, sourceVersion } = createEnvironmentFields(version);
     const tracePoint = {
       fileId: fileId,
       uid,
       timestamp: Date.now(),
-      sourceType: 'DevEco-Code-Cli',
-      sourceVersion: version,
+      sourceType,
+      sourceVersion,
       osName: osName,
       osVersion: osVersion,
       traceSid: runID,

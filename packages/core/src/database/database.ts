@@ -4,6 +4,7 @@ import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
 import { Global } from "../global"
+import { Runtime } from "../runtime"
 import { Flag } from "../flag/flag"
 import { isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
@@ -40,13 +41,11 @@ export const layer = Layer.effect(
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(
-    Layer.provide(Layer.mergeAll(sqliteLayer({ filename }), Layer.succeed(Filename, filename))),
-  )
+  return layer.pipe(Layer.provide(Layer.mergeAll(sqliteLayer({ filename }), Layer.succeed(Filename, filename))))
 }
 
 export function path() {
-  if (Flag.DEVECO_DB) {
+  if (Flag.DEVECO_DB && Runtime.current.mode === "default") {
     if (Flag.DEVECO_DB === ":memory:" || isAbsolute(Flag.DEVECO_DB)) return Flag.DEVECO_DB
     return join(Global.Path.data, Flag.DEVECO_DB)
   }

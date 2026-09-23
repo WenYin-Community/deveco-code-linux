@@ -6,13 +6,16 @@ import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
 import { LayerNode } from "./effect/layer-node"
+import { Runtime } from "./runtime"
 
 const app = "deveco"
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
-const tmp = path.join(os.tmpdir(), app)
+const data = Runtime.current.storageRoot ? path.join(Runtime.current.storageRoot, "data") : path.join(xdgData!, app)
+const cache = Runtime.current.storageRoot ? path.join(Runtime.current.storageRoot, "cache") : path.join(xdgCache!, app)
+const config = Runtime.current.storageRoot
+  ? path.join(Runtime.current.storageRoot, "config")
+  : path.join(xdgConfig!, app)
+const state = Runtime.current.storageRoot ? path.join(Runtime.current.storageRoot, "state") : path.join(xdgState!, app)
+const tmp = Runtime.current.storageRoot ? path.join(Runtime.current.storageRoot, "tmp") : path.join(os.tmpdir(), app)
 
 const paths = {
   get home() {
@@ -29,6 +32,11 @@ const paths = {
 }
 
 export const Path = paths
+
+export function projectConfig(projectID: string) {
+  const safe = projectID.replace(/[^a-zA-Z0-9._-]/g, "_") || "global"
+  return path.join(Path.config, "projects", safe, ".deveco")
+}
 
 Flock.setGlobal({ state })
 
@@ -61,7 +69,7 @@ export function make(input: Partial<Interface> = {}): Interface {
     home: Path.home,
     data: Path.data,
     cache: Path.cache,
-    config: Flag.DEVECO_CONFIG_DIR ?? Path.config,
+    config: Runtime.current.configSources.explicit ? (Flag.DEVECO_CONFIG_DIR ?? Path.config) : Path.config,
     state: Path.state,
     tmp: Path.tmp,
     bin: Path.bin,

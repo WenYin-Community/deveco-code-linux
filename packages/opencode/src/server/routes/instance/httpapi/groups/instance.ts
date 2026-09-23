@@ -14,11 +14,13 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { SkillNotFoundError } from "../errors"
 
 const PathInfo = Schema.Struct({
   home: Schema.String,
   state: Schema.String,
   config: Schema.String,
+  projectConfig: Schema.String,
   worktree: Schema.String,
   directory: Schema.String,
 }).annotate({ identifier: "Path" })
@@ -51,6 +53,7 @@ export const InstancePaths = {
   command: "/command",
   agent: "/agent",
   skill: "/skill",
+  skillStatus: "/skill/status",
   lsp: "/lsp",
   formatter: "/formatter",
 } as const
@@ -163,7 +166,30 @@ export const InstanceApi = HttpApi.make("instance")
           OpenApi.annotations({
             identifier: "app.skills",
             summary: "List skills",
-            description: "Get a list of all available skills in the OpenCode system.",
+            description: "Get all enabled skills in the OpenCode system.",
+          }),
+        ),
+        HttpApiEndpoint.get("skillStatus", InstancePaths.skillStatus, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(Skill.Status), "List of skill statuses"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skills.status",
+            summary: "List skill statuses",
+            description: "Get all discovered skills with their scope and enabled state.",
+          }),
+        ),
+        HttpApiEndpoint.patch("skillUpdate", `${InstancePaths.skill}/:name`, {
+          params: { name: Schema.String },
+          query: WorkspaceRoutingQuery,
+          payload: Skill.UpdateInput,
+          success: described(Skill.Status, "Updated skill"),
+          error: SkillNotFoundError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "app.skills.update",
+            summary: "Enable or disable skill",
+            description: "Persistently enable or disable one discovered global or project skill by name.",
           }),
         ),
         HttpApiEndpoint.get("lsp", InstancePaths.lsp, {

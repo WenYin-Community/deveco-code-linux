@@ -1,0 +1,15 @@
+.DS_Store
+.gradle/
+.idea/
+.intellijPlatform/
+build/
+out/
+*.iml
+src/main/resources/cli/
+.kotlin/
+*.hprof
+
+# All target packages and generated CLI resources live under build/.
+# Keep local delivery copies and IDE sandboxes out of Git as well.
+build-artifacts/
+s/

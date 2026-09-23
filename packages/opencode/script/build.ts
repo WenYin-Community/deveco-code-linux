@@ -24,8 +24,10 @@ import {
 } from "./vendor-deveco-cli"
 
 const singleFlag = process.argv.includes("--single")
+const targetFlag = process.argv.find((arg) => arg.startsWith("--target="))?.slice("--target=".length)
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
+const offlineVendorFlag = process.argv.includes("--offline-vendor")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
@@ -197,26 +199,36 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+function targetName(item: (typeof allTargets)[number]) {
+  return [item.os, item.arch, item.avx2 === false ? "baseline" : undefined].filter(Boolean).join("-")
+}
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+const targets = targetFlag
+  ? allTargets.filter((item) => targetName(item) === targetFlag)
+  : singleFlag
+    ? allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) {
+          return false
+        }
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
 
-      return true
-    })
-  : allTargets
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
+
+        return true
+      })
+    : allTargets
+
+if (targetFlag && targets.length === 0) {
+  throw new Error(`Unsupported build target: ${targetFlag}`)
+}
 
 await $`rm -rf dist`
 
@@ -358,7 +370,7 @@ for (const item of targets) {
     }
   }
 
-  // Per-target @deveco/deveco-cli for curl/irm zip installs (npm still uses package dependency).
+  // Per-target @deveco/deveco-cli runtime bundled into the standalone distribution.
   if (item.os === "darwin" || item.os === "win32") {
     const cliTarget: DevecoCliVendorTarget = { os: item.os, arch: item.arch }
     try {
@@ -367,6 +379,7 @@ for (const item of targets) {
         cacheDir: path.join(dir, ".build-cache"),
         vendorDir: path.join(dir, "dist", name, "vendor", "deveco-cli"),
         target: cliTarget,
+        offline: offlineVendorFlag,
       })
     } catch (error) {
       console.error(`  ERROR: failed to vendor @deveco/deveco-cli for ${item.os}-${item.arch}:`, error)

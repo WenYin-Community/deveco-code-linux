@@ -558,11 +558,11 @@ description: A skill in the .deveco/skill directory.
               Bun.write(
                 path.join(dir, ".deveco", "skills", "agent-skill", "SKILL.md"),
                 `---
-name: opencode-skill
+name: deveco-skill
 description: A skill in the .deveco/skills directory.
 ---
 
-# OpenCode Skill
+# DevEco Skill
 `,
               ),
             ]),

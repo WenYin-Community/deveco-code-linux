@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG } from "../analytics/types"
+import { DEFAULT_CONFIG, type AnalyticsSourceType } from "../analytics/types"
 
 export interface ModifiedFile {
   fileName: string
@@ -71,7 +71,7 @@ export interface AnalyticsEvent {
   analyticsStream: "magpie"
   pathRedactionVersion: 1
   pathRedactionMode: "hmac-sha256-installation"
-  sourceType: "DevEco-Code-Cli"
+  sourceType: AnalyticsSourceType
   sourceVersion: string
   os_arch: string
   os_name: string

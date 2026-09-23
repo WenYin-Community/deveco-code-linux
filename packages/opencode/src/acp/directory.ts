@@ -46,6 +46,7 @@ export interface LoaderInterface {
 export interface Interface {
   readonly get: (directory: string) => Effect.Effect<Snapshot, ACPError.Error>
   readonly refresh: (directory: string) => Effect.Effect<Snapshot, ACPError.Error>
+  readonly invalidate: (directory: string) => Effect.Effect<void>
   readonly variants: (snapshot: Snapshot, model: DefaultModel) => ModelVariants | undefined
 }
 
@@ -191,9 +192,17 @@ export const layer = Layer.effect(
       ).pipe(Effect.flatten)
     })
 
+    const invalidate = (directory: string): Effect.Effect<void> =>
+      SynchronizedRef.update(snapshots, (state) => {
+        const next = new Map(state)
+        next.delete(directory)
+        return next
+      })
+
     return Service.of({
       get,
       refresh,
+      invalidate,
       variants,
     })
   }),

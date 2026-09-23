@@ -44,6 +44,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "@/provider/provider"
 import type { Command } from "@/command"
+import { registerDisposer } from "@/effect/instance-registry"
 
 export const AuthMethodID = "opencode-login"
 
@@ -83,6 +84,30 @@ export function make(input: {
   const directoryService = input.directory ?? makeDirectoryService(input.sdk)
   const registeredMcp = new Map<string, Set<string>>()
   const sessionSnapshots = new Map<string, Directory.Snapshot>()
+
+  // When disposeInstance runs (HTTP POST /instance/dispose), the directory
+  // service's cached snapshot and the per-session sessionSnapshots must
+  // be invalidated so the next loadSession()/setSessionConfigOption() call
+  // returns fresh config. Without this, the ACP server keeps serving stale
+  // model lists even after the backend config was updated via HTTP API.
+  registerDisposer(async (directory) => {
+    try {
+      await Effect.runPromise(directoryService.invalidate(directory))
+      let cleared = 0
+      for (const [id, snapshot] of sessionSnapshots) {
+        if (snapshot.directory === directory) {
+          sessionSnapshots.delete(id)
+          cleared++
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log(`[disposer] directory=${directory} cacheInvalidated=true sessionSnapshotsCleared=${cleared}`)
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(`[disposer] directory=${directory} ERROR:`, e)
+    }
+  })
+
   const events = input.connection
     ? ACPEvent.start({ sdk: input.sdk, connection: input.connection, session })
     : undefined
@@ -524,28 +549,6 @@ export function make(input: {
         return promptResponse(response.info, params.messageId)
       }
 
-      const known = snapshot.availableCommands.find((item) => item.name === command.name)
-      if (known) {
-        const response = yield* request(
-          () =>
-            input.sdk.session.command(
-              {
-                sessionID: current.id,
-                command: known.name,
-                arguments: command.args,
-                model: `${selected.providerID}/${selected.modelID}`,
-                ...(variant ? { variant } : {}),
-                ...(modeId ? { agent: modeId } : {}),
-                directory: current.cwd,
-              },
-              { throwOnError: true },
-            ),
-          "session",
-        )
-        yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return promptResponse(response.info, params.messageId)
-      }
-
       if (command.name === "compact") {
         yield* request(
           () =>
@@ -560,10 +563,33 @@ export function make(input: {
             ),
           "session",
         )
+        yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
+        return promptResponse(undefined, params.messageId)
       }
 
+      // Delegate slash commands to the server's command endpoint. The
+      // server's command state is re-initialized after instance disposal,
+      // so newly imported skills are recognized even when the ACP directory
+      // snapshot is stale. If the command does not exist the server returns
+      // a clear error instead of silently producing no output.
+      const response = yield* request(
+        () =>
+          input.sdk.session.command(
+            {
+              sessionID: current.id,
+              command: command.name,
+              arguments: command.args,
+              model: `${selected.providerID}/${selected.modelID}`,
+              ...(variant ? { variant } : {}),
+              ...(modeId ? { agent: modeId } : {}),
+              directory: current.cwd,
+            },
+            { throwOnError: true },
+          ),
+        "session",
+      )
       yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-      return promptResponse(undefined, params.messageId)
+      return promptResponse(response.info, params.messageId)
     }),
     cancel,
   }
@@ -883,6 +909,10 @@ function sendAvailableCommands(
 ) {
   if (!connection) return Effect.void
   return Effect.sync(() => {
+    // Defer to the next macrotask so the notification is written after the
+    // in-flight request response. Clients synchronize request/response by id
+    // and drop any notification that arrives before the response — emitting
+    // available_commands_update earlier loses it for the fresh session.
     setTimeout(() => {
       void connection.sessionUpdate({
         sessionId,

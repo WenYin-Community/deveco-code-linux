@@ -379,6 +379,7 @@ describe("acp event routing", () => {
             }),
           ),
         variants: Directory.variants,
+        invalidate: () => Effect.void,
       },
       session: harness.session,
       eventSubscription: (started) => {
@@ -484,6 +485,7 @@ describe("acp event routing", () => {
             }),
           ),
         variants: Directory.variants,
+        invalidate: () => Effect.void,
       },
       eventSubscription: (started) => {
         subscription = started

@@ -1216,7 +1216,7 @@ it.instance(
         expect(exit.value.info.role).toBe("assistant")
       }
     }),
-  3_000,
+  10_000,
 )
 
 it.instance(

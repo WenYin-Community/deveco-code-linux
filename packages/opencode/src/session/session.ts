@@ -42,6 +42,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Effect, Layer, Option, Context, Schema, Types } from "effect"
 import { NonNegativeInt, optionalOmitUndefined } from "@opencode-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
@@ -393,9 +394,12 @@ export const Event = {
 }
 
 export function plan(input: { slug: string; time: { created: number } }, instance: InstanceContext) {
-  const base = instance.project.vcs
-    ? path.join(instance.worktree, ".deveco", "plans")
-    : path.join(Global.Path.data, "plans")
+  const base =
+    Runtime.current.mode === "deveco-studio"
+      ? path.join(Global.Path.data, "plans")
+      : instance.project.vcs
+        ? path.join(instance.worktree, ".deveco", "plans")
+        : path.join(Global.Path.data, "plans")
   return path.join(base, [input.time.created, input.slug].join("-") + ".md")
 }
 

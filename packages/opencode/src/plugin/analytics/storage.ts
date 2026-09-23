@@ -16,7 +16,7 @@ import type {
   ToolExecution,
   ToolSummary,
 } from './types';
-import { ANALYTICS_ACTION } from './types';
+import { ANALYTICS_ACTION, isAnalyticsSourceType } from './types';
 
 const ANALYTICS_FILE = 'analytics.json';
 const DEVICE_ID_FILE = 'device-id.json';
@@ -150,7 +150,7 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
   }
 
   return (
-    value.sourceType === 'DevEco-Code-Cli' &&
+    isAnalyticsSourceType(value.sourceType) &&
     typeof value.sourceVersion === 'string' &&
     typeof value.os_arch === 'string' &&
     typeof value.os_name === 'string' &&

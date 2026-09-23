@@ -13,6 +13,7 @@ import {
   preparePendingBatch,
 } from "@/plugin/analytics/storage"
 import { tmpdir } from "../../fixture/fixture"
+import { isMagpieAnalyticsEvent } from "@/plugin/analytics-magpie/storage"
 
 const originalDataDir = Global.Path.data
 
@@ -100,6 +101,60 @@ test("each queued ai_session receives a distinct local uid", async () => {
     expect(pending[0].event.sourceVersion).toBe("1.2.3")
   }
   expect("osArch" in (pending[0]?.event ?? {})).toBe(false)
+})
+
+test("queue accepts DevEco-Code-Plugin source metadata", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const studioEvent: AiSessionEvent = {
+    ...event(),
+    sourceType: "DevEco-Code-Plugin",
+    sourceVersion: "6.0.1.100",
+  }
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.AI_SESSION, event: studioEvent })
+  const pending = await getPendingEvents()
+
+  expect(pending).toHaveLength(1)
+  if (pending[0]?.action === ANALYTICS_ACTION.AI_SESSION) {
+    expect(pending[0].event.sourceType).toBe("DevEco-Code-Plugin")
+    expect(pending[0].event.sourceVersion).toBe("6.0.1.100")
+  }
+})
+
+test("Magpie queue validation accepts DevEco-Code-Plugin source metadata", () => {
+  expect(
+    isMagpieAnalyticsEvent({
+      analyticsSchemaVersion: 2,
+      analyticsStream: "magpie",
+      pathRedactionVersion: 1,
+      pathRedactionMode: "hmac-sha256-installation",
+      sourceType: "DevEco-Code-Plugin",
+      sourceVersion: "6.0.1.100",
+      os_arch: "arm64",
+      os_name: process.platform,
+      os_version: "os-version",
+      providerId: "deveco",
+      modelId: "model-1",
+      sessionid: "session-1",
+      messageId: "message-1",
+      agentName: "build",
+      query: "query",
+      answer: "answer",
+      inputTokenCount: 1,
+      outputTokenCount: 1,
+      projectId: "550e8400-e29b-41d4-a716-446655440000",
+      bundleName: "",
+      modifiedFileList: [],
+      operations: { builtinTools: [], mcpTools: [], skillTools: [] },
+      toolExecutions: [],
+      isSuccess: true,
+      totalElapsed: 10,
+      firstResultElapsed: 5,
+      startedAt: 1,
+      assistantExecutions: [],
+    }),
+  ).toBe(true)
 })
 
 test("current-schema queue rejects ai_session details with forbidden fields", async () => {

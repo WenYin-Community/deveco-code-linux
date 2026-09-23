@@ -92,6 +92,28 @@ export const ProviderApi = HttpApi.make("provider")
             description: "Handle the OAuth callback from a provider after user authorization.",
           }),
         ),
+        HttpApiEndpoint.delete("deleteModel", `${root}/:providerID/models/:modelID`, {
+          params: { providerID: ProviderV2.ID, modelID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Model deleted successfully"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.deleteModel",
+            summary: "Delete a model from a provider",
+            description: "Remove a specific model from a provider's configuration.",
+          }),
+        ),
+        HttpApiEndpoint.delete("deleteProvider", `${root}/:providerID`, {
+          params: { providerID: ProviderV2.ID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Provider deleted successfully"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.deleteProvider",
+            summary: "Delete a provider",
+            description: "Remove an entire provider and all its models from the configuration.",
+          }),
+        ),
       )
       .annotateMerge(
         OpenApi.annotations({

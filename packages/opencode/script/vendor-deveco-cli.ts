@@ -217,6 +217,7 @@ export async function ensureDevecoCliCached(opts: {
   version: string
   cacheDir: string
   target: DevecoCliVendorTarget
+  offline?: boolean
 }) {
   const key = `${opts.target.os}-${opts.target.arch}`
   const dest = path.join(opts.cacheDir, DEVECO_CLI_VENDOR_DIRNAME, key)
@@ -229,6 +230,12 @@ export async function ensureDevecoCliCached(opts: {
       console.log(`  deveco-cli@${opts.version} already cached for ${key}`)
       return { dest, version: opts.version, bytes: dirSizeBytes(dest) }
     }
+  }
+
+  if (opts.offline) {
+    throw new Error(
+      `Offline vendor cache miss for deveco-cli@${opts.version} (${key}). Run the normal source setup before building the plugin.`,
+    )
   }
 
   console.log(`  Caching deveco-cli@${opts.version} for ${key}...`)
@@ -244,11 +251,13 @@ export async function bundleDevecoCliVendor(opts: {
   cacheDir: string
   vendorDir: string
   target: DevecoCliVendorTarget
+  offline?: boolean
 }) {
   const cache = await ensureDevecoCliCached({
     version: opts.version,
     cacheDir: opts.cacheDir,
     target: opts.target,
+    offline: opts.offline,
   })
 
   await fs.promises.rm(opts.vendorDir, { recursive: true, force: true })

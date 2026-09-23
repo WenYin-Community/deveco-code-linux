@@ -109,7 +109,7 @@ export const layer = Layer.effect(
 
     const resolve = Effect.fn("Project.resolve")(function* (input: AbsolutePath) {
       const repo = yield* git.find(input)
-      if (!repo) return { id: ID.global, directory: AbsolutePath.make(path.parse(input).root), vcs: undefined }
+      if (!repo) return { id: ID.make(Hash.fast(`dir:${input}`)), directory: input, vcs: undefined }
 
       const previous = yield* cached(repo.store)
       const id = (yield* remote(repo)) ?? previous ?? (yield* root(repo))

@@ -7,6 +7,7 @@ import { pathToFileURL } from "url"
 import os from "os"
 import { mergeDeep } from "remeda"
 import { Global } from "@opencode-ai/core/global"
+import { Runtime } from "@opencode-ai/core/runtime"
 import fsNode from "fs/promises"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Auth } from "../auth"
@@ -131,6 +132,8 @@ export interface Interface {
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
   readonly update: (config: Info) => Effect.Effect<void>
   readonly updateGlobal: (config: Info) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly deleteProviderModelGlobal: (providerID: string, modelID: string) => Effect.Effect<{ changed: boolean }>
+  readonly deleteProviderGlobal: (providerID: string) => Effect.Effect<{ changed: boolean }>
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
@@ -141,9 +144,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Co
 export const use = serviceUse(Service)
 
 function globalConfigFile() {
-  const candidates = ["deveco.jsonc", "deveco.json", "config.json"].map((file) =>
-    path.join(Global.Path.config, file),
-  )
+  const candidates = ["deveco.jsonc", "deveco.json", "config.json"].map((file) => path.join(Global.Path.config, file))
   for (const file of candidates) {
     if (existsSync(file)) return file
   }
@@ -251,7 +252,10 @@ export const layer = Layer.effect(
       let result: Info = {}
       // Seed the default global config with the schema for editor completion, but avoid writing when the user
       // explicitly routes config through env-provided paths or content.
-      if (!Flag.DEVECO_CONFIG && !Flag.DEVECO_CONFIG_DIR && !Flag.DEVECO_CONFIG_CONTENT) {
+      if (
+        !Runtime.current.configSources.explicit ||
+        (!Flag.DEVECO_CONFIG && !Flag.DEVECO_CONFIG_DIR && !Flag.DEVECO_CONFIG_CONTENT)
+      ) {
         const file = globalConfigFile()
         if (!existsSync(file)) {
           yield* fs
@@ -303,16 +307,11 @@ export const layer = Layer.effect(
       const hasIgnore = yield* fs.existsSafe(gitignore)
       if (!hasIgnore) {
         yield* fs
-          .writeFileString(
+          .writeWithDirs(
             gitignore,
             ["node_modules", "package.json", "package-lock.json", "bun.lock", ".gitignore"].join("\n"),
           )
-          .pipe(
-            Effect.catchIf(
-              (e) => e.reason._tag === "PermissionDenied",
-              () => Effect.void,
-            ),
-          )
+          .pipe(Effect.catch(() => Effect.void))
       }
     })
 
@@ -403,12 +402,12 @@ export const layer = Layer.effect(
         const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
-        if (Flag.DEVECO_CONFIG) {
+        if (Runtime.current.configSources.explicit && Flag.DEVECO_CONFIG) {
           yield* merge(Flag.DEVECO_CONFIG, yield* loadFile(Flag.DEVECO_CONFIG, authEnv))
           yield* Effect.logDebug("loaded custom config", { path: Flag.DEVECO_CONFIG })
         }
 
-        if (!Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
+        if (Runtime.current.configSources.project && !Flag.DEVECO_DISABLE_PROJECT_CONFIG) {
           for (const file of yield* ConfigPaths.files("deveco", ctx.directory, ctx.worktree).pipe(Effect.orDie)) {
             yield* merge(file, yield* loadFile(file, authEnv), "local")
           }
@@ -418,9 +417,9 @@ export const layer = Layer.effect(
         result.mode = result.mode || {}
         result.plugin = result.plugin || []
 
-        const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree)
+        const directories = yield* ConfigPaths.directories(ctx.directory, ctx.worktree, ctx.project.id)
 
-        if (Flag.DEVECO_CONFIG_DIR) {
+        if (Runtime.current.configSources.explicit && Flag.DEVECO_CONFIG_DIR) {
           yield* Effect.logDebug("loading config from DEVECO_CONFIG_DIR", { path: Flag.DEVECO_CONFIG_DIR })
         }
 
@@ -473,7 +472,7 @@ export const layer = Layer.effect(
           yield* mergePluginOrigins(dir, list)
         }
 
-        if (process.env.DEVECO_CONFIG_CONTENT) {
+        if (Runtime.current.configSources.explicit && process.env.DEVECO_CONFIG_CONTENT) {
           const source = "DEVECO_CONFIG_CONTENT"
           const next = yield* loadConfig(process.env.DEVECO_CONFIG_CONTENT, {
             dir: ctx.directory,
@@ -630,11 +629,14 @@ export const layer = Layer.effect(
     })
 
     const update = Effect.fn("Config.update")(function* (config: Info) {
-      const dir = yield* InstanceState.directory
-      const file = path.join(dir, "config.json")
+      const ctx = yield* InstanceState.context
+      const file =
+        Runtime.current.mode === "deveco-studio"
+          ? path.join(Global.projectConfig(ctx.project.id), "deveco.json")
+          : path.join(ctx.directory, "config.json")
       const existing = yield* loadFile(file)
       yield* fs
-        .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
+        .writeWithDirs(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
         .pipe(Effect.orDie)
     })
 
@@ -667,12 +669,98 @@ export const layer = Layer.effect(
       return { info: next, changed }
     })
 
+    const deleteProviderModelGlobal = Effect.fn("Config.deleteProviderModelGlobal")(
+      function* (providerID: string, modelID: string) {
+        const file = globalConfigFile()
+        const before = (yield* readConfigFile(file)) ?? "{}"
+
+        let next: Info
+        let changed: boolean
+        if (!file.endsWith(".jsonc")) {
+          const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
+          if (!existing.provider?.[providerID]?.models?.[modelID]) {
+            // eslint-disable-next-line no-console
+            console.log(`[deleteProviderModel] provider=${providerID} model=${modelID} notFound=true`)
+            return { changed: false }
+          }
+          existing.provider[providerID].models = Object.fromEntries(
+            Object.entries(existing.provider[providerID].models).filter(([key]) => key !== modelID),
+          )
+          const serialized = JSON.stringify(writableGlobal(existing), null, 2)
+          changed = serialized !== before
+          if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
+          next = existing
+        } else {
+          // For .jsonc, use jsonc-parser's modify with undefined to remove the key
+          const edits = modify(before, ["provider", providerID, "models", modelID], undefined, {
+            formattingOptions: { insertSpaces: true, tabSize: 2 },
+          })
+          const updated = applyEdits(before, edits)
+          changed = updated !== before
+          if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+          next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(`[deleteProviderModel] provider=${providerID} model=${modelID} changed=${changed} file=${file}`)
+        if (changed) yield* invalidate()
+        return { info: next, changed }
+      },
+    )
+
+    const deleteProviderGlobal = Effect.fn("Config.deleteProviderGlobal")(
+      function* (providerID: string) {
+        const file = globalConfigFile()
+        const before = (yield* readConfigFile(file)) ?? "{}"
+
+        let next: Info
+        let changed: boolean
+        if (!file.endsWith(".jsonc")) {
+          const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
+          if (!existing.provider?.[providerID]) {
+            // eslint-disable-next-line no-console
+            console.log(`[deleteProvider] provider=${providerID} notFound=true`)
+            return { changed: false }
+          }
+          existing.provider = Object.fromEntries(
+            Object.entries(existing.provider).filter(([key]) => key !== providerID),
+          )
+          // Clean up disabled_providers / enabled_providers
+          if (existing.disabled_providers) {
+            existing.disabled_providers = existing.disabled_providers.filter((p) => p !== providerID)
+          }
+          if (existing.enabled_providers) {
+            existing.enabled_providers = existing.enabled_providers.filter((p) => p !== providerID)
+          }
+          const serialized = JSON.stringify(writableGlobal(existing), null, 2)
+          changed = serialized !== before
+          if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
+          next = existing
+        } else {
+          const edits = modify(before, ["provider", providerID], undefined, {
+            formattingOptions: { insertSpaces: true, tabSize: 2 },
+          })
+          const updated = applyEdits(before, edits)
+          changed = updated !== before
+          if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+          next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
+        }
+
+        // eslint-disable-next-line no-console
+        console.log(`[deleteProvider] provider=${providerID} changed=${changed} file=${file}`)
+        if (changed) yield* invalidate()
+        return { info: next, changed }
+      },
+    )
+
     return Service.of({
       get,
       getGlobal,
       getConsoleState,
       update,
       updateGlobal,
+      deleteProviderModelGlobal,
+      deleteProviderGlobal,
       invalidate,
       directories,
       waitForDependencies,
