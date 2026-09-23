@@ -42,6 +42,12 @@ const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
 if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
+// HarmonyOS arm64 is prebuilt and published from a separate repo, so it never lands in
+// ./dist and is never compiled here. It gates itself via its own os/cpu fields. That repo
+// must publish this exact version; npm silently skips an optional dependency whose version
+// does not exist, which would leave HarmonyOS installs without a binary.
+const hmosPackageName = `@${scope}/deveco-code-openharmony-arm64`
+
 // Map: scoped package name → { version, dir (relative to ./dist) }
 const binaries: Record<string, { version: string; dir: string }> = {}
 for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
@@ -81,6 +87,8 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       },
       version: version,
       license: pkg.license,
+      os: ["darwin", "linux", "win32", "openharmony"],
+      cpu: ["arm64", "x64"],
       files: [
         "bin/**/*",
         "postinstall.mjs",
@@ -88,7 +96,10 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
         "README.md",
         "CHANGELOG.md",
       ],
-      optionalDependencies: Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
+      optionalDependencies: {
+        ...Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
+        [hmosPackageName]: version,
+      },
       dependencies: {
         "@deveco/deveco-cli": devecoCliVersion,
       },
