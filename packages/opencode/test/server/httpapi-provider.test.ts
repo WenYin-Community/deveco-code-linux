@@ -104,6 +104,19 @@ function requestCallback(input: { providerID: string; method: number; headers: H
   })
 }
 
+function requestCancel(input: { providerID: string; headers: HeadersInit }) {
+  return Effect.gen(function* () {
+    const response = yield* request(`/provider/${input.providerID}/oauth/cancel`, {
+      method: "POST",
+      headers: input.headers,
+    })
+    return {
+      status: response.status,
+      body: yield* response.text,
+    }
+  })
+}
+
 function writeProviderAuthPlugin(dir: string) {
   return Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -169,6 +182,40 @@ function writeProviderAuthValidationPlugin(dir: string) {
         '            method: "code",',
         `            instructions: "${oauthInstructions}",`,
         "            callback: async () => ({ type: 'success', key: 'token' }),",
+        "          }),",
+        "        },",
+        "      ],",
+        "    },",
+        "  }),",
+        "}",
+        "",
+      ].join("\n"),
+    )
+  })
+}
+
+function writeProviderOauthFailedPlugin(dir: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    yield* Effect.promise(() => markPluginDependenciesReady(path.join(dir, ".deveco")))
+
+    yield* fs.writeWithDirs(
+      path.join(dir, ".deveco", "plugin", "provider-oauth-failed.ts"),
+      [
+        "export default {",
+        '  id: "test.provider-oauth-failed",',
+        "  server: async () => ({",
+        "    auth: {",
+        '      provider: "test-oauth-failed",',
+        "      methods: [",
+        "        {",
+        '          type: "oauth",',
+        '          label: "OAuth",',
+        "          authorize: async () => ({",
+        `            url: "${oauthURL}",`,
+        '            method: "code",',
+        `            instructions: "${oauthInstructions}",`,
+        "            callback: async () => ({ type: 'failed' }),",
         "          }),",
         "        },",
         "      ],",
@@ -373,6 +420,67 @@ describe("provider HttpApi", () => {
       })
     }),
     projectOptions,
+    30000,
+  )
+
+  it.instance(
+    "cancel clears pending OAuth state so a later callback reports missing",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const headers = { "x-deveco-directory": directory, "content-type": "application/json" }
+      // authorize (method 1 = oauth) installs the pending entry
+      yield* requestAuthorize({ providerID, method: 1, headers })
+      // cancel tears it down
+      const cancel = yield* requestCancel({ providerID, headers })
+      expect(cancel.status).toBe(200)
+      expect(JSON.parse(cancel.body)).toBe(true)
+      // a subsequent callback finds no pending entry
+      const callback = yield* requestCallback({ providerID, method: 1, headers, code: "x" })
+      expect(callback.status).toBe(400)
+      expect(JSON.parse(callback.body)).toEqual({
+        name: "ProviderAuthOauthMissing",
+        data: { providerID },
+      })
+    }),
+    { ...projectOptions, init: writeProviderAuthPlugin },
+    30000,
+  )
+
+  it.instance(
+    "cancel is a no-op (200) when nothing is pending",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const cancel = yield* requestCancel({
+        providerID,
+        headers: { "x-deveco-directory": directory, "content-type": "application/json" },
+      })
+      expect(cancel.status).toBe(200)
+      expect(JSON.parse(cancel.body)).toBe(true)
+    }),
+    projectOptions,
+    30000,
+  )
+
+  it.instance(
+    "clears pending OAuth state after a failed callback so a later callback reports missing",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const headers = { "x-deveco-directory": directory, "content-type": "application/json" }
+      const failedID = "test-oauth-failed"
+      yield* requestAuthorize({ providerID: failedID, method: 0, headers })
+      // callback fails (type: 'failed') — try/finally must still clean pending
+      const first = yield* requestCallback({ providerID: failedID, method: 0, headers, code: "x" })
+      expect(first.status).toBe(400)
+      expect(JSON.parse(first.body)).toEqual({ name: "ProviderAuthOauthCallbackFailed", data: {} })
+      // a second callback proves pending was cleared by the finally block
+      const second = yield* requestCallback({ providerID: failedID, method: 0, headers, code: "x" })
+      expect(second.status).toBe(400)
+      expect(JSON.parse(second.body)).toEqual({
+        name: "ProviderAuthOauthMissing",
+        data: { providerID: failedID },
+      })
+    }),
+    { ...projectOptions, init: writeProviderOauthFailedPlugin },
     30000,
   )
 

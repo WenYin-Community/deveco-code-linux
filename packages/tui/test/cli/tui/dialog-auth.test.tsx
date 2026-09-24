@@ -23,6 +23,8 @@ async function mount(
     language?: string
     configured?: boolean
     save?: () => Promise<Response>
+    providerAuth?: Record<string, unknown[]>
+    fetchHandler?: (pathname: string) => Response | Promise<Response> | undefined
     refresh?: () => Promise<void>
   },
 ) {
@@ -38,7 +40,7 @@ async function mount(
       provider: [],
       config: { provider: options?.configured ? { custom: { models: {} } } : {} },
       provider_next: { all: providers, connected: [], default: {} },
-      provider_auth: {},
+      provider_auth: (options?.providerAuth ?? {}) as Record<string, unknown[]>,
       console_state: { consoleManagedProviders: [], activeOrgName: "" },
     },
     provider: {
@@ -47,6 +49,8 @@ async function mount(
   } as unknown as ReturnType<typeof useSync>
   const fetcher = (async (input: RequestInfo | URL) => {
     const pathname = new URL(input instanceof Request ? input.url : String(input)).pathname
+    const custom = options?.fetchHandler?.(pathname)
+    if (custom) return custom
     if (pathname === "/auth") return auth()
     if (pathname === "/auth/openai" && options?.save) return options.save()
     return Response.json({})
@@ -298,3 +302,34 @@ test("auth translates account status and sign-out confirmation into Chinese", as
     await changeLanguage("en")
   }
 })
+
+test("closing the Huawei OAuth dialog cancels the in-flight OAuth flow", async () => {
+  let cancelCalls = 0
+  const panel = await mount(async () => Response.json([]), {
+    providerAuth: {
+      deveco: [{ type: "oauth" as const, label: "Sign in with HUAWEI ID" }],
+    },
+    fetchHandler: (pathname) => {
+      if (pathname === "/provider/deveco/oauth/authorize")
+        return Response.json({ url: "", method: "auto", instructions: "Opening browser..." })
+      if (pathname === "/provider/deveco/oauth/callback") return new Promise<Response>(() => {})
+      if (pathname === "/provider/deveco/oauth/cancel") {
+        cancelCalls++
+        return Response.json(true)
+      }
+      return undefined
+    },
+  })
+  try {
+    await panel.frame("Provider authentication")
+    panel.setup.mockInput.pressEnter()
+    await panel.frame("Sign in with HUAWEI ID")
+    panel.setup.mockInput.pressEnter()
+    await panel.frame("Waiting for browser sign-in")
+  } finally {
+    await panel.close()
+  }
+  // Allow the fire-and-forget cancel fetch (dispatched from onCleanup) to settle
+  await Bun.sleep(50)
+  expect(cancelCalls).toBe(1)
+}, 15_000)

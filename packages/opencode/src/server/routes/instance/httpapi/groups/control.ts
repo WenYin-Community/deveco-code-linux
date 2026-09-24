@@ -38,7 +38,7 @@ export const ControlApi = HttpApi.make("control").add(
   HttpApiGroup.make("control")
     .add(
       HttpApiEndpoint.get("authList", "/auth", {
-        success: Schema.Array(Schema.Struct({ providerID: Schema.String, type: Schema.String, removable: Schema.Boolean })),
+        success: Schema.Array(Schema.Struct({ providerID: Schema.String, type: Schema.String, removable: Schema.Boolean, isRealName: Schema.optional(Schema.Boolean) })),
         error: UnknownError,
       }).annotateMerge(OpenApi.annotations({
         identifier: "auth.list", summary: "List saved credential metadata",

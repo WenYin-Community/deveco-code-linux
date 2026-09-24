@@ -95,6 +95,7 @@ export interface Interface {
     } & AuthorizeInput,
   ) => Effect.Effect<Authorization | undefined, Error>
   readonly callback: (input: { providerID: ProviderV2.ID } & CallbackInput) => Effect.Effect<void, Error>
+  readonly cancel: (input: { providerID: ProviderV2.ID }) => Effect.Effect<void, Error>
 }
 
 interface State {
@@ -197,6 +198,12 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
 
       const result = yield* Effect.promise(() =>
         match.method === "code" ? match.callback(input.code!) : match.callback(),
+      ).pipe(
+        Effect.onExit(() =>
+          Effect.sync(() => {
+            if (pending.get(input.providerID) === match) pending.delete(input.providerID)
+          }),
+        ),
       )
       if (!result || result.type !== "success") return yield* new OauthCallbackFailed({})
 
@@ -220,7 +227,20 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
       }
     })
 
-    return Service.of({ methods, authorize, callback })
+    const cancel = Effect.fn("ProviderAuth.cancel")(function* (input: {
+      providerID: ProviderV2.ID
+    }) {
+      const pending = (yield* InstanceState.get(state)).pending
+      const match = pending.get(input.providerID)
+      if (!match) return
+      // Trigger provider-specific cancellation (e.g. close the local OAuth
+      // server, reject the in-flight callback promise) before dropping the
+      // pending entry so the matching callback effect completes promptly.
+      match.cancel?.()
+      pending.delete(input.providerID)
+    })
+
+    return Service.of({ methods, authorize, callback, cancel })
   }),
 )
 

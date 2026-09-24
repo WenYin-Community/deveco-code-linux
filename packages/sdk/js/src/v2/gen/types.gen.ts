@@ -5434,6 +5434,7 @@ export type AuthListResponses = {
     providerID: string
     type: string
     removable: boolean
+    isRealName?: boolean
   }>
 }
 
@@ -7957,6 +7958,36 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type ProviderOauthCancelData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/oauth/cancel"
+}
+
+export type ProviderOauthCancelErrors = {
+  /**
+   * ProviderAuthError | InvalidRequestError
+   */
+  400: ProviderAuthError1 | InvalidRequestError
+}
+
+export type ProviderOauthCancelError = ProviderOauthCancelErrors[keyof ProviderOauthCancelErrors]
+
+export type ProviderOauthCancelResponses = {
+  /**
+   * OAuth flow cancelled
+   */
+  200: boolean
+}
+
+export type ProviderOauthCancelResponse = ProviderOauthCancelResponses[keyof ProviderOauthCancelResponses]
 
 export type SessionListData = {
   body?: never

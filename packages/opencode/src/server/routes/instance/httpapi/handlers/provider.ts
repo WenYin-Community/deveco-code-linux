@@ -127,6 +127,13 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       return true
     })
 
+    const cancel = Effect.fn("ProviderHttpApi.cancel")(function* (ctx: {
+      params: { providerID: ProviderV2.ID }
+    }) {
+      yield* mapProviderAuthError(svc.cancel({ providerID: ctx.params.providerID }))
+      return true
+    })
+
     const deleteModel = Effect.fn("ProviderHttpApi.deleteModel")(function* (ctx: {
       params: { providerID: ProviderV2.ID; modelID: string }
     }) {
@@ -153,6 +160,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       .handle("auth", auth)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
+      .handle("cancel", cancel)
       .handle("deleteModel", deleteModel)
       .handle("deleteProvider", deleteProvider)
   }),

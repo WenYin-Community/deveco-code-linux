@@ -997,6 +997,7 @@
     "login_failed": "登录失败",
     "realname_incomplete": "尚未完成实名认证。",
     "realname_required": "需要实名认证",
+    "realname_title": "实名认证",
     "realname_description": "请在华为官方网站完成实名认证后继续：",
     "realname_link": "完成实名认证",
     "realname_go": "1. 前往实名认证",

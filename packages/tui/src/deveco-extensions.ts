@@ -57,6 +57,9 @@ export type DevEcoPrivacyDialog = () => JSX.Element
 /** Agreement review shown when a built-in model request discovers updated terms. */
 export type DevEcoAgreementReviewDialog = (props: { onComplete: () => void }) => JSX.Element
 
+/** Real-name dialog shown when a built-in model request hits a real-name verification failure. */
+export type DevEcoRealNameDialog = (props: { onComplete: () => void }) => JSX.Element
+
 /** Log collection dialog. Shown via the `/collect` command or crash detection. */
 export type DevEcoCollectDialog = (props: { triggerType?: string }) => JSX.Element
 
@@ -79,6 +82,8 @@ export type DevEcoExtensions = {
   privacyDialog?: DevEcoPrivacyDialog
   agreementReviewDialog?: DevEcoAgreementReviewDialog
   isAgreementReviewError?: (message: string) => boolean
+  realNameDialog?: DevEcoRealNameDialog
+  isRealNameError?: (message: string) => boolean
   collectDialog?: DevEcoCollectDialog
   consumeCrashInfo?: DevEcoConsumeCrashInfo
 }

@@ -240,6 +240,35 @@ describe("LoginService.cancel", () => {
     const service = new LoginService()
     service.cancel()
   })
+
+  test("cancel aborts the in-flight callback and stops the server", async () => {
+    const stopSpy = mock(() => Promise.resolve())
+    let rejectCallback!: (err: Error) => void
+    mockServerInstance = makeServer({
+      waitForCallback: mock(
+        () =>
+          new Promise<CallbackData>((_, reject) => {
+            rejectCallback = reject
+          }),
+      ),
+      cancel: mock(() => {
+        rejectCallback(new LoginCancelledError("cancelled by user"))
+      }),
+      stop: stopSpy,
+    })
+
+    const service = new LoginService()
+    const loginPromise = service.login()
+    // Let login reach `await callbackPromise` before cancelling
+    await Bun.sleep(0)
+    service.cancel()
+    const result = await loginPromise
+
+    expect(result.success).toBe(false)
+    expect(result.cancelled).toBe(true)
+    expect(localAuthServerCancelSpy).toHaveBeenCalledTimes(1)
+    expect(stopSpy).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("LoginService.login", () => {

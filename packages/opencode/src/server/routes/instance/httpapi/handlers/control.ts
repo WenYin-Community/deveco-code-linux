@@ -13,7 +13,12 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
 
     const authList = Effect.fn("ControlHttpApi.authList")(function* () {
       const saved = yield* auth.all().pipe(Effect.mapError(() => new UnknownError({ message: "Unable to load saved credentials." })))
-      return Object.entries(saved).map(([providerID, info]) => ({ providerID, type: info.type, removable: !process.env.DEVECO_AUTH_CONTENT }))
+      return Object.entries(saved).map(([providerID, info]) => ({
+        providerID,
+        type: info.type,
+        removable: !process.env.DEVECO_AUTH_CONTENT,
+        ...("isRealName" in info ? { isRealName: info.isRealName } : {}),
+      }))
     })
 
     const authSet = Effect.fn("ControlHttpApi.authSet")(function* (ctx: {

@@ -92,6 +92,19 @@ export const ProviderApi = HttpApi.make("provider")
             description: "Handle the OAuth callback from a provider after user authorization.",
           }),
         ),
+        HttpApiEndpoint.post("cancel", `${root}/:providerID/oauth/cancel`, {
+          params: { providerID: ProviderV2.ID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "OAuth flow cancelled"),
+          error: ProviderAuthApiError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "provider.oauth.cancel",
+            summary: "Cancel OAuth authorization",
+            description:
+              "Cancel an in-flight OAuth authorization flow for a provider, stopping any local callback server and clearing pending state.",
+          }),
+        ),
         HttpApiEndpoint.delete("deleteModel", `${root}/:providerID/models/:modelID`, {
           params: { providerID: ProviderV2.ID, modelID: Schema.String },
           query: WorkspaceRoutingQuery,

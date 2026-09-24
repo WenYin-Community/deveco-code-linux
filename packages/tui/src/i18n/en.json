@@ -997,6 +997,7 @@
     "login_failed": "Login failed",
     "realname_incomplete": "Real-name authentication not yet completed.",
     "realname_required": "Real-name authentication required",
+    "realname_title": "Real-name authentication",
     "realname_description": "Please complete real-name authentication on HUAWEI official website to continue:",
     "realname_link": "Complete Real-name Authentication",
     "realname_go": "1. Authenticate",

@@ -178,6 +178,7 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
               url: "",
               instructions: "Opening browser for login...",
               method: "auto" as const,
+              cancel: () => devecoAuth.cancel(),
               async callback() {
                 const result = await devecoAuth.login()
 

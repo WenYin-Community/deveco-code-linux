@@ -298,6 +298,10 @@ function AutoMethod(props: AutoMethodProps) {
   const active = { value: true }
   onCleanup(() => {
     active.value = false
+    // Notify the server to tear down the in-flight OAuth flow so the local
+    // callback server stops and pending state is cleared. Fire-and-forget:
+    // the dialog is already gone, a failure here is harmless.
+    void sdk.client.provider.oauth.cancel({ providerID: props.providerID }).catch(() => {})
   })
   const copyValue = () =>
     props.authorization.instructions.match(/[A-Z0-9]{4}-[A-Z0-9]{4,5}/)?.[0] ?? props.authorization.url

@@ -10,6 +10,7 @@
 import { registerDevEcoExtensions } from "@opencode-ai/tui/deveco-extensions"
 import { DevEcoHomeBody } from "./home-body"
 import { AgreementReviewDialog, ProductAgreementGate } from "./agreement-panel"
+import { DialogRealName } from "./dialog-realname"
 import { DialogPrivacyConnected } from "./dialog-privacy"
 import { DialogCollect } from "./dialog-collect"
 import { openComplainPage } from "./complain"
@@ -59,6 +60,8 @@ export function registerDevEcoTuiExtensions(
     privacyDialog: () => DialogPrivacyConnected({ onToolImprovementEnabledChange: options.onToolImprovementEnabledChange }),
     agreementReviewDialog: AgreementReviewDialog,
     isAgreementReviewError: (message) => message.includes(AGREEMENT_REVIEW_REQUIRED_MESSAGE),
+    realNameDialog: DialogRealName,
+    isRealNameError: (message) => /HUAWEI real-name|real-name verification/i.test(message),
     collectDialog: DialogCollect,
     consumeCrashInfo: detectCrashedFlag,
   })

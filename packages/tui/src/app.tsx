@@ -1199,6 +1199,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       return
     }
 
+    if (extensions.realNameDialog && extensions.isRealNameError?.(message)) {
+      const RealNameDialog = extensions.realNameDialog
+      dialog.replace(() => <RealNameDialog onComplete={() => dialog.clear()} />)
+      return
+    }
+
     toast.show({
       variant: "error",
       message,
