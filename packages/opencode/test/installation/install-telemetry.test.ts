@@ -7,7 +7,7 @@ const installTelemetryContract = {
   endpoint: "https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload",
   headers: {
     contentType: "application/json",
-    sender: "deveco-cli",
+    sender: "deveco-installer",
     deviceID: "deviceid",
   },
   actions: {
@@ -142,7 +142,7 @@ const powerShell = powerShellExecutables[0]
 describe("installation telemetry contract", () => {
   test("uses the existing trace upload array protocol with bounded best-effort delivery", () => {
     expect(installTelemetryContract.endpoint).toBe("https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload")
-    expect(installTelemetryContract.headers.sender).toBe("deveco-cli")
+    expect(installTelemetryContract.headers.sender).toBe("deveco-installer")
     expect(installTelemetryContract.limits).toEqual({
       batchSize: 200,
       payloadBytes: 1_782_579,

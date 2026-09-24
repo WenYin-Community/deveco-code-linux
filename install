@@ -15,7 +15,7 @@ GITCODE_API="https://gitcode.com/api/v5/repos/${GITCODE_OWNER}/${GITCODE_REPO}"
 
 # Installation telemetry contract.
 TELEMETRY_ENDPOINT="https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload"
-TELEMETRY_SENDER="deveco-cli"
+TELEMETRY_SENDER="deveco-installer"
 TELEMETRY_MAX_EVENTS=200
 TELEMETRY_MAX_BYTES=1782579
 INSTALLER_REVISION="install-telemetry-v1"

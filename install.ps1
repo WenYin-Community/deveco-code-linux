@@ -55,7 +55,7 @@ $VersionRetentionCount = 2
 
 # Installation telemetry contract.
 $TelemetryEndpoint = "https://cn.devecostudio.huawei.com/codeGenie/cli/trace/upload"
-$TelemetrySender = "deveco-cli"
+$TelemetrySender = "deveco-installer"
 $TelemetryMaxEvents = 200
 $TelemetryMaxBytes = 1782579
 $InstallerRevision = "install-telemetry-v1"
