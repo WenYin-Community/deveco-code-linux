@@ -4,12 +4,29 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { HttpRecorder } from "@opencode-ai/http-recorder"
 import { HttpRecorderInternal } from "@opencode-ai/http-recorder/internal"
-import { beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } from "@/cli/deveco-product-agreement"
 beforeAll(() => acceptProductAgreement(PRODUCT_AGREEMENT_VERSION))
+
+// The recorded fixtures were captured before the deveco memory plugin existed.
+// Write a memory-config.json that disables slash-commands guidance so the
+// MemoryPlugin doesn't mutate the system prompt and break the byte-level
+// fixture match.
+const memoryConfigPath = path.join(os.homedir(), ".deveco", "memory-config.json")
+let savedMemoryConfig: string | undefined
+beforeAll(async () => {
+  try { savedMemoryConfig = await Bun.file(memoryConfigPath).text() } catch { savedMemoryConfig = undefined }
+  await Bun.write(memoryConfigPath, JSON.stringify({ slashCommands: { enabled: false }, autoMemory: { enabled: false } }))
+})
+afterAll(async () => {
+  if (savedMemoryConfig !== undefined) await Bun.write(memoryConfigPath, savedMemoryConfig)
+  else try { await fs.unlink(memoryConfigPath) } catch {}
+})
 import { tool, type ModelMessage, type JSONValue } from "ai"
 import { Effect, Layer, Option, Schema, Stream } from "effect"
 import path from "node:path"
+import os from "node:os"
+import fs from "node:fs/promises"
 import z from "zod"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
