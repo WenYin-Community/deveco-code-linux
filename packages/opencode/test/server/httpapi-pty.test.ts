@@ -10,7 +10,7 @@ import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/un
 import * as Socket from "effect/unstable/socket/Socket"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Pty } from "@opencode-ai/core/pty"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const testPty = process.platform === "win32" ? test.skip : test
 
@@ -169,21 +169,25 @@ describe("pty HttpApi bridge", () => {
     const created = await app().request(PtyPaths.create, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ command: "/usr/bin/env", args: ["sh", "-c", "sleep 5"] }),
+      body: JSON.stringify({ command: "/usr/bin/env", args: ["sh", "-c", "sleep 30"] }),
     })
     expect(created.status).toBe(200)
 
     await disposeAllInstances()
 
-    let list = await app().request(PtyPaths.list, { headers })
-    let items = await list.json()
-    for (let i = 0; i < 50 && items.length > 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      list = await app().request(PtyPaths.list, { headers })
-      items = await list.json()
-    }
+    const list = await Effect.runPromise(
+      pollWithTimeout(
+        Effect.promise(async () => {
+          const response = await app().request(PtyPaths.list, { headers })
+          const items = await response.json()
+          return items.length === 0 ? { status: response.status, items } : undefined
+        }),
+        "PTY session remained visible after instance disposal",
+        "10 seconds",
+      ),
+    )
     expect(list.status).toBe(200)
-    expect(items).toEqual([])
+    expect(list.items).toEqual([])
   })
 
   test("returns 404 for missing PTY websocket before upgrade", async () => {

@@ -51,7 +51,9 @@ describe("usage panel helpers", () => {
     // Months run window-start month through the current month, evenly spaced.
     const labels = heatmap.months.trim().split(/\s+/)
     const shortMonth = new Intl.DateTimeFormat("en-US", { month: "short" })
-    expect(labels[0]).toBe(shortMonth.format(new Date(todayMs - 364 * 86_400_000)))
+    const startSunday = todayMs - new Date(todayMs).getUTCDay() * 86_400_000 - 51 * 7 * 86_400_000
+    const firstMonth = Date.UTC(new Date(startSunday).getUTCFullYear(), new Date(startSunday).getUTCMonth(), 1)
+    expect(labels[0]).toBe(shortMonth.format(new Date(firstMonth)))
     expect(labels.at(-1)).toBe(shortMonth.format(new Date(todayMs)))
     expect(labels.length).toBeGreaterThanOrEqual(12)
     expect(heatmap.months).toBe(labels.join(" "))
