@@ -402,6 +402,7 @@
     "usage_quota_remaining": "剩余",
     "usage_quota_reset": "重置于",
     "usage_quota_left": "剩余",
+    "usage_quota_exceeded": "超额",
     "usage_more": "高",
     "usage_footer_stats_top": "↓ 统计 · {{r}} 切换范围",
     "usage_footer_stats_sub": "↑ 标签 · {{r}} 切换范围",

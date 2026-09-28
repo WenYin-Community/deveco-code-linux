@@ -590,30 +590,51 @@ function QuotaRow(props: {
   const { t } = useI18n()
   const w = props.window
   if (!w) return <box />
-  // `|| 1` guards against total=0 (quota reset moment) — `??` would let it
-  // through and make used/total NaN, crashing repeat().
-  const total = w.total || 1
+  const labelRow = (
+    <box flexDirection="row" gap={1}>
+      <text fg={theme.textMuted}>{`${props.label}:`}</text>
+      <Show when={w.nextResetTime}>
+        <text fg={theme.textMuted}>{localTime(w.nextResetTime!)}</text>
+      </Show>
+    </box>
+  )
+  // A missing or zero total (the quota-reset moment) leaves the ratio undefined,
+  // so the row degrades to the label instead of dividing by zero.
+  const total = w.total
+  if (!total) return <box gap={1}>{labelRow}</box>
   const used = w.used ?? 0
-  const usedRatio = Math.min(1, used / total)
   const barWidth = 32
-  const usedCells = Math.max(0, Math.min(barWidth, Math.round(usedRatio * barWidth)))
-  const remainingPercent = used > 0 ? Math.min(99.9, ((1 - usedRatio) * 100)).toFixed(1) : "100"
+  // Solid cells are what is LEFT and hollow cells what was used, so the bar reads
+  // "remaining first". The cloud's own `remaining` field stays ignored — the local
+  // used/total pair is the only input.
+  const remainingRatio = Math.min(1, Math.max(0, 1 - used / total))
+  const remainingCells = Math.round(remainingRatio * barWidth)
+  // used=0 is a full quota, not a 99.9% one; the 99.9 cap only keeps a nearly
+  // drained quota from ever printing a misleading "100.0%".
+  const remainingPercent = used === 0 ? "100.0" : Math.min(99.9, remainingRatio * 100).toFixed(1)
+  const low = remainingRatio <= 0.2
   return (
     <box gap={1}>
-      <box flexDirection="row" gap={1}>
-        <text fg={theme.textMuted}>{`${props.label}:`}</text>
-        <Show when={w.nextResetTime}>
-          <text fg={theme.textMuted}>{localTime(w.nextResetTime!)}</text>
-        </Show>
-      </box>
+      {labelRow}
       <box flexDirection="row" gap={1}>
         <box flexDirection="row">
-          <text fg={theme.accent}>{"█".repeat(usedCells)}</text>
-          <text fg={theme.textMuted}>{"█".repeat(barWidth - usedCells)}</text>
+          <text fg={low ? theme.warning : theme.accent}>{"█".repeat(remainingCells)}</text>
+          <text fg={theme.textMuted}>{"░".repeat(barWidth - remainingCells)}</text>
         </box>
-        <text fg={theme.textMuted}>
-          {`${remainingPercent}% ${t("dialog.usage_quota_left")} (${compactNumber(used)} / ${compactNumber(total)})`}
-        </text>
+        <Show
+          when={used <= total}
+          fallback={
+            // Overspent: no percentage makes sense, so the absolute overshoot
+            // replaces it; the whole amount line renders in error red.
+            <text fg={theme.error}>
+              {`${t("dialog.usage_quota_exceeded")} ${compactNumber(used - total)} (${compactNumber(used)} / ${compactNumber(total)})`}
+            </text>
+          }
+        >
+          <text fg={low ? theme.warning : theme.textMuted}>
+            {`${remainingPercent}% ${t("dialog.usage_quota_left")} (${compactNumber(used)} / ${compactNumber(total)})`}
+          </text>
+        </Show>
       </box>
     </box>
   )

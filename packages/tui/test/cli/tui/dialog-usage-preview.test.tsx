@@ -3,7 +3,9 @@
  * (ANSI) for eyeballing. Not part of the regular suite:
  *
  *   XDG_STATE_HOME=$(pwd)/.tmp-xdg USAGE_PREVIEW=1 bun test test/cli/tui/dialog-usage-preview.test.tsx
- *   cat .usage-preview/rich-models.ansi
+ *   cat .usage-preview/rich-models.ansi        # stats charts
+ *   cat .usage-preview/quota-states.ansi       # quota bar: healthy / warning / exceeded
+ *   cat .usage-preview/quota-edges.ansi        # quota bar: exhausted / untouched / degraded
  */
 import { test } from "bun:test"
 import { mkdir } from "node:fs/promises"
@@ -197,4 +199,40 @@ maybe("usage preview dumps ansi frames", async () => {
     }
   }
   console.log(`[usage-preview] view with: cat ${outDir}/<scenario>-<tab>.ansi`)
+})
+
+// Quota bar states a healthy real account never shows (its cloud quota always
+// renders 100%/99.9%): warning threshold, exhausted, overspend, and the
+// degraded no-total row. Real quota data comes from the cloud OAuth API, so
+// synthetic fixtures are the only way to eyeball these states.
+const quotaStates = {
+  hourly: { enabled: true, total: 50_000_000, used: 41_500_000, nextResetTime: "2026-09-28 20:00" },
+  weekly: { enabled: true, total: 50_000_000, used: 31_250_000, nextResetTime: "2026-10-01 08:00" },
+  monthly: { enabled: true, total: 50_000_000, used: 84_300_000, nextResetTime: "2026-10-01 08:00" },
+}
+
+const quotaEdges = {
+  hourly: { enabled: true, total: 50_000_000, used: 50_000_000, nextResetTime: "2026-09-28 20:00" },
+  weekly: { enabled: true, total: 50_000_000, used: 0, nextResetTime: "2026-10-01 08:00" },
+  monthly: { enabled: true, total: 0, used: 123, nextResetTime: "2026-10-01 08:00" },
+}
+
+maybe("quota preview dumps ansi frames", async () => {
+  const outDir = path.join(import.meta.dir, "../../../.usage-preview")
+  await mkdir(outDir, { recursive: true })
+  const statsFixture = buildFixture(scenarios[0]!)
+  for (const [name, quotaFixture] of [
+    ["quota-states", quotaStates],
+    ["quota-edges", quotaEdges],
+  ]) {
+    const panel = await mountUsagePanel({ initialTab: "usage", statsFixture, quotaFixture, width: 100, height: 64 })
+    try {
+      await panel.frameWith("Quota")
+      await Bun.write(path.join(outDir, `${name}.ansi`), spansToAnsi(captureFrameRef(panel.setup)))
+      console.log(`[usage-preview] ${name} written`)
+    } finally {
+      panel.cleanup()
+    }
+  }
+  console.log(`[usage-preview] view with: cat ${outDir}/quota-states.ansi ${outDir}/quota-edges.ansi`)
 })

@@ -12,14 +12,16 @@ type PanelInput = {
   initialTab: "usage" | "stats"
   /** Static body, or a resolver receiving the days query value ("" = all time). */
   statsFixture: unknown | ((days: string) => unknown)
+  /** Static StatsQuota body served for /stats/quota; omitted = no quota windows. */
+  quotaFixture?: unknown
   width?: number
   height?: number
 }
 
 /**
  * Mounts DialogUsage with the full provider stack and a stubbed SDK fetch that
- * serves the given stats fixture for /stats/usage. Shared by render tests and
- * the USAGE_PREVIEW dump.
+ * serves the given stats fixture for /stats/usage and the quota fixture for
+ * /stats/quota. Shared by render tests and the USAGE_PREVIEW dump.
  */
 export async function mountUsagePanel(input: PanelInput) {
   const root = await tmpdir()
@@ -27,7 +29,7 @@ export async function mountUsagePanel(input: PanelInput) {
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
 
-  const fetchStub = buildFetchStub(input.statsFixture)
+  const fetchStub = buildFetchStub(input)
   const providers = await loadProviders()
 
   function Harness() {
@@ -46,14 +48,20 @@ export async function mountUsagePanel(input: PanelInput) {
   return { setup, frameWith: frameWithOf(setup), cleanup: () => setup.renderer.destroy() }
 }
 
-function buildFetchStub(statsFixture: PanelInput["statsFixture"]): typeof fetch {
+function buildFetchStub(input: PanelInput): typeof fetch {
   return (async (request: RequestInfo | URL) => {
     const url = request instanceof Request ? request.url : String(request)
+    if (url.includes("/stats/quota")) {
+      return new Response(JSON.stringify(input.quotaFixture ?? {}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
     if (!url.includes("/stats/usage")) {
       return new Response(JSON.stringify({}), { status: 200, headers: { "content-type": "application/json" } })
     }
     const days = new URL(url).searchParams.get("days") ?? ""
-    const body = typeof statsFixture === "function" ? (statsFixture as (days: string) => unknown)(days) : statsFixture
+    const body = typeof input.statsFixture === "function" ? (input.statsFixture as (days: string) => unknown)(days) : input.statsFixture
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
   }) as typeof fetch
 }

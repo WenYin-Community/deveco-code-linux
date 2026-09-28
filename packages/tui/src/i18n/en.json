@@ -402,6 +402,7 @@
     "usage_quota_remaining": "Remaining",
     "usage_quota_reset": "Reset at",
     "usage_quota_left": "left",
+    "usage_quota_exceeded": "Exceeded",
     "usage_more": "High",
     "usage_footer_stats_top": "↓ stats · {{r}} cycle dates",
     "usage_footer_stats_sub": "↑ tabs · {{r}} cycle dates",
