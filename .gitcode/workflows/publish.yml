@@ -55,12 +55,15 @@ jobs:
           VERSION="${VERSION#v}"
           echo "DEVECO_VERSION=${VERSION}" >> "$ATOMGIT_ENV"
 
+          COMMIT_SHA=$(git rev-parse HEAD)
+
           echo "## 版本信息" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 版本 | \`$VERSION\` |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 分支 | \`$ATOMGIT_REF_NAME\` |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Commit | [\`${COMMIT_SHA:0:7}\`](https://gitcode.com/$GITCODE_OWNER/$GITCODE_REPO/commit/$COMMIT_SHA) |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| Channel | \`$DEVECO_CHANNEL\` |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| Scope | \`@$DEVECO_SCOPE\` |" >> "$ATOMGIT_STEP_SUMMARY"
 
