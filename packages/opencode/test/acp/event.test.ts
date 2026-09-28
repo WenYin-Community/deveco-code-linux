@@ -105,7 +105,8 @@ function createHarness(messages: Record<string, SessionMessageResponse> = {}) {
       updates.push(params)
       return Promise.resolve()
     },
-  } satisfies Pick<AgentSideConnection, "sessionUpdate">
+    unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
+  } satisfies Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation">
   const session = makeSessionService()
   const subscription = new ACPEvent.Subscription({ sdk, connection, session })
 
@@ -444,7 +445,8 @@ describe("acp event routing", () => {
         updates.push(params)
         return Promise.resolve()
       },
-    } satisfies Pick<AgentSideConnection, "sessionUpdate">
+      unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
+    } satisfies Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation">
     let subscription: ACPEvent.Subscription | undefined
     const service = ACPService.make({
       sdk: {

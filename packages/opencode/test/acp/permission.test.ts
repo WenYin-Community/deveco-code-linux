@@ -61,7 +61,8 @@ function createHarness(
       updates.push(params)
       return Promise.resolve()
     },
-  } satisfies Pick<AgentSideConnection, "requestPermission" | "sessionUpdate">
+    unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
+  } satisfies Pick<AgentSideConnection, "requestPermission" | "sessionUpdate" | "unstable_createElicitation">
   const subscription = new ACPEvent.Subscription({ sdk, connection, session })
 
   return { connection, replies, requests, sdk, session, subscription, updates }

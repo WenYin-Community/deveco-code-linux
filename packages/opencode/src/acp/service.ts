@@ -49,7 +49,7 @@ import { registerDisposer } from "@/effect/instance-registry"
 export const AuthMethodID = "opencode-login"
 
 export type Error = ACPError.Error
-type ServiceConnection = Pick<AgentSideConnection, "sessionUpdate"> &
+type ServiceConnection = Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation"> &
   Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
 
 export type Interface = {

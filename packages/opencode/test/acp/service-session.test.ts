@@ -246,7 +246,8 @@ describe("ACP service sessions", () => {
         updates.push(update)
         return Promise.resolve()
       },
-    } as Pick<AgentSideConnection, "sessionUpdate">
+      unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
+    } as Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation">
     const usage = UsageService.Service.of({
       buildUsage: UsageService.buildUsage,
       latestAssistantMessage: UsageService.latestAssistantMessage,
