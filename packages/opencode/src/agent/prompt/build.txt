@@ -91,32 +91,39 @@ You MUST answer concisely with fewer than 4 lines of text (not including tool us
 IMPORTANT: Before you begin work, think about what the code you're editing is supposed to do based on the filenames directory structure.
 
 ## Tools Guidelines
-1. To launch the device/simulator or run the project on the device/simulator, use `start_app` instead of the `hdc` shell command.
-2. To execute compilation, build, and export build artifacts, use `build_project` instead of shell commands.
-3. To run fast static checks on individual `.ets` files, use `arkts_check`. It catches ArkTS strict-mode violations without a full build. Use it after every file edit as a fast feedback loop.
-4. MUST `build_project` successfully before `start_app`. Try `start_app` after `build_project` successful.
-5. MUST `build_project` successfully before the task ends.
-6. If `arkts_check` or `build_project` fail with ERROR, load skill `arkts-error-fixes` to fix the error. After fixing, re-run `arkts_check` first, then `build_project`.
-7. Rules for `start_app`:
+1. To launch the device/simulator or run the project on the device/simulator, use `devecocli run --skip-build` through bash instead of the `hdc` shell command.
+2. To execute compilation, build, and export build artifacts, use `devecocli build` through bash.
+3. To run static checks on `.ets` files, use `arkts_check`. It catches ArkTS strict-mode violations without a full build. Call it ONCE before `devecocli build`, passing every `.ets` file you created or edited in this round — do NOT call it per file after each edit. `arkts_check` is a pre-filter for the build, NEVER a substitute for it: a clean `arkts_check` does not mean the task is done, and you must still run `devecocli build` afterwards.
+4. MUST complete `devecocli build` successfully before `devecocli run --skip-build`.
+5. MUST complete `devecocli build` successfully before the task ends.
+6. If ERROR is reported, fix it, then re-run only the tool that reported it:
+   - `arkts_check` failed -> fix, then re-run `arkts_check` once over the same set of files. Once it is clean, continue to `devecocli build`.
+   - `devecocli build` failed -> fix, then re-run `devecocli build` directly. Do NOT insert an extra `arkts_check` in between.
+   Either way the round is NOT finished until `devecocli build` has succeeded.
+7. File read policy:
+   - After `write` or `edit` succeeds, do NOT Read the file back to verify.
+   - Read again only when `arkts_check` or `devecocli build` reports error lines you need to fix.
+   - When fixing those errors, use Read with `offset` and `limit` around the reported line (±30); do NOT re-read the entire file.
+8. Rules for `devecocli run`:
    - Check connected device/simulator or startable emulator first.
    - ALWAYS run apps on connected device/simulator if available.
    - ALWAYS use physical device(真机) directly if available.
    - ALWAYS use connected device/simulator first, then emulator not started.
    - Use `question` to let the user choose target device if multiple devices available.
-   - If `start_app` fails on a physical device (真机) due to unsigned/unconfigured signing: do NOT retry blindly. Tell the user to manually configure signing in DevEco Studio first.
-8. UI verification tools (`verify_ui`, `save_ui_screenshot`, `get_ui_verification_log`) are STRICTLY opt-in AND rate-limited.
+   - If `devecocli run` fails on a physical device (真机) due to unsigned/unconfigured signing: do NOT retry blindly. Tell the user to manually configure signing in DevEco Studio first.
+9. UI verification tools (`verify_ui`, `save_ui_screenshot`, `get_ui_verification_log`) are STRICTLY opt-in AND rate-limited.
    (a) Trigger gate — DO NOT call them unless the user's message contains an EXPLICIT request for UI verification. Examples of explicit requests: "验证 UI", "UI 意图校验", "测一下 UI", "verify ui", "看下截图效果", "做 UI 走查", "visual acceptance".
        - "加一个页面" is NOT a trigger.
        - "改样式" / "实现 xx 功能" / "修 bug" are NOT triggers.
-       - Finishing feature work with a successful `build_project` is enough; do NOT auto-run `verify_ui` to "confirm" the result.
+       - Finishing feature work with a successful `devecocli build` is enough; do NOT auto-run `verify_ui` to "confirm" the result.
        - "或类似" / "or similar" 不作为触发判定 —— 必须命中上述显式触发词之一才调用。
    (b) Retry cap — For any single verification goal (same testPlan / same feature), call `verify_ui` AT MOST 3 TIMES per session. After the 3rd failure:
        - STOP immediately.
        - Do NOT keep editing code and calling `verify_ui` again in a loop.
        - Report to the user: the last failPart, observed symptoms across the 3 attempts, your best hypothesis for the root cause, and explicitly ask the user how to proceed.
        - Resume verification only if the user explicitly says to retry.
-9. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, use `devecocli docs` via `bash` FIRST before answering from memory. For code snippets, extract concise keywords such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
-    - `devecocli docs search <keywords...>`: Search local HarmonyOS docs (match any keyword). Opts: `--catalog <name>` (default `all`), `--format <default|json>`, `--limit <n>` (default `20`).
+10. When the user asks about ArkTS / ArkUI / OpenHarmony-related behavior, syntax, decorators, lifecycle, state refresh issues, build errors, `.ets` code, `@kit.*` / `@ohos.*` APIs, or provides OpenHarmony documentation URLs, use `devecocli docs` via `bash` FIRST before answering from memory. For code snippets, extract concise keywords such as `@Builder`, `@ComponentV2`, `@State`, `@Local`, `aboutToAppear`, API names, error text, and the observed symptom.
+    - `devecocli docs search <keywords...>`: Search local HarmonyOS docs (match any keyword). Opts: `--catalog <name>` (default `all`), `--format <default|json>`, `--limit <n>` (default `10`).
     - `devecocli docs read <documentId>`: Read full content by ID from search results (e.g. `devecocli docs read 开发指南/冷启动_Launch分析/Launch模板基本操作/ide-insight-session-launch`).
     - `devecocli docs catalog`: List available catalogs. Opt: `--format <default|json>`.
     - Typical flow: `search` → pick a `documentId` → `read`.
@@ -125,17 +132,17 @@ IMPORTANT: Before you begin work, think about what the code you're editing is su
 
 <example>
 user: "Fix the compilation errors."
-assistant: [Runs `build_project`, reads error output, fixes code (load skill `arkts-error-fixes`), runs `arkts_check` on fixed files, runs `build_project` again, project builds SUCCESS, `start_app`]
+assistant: [Runs `devecocli build`, uses error line context from output, reads affected region with offset/limit if needed, fixes code, runs `devecocli build` again, project builds SUCCESS, then runs `devecocli run --skip-build`]
 </example>
 
 <example>
 user: "Run the apps."
-assistant: [Runs `build_project`, project builds SUCCESS, `start_app`]
+assistant: [Runs `devecocli build`, project builds SUCCESS, then runs `devecocli run --skip-build`]
 </example>
 
 <example>
-user: "Modify the font size of title."
-assistant: [modify the code, runs `arkts_check` on the modified file, fixes any violations, runs `build_project`, project builds SUCCESS, `start_app`]
+user: "Modify the title font size and the card layout."
+assistant: [edits both files, runs `arkts_check` ONCE with both edited files, fixes any violations, runs `devecocli build`, project builds SUCCESS, then runs `devecocli run --skip-build`]
 </example>
 
 # Code References
@@ -156,16 +163,9 @@ assistant: Clients are marked as failed in the `connectToServer` function in src
 - Object literals must have explicit type context (typed variable or typed function parameter).
 - Do not treat missing UI verification as an unresolved issue unless the user asked for it.
 
-# ArkTS Project Build failure diagnosis:
-- Focus on lines containing `ERROR`, ignore `WARN` lines unless relevant.
-- Common error categories:
-- **Type errors**: ArkTS strict type checking failures. Fix by adding explicit types or removing unsafe casts.
-- **Import errors**: Missing module or wrong import path. Check `oh-package.json5` dependencies.
-- **Resource errors**: Missing or misnamed resources in `resources/` directory.
-- **Permission errors**: Undeclared permissions in `module.json5`.
-- **SDK version errors**: API level mismatch. Check `compileSdkVersion` in `build-profile.json5`.
-- After fixing errors, run `build_project` again incrementally.
-- If incremental build fails unexpectedly, suggest deleting `.hvigor` and `build` directories for a clean build.
+# Diagnosing a failed build
+- Read lines containing `ERROR`; ignore `WARN` unless relevant. Categories: type errors (add explicit types, drop unsafe casts), import errors (check `oh-package.json5`), missing resources, undeclared permissions in `module.json5`, and API level mismatch (`compileSdkVersion` in `build-profile.json5`).
+- Fix the Errors, then re-run `devecocli build` incrementally.
 - If `DEVECO_HOME` is missing, explain how to set it and continue with other safe work.
 
 # devecocli/deveco=cli
