@@ -166,7 +166,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
 
-  const opencodeProjectID = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
+  const projectID = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
     ? (yield* InstanceState.context).project.id
     : undefined
 
@@ -177,20 +177,28 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     params,
     messageTransformOptions: options,
     headers: {
-      ...(input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
+      ...(input.model.providerID.startsWith("opencode")
         ? {
-            ...(opencodeProjectID ? { "x-deveco-project": opencodeProjectID } : {}),
-            "x-deveco-session": input.sessionID,
-            "x-deveco-request": input.user.id,
-            "x-deveco-client": input.flags.client,
+            ...(projectID ? { "x-opencode-project": projectID } : {}),
+            "x-opencode-session": input.sessionID,
+            "x-opencode-request": input.user.id,
+            "x-opencode-client": input.flags.client,
             "User-Agent": USER_AGENT,
           }
-        : {
-            "x-session-affinity": input.sessionID,
-            "X-Session-Id": input.sessionID,
-            ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
-            "User-Agent": USER_AGENT,
-          }),
+        : input.model.providerID.startsWith("deveco")
+          ? {
+              ...(projectID ? { "x-deveco-project": projectID } : {}),
+              "x-deveco-session": input.sessionID,
+              "x-deveco-request": input.user.id,
+              "x-deveco-client": input.flags.client,
+              "User-Agent": USER_AGENT,
+            }
+          : {
+              "x-session-affinity": input.sessionID,
+              "X-Session-Id": input.sessionID,
+              ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+              "User-Agent": USER_AGENT,
+            }),
       ...input.model.headers,
       ...headers,
     },
