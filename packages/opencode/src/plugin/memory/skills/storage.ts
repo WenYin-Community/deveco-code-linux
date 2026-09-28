@@ -20,17 +20,66 @@ import {
 
 const SKILL_FILENAME = 'SKILL.md'
 
+export const RETIRED_SKILL_SEEDS = [
+  {
+    category: 'dream',
+    name: 'dream',
+    slashCommand: 'dream',
+    description: 'Trigger memory consolidation (Auto Dream)',
+    content: `Please call the dream-trigger tool to run memory consolidation.
+
+This will merge, deduplicate, and clean up memory files and skills.
+
+**What happens:**
+- Consolidates duplicate memories
+- Prunes outdated skills
+- Cleans up session state
+
+**Thresholds:** Must meet time (24h) and session (5) gates unless forced.`,
+  },
+  {
+    category: 'dream',
+    name: 'dream-force',
+    slashCommand: 'dream-force',
+    description: 'Force memory consolidation (bypass thresholds)',
+    content: `Please call the dream-trigger tool with force=true to run memory consolidation.
+
+This bypasses all thresholds and runs consolidation immediately.
+
+**What happens:**
+- Consolidates duplicate memories
+- Prunes outdated skills
+- Cleans up session state
+
+**Note:** Use sparingly - consolidation is resource-intensive.`,
+  },
+  {
+    category: 'auto-skill',
+    name: 'auto-skill',
+    slashCommand: 'auto-skill',
+    description: 'Trigger skill review agent',
+    content: `Please analyze the conversation for potential skill creation opportunities.
+
+Look for:
+- Repeated patterns or workflows
+- Common task sequences
+- Useful approaches that could be reused
+- Problem-solving patterns worth capturing
+
+Create a skill if you find a reusable pattern. Do not explain, just create the skill.`,
+  },
+]
+
 export class SkillStorage implements SkillStorageInterface {
   private skillsRoot: string
 
-  constructor() {
-    this.skillsRoot = getSkillsRoot()
+  constructor(skillsRoot?: string) {
+    this.skillsRoot = skillsRoot ?? getSkillsRoot()
   }
 
   /**
    * Initialize skill storage
    * Create skills root directory if not exists
-   * Auto-create default slash command skills for global availability
    */
   async init(): Promise<void> {
     try {
@@ -41,101 +90,32 @@ export class SkillStorage implements SkillStorageInterface {
         throw error
       }
     }
-    
-    // Remove retired seed, then auto-create default slash command skills
+
+    // 退役种子清理；命令分发不依赖种子
     await this.cleanupRetiredSkillSeeds()
-    await this.ensureDefaultSkills()
   }
 
   /**
-   * Ensure default slash command skills exist
-   * These skills provide global slash commands like /dream-force and /auto-skill
-   */
-  private async ensureDefaultSkills(): Promise<void> {
-    const defaultSkills = [
-      {
-        category: 'dream',
-        name: 'dream-force',
-        slashCommand: 'dream-force',
-        description: 'Force memory consolidation (bypass thresholds)',
-        content: `Please call the dream-trigger tool with force=true to run memory consolidation.
-
-This bypasses all thresholds and runs consolidation immediately.
-
-**What happens:**
-- Consolidates duplicate memories
-- Prunes outdated skills
-- Cleans up session state
-
-**Note:** Use sparingly - consolidation is resource-intensive.`,
-      },
-      {
-        category: 'auto-skill',
-        name: 'auto-skill',
-        slashCommand: 'auto-skill',
-        description: 'Trigger skill review agent',
-        content: `Please analyze the conversation for potential skill creation opportunities.
-
-Look for:
-- Repeated patterns or workflows
-- Common task sequences
-- Useful approaches that could be reused
-- Problem-solving patterns worth capturing
-
-Create a skill if you find a reusable pattern. Do not explain, just create the skill.`,
-      },
-    ]
-    
-    for (const skill of defaultSkills) {
-      const exists = await this.exists(skill.category, skill.name)
-      if (!exists) {
-        await this.write({
-          category: skill.category,
-          name: skill.name,
-          slashCommand: skill.slashCommand,
-          description: skill.description,
-          content: skill.content,
-        })
-      }
-    }
-  }
-
-  /**
-   * Remove the retired `dream` seed skill. Its slash command stays dispatchable
-   * via the plugin's fallback registry, but the seed must no longer surface the
-   * command through the host skill/command registry. Only deletes when the file
-   * still matches the exact seeded content (frontmatter + body), so
-   * user-modified copies are preserved.
+   * Remove retired seed skills. Only deletes when the file still matches the
+   * exact seeded content (frontmatter + body), so user-modified copies are
+   * preserved.
    */
   private async cleanupRetiredSkillSeeds(): Promise<void> {
-    const retired = {
-      category: 'dream',
-      name: 'dream',
-      description: 'Trigger memory consolidation (Auto Dream)',
-      content: `Please call the dream-trigger tool to run memory consolidation.
-
-This will merge, deduplicate, and clean up memory files and skills.
-
-**What happens:**
-- Consolidates duplicate memories
-- Prunes outdated skills
-- Cleans up session state
-
-**Thresholds:** Must meet time (24h) and session (5) gates unless forced.`,
-    }
-    try {
-      if (!(await this.exists(retired.category, retired.name))) return
-      const skill = await this.read(retired.category, retired.name)
-      if (
-        skill &&
-        skill.description === retired.description &&
-        skill.slashCommand === retired.name &&
-        skill.content.trim() === retired.content.trim()
-      ) {
-        await this.delete(retired.category, retired.name)
+    for (const retired of RETIRED_SKILL_SEEDS) {
+      try {
+        if (!(await this.exists(retired.category, retired.name))) continue
+        const skill = await this.read(retired.category, retired.name)
+        if (
+          skill &&
+          skill.description === retired.description &&
+          skill.slashCommand === retired.slashCommand &&
+          skill.content.trim() === retired.content.trim()
+        ) {
+          await this.delete(retired.category, retired.name)
+        }
+      } catch {
+        // Best-effort cleanup; leave the file in place on read errors
       }
-    } catch {
-      // Best-effort cleanup; leave the file in place on read errors
     }
   }
 
