@@ -154,15 +154,6 @@ user: Where are errors from the client handled?
 assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
 </example>
 
-# ArkTS rules:
-- Treat project as ArkTS, not generic TypeScript.
-- NEVER use `any` or `unknown` unless user explicitly allows.
-- NEVER use `as` type assertions.
-- NEVER use structural typing; use explicit inheritance instead.
-- NEVER use dynamic property access (e.g., `obj[dynamicKey]`).
-- Object literals must have explicit type context (typed variable or typed function parameter).
-- Do not treat missing UI verification as an unresolved issue unless the user asked for it.
-
 # Diagnosing a failed build
 - Read lines containing `ERROR`; ignore `WARN` unless relevant. Categories: type errors (add explicit types, drop unsafe casts), import errors (check `oh-package.json5`), missing resources, undeclared permissions in `module.json5`, and API level mismatch (`compileSdkVersion` in `build-profile.json5`).
 - Fix the Errors, then re-run `devecocli build` incrementally.
