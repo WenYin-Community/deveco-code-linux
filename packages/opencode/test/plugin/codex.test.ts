@@ -245,6 +245,98 @@ describe("plugin.codex", () => {
       { authorization: "Bearer access-new", accountId: "acc-123" },
     ])
   })
+
+  describe("provider models hook", () => {
+    function testModel(id: string, options: Record<string, unknown> = {}) {
+      return {
+        id,
+        providerID: "openai",
+        api: { id, url: "", npm: "@ai-sdk/openai" },
+        name: id,
+        options,
+        cost: { input: 10, output: 50, cache: { read: 1, write: 12.5 } },
+        limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+      }
+    }
+
+    const MODEL_IDS = [
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "gpt-5.6",
+      "gpt-5.6-sol",
+      "gpt-5.5",
+      "gpt-5.5-pro",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+      "gpt-5.3-codex",
+      "gpt-5.2",
+      "gpt-5",
+      "o3",
+    ]
+
+    async function runModelsHook(ctx: unknown) {
+      const hooks = await CodexAuthPlugin({} as never)
+      const provider = {
+        id: "openai",
+        name: "OpenAI",
+        source: "env",
+        env: [],
+        options: {},
+        models: {
+          ...Object.fromEntries(MODEL_IDS.map((id) => [id, testModel(id)])),
+          "gpt-6-terra": testModel("gpt-6-terra", { reasoningMode: "pro" }),
+        },
+      }
+      return hooks.provider!.models!(provider as never, ctx as never)
+    }
+
+    test("includes gpt-6 family and post-5.4 models for oauth", async () => {
+      const models = await runModelsHook({
+        auth: { type: "oauth", refresh: "r", access: "a", expires: Date.now() + 60_000 },
+      })
+      const keys = Object.keys(models)
+      expect(keys).toContain("gpt-6-astra")
+      expect(keys).toContain("gpt-6-sol")
+      expect(keys).toContain("gpt-6-luna")
+      expect(keys).toContain("gpt-5.6-sol")
+      expect(keys).toContain("gpt-5.5")
+      expect(keys).toContain("gpt-5.4")
+      expect(keys).toContain("gpt-5.4-mini")
+      expect(keys).toContain("gpt-5.3-codex-spark")
+    })
+
+    test("excludes pro, allowlist-miss, and pre-5.4 models for oauth", async () => {
+      const models = await runModelsHook({
+        auth: { type: "oauth", refresh: "r", access: "a", expires: Date.now() + 60_000 },
+      })
+      const keys = Object.keys(models)
+      expect(keys).not.toContain("gpt-6-terra")
+      expect(keys).not.toContain("gpt-5.6")
+      expect(keys).not.toContain("gpt-5.5-pro")
+      expect(keys).not.toContain("gpt-5.3-codex")
+      expect(keys).not.toContain("gpt-5.2")
+      expect(keys).not.toContain("gpt-5")
+      expect(keys).not.toContain("o3")
+    })
+
+    test("zeroes cost and overrides gpt-5.5/gpt-5.6 limits for oauth", async () => {
+      const models = await runModelsHook({
+        auth: { type: "oauth", refresh: "r", access: "a", expires: Date.now() + 60_000 },
+      })
+      expect(models["gpt-6-astra"]!.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+      expect(models["gpt-6-astra"]!.limit.context).toBe(1_050_000)
+      expect(models["gpt-5.5"]!.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
+      expect(models["gpt-5.6-sol"]!.limit).toEqual({ context: 400_000, input: 272_000, output: 128_000 })
+    })
+
+    test("returns all models unchanged for api key auth", async () => {
+      const models = await runModelsHook({ auth: { type: "api", key: "sk-test" } })
+      expect(Object.keys(models)).toHaveLength(MODEL_IDS.length + 1)
+      expect(models["gpt-5"]!.cost.input).toBe(10)
+    })
+  })
 })
 
 async function waitFor(predicate: () => boolean) {
