@@ -1314,8 +1314,70 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   return { [key]: options }
 }
 
-export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
-  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
+// A completion budget may never consume the whole window: providers reject
+// `prompt + max_tokens > context`, and overflow.usable() derives the prompt
+// budget from whatever the completion leaves behind. Catalog rows declaring
+// `limit.output >= limit.context` are common (providers publishing the window
+// in both fields, plus non-chat models), so the ceiling has to be derived from
+// the window instead of trusting the declared output.
+const OUTPUT_CONTEXT_SHARE = 0.75
+
+// Below this remainder a declared input limit is not a real prompt/completion
+// split — it is a row publishing the window in both fields (196601/196608 leaves
+// 7 tokens for the completion). Trusting it truncates every response, so such
+// rows fall back to the window share instead.
+const MIN_SPLIT_OUTPUT = 1_024
+
+/** Largest completion the window can carry alongside a usable prompt, or
+ * `undefined` when the window is unknown and no clamp may be applied. */
+export function outputCeiling(model: Provider.Model): number | undefined {
+  const context = model.limit.context
+  if (context <= 0) return undefined
+  const input = model.limit.input
+  // An explicit prompt ceiling already splits the window; completion gets the rest.
+  if (input !== undefined && input > 0 && input < context && context - input >= MIN_SPLIT_OUTPUT) {
+    return context - input
+  }
+  return Math.max(1, Math.floor(context * OUTPUT_CONTEXT_SHARE))
+}
+
+export function maxOutputTokens(model: Provider.Model, outputTokenMax?: number): number {
+  const cap = outputTokenMax ?? OUTPUT_TOKEN_MAX
+  const configured = model.limit.output > 0 ? model.limit.output : cap
+  const requested = outputTokenMax === undefined ? configured : Math.min(configured, outputTokenMax)
+  const ceiling = outputCeiling(model)
+  return ceiling === undefined ? requested : Math.min(requested, ceiling)
+}
+
+// Thinking budgets are derived from `limit.output` (see budgetVariants() and the
+// numeric branches of variants()), but a merged variant can carry a budget
+// derived from an *earlier* pass's larger limit — the catalog row before a config
+// pass lowered it, or a previous provider-config pass. Providers reject
+// `budget_tokens >= max_tokens`, so every budget (and openrouter's
+// `reasoning.max_tokens`) is clamped against the limit the model ends up with.
+const THINKING_BUDGET_KEYS = new Set(["budgetTokens", "budget_tokens", "thinkingBudget", "tokenBudget"])
+
+function clampBudgets(value: JsonRecord, ceiling: number): JsonRecord {
+  const result: JsonRecord = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "number" && (THINKING_BUDGET_KEYS.has(key) || key === "max_tokens")) {
+      result[key] = Math.max(0, Math.min(item, ceiling))
+      continue
+    }
+    result[key] = isPlainObject(item) ? clampBudgets(item, ceiling) : item
+  }
+  return result
+}
+
+/** Clamp every thinking budget in `variants` below the model's completion budget. */
+export function clampVariantBudgets(
+  model: Provider.Model,
+  variants: Record<string, JsonRecord>,
+  outputTokenMax?: number,
+): Record<string, JsonRecord> {
+  const ceiling = maxOutputTokens(model, outputTokenMax) - 1
+  if (ceiling <= 0) return variants
+  return Object.fromEntries(Object.entries(variants).map(([key, value]) => [key, clampBudgets(value, ceiling)]))
 }
 
 type JsonRecord = Record<string, unknown>
@@ -1731,7 +1793,10 @@ function reasoningBudget(model: Provider.Model, budget: number) {
 }
 
 function budgetVariants(model: Provider.Model, min?: number, max?: number) {
-  const maximum = Math.min(max ?? OUTPUT_TOKEN_MAX - 1, model.limit.output - 1, OUTPUT_TOKEN_MAX - 1)
+  // A thinking budget must stay below the completion the request actually sends.
+  // The window clamp can pull that under both `limit.output` and OUTPUT_TOKEN_MAX.
+  if (model.limit.output <= 0) return {}
+  const maximum = Math.min(max ?? OUTPUT_TOKEN_MAX - 1, maxOutputTokens(model) - 1)
   if (maximum <= 0) return {}
   const high = Math.min(Math.max(min ?? 0, Math.floor((maximum + 1) / 2)), maximum)
   return Object.fromEntries(

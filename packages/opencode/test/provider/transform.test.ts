@@ -4690,3 +4690,171 @@ describe("ProviderTransform.providerOptions - ai-gateway-provider", () => {
     expect(result).toEqual({ openaiCompatible: { reasoningEffort: "high" } })
   })
 })
+
+describe("ProviderTransform.maxOutputTokens - context window clamp", () => {
+  const createModel = (limit: { context: number; output: number; input?: number }) =>
+    ({
+      id: "test-model",
+      providerID: "test",
+      name: "Test",
+      api: { id: "test-model", url: "https://api.example.com", npm: "@ai-sdk/openai-compatible" },
+      capabilities: {
+        temperature: true,
+        reasoning: false,
+        attachment: false,
+        toolcall: true,
+        input: { text: true, audio: false, image: false, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      limit,
+      status: "active",
+      options: {},
+      headers: {},
+    }) as any
+
+  test("outputCeiling splits the window on the declared input limit", () => {
+    expect(ProviderTransform.outputCeiling(createModel({ context: 400_000, output: 128_000, input: 272_000 }))).toBe(
+      128_000,
+    )
+  })
+
+  test("outputCeiling keeps a quarter of the window for the prompt when input is undeclared", () => {
+    expect(ProviderTransform.outputCeiling(createModel({ context: 200_000, output: 131_072 }))).toBe(150_000)
+  })
+
+  test("outputCeiling is undefined when the window is unknown", () => {
+    expect(ProviderTransform.outputCeiling(createModel({ context: 0, output: 0 }))).toBeUndefined()
+  })
+
+  test("keeps a configured output limit that fits the window", () => {
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 200_000, output: 131_072 }))).toBe(131_072)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 200_000, output: 64_000 }))).toBe(64_000)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 400_000, output: 128_000, input: 272_000 }))).toBe(
+      128_000,
+    )
+  })
+
+  test("clamps a declared output that would swallow the window", () => {
+    // Regression: catalog rows publishing the window in both fields used to send
+    // max_tokens == context, which providers reject because the prompt no longer fits.
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 262_144, output: 262_144 }))).toBe(196_608)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 131_072, output: 262_144 }))).toBe(98_304)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 4_000, output: 50_000 }))).toBe(3_000)
+  })
+
+  test("clamps the undeclared-output fallback by the window too", () => {
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 32_768, output: 0 }))).toBe(24_576)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 0, output: 0 }))).toBe(32_000)
+  })
+
+  test("an explicit outputTokenMax still caps, and never lifts the window clamp", () => {
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 200_000, output: 131_072 }), 4_096)).toBe(4_096)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 32_768, output: 0 }), 4_096)).toBe(4_096)
+    expect(ProviderTransform.maxOutputTokens(createModel({ context: 4_000, output: 50_000 }), 8_000)).toBe(3_000)
+  })
+
+  test("ignores a declared input limit that leaves no room to complete", () => {
+    // Regression: alibaba-*/MiniMax-M2.5 declares input 196601 against context
+    // 196608, so `context - input` capped max_tokens at 7 and truncated every
+    // response. Such a row is the window published in both fields, not a split.
+    const degenerate = createModel({ context: 196_608, output: 24_576, input: 196_601 })
+    expect(ProviderTransform.outputCeiling(degenerate)).toBe(147_456)
+    expect(ProviderTransform.maxOutputTokens(degenerate)).toBe(24_576)
+    // A real split is still honored.
+    const real = createModel({ context: 200_000, output: 64_000, input: 190_000 })
+    expect(ProviderTransform.outputCeiling(real)).toBe(10_000)
+    expect(ProviderTransform.maxOutputTokens(real)).toBe(10_000)
+  })
+})
+
+describe("ProviderTransform.clampVariantBudgets", () => {
+  const createModel = (limit: { context: number; output: number; input?: number }) =>
+    ({
+      id: "claude-test",
+      providerID: "anthropic",
+      name: "Test",
+      api: { id: "claude-test", url: "https://api.example.com", npm: "@ai-sdk/anthropic" },
+      capabilities: {
+        temperature: true,
+        reasoning: true,
+        attachment: false,
+        toolcall: true,
+        input: { text: true, audio: false, image: false, video: false, pdf: false },
+        output: { text: true, audio: false, image: false, video: false, pdf: false },
+        interleaved: false,
+      },
+      cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+      limit,
+      status: "active",
+      options: {},
+      headers: {},
+    }) as any
+
+  test("clamps a thinking budget derived from a larger earlier limit", () => {
+    // Regression: variants are derived from `limit.output`, but a merged model can
+    // carry budgets derived before a config pass lowered that limit. Anthropic
+    // rejects `budget_tokens >= max_tokens`.
+    const stale = {
+      high: { thinking: { type: "enabled", budgetTokens: 16_000 } },
+      max: { thinking: { type: "enabled", budgetTokens: 31_999 } },
+    }
+    const model = createModel({ context: 200_000, output: 8_192 })
+    expect(ProviderTransform.maxOutputTokens(model)).toBe(8_192)
+    expect(ProviderTransform.clampVariantBudgets(model, stale)).toEqual({
+      high: { thinking: { type: "enabled", budgetTokens: 8_191 } },
+      max: { thinking: { type: "enabled", budgetTokens: 8_191 } },
+    })
+  })
+
+  test("clamps every budget shape and leaves effort strings alone", () => {
+    const model = createModel({ context: 200_000, output: 4_096 })
+    expect(
+      ProviderTransform.clampVariantBudgets(model, {
+        a: { thinking: { type: "enabled", budgetTokens: 99_999 } },
+        b: { reasoningConfig: { type: "enabled", budgetTokens: 99_999 } },
+        c: { thinkingConfig: { includeThoughts: true, thinkingBudget: 99_999 } },
+        d: { thinking: { type: "enabled", tokenBudget: 99_999 } },
+        e: { enableThinking: true, thinkingBudget: 99_999 },
+        f: { reasoning: { max_tokens: 99_999 } },
+        g: { modelParams: { thinking: { type: "enabled", budget_tokens: 99_999 } } },
+        h: { reasoningEffort: "max", effort: "high" },
+      }),
+    ).toEqual({
+      a: { thinking: { type: "enabled", budgetTokens: 4_095 } },
+      b: { reasoningConfig: { type: "enabled", budgetTokens: 4_095 } },
+      c: { thinkingConfig: { includeThoughts: true, thinkingBudget: 4_095 } },
+      d: { thinking: { type: "enabled", tokenBudget: 4_095 } },
+      e: { enableThinking: true, thinkingBudget: 4_095 },
+      f: { reasoning: { max_tokens: 4_095 } },
+      g: { modelParams: { thinking: { type: "enabled", budget_tokens: 4_095 } } },
+      h: { reasoningEffort: "max", effort: "high" },
+    })
+  })
+
+  test("never raises a budget that already fits", () => {
+    const model = createModel({ context: 200_000, output: 64_000 })
+    const variants = { high: { thinking: { type: "enabled", budgetTokens: 16_000 } } }
+    expect(ProviderTransform.clampVariantBudgets(model, variants)).toEqual(variants)
+  })
+
+  test("leaves a zero budget alone because zero means thinking off", () => {
+    // A zero thinkingBudget is an explicit "thinking off", not an oversized budget;
+    // clamping it up to 1 would silently turn "off" into "on with a 1-token budget".
+    const model = createModel({ context: 200_000, output: 8_192 })
+    const variants = {
+      off: { thinkingConfig: { includeThoughts: true, thinkingBudget: 0 } },
+      on: { thinkingConfig: { includeThoughts: true, thinkingBudget: 99_999 } },
+    }
+    expect(ProviderTransform.clampVariantBudgets(model, variants)).toEqual({
+      off: { thinkingConfig: { includeThoughts: true, thinkingBudget: 0 } },
+      on: { thinkingConfig: { includeThoughts: true, thinkingBudget: 8_191 } },
+    })
+  })
+
+  test("is a no-op when no completion budget is left", () => {
+    const variants = { high: { thinking: { type: "enabled", budgetTokens: 16_000 } } }
+    expect(ProviderTransform.clampVariantBudgets(createModel({ context: 0, output: 0 }), variants, 1)).toEqual(variants)
+  })
+})

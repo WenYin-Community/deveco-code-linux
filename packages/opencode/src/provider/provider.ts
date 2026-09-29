@@ -1543,6 +1543,11 @@ export const layer = Layer.effect(
               release_date: model.release_date ?? existingModel?.release_date ?? "",
               variants: {},
             }
+            // Only two layers: what this pass derives from the merged model, and what
+            // this pass declares. Carrying `existingModel.variants` in between was
+            // measured to be a no-op across the catalog (every value it holds is
+            // re-derived identically) while letting budgets computed from an older,
+            // larger `limit.output` outrank the fresh ones.
             const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
             parsedModel.variants = mapValues(
               pickBy(merged, (v) => !v.disabled),
@@ -1689,6 +1694,16 @@ export const layer = Layer.effect(
               model.variants = mapValues(
                 pickBy(merged, (v) => !v.disabled),
                 (v) => omit(v, ["disabled"]),
+              )
+            }
+
+            // Merged variants can carry a thinking budget derived from an earlier,
+            // larger `limit.output`; providers reject budget_tokens >= max_tokens.
+            if (model.variants) {
+              model.variants = ProviderTransform.clampVariantBudgets(
+                model,
+                model.variants,
+                runtimeFlags.outputTokenMax,
               )
             }
           }

@@ -13,6 +13,7 @@ import { Config } from "@/config/config"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
+import { ProviderTransform } from "@/provider/transform"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Filesystem } from "@/util/filesystem"
@@ -1837,6 +1838,177 @@ credentialChanges.instance(
     expect((yield* list)[ProviderV2.ID.openai]).toBeUndefined()
   }),
   30000,
+)
+
+it.instance(
+  "configured limit on a brand-new provider model reaches the resolved model",
+  () =>
+    Effect.gen(function* () {
+      const model = yield* Provider.use.getModel(
+        ProviderV2.ID.make("alibaba-hw"),
+        ModelV2.ID.make("qwen3.8-max"),
+      )
+      expect(model.limit).toEqual({ context: 200_000, input: undefined, output: 131_072 })
+      expect(ProviderTransform.maxOutputTokens(model)).toBe(131_072)
+
+      const unlimited = yield* Provider.use.getModel(
+        ProviderV2.ID.make("alibaba-hw"),
+        ModelV2.ID.make("no-limit-model"),
+      )
+      expect(unlimited.limit.output).toBe(0)
+      expect(ProviderTransform.maxOutputTokens(unlimited)).toBe(32_000)
+      expect(ProviderTransform.maxOutputTokens(unlimited, 4_096)).toBe(4_096)
+      expect(ProviderTransform.maxOutputTokens(model, 4_096)).toBe(4_096)
+    }),
+  {
+    config: {
+      provider: {
+        "alibaba-hw": {
+          name: "百炼",
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          models: {
+            "qwen3.8-max": {
+              tool_call: true,
+              limit: { context: 200_000, output: 131_072 },
+            },
+            "no-limit-model": {
+              tool_call: true,
+            },
+          },
+          options: { apiKey: "test-key" },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "cloud catalog wins over user config for built-in deveco models",
+  () =>
+    Effect.gen(function* () {
+      const { devecoAuth } = yield* Effect.promise(() => import("@/plugin/deveco/auth"))
+      const refresh = spyOn(devecoAuth, "refreshToken").mockResolvedValue(null)
+      yield* Effect.addFinalizer(() => Effect.sync(() => refresh.mockRestore()))
+      const cache = Global.Path.cache
+      const isolatedCache = yield* tmpdirScoped().pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+      const { clearDevecoModelCache } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(
+        Object.assign(
+          async () =>
+            Response.json({
+              code: 200,
+              body: {
+                version: 1,
+                inner_models: [
+                  {
+                    protocol: "openai",
+                    group_name: "default",
+                    model_configs: [
+                      {
+                        id: 1,
+                        model_id: "test-deveco-model",
+                        context_window: 32768,
+                        output: 8192,
+                        thinking_mode: "on",
+                        reasoning_effort: '{"level":["max"],"default":"max"}',
+                      },
+                      { id: 2, model_id: "untouched-deveco-model", context_window: 16384, output: 4096 },
+                    ],
+                  },
+                ],
+              },
+            }),
+          { preconnect: globalThis.fetch.preconnect },
+        ),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          fetch.mockRestore()
+          clearDevecoModelCache()
+          Global.Path.cache = cache
+        }),
+      )
+      Global.Path.cache = isolatedCache
+      clearDevecoModelCache()
+      yield* setProcessEnv("DEVECO_AUTH_CONTENT", "")
+      yield* withAuthJson(
+        JSON.stringify({
+          deveco: {
+            type: "oauth",
+            access: "test-login-access",
+            refresh: "test-refresh",
+            expires: Date.now() + 60000,
+            isRealName: true,
+          },
+          openai: { type: "api", key: "test-third-party-key" },
+        }),
+      )
+
+      const builtIn = yield* Provider.use.getModel(
+        ProviderV2.ID.make("deveco"),
+        ModelV2.ID.make("test-deveco-model"),
+      )
+      expect(builtIn.limit).toEqual({ context: 32_768, input: undefined, output: 8_192 })
+      expect(ProviderTransform.maxOutputTokens(builtIn)).toBe(8_192)
+      expect(Object.keys(builtIn.variants ?? {})).toContain("max")
+
+      const untouched = yield* Provider.use.getModel(
+        ProviderV2.ID.make("deveco"),
+        ModelV2.ID.make("untouched-deveco-model"),
+      )
+      expect(untouched.limit).toEqual({ context: 16_384, input: undefined, output: 4_096 })
+
+      const custom = yield* Provider.use.getModel(
+        ProviderV2.ID.make("deveco"),
+        ModelV2.ID.make("custom-deveco-model"),
+      )
+      expect(custom.limit).toEqual({ context: 128_000, input: undefined, output: 16_384 })
+      expect(ProviderTransform.maxOutputTokens(custom)).toBe(16_384)
+    }),
+  {
+    config: {
+      model: "openai/gpt-4o",
+      enabled_providers: ["openai", "deveco"],
+      provider: {
+        deveco: {
+          npm: "@ai-sdk/openai-compatible",
+          api: "https://api.example.com/v1",
+          models: {
+            "test-deveco-model": { limit: { context: 200_000, output: 64_000 } },
+            "custom-deveco-model": { tool_call: true, limit: { context: 128_000, output: 16_384 } },
+          },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "a lowered output limit pulls every thinking budget below max_tokens",
+  Effect.gen(function* () {
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    const providers = yield* list
+    const model = providers[ProviderV2.ID.anthropic].models["claude-sonnet-4-5"]
+    const max = ProviderTransform.maxOutputTokens(model)
+    expect(max).toBe(8_192)
+    const variants = model.variants ?? {}
+    expect(Object.keys(variants).length).toBeGreaterThan(0)
+    for (const variant of Object.values(variants)) {
+      const budget = variant.thinking?.budgetTokens
+      if (typeof budget === "number") expect(budget).toBeLessThan(max)
+    }
+    // The catalog annotates this model with budget tiers derived from its published
+    // output of 64000; those must not survive the lowered limit.
+    expect(variants.max?.thinking?.budgetTokens).toBe(8_191)
+  }),
+  {
+    config: {
+      provider: {
+        anthropic: { models: { "claude-sonnet-4-5": { limit: { context: 200_000, output: 8_192 } } } },
+      },
+    },
+  },
 )
 
 for (const { available, expired } of [{ available: true, expired: false }, { available: false, expired: false }, { available: false, expired: true }, { available: true, expired: true }]) {
