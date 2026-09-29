@@ -1,10 +1,11 @@
-import https from "https"
-import http from "http"
 import querystring from "querystring"
 import { resolveAgreementConfig, getPrivacyAcceptedKey, getSignPendingKey, type AgreementConfig } from "@/cli/deveco-legal"
 import { devecoAuth, saveAuthToDisk, ACCESS_TOKEN_EXPIRES_MS } from "@/plugin/deveco"
 import { logInfo, logWarn, logError } from "@/plugin/deveco/log"
+import { describeNetworkError } from "@/plugin/deveco/network-error"
 import { hashUserId } from "@opencode-ai/core/sanitize-path"
+
+const TMS_TIMEOUT_MS = 10000
 
 // ============ Data Models ============
 
@@ -92,10 +93,6 @@ interface TmsFormBody {
  * The `request` field is an embedded JSON string inside the form-encoded body.
  */
 async function tmsPost(tmsUrl: string, body: TmsFormBody): Promise<string> {
-  const parsedUrl = new URL(tmsUrl)
-  const isHttps = parsedUrl.protocol === "https:"
-  const httpModule = isHttps ? https : http
-
   // Encode as application/x-www-form-urlencoded (NSP protocol format)
   const formBody = querystring.stringify({
     nsp_svc: body.nsp_svc,
@@ -103,48 +100,28 @@ async function tmsPost(tmsUrl: string, body: TmsFormBody): Promise<string> {
     request: body.request,
   })
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Content-Length": String(Buffer.byteLength(formBody)),
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "accept-language": "zh-CN",
-  }
-
-  return new Promise((resolve, reject) => {
-    const options: http.RequestOptions | https.RequestOptions = {
+  // fetch (not node:http) so Bun applies HTTP(S)_PROXY / NO_PROXY — the agreement
+  // endpoint is otherwise unreachable on networks that only work through a proxy.
+  try {
+    const response = await fetch(tmsUrl, {
       method: "POST",
-      headers,
-      timeout: 10000,
-    }
-
-    const req = httpModule.request(tmsUrl, options, (res) => {
-      let data = ""
-      res.on("data", (chunk: Buffer | string) => {
-        data += chunk
-      })
-      res.on("end", () => {
-        clearTimeout(deadline)
-        resolve(data)
-      })
-      res.on("error", reject)
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "accept-language": "zh-CN",
+      },
+      body: formBody,
+      redirect: "manual",
+      signal: AbortSignal.timeout(TMS_TIMEOUT_MS),
     })
-
-    const deadline = setTimeout(() => req.destroy(new Error("TMS request deadline exceeded")), 10000)
-    deadline.unref()
-    req.on("close", () => clearTimeout(deadline))
-    req.on("error", (err: Error) => {
-      clearTimeout(deadline)
-      reject(err)
-    })
-    req.on("timeout", () => {
-      req.destroy()
+    return await response.text()
+  } catch (err) {
+    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
       logError("TMS request timeout", { service: "deveco-agreement", url: tmsUrl })
-      reject(new Error("TMS request timeout"))
-    })
-
-    req.write(formBody)
-    req.end()
-  })
+      throw new Error("TMS request timeout", { cause: err })
+    }
+    throw err
+  }
 }
 
 // ============ Session Timeout Retry ============
@@ -289,12 +266,14 @@ export class AgreementService {
 
       return result
     } catch (err) {
-      logError("query agreement exception", { service: "deveco-agreement", error: err instanceof Error ? err.message : String(err) })
+      const raw = err instanceof Error ? err.message : String(err)
+      const hint = describeNetworkError(err, this.config.tms_url)
+      logError("query agreement exception", { service: "deveco-agreement", error: raw, ...(hint ? { hint } : {}) })
       return {
         status: AgreementStatus.NETWORK_ERROR,
         signInfo: null,
         versionInfo: null,
-        error: err instanceof Error ? err.message : "Network error",
+        error: hint ?? (raw || "Network error"),
       }
     }
   }
@@ -430,11 +409,13 @@ export class AgreementService {
 
       return { ...result, refreshedToken }
     } catch (err) {
-      logError("sign agreement exception", { service: "deveco-agreement", error: err instanceof Error ? err.message : String(err) })
+      const raw = err instanceof Error ? err.message : String(err)
+      const hint = describeNetworkError(err, this.config.tms_url)
+      logError("sign agreement exception", { service: "deveco-agreement", error: raw, ...(hint ? { hint } : {}) })
       return {
         success: false,
         isUpload: false,
-        error: err instanceof Error ? err.message : "Network error",
+        error: hint ?? (raw || "Network error"),
       }
     }
   }

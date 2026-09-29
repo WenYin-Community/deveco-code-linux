@@ -2,12 +2,22 @@ import crypto from "crypto"
 import { exec } from "node:child_process"
 import { promisify } from "node:util"
 import { logInfo, logWarn, logError } from "./log"
-import { LoginCancelledError, UnsupportedRegionError } from "./errors"
+import { LoginCancelledError, NetworkError, UnsupportedRegionError } from "./errors"
 import { httpClient } from "./http-client"
+import { describeNetworkError } from "./network-error"
 import { LocalAuthServer } from "./local-auth-server"
 import { tokenStorage } from "./token-storage"
 import { saveAuthToDisk } from "./storage"
-import type { AccountRegionStatus, JwtPayload, LoginConfig, LoginResult, TokenCheckResponse, UserInfo } from "./types"
+import type {
+  AccountRegionStatus,
+  HttpRequestConfig,
+  HttpResponse,
+  JwtPayload,
+  LoginConfig,
+  LoginResult,
+  TokenCheckResponse,
+  UserInfo,
+} from "./types"
 import { DEFAULT_CONFIG } from "./types"
 import { CHINA_ACCOUNT_ONLY_MESSAGE } from "./region-policy"
 
@@ -89,10 +99,11 @@ export class LoginService {
           error: CHINA_ACCOUNT_ONLY_MESSAGE,
         }
       }
-      logError("login failed", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
+      const raw = err instanceof Error ? err.message : String(err)
+      logError("login failed", { service: "deveco", error: raw })
       return {
         success: false,
-        error: err instanceof Error ? err.message : "Unknown error",
+        error: raw || "Unknown error",
       }
     } finally {
       if (this.server) {
@@ -202,6 +213,25 @@ export class LoginService {
     }
   }
 
+  /**
+   * Auth-server request that turns transport failures into an actionable message.
+   * The raw error stays in the log and in `cause`.
+   */
+  private async requestAuth(url: string, config?: HttpRequestConfig): Promise<HttpResponse> {
+    try {
+      return await httpClient.get(url, config)
+    } catch (err) {
+      const hint = describeNetworkError(err, url)
+      logError("auth request failed", {
+        service: "deveco",
+        url,
+        error: err instanceof Error ? err.message : String(err),
+        ...(hint ? { hint } : {}),
+      })
+      throw hint ? new NetworkError(hint, { cause: err }) : err
+    }
+  }
+
   private async getJwtToken(tempToken: string): Promise<string> {
     const actualTempToken = tempToken.split("&")[0]
 
@@ -213,7 +243,7 @@ export class LoginService {
     }
 
     const url = `${this.config.baseUrl}/${this.config.tempTokenCheckUrl}`
-    const response = await httpClient.get(url, { params })
+    const response = await this.requestAuth(url, { params })
 
     if (response.statusCode !== 200) {
       logError("failed to get jwtToken", { service: "deveco", statusCode: response.statusCode })
@@ -263,7 +293,7 @@ export class LoginService {
     }
 
     const url = `${this.config.baseUrl}/${this.config.jwtTokenCheckUrl}`
-    const response = await httpClient.get(url, { headers })
+    const response = await this.requestAuth(url, { headers })
 
     if (response.statusCode !== 200) {
       logError("failed to check jwtToken", { service: "deveco", statusCode: response.statusCode })
@@ -320,7 +350,7 @@ export class LoginService {
         jwtToken: jwtToken,
       }
 
-      const response = await httpClient.get(url, { headers })
+      const response = await this.requestAuth(url, { headers })
 
       if (response.statusCode !== 200) {
         logError(`refreshToken failed: HTTP ${response.statusCode}`, { service: "deveco", url })

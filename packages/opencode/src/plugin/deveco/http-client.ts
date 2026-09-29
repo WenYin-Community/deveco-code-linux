@@ -1,6 +1,3 @@
-import http from "http"
-import https from "https"
-import { URL } from "url"
 import type { HttpRequestConfig, HttpResponse, TokenCheckResponse } from "./types"
 
 export class HttpClient {
@@ -19,65 +16,57 @@ export class HttpClient {
     return this.request(url, "POST", config)
   }
 
+  // Uses fetch instead of node:http/https on purpose: Bun's fetch honours
+  // HTTP(S)_PROXY / NO_PROXY, while node's request ignores them. Behind a
+  // corporate proxy the browser completed OAuth but the token exchange died
+  // with `getaddrinfo ENOTFOUND cn.devecostudio.huawei.com`.
   private async request(url: string, method: string, config?: HttpRequestConfig): Promise<HttpResponse> {
-    const parsedUrl = new URL(url)
-    const isHttps = parsedUrl.protocol === "https:"
-    const httpModule = isHttps ? https : http
-
     const searchParams = new URLSearchParams(config?.params ?? {})
     const queryString = searchParams.toString()
     const fullUrl = queryString ? `${url}?${queryString}` : url
+    const body = method === "POST" && config?.params ? JSON.stringify(config.params) : undefined
 
-    const headers = {
-      ...this.defaultHeaders,
-      ...(config?.headers || {}),
-    }
-
-    return new Promise((resolve, reject) => {
-      const options: http.RequestOptions | https.RequestOptions = {
+    try {
+      const response = await fetch(fullUrl, {
         method,
+        headers: { ...this.defaultHeaders, ...(config?.headers ?? {}) },
+        body,
+        redirect: "manual",
+        signal: AbortSignal.timeout(config?.timeout ?? this.defaultTimeout),
+      })
+
+      const headers: Record<string, string> = {}
+      response.headers.forEach((value, key) => {
+        headers[key] = value
+      })
+
+      return {
+        data: await response.text(),
+        statusCode: response.status,
         headers,
-        timeout: config?.timeout ?? this.defaultTimeout,
       }
-
-      const req = httpModule.request(fullUrl, options, (res) => {
-        let data = ""
-        res.on("data", (chunk) => {
-          data += chunk
-        })
-        res.on("end", () => {
-          resolve({
-            data,
-            statusCode: res.statusCode ?? 0,
-            headers: res.headers,
-          })
-        })
-      })
-
-      req.on("error", reject)
-      req.on("timeout", () => {
-        req.destroy()
-        reject(new Error("Request timeout"))
-      })
-
-      if (method === "POST" && config?.params) {
-        req.write(JSON.stringify(config.params))
+    } catch (err) {
+      if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+        throw new Error("Request timeout", { cause: err })
       }
-
-      req.end()
-    })
+      throw err
+    }
   }
 
   public parseJson(response: HttpResponse): TokenCheckResponse {
-    const contentType = (response.headers['content-type'] ?? '').toString().toLowerCase()
+    const contentType = (response.headers["content-type"] ?? "").toString().toLowerCase()
     const body = response.data.trim()
-    if (contentType.includes('html') || /^\s*<!doctype|^\s*<html/i.test(body)) {
-      throw new Error(`Server returned HTML instead of JSON (content-type: ${contentType || 'unknown'}). The auth server may be behind a gateway or proxy error page.`)
+    if (contentType.includes("html") || /^\s*<!doctype|^\s*<html/i.test(body)) {
+      throw new Error(
+        `Server returned HTML instead of JSON (content-type: ${contentType || "unknown"}). The auth server may be behind a gateway or proxy error page.`,
+      )
     }
     try {
       return JSON.parse(body) as TokenCheckResponse
     } catch (err) {
-      throw new Error(`Failed to parse server response as JSON: ${err instanceof Error ? err.message : String(err)}. Response preview: ${body.slice(0, 200)}`)
+      throw new Error(
+        `Failed to parse server response as JSON: ${err instanceof Error ? err.message : String(err)}. Response preview: ${body.slice(0, 200)}`,
+      )
     }
   }
 }

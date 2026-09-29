@@ -456,6 +456,48 @@ describe("LoginService.login", () => {
   })
 })
 
+describe("LoginService network failure messaging", () => {
+  test("explains a DNS failure instead of surfacing getaddrinfo", async () => {
+    const dns = new Error("getaddrinfo ENOTFOUND cn.devecostudio.huawei.com") as Error & { code?: string }
+    dns.code = "ENOTFOUND"
+    httpClient.get = mock(() => Promise.reject(dns))
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("Cannot resolve the address of cn.devecostudio.huawei.com")
+    expect(result.error).toContain("HTTPS_PROXY")
+  })
+
+  test("keeps non-network errors verbatim", async () => {
+    httpClient.get = mock(() => Promise.reject(new Error("Invalid jwtToken format")))
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe("Invalid jwtToken format")
+  })
+
+  test("keeps the gateway HTML diagnostic instead of blaming the proxy", async () => {
+    httpClient.get = mock((url: string) => {
+      if (url.includes("temptoken")) {
+        return Promise.resolve({ statusCode: 200, data: defaultJwt, headers: {} } as HttpResponse)
+      }
+      return Promise.resolve({
+        statusCode: 200,
+        data: "<html>blocked by gateway</html>",
+        headers: { "content-type": "text/html" },
+      } as HttpResponse)
+    })
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("Server returned HTML instead of JSON")
+    expect(result.error).not.toContain("HTTPS_PROXY")
+  })
+})
+
 describe("LoginService.checkAccountRegion", () => {
   test("returns supported only for a CN nationalCode", async () => {
     mockHttpClientForLogin(defaultJwt, defaultTokenCheck)

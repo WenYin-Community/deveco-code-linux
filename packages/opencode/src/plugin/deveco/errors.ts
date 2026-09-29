@@ -11,3 +11,11 @@ export class UnsupportedRegionError extends Error {
     this.name = "UnsupportedRegionError"
   }
 }
+
+/** A transport failure whose message is already user-facing, so it must not be re-mapped. */
+export class NetworkError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = "NetworkError"
+  }
+}

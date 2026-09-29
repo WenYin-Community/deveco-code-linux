@@ -59,7 +59,7 @@ export interface CallbackData {
 export interface HttpResponse {
   data: string
   statusCode: number
-  headers: import("http").IncomingHttpHeaders
+  headers: Record<string, string>
 }
 
 export interface HttpRequestConfig {
