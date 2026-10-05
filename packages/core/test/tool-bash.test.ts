@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs"
 import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import { Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Config } from "@opencode-ai/core/config"
@@ -13,6 +14,8 @@ import { AppProcess } from "@opencode-ai/core/process"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { BashTool } from "@opencode-ai/core/tool/bash"
+import { Sandbox, SandboxContextService, SandboxRuntimeService, SandboxConfigWriterService } from "@opencode-ai/core/sandbox"
+import { EventV2 } from "@opencode-ai/core/event"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
 import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
@@ -73,6 +76,79 @@ const config = Layer.succeed(
     entries: () => Effect.succeed([]),
   }),
 )
+// Sandbox mock: bypass sandbox for existing bash tests
+const sandboxCtx = Layer.succeed(
+  SandboxContextService,
+  SandboxContextService.of({
+    resolve: () =>
+      Effect.succeed({
+        profile_id: "read-only",
+        filesystem: { ":root": "read" },
+        network_enabled: true,
+        workspace_roots: [],
+        is_implicit: true,
+        source_layer: "global",
+      }),
+    buildRequest: (resolved, target) => ({
+      command: target,
+      file_system_context: {
+        cwd: target.cwd,
+        workspace_roots: resolved.workspace_roots,
+      },
+      permissions: {
+        profile_id: resolved.profile_id,
+        filesystem: Object.fromEntries(Object.entries(resolved.filesystem)),
+        network_enabled: resolved.network_enabled,
+        workspace_roots: resolved.workspace_roots,
+      },
+      io: { kind: "pipe" },
+    }),
+  }),
+)
+const sandboxRuntime = Layer.succeed(
+  SandboxRuntimeService,
+  SandboxRuntimeService.of({
+    new: () => Effect.void,
+    probe: () => Effect.succeed({ _tag: "Supported" as const }),
+    // Mock prepare: return the shell + command as structured target
+    // (simulates disabled/passthrough mode for testing)
+    prepare: (request) =>
+      Effect.succeed({
+        executable: request.command.executable,
+        args: request.command.args,
+        cwd: request.command.cwd,
+        env: request.command.env,
+      }),
+  }),
+)
+const sandboxWriter = Layer.succeed(
+  SandboxConfigWriterService,
+  SandboxConfigWriterService.of({
+    writeProfile: () => Effect.succeed("/mock/path"),
+    getWriteTargetPath: () => Effect.succeed("/mock/path"),
+    getRuntimeOverride: () => Effect.succeed(undefined),
+    clearRuntimeOverride: () => Effect.void,
+  }),
+)
+
+// EventV2.Service mock: no-op publish for telemetry events
+const eventService = Layer.succeed(
+  EventV2.Service,
+  EventV2.Service.of({
+    publish: () => Effect.succeed({} as any),
+    subscribe: () => Stream.empty,
+    all: () => Stream.empty,
+    aggregateEvents: () => Stream.empty,
+    sync: () => Effect.succeed(Effect.void),
+    listen: () => Effect.succeed(Effect.void),
+    beforeCommit: () => Effect.void,
+    project: () => Effect.void,
+    replay: () => Effect.void,
+    replayAll: () => Effect.succeed(undefined),
+    remove: () => Effect.void,
+    claim: () => Effect.void,
+  }),
+)
 
 const reset = () => {
   assertions.length = 0
@@ -109,10 +185,14 @@ const withTool = <A, E, R>(
     Layer.provide(filesystem),
     Layer.provide(processLayer),
     Layer.provide(config),
+    Layer.provide(sandboxCtx),
+    Layer.provide(sandboxRuntime),
+    Layer.provide(sandboxWriter),
+    Layer.provide(eventService),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
-  }).pipe(Effect.provide(Layer.mergeAll(registry, bash)))
+  }).pipe(Effect.provide(Layer.mergeAll(registry, bash, eventService)))
 }
 
 const call = (input: typeof BashTool.Input.Type, id = "call-bash") => ({
@@ -123,7 +203,14 @@ const call = (input: typeof BashTool.Input.Type, id = "call-bash") => ({
 
 const it = testEffect(Layer.empty)
 
+// ─── 测试文件说明 ───────────────────────────────────────────
+// 本文件测试 bash 工具的沙箱执行链路（FR-EXEC-001 ~ FR-EXEC-006, FR-CFG-012）。
+// 覆盖：resolve→probe→prepare→spawn 链路、输出与退出码、权限审批、超时处理。
+// 使用 mock 的 SandboxContextService 和 SandboxRuntimeService 模拟沙箱。
+// 对应需求文档：sandbox/doc/SR/macos_sandbox_sr1.md §3.1.3
+
 describe("BashTool", () => {
+  // FR-EXEC-001: 注册 bash 工具并返回结构化成功输出
   it.live("registers and returns structured successful output from the active Location", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -150,7 +237,7 @@ describe("BashTool", () => {
                 content: [{ type: "text", text: "hello\n\n\nCommand exited with code 0." }],
               },
             })
-            expect(runs).toMatchObject([{ command: "pwd", cwd: realpathSync(tmp.path) }])
+            expect(runs).toMatchObject([{ command: "/bin/sh", cwd: realpathSync(tmp.path), shell: false }])
             expect(runs[0]?.options).toMatchObject({
               maxOutputBytes: BashTool.MAX_CAPTURE_BYTES,
               maxErrorBytes: BashTool.MAX_CAPTURE_BYTES,
@@ -163,6 +250,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-001: 相对 workdir 从当前 Location 解析
   it.live("resolves a relative workdir from the active Location", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -181,6 +269,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-001: 审批期间 workdir 不再是目录时拒绝执行
   it.live("rejects a workdir that stops being a directory during approval", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -211,6 +300,7 @@ describe("BashTool", () => {
   )
 
   if (process.platform !== "win32") {
+  // FR-EXEC-002: 通过 AppProcess 执行真实 shell 命令并返回输出
     it.live("executes a real shell command through AppProcess", () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
@@ -239,6 +329,7 @@ describe("BashTool", () => {
     )
   }
 
+  // FR-EXEC-001: 外部 workdir 需先通过权限审批再执行 bash
   it.live("approves an explicit external workdir before bash execution", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -265,6 +356,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-FAIL-001: 权限拒绝后不执行命令
   it.live("does not execute after external-directory or bash denial", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -291,6 +383,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-001: 命令参数引用外部目录时给出告警，不强制审批
   it.live("reports external command arguments as advisory warnings without enforcing approval", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -320,6 +413,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-002: 非零退出码依然返回有用信息
   it.live("keeps non-zero exits useful", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -348,6 +442,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-002: 输出截断时在结果中提示
   it.live("surfaces bounded process-capture truncation", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -371,6 +466,7 @@ describe("BashTool", () => {
     ),
   )
 
+  // FR-EXEC-004: 命令超时后返回超时结算信息
   it.live("returns a useful timeout settlement", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

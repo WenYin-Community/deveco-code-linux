@@ -48,6 +48,7 @@ import { RequestExecutor } from "@opencode-ai/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
+import { Sandbox } from "./sandbox"
 import { FetchHttpClient } from "effect/unstable/http"
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@opencode/example/LocationServiceMap", {
@@ -89,6 +90,10 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const referenceGuidance = ReferenceGuidance.locationLayer.pipe(Layer.provide(services))
     const todos = SessionTodo.layer.pipe(Layer.provide(services))
     const questions = QuestionV2.locationLayer.pipe(Layer.provide(services))
+    const sandbox = Layer.mergeAll(
+      Sandbox.contextLayer.pipe(Layer.provide(Sandbox.writerLayer.pipe(Layer.provide(services)))),
+      Sandbox.runtimeLayer,
+    ).pipe(Layer.provide(services))
     const builtInTools = BuiltInTools.locationLayer.pipe(
       Layer.provide(services),
       Layer.provide(mutation),
@@ -96,6 +101,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(todos),
       Layer.provide(questions),
       Layer.provide(image),
+      Layer.provide(sandbox),
       Layer.provide(Ssrf.GuardLive),
     )
     const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))

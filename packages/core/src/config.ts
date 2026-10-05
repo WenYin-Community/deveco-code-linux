@@ -20,6 +20,7 @@ import { ConfigMCP } from "./config/mcp"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
+import { ConfigSandbox } from "./config/sandbox"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigWatcher } from "./config/watcher"
 import { ConfigV1 } from "./v1/config/config"
@@ -103,6 +104,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   experimental: ConfigExperimental.Experimental.pipe(Schema.optional),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
+  sandbox: ConfigSandbox.SandboxConfig.pipe(Schema.optional).annotate({
+    description:
+      "Sandbox configuration: profile selection, definitions, whitelist, and network override",
+  }),
 }) {}
 
 export class Document extends Schema.Class<Document>("Config.Document")({

@@ -47,6 +47,7 @@ import { DialogStatus } from "./component/dialog-status"
 import { DialogUsage } from "./component/dialog-usage"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogLanguage } from "./component/dialog-language"
+import { DialogSandbox } from "./component/dialog-sandbox"
 import { DEVECO_FEEDBACK_URL, DEVECO_README_URL } from "./deveco-links"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
@@ -827,6 +828,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: t("command.switch_language"),
         run: () => {
           dialog.replace(() => <DialogLanguage />)
+        },
+        category: t("category.settings"),
+      },
+      {
+        name: "sandbox.open",
+        title: t("command.open_sandbox"),
+        slashName: "sandbox",
+        run: () => {
+          dialog.replace(() => <DialogSandbox />)
         },
         category: t("category.settings"),
       },

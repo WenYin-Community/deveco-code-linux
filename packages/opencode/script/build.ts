@@ -24,6 +24,8 @@ import {
 } from "./vendor-deveco-cli"
 import { copyHomegraphRuntime } from "./vendor-homegraph.ts"
 
+const require = createRequire(import.meta.url)
+
 const singleFlag = process.argv.includes("--single")
 const targetFlag = process.argv.find((arg) => arg.startsWith("--target="))?.slice("--target=".length)
 const baselineFlag = process.argv.includes("--baseline")
@@ -286,6 +288,21 @@ for (const item of targets) {
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
+  // Patch @bitfun-ai/sandbox dist/loader.js to support bun compiled binaries
+  // (bunfs). The upstream npm package (0.2.19) uses realpathSync on bunfs
+  // virtual paths, which fails with "Sandbox wrapper package identity is invalid".
+  // Our patched version adds tryRealpath(), isBunfs(), and loadNativeFromBunfs().
+  const sandboxLoaderPath = path.join(dir, "node_modules/@bitfun-ai/sandbox/dist/loader.js")
+  const patchedLoaderPath = path.join(dir, "patches/sandbox-loader.js")
+  if (fs.existsSync(sandboxLoaderPath) && fs.existsSync(patchedLoaderPath)) {
+    const upstreamContent = fs.readFileSync(sandboxLoaderPath, "utf8")
+    const patchedContent = fs.readFileSync(patchedLoaderPath, "utf8")
+    if (!upstreamContent.includes("isBunfs")) {
+      fs.writeFileSync(sandboxLoaderPath, patchedContent)
+      console.log("  Patched @bitfun-ai/sandbox dist/loader.js for bunfs support")
+    }
+  }
+
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
   const parserWorker = fs.realpathSync(fs.existsSync(localPath) ? localPath : rootPath)
@@ -344,6 +361,39 @@ for (const item of targets) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)
     }
+  }
+
+  // Vendor sandbox native addon (.node) alongside the binary, since bun's
+  // compiled binary cannot require() .node files from bunfs.
+  if (item.os === "darwin") {
+    const sandboxPkgPath = require.resolve("@bitfun-ai/sandbox/package.json")
+    const sandboxPkgDir = path.dirname(sandboxPkgPath)
+    const sandboxVersion = require(sandboxPkgPath).version
+    const nativePkgName = `@bitfun-ai+sandbox-${item.os}-${item.arch}@${sandboxVersion}`
+    // bun stores optional dependencies in node_modules/.bun/<name>@<version>/node_modules/<pkg>
+    const monorepoRoot = path.resolve(dir, "..", "..")
+    const bunDir = path.join(monorepoRoot, "node_modules", ".bun", nativePkgName, "node_modules", `@bitfun-ai/sandbox-${item.os}-${item.arch}`)
+    const nativePkgDir = fs.existsSync(bunDir) ? bunDir : path.join(sandboxPkgDir, "node_modules", `@bitfun-ai/sandbox-${item.os}-${item.arch}`)
+    const addonSrc = path.join(nativePkgDir, "sandbox.node")
+    const identitySrc = path.join(nativePkgDir, "build-identity.json")
+    if (!fs.existsSync(addonSrc)) {
+      console.error(`  ERROR: sandbox.node not found at ${addonSrc}`)
+      process.exit(1)
+    }
+    const vendorSandboxDir = path.join(dir, "dist", name, "vendor", "sandbox")
+    await fs.promises.mkdir(vendorSandboxDir, { recursive: true })
+    await fs.promises.copyFile(addonSrc, path.join(vendorSandboxDir, "sandbox.node"))
+    await fs.promises.copyFile(identitySrc, path.join(vendorSandboxDir, "build-identity.json"))
+    // Also copy the wrapper package.json for version identification
+    await fs.promises.copyFile(
+      path.join(sandboxPkgDir, "package.json"),
+      path.join(vendorSandboxDir, "wrapper-package.json"),
+    )
+    await fs.promises.copyFile(
+      path.join(nativePkgDir, "package.json"),
+      path.join(vendorSandboxDir, "platform-package.json"),
+    )
+    console.log(`  Bundled sandbox native addon for ${item.os}-${item.arch}`)
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`

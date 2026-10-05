@@ -214,6 +214,8 @@ export const Definitions = {
   "dialog.usage.focus.top": keybind("up", "Exit usage sub-tabs"),
   "dialog.usage.dates.cycle": keybind("r", "Cycle stats date range"),
   "dialog.usage.stats.copy": keybind("ctrl+s", "Copy stats summary"),
+  "dialog.sandbox.tab.prev": keybind("left", "Previous sandbox tab"),
+  "dialog.sandbox.tab.next": keybind("right", "Next sandbox tab"),
   "prompt.autocomplete.prev": keybind("up,ctrl+p", "Move to previous autocomplete item"),
   "prompt.autocomplete.next": keybind("down,ctrl+n", "Move to next autocomplete item"),
   "prompt.autocomplete.hide": keybind("escape", "Hide autocomplete"),

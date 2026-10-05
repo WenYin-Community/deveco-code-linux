@@ -1,7 +1,8 @@
 import { Effect, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
-import { rm } from "node:fs/promises"
+import { rm, readFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import * as Tool from "./tool"
 import path from "path"
@@ -9,6 +10,7 @@ import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { lazy } from "@/util/lazy"
 import type { Node } from "web-tree-sitter"
+import { parse as parseJsonc, type ParseError } from "jsonc-parser"
 
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { sanitizePath } from "@opencode-ai/core/sanitize-path"
@@ -17,6 +19,12 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell, PS_ENCODING_PREAMBLE } from "@opencode-ai/core/shell"
 import { ShellID } from "./shell/id"
+import { Sandbox, toNativePrepareRequest, fromNativePreparedCommand, resolveSR1AndMapError } from "@opencode-ai/core/sandbox"
+import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
+import { ConfigSandbox, type ResolvedProfile } from "@opencode-ai/core/config/sandbox"
+import { getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
+import { addSandboxPid, removeSandboxPid } from "@opencode-ai/core/config/sandbox-pids"
+import { SandboxRuntime as NativeSandboxRuntime } from "@bitfun-ai/sandbox"
 
 import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
@@ -28,6 +36,7 @@ import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
 import { resolveCliInvocation } from "@/deveco-cli/commands"
 import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/event"
 import { Global } from "@opencode-ai/core/global"
+import { Agent } from "@/agent/agent"
 
 export { Parameters } from "./shell/prompt"
 
@@ -126,6 +135,9 @@ type ShellRunState = {
   cut: boolean
   expired: boolean
   aborted: boolean
+  sandboxError?: string
+  requestId?: string
+  sandboxStartTime?: number
 }
 
 const resolveWasm = (asset: string) => {
@@ -448,6 +460,15 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
+    const agents = yield* Agent.Service
+    // Sandbox: SR1 default read-only profile, prepared via native runtime.
+    // core's Config.Service (@opencode/v2/Config) isn't available in the
+    // opencode bundle (bun bundler creates a separate context tag identity
+    // that doesn't match across package boundaries), so we resolve directly
+    // to the default profile and call the native runtime ourselves.
+    const nativeRuntime = lazy(() =>
+      NativeSandboxRuntime.new({ state_dir: null, bundled_executables_dir: null }),
+    )
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
@@ -591,6 +612,133 @@ export const ShellTool = Tool.define(
         },
       })
 
+    // ─── Sandbox config loading (FR-CFG-001/010/011) ──────────
+    // Reads deveco.json(c) from global and project layers, builds
+    // LayeredSandboxConfig, then calls SandboxResolver.resolveSR1()
+    // to validate + resolve the effective profile.
+    // This bypasses core's Config.Service (@opencode/v2/Config) which
+    // isn't available in the opencode bundle context.
+
+    // S23: filename order aligned with opencode Config service
+    const configFilenames = ["deveco.jsonc", "deveco.json", "config.json"]
+
+    function extractSandbox(jsonText: string): ConfigSandbox.SandboxConfig | undefined {
+      const errors: ParseError[] = []
+      const parsed = parseJsonc(jsonText, errors, { allowTrailingComma: true })
+      // S11: log parse errors so malformed config isn't silently dropped.
+      // console.warn is acceptable here: this runs at config-load time (not
+      // per-command), so it won't pollute the TUI input window repeatedly.
+      if (errors.length) {
+        console.warn(`[sandbox] JSONC parse errors in config: ${JSON.stringify(errors)}`)
+        return
+      }
+      const sandbox = (parsed as Record<string, unknown>)?.sandbox
+      if (!sandbox || typeof sandbox !== "object") return
+      // S-MERGE-5: strict shape validation — reject type mismatches before casting
+      return ConfigSandbox.validateSandboxShape(sandbox)
+    }
+
+    async function readSandboxConfig(filepath: string): Promise<ConfigSandbox.SandboxConfig | undefined> {
+      let text: string | undefined
+      try {
+        text = await readFile(filepath, "utf-8")
+      } catch (err) {
+        if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+        console.warn(`[sandbox] Failed to read config file ${filepath}:`, err instanceof Error ? err.message : String(err))
+        return
+      }
+      if (!text) return
+      return extractSandbox(text)
+    }
+
+    // S-AGENT-1: per-agent sandbox override "视同声明它的配置层的选择"，
+    // 优先级高于同层顶层 sandbox.profile。所以 agent override 的所有字段
+    // 覆盖 base（profile/network/allowed_profiles），profiles 深度合并。
+    // agent override 仍然是 project 层的一部分，runtime 层可以覆盖它。
+    function mergeSandboxConfig(
+      base: ConfigSandbox.SandboxConfig,
+      override: ConfigSandbox.SandboxConfig,
+    ): ConfigSandbox.SandboxConfig {
+      return {
+        ...base,
+        ...override,
+        profiles: { ...(base.profiles ?? {}), ...(override.profiles ?? {}) },
+      }
+    }
+
+    function findProjectConfig(startDir: string): string | undefined {
+      let dir = startDir
+      while (dir !== path.dirname(dir)) {
+        for (const name of configFilenames) {
+          const candidate = path.join(dir, name)
+          if (existsSync(candidate)) return candidate
+        }
+        for (const name of configFilenames) {
+          const candidate = path.join(dir, ".deveco", name)
+          if (existsSync(candidate)) return candidate
+        }
+        dir = path.dirname(dir)
+      }
+    }
+
+    function findGlobalConfig(): string | undefined {
+      for (const name of configFilenames) {
+        const candidate = path.join(Global.Path.config, name)
+        if (existsSync(candidate)) return candidate
+      }
+    }
+
+    const resolveSandboxProfile = Effect.fn("ShellTool.resolveSandboxProfile")(function* (cwd: string, agentSandbox?: ConfigSandbox.SandboxConfig) {
+      const layers: SandboxResolver.LayeredSandboxConfig = {}
+
+      const globalPath = findGlobalConfig()
+      if (globalPath) {
+        const globalSandbox = yield* Effect.promise(() => readSandboxConfig(globalPath))
+        if (globalSandbox) layers.global = globalSandbox
+      }
+
+      const projectPath = findProjectConfig(cwd)
+      if (projectPath && path.dirname(projectPath) !== Global.Path.config) {
+        const projectSandbox = yield* Effect.promise(() => readSandboxConfig(projectPath))
+        if (projectSandbox) layers.project = projectSandbox
+      }
+
+      // FR-CFG-008 (S-AGENT-1): per-agent sandbox override is NOT the runtime layer.
+      // It "视同声明它的配置层的选择" — merged into the project layer so it
+      // overrides the project-level top-level selection but is still subject to
+      // the runtime layer (session switch, S-SESS-1) and higher-priority overrides.
+      if (agentSandbox) {
+        layers.project = layers.project
+          ? mergeSandboxConfig(layers.project, agentSandbox)
+          : agentSandbox
+      }
+
+      // FR-CFG-009 (S-SESS-1): runtime injection layer — highest priority.
+      // Sources (checked in order): process-level session override > DEVECO_CONFIG_CONTENT > DEVECO_CONFIG
+      const sessionOverride = yield* Effect.promise(() => getRuntimeSandbox())
+      if (sessionOverride) {
+        layers.runtime = sessionOverride
+      } else {
+        const envContent = process.env.DEVECO_CONFIG_CONTENT
+        if (envContent) {
+          const parsed = extractSandbox(envContent)
+          if (parsed) layers.runtime = parsed
+        }
+        if (!layers.runtime) {
+          const envConfigPath = process.env.DEVECO_CONFIG
+          if (envConfigPath) {
+            const parsed = yield* Effect.promise(() => readSandboxConfig(envConfigPath))
+            if (parsed) layers.runtime = parsed
+          }
+        }
+      }
+
+      return yield* resolveSR1AndMapError(layers)
+    })
+
+    // FR-EXEC-003: handle.kill() terminates the sandbox-exec process.
+    // sandbox-exec exec's into zsh which exec's into the target command,
+    // so handle.pid is the final process PID and handle.kill() is sufficient.
     const executeShell = Effect.fn("ShellTool.executeShell")(function* (
       input: ShellRunInput,
       ctx: Tool.Context,
@@ -598,7 +746,111 @@ export const ShellTool = Tool.define(
       limits: ShellRunLimits,
     ) {
       yield* Effect.addFinalizer(() => closeSink(state))
-      const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+
+      // Sandbox: resolve effective profile from config files, then prepare
+      // command via native runtime (FR-CFG-010/011, FR-OBS-001/002, FR-FAIL-001).
+      // On macOS: prepare() generates a Seatbelt policy wrapped in sandbox-exec.
+      // On non-macOS: SR1 scope is macOS-only, commands execute without sandbox.
+      const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const commandTag = input.command.trim().split(/\s+/)[0] || "unknown"
+      const sandboxStartTime = Date.now()
+      const isMac = process.platform === "darwin"
+      state.requestId = requestId
+      state.sandboxStartTime = sandboxStartTime
+
+      // FR-OBS-001: Record started event before any sandbox work so config
+      // failures still produce a start event. Only one start event per request.
+      yield* Effect.logInfo(
+        `sandbox_request_started request_id=${requestId} capability=${isMac ? "macos-seatbelt" : "none"} platform=${process.platform} profile_type=pending network_state=pending command_tag=${commandTag}`,
+      )
+
+      // FR-CFG-010/011: Load and validate sandbox config before executing any command.
+      // Config errors (config_invalid) and SR1 constraint violations (profile_not_supported,
+      // network_enforcement_unavailable) cause the command to be rejected — fail closed.
+      // SR1 scope: sandbox is macOS-only. Non-macOS falls through to direct execution.
+      let profile: ResolvedProfile | undefined
+      if (isMac) {
+        // FR-CFG-008 (S-AGENT-1): per-agent sandbox override, merged into project layer
+        let agentSandbox: ConfigSandbox.SandboxConfig | undefined
+        if (ctx.agent) {
+          const agentInfo = yield* agents.get(ctx.agent).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          if (agentInfo?.sandbox) agentSandbox = agentInfo.sandbox
+        }
+        // FR-OBS-002: Catch config/constraint failures to record finished event before re-failing.
+        const resolvedProfile = yield* resolveSandboxProfile(input.cwd, agentSandbox).pipe(
+          Effect.catchTags({
+            SandboxError: (err) =>
+              Effect.gen(function* () {
+                yield* Effect.logInfo(
+                  `sandbox_request_finished request_id=${requestId} enforcement_result=failed execution_result=failed duration_ms=${Date.now() - sandboxStartTime} failure_stage=${err.phase} error_type=${err.code} error_message=${err.message}`,
+                )
+                return yield* Effect.fail(err)
+              }),
+          }),
+        )
+        // Native prepare requires at least one workspace root (the cwd).
+        profile = resolvedProfile.workspace_roots.length === 0
+          ? { ...resolvedProfile, workspace_roots: [input.cwd] }
+          : resolvedProfile
+      }
+
+      let spawnCmd = cmd(input.shell, input.command, input.cwd, input.env)
+
+      let prepareDurationMs: number | undefined
+      let failureStage: string | undefined
+      let errorType: string | undefined
+
+      if (isMac && profile) {
+        const prepareRequest = toNativePrepareRequest(profile, {
+          executable: input.shell,
+          args: ["-c", input.command],
+          cwd: input.cwd,
+          env: Object.fromEntries(
+            Object.entries(input.env).filter(([, v]) => v !== undefined),
+          ) as Record<string, string>,
+        })
+
+        const prepareStartTime = Date.now()
+        const prepared = yield* Effect.tryPromise({
+          try: () => nativeRuntime().prepare(prepareRequest),
+          catch: (err) => new Sandbox.SandboxError({
+            code: "PrepareFailed",
+            phase: "Prepare",
+            message: err instanceof Error ? err.message : "Sandbox prepare failed",
+          }),
+        }).pipe(
+          Effect.catchTags({
+            SandboxError: (err) =>
+              Effect.gen(function* () {
+                prepareDurationMs = Date.now() - prepareStartTime
+                failureStage = err.phase
+                errorType = err.code
+                yield* Effect.logInfo(
+                  `sandbox_request_finished request_id=${requestId} enforcement_result=failed execution_result=failed duration_ms=${Date.now() - sandboxStartTime} prepare_duration_ms=${prepareDurationMs} failure_stage=${failureStage} error_type=${errorType} error_message=${err.message}`,
+                )
+                return yield* Effect.fail(err)
+              }),
+          }),
+        )
+        prepareDurationMs = Date.now() - prepareStartTime
+        const converted = fromNativePreparedCommand(prepared)
+        spawnCmd = ChildProcess.make(converted.executable, converted.args, {
+          cwd: converted.cwd,
+          env: converted.env,
+          stdin: "ignore",
+          // FR-EXEC-006: detached=false keeps child in parent's process group,
+          // so OS-level signals (SIGHUP/SIGTERM) propagate to children when
+          // the host is terminated. forceKillAfter handles graceful cancel.
+          detached: false,
+        })
+      }
+
+      const handle = yield* spawner.spawn(spawnCmd)
+      // FR-EXEC-006: Persist sandbox-exec PID so a crashed host can clean up
+      // orphaned processes on next bootstrap. Removed after graceful exit below.
+      if (isMac && handle.pid) {
+        yield* Effect.promise(() => addSandboxPid(handle.pid!))
+      }
       yield* Effect.forkScoped(
         Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
           captureChunk(chunk, input, state, limits).pipe(Effect.andThen((metadata) => ctx.metadata(metadata))),
@@ -617,10 +869,39 @@ export const ShellTool = Tool.define(
           Effect.map(() => ({ kind: "timeout" as const, code: null })),
         ),
       ])
-      if (exit.kind === "exit") return exit.code
+
+      const enforcementResult = isMac ? "applied" : "bypassed"
+      const executionResult = exit.kind === "exit" ? (exit.code === 0 ? "success" : "failed") : exit.kind === "timeout" ? "timeout" : "cancelled"
+      const cleanupResult = exit.kind === "exit" ? "none" : "killed"
+      const finishedParts = [
+        `request_id=${requestId}`,
+        `enforcement_result=${enforcementResult}`,
+        `execution_result=${executionResult}`,
+        `duration_ms=${Date.now() - sandboxStartTime}`,
+        `cleanup_result=${cleanupResult}`,
+      ]
+      if (prepareDurationMs !== undefined) finishedParts.push(`prepare_duration_ms=${prepareDurationMs}`)
+      if (failureStage) finishedParts.push(`failure_stage=${failureStage}`)
+      if (errorType) finishedParts.push(`error_type=${errorType}`)
+      yield* Effect.logInfo(
+        `sandbox_request_finished ${finishedParts.join(" ")}`,
+      )
+
+      if (exit.kind === "exit") {
+        if (isMac && handle.pid) {
+          yield* Effect.promise(() => removeSandboxPid(handle.pid!)).pipe(Effect.ignore)
+        }
+        return exit.code
+      }
       state.aborted = exit.kind === "abort"
       state.expired = exit.kind === "timeout"
+      // FR-EXEC-003: handle.kill() terminates the target process.
+      // sandbox-exec exec's into the target command, so handle.pid is the
+      // final process PID and handle.kill() is sufficient to end it.
       yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+      if (isMac && handle.pid) {
+        yield* Effect.promise(() => removeSandboxPid(handle.pid!)).pipe(Effect.ignore)
+      }
       return null
     })
 
@@ -638,7 +919,9 @@ export const ShellTool = Tool.define(
               `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
             ]
           : []),
-        ...(state.aborted ? ["User aborted the command"] : []),
+        ...(state.sandboxError
+          ? [`Sandbox blocked the command: ${state.sandboxError}`]
+          : state.aborted ? ["User aborted the command"] : []),
       ]
       const raw = state.list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
@@ -679,7 +962,30 @@ export const ShellTool = Tool.define(
         aborted: false,
       }
       yield* ctx.metadata({ metadata: { output: "", description: input.description } })
-      const code = yield* Effect.scoped(executeShell(input, ctx, state, limits)).pipe(Effect.orDie)
+      const code = yield* Effect.scoped(executeShell(input, ctx, state, limits)).pipe(
+        Effect.catchTags({
+          SandboxError: (err) =>
+            Effect.gen(function* () {
+              state.aborted = true
+              state.sandboxError = `[${err.code}] ${err.message}`
+              yield* ctx.metadata({ metadata: { output: `[sandbox error] [${err.code}] ${err.message}`, description: input.description } })
+              return null
+            }),
+        }),
+        Effect.catch((err: unknown) =>
+          Effect.gen(function* () {
+            state.aborted = true
+            // FR-OBS-002: Record finished event for non-SandboxError failures.
+            if (state.requestId && state.sandboxStartTime) {
+              yield* Effect.logInfo(
+                `sandbox_request_finished request_id=${state.requestId} enforcement_result=failed execution_result=failed duration_ms=${Date.now() - state.sandboxStartTime} error_type=internal_error error_message=${err instanceof Error ? err.message : String(err)}`,
+              )
+            }
+            yield* ctx.metadata({ metadata: { output: `[shell error] ${err instanceof Error ? err.message : String(err)}`, description: input.description } })
+            return null
+          }),
+        ),
+      )
       return yield* finishShell(input, ctx, state, limits, code)
     })
 

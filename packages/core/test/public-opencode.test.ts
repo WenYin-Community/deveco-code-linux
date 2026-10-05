@@ -1,12 +1,50 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { AbsolutePath, Location, Model, OpenCode, Session, Tool } from "@opencode-ai/core/public"
+import { SandboxContextService, SandboxRuntimeService, SandboxConfigWriterService } from "@opencode-ai/core/sandbox"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(OpenCode.layer)
+const sandboxMock = Layer.mergeAll(
+  Layer.succeed(SandboxContextService, SandboxContextService.of({
+    resolve: () => Effect.succeed({
+      profile_id: "read-only", filesystem: { ":root": "read" },
+      network_enabled: true, workspace_roots: [], is_implicit: true, source_layer: "global",
+    }),
+    buildRequest: (resolved, target) => ({
+      command: target,
+      file_system_context: {
+        cwd: target.cwd,
+        workspace_roots: resolved.workspace_roots,
+      },
+      permissions: {
+        profile_id: resolved.profile_id,
+        filesystem: Object.fromEntries(Object.entries(resolved.filesystem)),
+        network_enabled: resolved.network_enabled,
+        workspace_roots: resolved.workspace_roots,
+      },
+      io: { kind: "pipe" },
+    }),
+  })),
+  Layer.succeed(SandboxRuntimeService, SandboxRuntimeService.of({
+    new: () => Effect.void,
+    probe: () => Effect.succeed({ _tag: "Supported" as const }),
+    prepare: (request) => Effect.succeed({
+      executable: request.command.executable, args: request.command.args,
+      cwd: request.command.cwd, env: request.command.env,
+    }),
+  })),
+  Layer.succeed(SandboxConfigWriterService, SandboxConfigWriterService.of({
+    writeProfile: () => Effect.succeed("/mock/path"),
+    getWriteTargetPath: () => Effect.succeed("/mock/path"),
+    getRuntimeOverride: () => Effect.succeed(undefined),
+    clearRuntimeOverride: () => Effect.void,
+  })),
+)
+
+const it = testEffect(Layer.provide(OpenCode.layer, sandboxMock))
 const itLive = process.platform === "win32" ? it.live.skip : it.live
 
 describe("public native OpenCode API", () => {

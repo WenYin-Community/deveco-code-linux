@@ -14,6 +14,7 @@ import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
 import { ConfigPluginV1 } from "./plugin"
 import { ConfigProviderV1 } from "./provider"
+import { ConfigSandbox } from "../../config/sandbox"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
 
@@ -224,6 +225,9 @@ export const Info = Schema.Struct({
   ).annotate({
     description:
       "Agreement/legal configuration for DevEco Code onboarding. All fields optional — absent values fall back to built-in defaults.",
+  }),
+  sandbox: Schema.optional(ConfigSandbox.SandboxConfig).annotate({
+    description: "Sandbox configuration for macOS Seatbelt read-only enforcement (SR1).",
   }),
 }).annotate({ identifier: "Config" })
 

@@ -29,6 +29,7 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PluginBoot } from "@opencode-ai/core/plugin/boot"
 import { Reference } from "@opencode-ai/core/reference"
 import { Location } from "@opencode-ai/core/location"
+import { ConfigSandbox } from "@opencode-ai/core/config/sandbox"
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -50,6 +51,8 @@ export const Info = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
+  // FR-CFG-008: per-agent sandbox profile override
+  sandbox: ConfigSandbox.SandboxConfig.pipe(Schema.optional),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -446,6 +449,12 @@ export const layer = Layer.effect(
           item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
+          // S28: validate shape before assigning; cast needed because
+          // validateSandboxShape returns readonly type, item.sandbox is mutable.
+          if (value.sandbox) {
+            const validated = ConfigSandbox.validateSandboxShape(value.sandbox)
+            if (validated) item.sandbox = validated as typeof item.sandbox
+          }
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured

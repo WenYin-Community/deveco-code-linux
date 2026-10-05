@@ -5,10 +5,12 @@ import { ToolFailure } from "@opencode-ai/llm"
 import { Duration, Effect, Layer, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../config"
+import { EventV2 } from "../event"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
+import { Sandbox, SandboxContextService, SandboxRuntimeService } from "../sandbox"
 import { PositiveInt } from "../schema"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -112,6 +114,9 @@ export const layer = Layer.effectDiscard(
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
     const permission = yield* PermissionV2.Service
+    const sandboxCtx = yield* SandboxContextService
+    const sandboxRuntime = yield* SandboxRuntimeService
+    const events = yield* EventV2.Service
 
     yield* tools
       .register({
@@ -156,12 +161,126 @@ export const layer = Layer.effectDiscard(
               const shell =
                 Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
                   .shell ?? defaultShell()
-              const command = ChildProcess.make(input.command, [], {
+
+              // FR-CFG-012: Command-level config snapshot.
+              // resolvedProfile is captured at this point and bound to this command's
+              // entire lifecycle. Config changes after this point only affect subsequent
+              // commands, not this one. Snapshot includes: profile_id, filesystem,
+              // network_enabled, workspace_roots, is_implicit, source_layer.
+              // FR-CFG-008: agent-level sandbox.profile override is applied (S-AGENT-1).
+              const resolvedProfile = yield* sandboxCtx.resolve(context.agent)
+
+              // FR-OBS-001: Publish sandbox_request_started event (sanitized).
+              // Also log to application log for observability (EventV2 events don't appear in deveco.log).
+              const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+              const sandboxStartTime = Date.now()
+              // Sanitized command tag: first command word, skipping env var assignments
+              const commandTag = (() => {
+                const tokens = input.command.trim().split(/\s+/)
+                for (const token of tokens) {
+                  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue
+                  return token || "unknown"
+                }
+                return "unknown"
+              })()
+              yield* Effect.logInfo(
+                `sandbox_request_started request_id=${requestId} capability=${process.platform === "darwin" ? "macos-seatbelt" : "none"} platform=${process.platform} profile=${resolvedProfile.profile_id} network=${resolvedProfile.network_enabled ? "on" : "off"} command_tag=${commandTag}`,
+              )
+              yield* events.publish(Sandbox.SandboxTelemetry.RequestStarted, {
+                request_id: requestId,
+                capability: process.platform === "darwin" ? "macos-seatbelt" : "none",
+                platform: process.platform,
+                profile_type: resolvedProfile.profile_id,
+                network_state: resolvedProfile.network_enabled ? "on" : "off",
+                timestamp: sandboxStartTime,
+                command_tag: commandTag,
+              }).pipe(Effect.ignore)
+
+              // Build SandboxTargetCommand: wrap shell + command text as structured target.
+              // Windows cmd.exe uses /c; POSIX shells use -c (no login flag to preserve
+              // original behavior).
+              const isWindowsCmd =
+                process.platform === "win32" &&
+                (shell.endsWith("cmd.exe") || shell === process.env.COMSPEC)
+              const sandboxTarget: Sandbox.SandboxTargetCommand = {
+                executable: shell,
+                args: isWindowsCmd ? ["/c", input.command] : ["-c", input.command],
                 cwd: target.canonical,
-                shell,
+                env: Object.fromEntries(
+                  Object.entries(process.env).filter(([, v]) => v !== undefined),
+                ) as Record<string, string>,
+              }
+
+              const prepareRequest = sandboxCtx.buildRequest(resolvedProfile, sandboxTarget)
+
+              // Probe sandbox support; on macOS, fail closed if unsupported (FR-FAIL-001).
+              // FR-OBS-002: Sandbox errors publish telemetry via tapError, which runs
+              // inside the generator scope where events/requestId/sandboxStartTime
+              // are accessible, without affecting the error propagation.
+              const { probeResult, prepared } = yield* Effect.gen(function* () {
+                const probeResult = yield* sandboxRuntime.probe(prepareRequest)
+                yield* Effect.logInfo(
+                  `sandbox_probe_result request_id=${requestId} probe_tag=${probeResult._tag}${probeResult._tag === "Unsupported" ? ` reason=${probeResult.reason}` : ""}`,
+                )
+                if (probeResult._tag === "Supported") {
+                  const prepared = yield* sandboxRuntime.prepare(prepareRequest)
+                  yield* Effect.logInfo(
+                    `sandbox_prepare_result request_id=${requestId} executable=${prepared.executable} args=${JSON.stringify(prepared.args)}`,
+                  )
+                  return { probeResult, prepared }
+                }
+                // FR-FAIL-001: Fail closed on macOS — never execute without sandbox.
+                // On non-macOS, sandbox is not available, so fall back to direct execution.
+                if (process.platform === "darwin") {
+                  return yield* Effect.fail(
+                    new Sandbox.SandboxError({
+                      code: "UnsupportedPlatform",
+                      phase: "Probe",
+                      message: `Sandbox enforcement unavailable on macOS: ${probeResult.reason}`,
+                    }),
+                  )
+                }
+                return {
+                  probeResult,
+                  prepared: {
+                    executable: sandboxTarget.executable,
+                    args: sandboxTarget.args,
+                    cwd: sandboxTarget.cwd,
+                    env: sandboxTarget.env,
+                  },
+                }
+              }).pipe(
+                Effect.tapError((error) => {
+                  if (error instanceof Sandbox.SandboxError) {
+                    return Effect.gen(function* () {
+                      yield* Effect.logInfo(
+                        `sandbox_request_finished request_id=${requestId} enforcement=failed execution=failed failure_stage=${error.phase} error_type=${error.code} duration_ms=${Date.now() - sandboxStartTime}`,
+                      )
+                      yield* events
+                        .publish(Sandbox.SandboxTelemetry.RequestFinished, {
+                          request_id: requestId,
+                          enforcement_result: "failed",
+                          execution_result: "failed",
+                          failure_stage: error.phase,
+                          error_type: error.code,
+                          duration_ms: Date.now() - sandboxStartTime,
+                          cleanup_result: "none",
+                        })
+                        .pipe(Effect.ignore)
+                    })
+                  }
+                  return Effect.void
+                }),
+              )
+
+              // Spawn the PreparedCommand exactly as returned (shell=false, no re-wrapping)
+              const command = ChildProcess.make(prepared.executable, prepared.args, {
+                cwd: prepared.cwd,
+                shell: false,
                 stdin: "ignore",
                 detached: process.platform !== "win32",
                 forceKillAfter: Duration.seconds(3),
+                env: prepared.env,
               })
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
               const result = yield* appProcess
@@ -174,11 +293,39 @@ export const layer = Layer.effectDiscard(
                   Effect.catchTag("AppProcessError", (error) =>
                     isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
                   ),
+                  Effect.tapError(() =>
+                    Effect.gen(function* () {
+                      yield* Effect.logInfo(
+                        `sandbox_request_finished request_id=${requestId} enforcement=${probeResult._tag === "Supported" ? "applied" : "bypassed"} execution=failed duration_ms=${Date.now() - sandboxStartTime}`,
+                      )
+                      yield* events
+                        .publish(Sandbox.SandboxTelemetry.RequestFinished, {
+                          request_id: requestId,
+                          enforcement_result: probeResult._tag === "Supported" ? "applied" : "bypassed",
+                          execution_result: "failed",
+                          duration_ms: Date.now() - sandboxStartTime,
+                          cleanup_result: "none",
+                        })
+                        .pipe(Effect.ignore)
+                    }),
+                  ),
                 )
               if (!result) {
+                // FR-OBS-002: Publish finish event for timeout
+                yield* Effect.logInfo(
+                  `sandbox_request_finished request_id=${requestId} enforcement=${probeResult._tag === "Supported" ? "applied" : "bypassed"} execution=timeout duration_ms=${Date.now() - sandboxStartTime}`,
+                )
+                yield* events.publish(Sandbox.SandboxTelemetry.RequestFinished, {
+                  request_id: requestId,
+                  enforcement_result: probeResult._tag === "Supported" ? "applied" : "bypassed",
+                  execution_result: "timeout",
+                  duration_ms: Date.now() - sandboxStartTime,
+                  cleanup_result: "none",
+                })
                 return {
                   command: input.command,
                   cwd: target.canonical,
+                  exitCode: undefined,
                   output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
                   truncated: false,
                   timedOut: true,
@@ -188,6 +335,20 @@ export const layer = Layer.effectDiscard(
 
               const compact = compactOutput(result.stdout.toString("utf8"), result.stderr.toString("utf8"))
               const notice = captureNotice(result.stdoutTruncated, result.stderrTruncated)
+
+              // FR-OBS-002: Publish sandbox_request_finished event (sanitized).
+              const sandboxEndTime = Date.now()
+              yield* Effect.logInfo(
+                `sandbox_request_finished request_id=${requestId} enforcement=${probeResult._tag === "Supported" ? "applied" : "bypassed"} execution=${result.exitCode === 0 ? "success" : "failed"} duration_ms=${sandboxEndTime - sandboxStartTime}`,
+              )
+              yield* events.publish(Sandbox.SandboxTelemetry.RequestFinished, {
+                request_id: requestId,
+                enforcement_result: probeResult._tag === "Supported" ? "applied" : "bypassed",
+                execution_result: result.exitCode === 0 ? "success" : "failed",
+                duration_ms: sandboxEndTime - sandboxStartTime,
+                cleanup_result: "none",
+              })
+
               return {
                 command: input.command,
                 cwd: target.canonical,
@@ -198,7 +359,18 @@ export const layer = Layer.effectDiscard(
                 ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
                 ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+            }).pipe(
+              Effect.mapError((error) => {
+                if (error instanceof Sandbox.SandboxError) {
+                  return new ToolFailure({
+                    message: `Sandbox blocked command execution: [${error.code}/${error.phase}] ${error.message}`,
+                  })
+                }
+                return new ToolFailure({
+                  message: `Unable to execute command: ${input.command}: ${error instanceof Error ? error.message : String(error)}`,
+                })
+              }),
+            ),
         }),
       })
       .pipe(Effect.orDie)
