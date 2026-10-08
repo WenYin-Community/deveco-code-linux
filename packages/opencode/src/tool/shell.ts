@@ -19,7 +19,7 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell, PS_ENCODING_PREAMBLE } from "@opencode-ai/core/shell"
 import { ShellID } from "./shell/id"
-import { Sandbox, toNativePrepareRequest, fromNativePreparedCommand, resolveSR1AndMapError } from "@opencode-ai/core/sandbox"
+import { Sandbox, toNativePrepareRequest, fromNativePreparedCommand, resolveSandboxAndMapError } from "@opencode-ai/core/sandbox"
 import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
 import { ConfigSandbox, type ResolvedProfile } from "@opencode-ai/core/config/sandbox"
 import { getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
@@ -461,7 +461,7 @@ export const ShellTool = Tool.define(
     const plugin = yield* Plugin.Service
     const flags = yield* RuntimeFlags.Service
     const agents = yield* Agent.Service
-    // Sandbox: SR1 default read-only profile, prepared via native runtime.
+    // Sandbox: default profile (read-only), prepared via native runtime.
     // core's Config.Service (@opencode/v2/Config) isn't available in the
     // opencode bundle (bun bundler creates a separate context tag identity
     // that doesn't match across package boundaries), so we resolve directly
@@ -614,7 +614,7 @@ export const ShellTool = Tool.define(
 
     // ─── Sandbox config loading (FR-CFG-001/010/011) ──────────
     // Reads deveco.json(c) from global and project layers, builds
-    // LayeredSandboxConfig, then calls SandboxResolver.resolveSR1()
+    // LayeredSandboxConfig, then calls SandboxResolver.resolveSandbox()
     // to validate + resolve the effective profile.
     // This bypasses core's Config.Service (@opencode/v2/Config) which
     // isn't available in the opencode bundle context.
@@ -733,7 +733,7 @@ export const ShellTool = Tool.define(
         }
       }
 
-      return yield* resolveSR1AndMapError(layers)
+      return yield* resolveSandboxAndMapError(layers)
     })
 
     // FR-EXEC-003: handle.kill() terminates the sandbox-exec process.
@@ -750,7 +750,7 @@ export const ShellTool = Tool.define(
       // Sandbox: resolve effective profile from config files, then prepare
       // command via native runtime (FR-CFG-010/011, FR-OBS-001/002, FR-FAIL-001).
       // On macOS: prepare() generates a Seatbelt policy wrapped in sandbox-exec.
-      // On non-macOS: SR1 scope is macOS-only, commands execute without sandbox.
+      // On non-macOS: sandbox is macOS-only, commands execute without sandbox.
       const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const commandTag = input.command.trim().split(/\s+/)[0] || "unknown"
       const sandboxStartTime = Date.now()
@@ -765,9 +765,8 @@ export const ShellTool = Tool.define(
       )
 
       // FR-CFG-010/011: Load and validate sandbox config before executing any command.
-      // Config errors (config_invalid) and SR1 constraint violations (profile_not_supported,
-      // network_enforcement_unavailable) cause the command to be rejected — fail closed.
-      // SR1 scope: sandbox is macOS-only. Non-macOS falls through to direct execution.
+      // Config errors (config_invalid) cause the command to be rejected — fail closed.
+      // Sandbox is macOS-only. Non-macOS falls through to direct execution.
       let profile: ResolvedProfile | undefined
       if (isMac) {
         // FR-CFG-008 (S-AGENT-1): per-agent sandbox override, merged into project layer

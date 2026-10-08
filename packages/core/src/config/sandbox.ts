@@ -3,16 +3,16 @@ export * as ConfigSandbox from "./sandbox"
 import { Schema } from "effect"
 
 // ─── Access Mode ────────────────────────────────────────────
-// SR1 §3.3.3: read = ✓ read ✗ write; write = ✓ read ✓ write; deny = ✗ read ✗ write
+// §3.3.3: read = ✓ read ✗ write; write = ✓ read ✓ write; deny = ✗ read ✗ write
 
 export const AccessMode = Schema.Literals(["read", "write", "deny"]).annotate({
   identifier: "ConfigV2.Sandbox.AccessMode",
-  description: "File access mode: read (SR1 enforced), write (SR2), deny (SR2)",
+  description: "File access mode: read, write, deny",
 })
 export type AccessMode = typeof AccessMode.Type
 
 // ─── Network Override ───────────────────────────────────────
-// SR1 §3.3.2: sandbox.network = { "enabled": boolean } (required when present)
+// §3.3.2: sandbox.network = { "enabled": boolean } (required when present)
 
 export const NetworkOverride = Schema.Struct({
   enabled: Schema.Boolean,
@@ -23,7 +23,7 @@ export const NetworkOverride = Schema.Struct({
 export type NetworkOverride = typeof NetworkOverride.Type
 
 // ─── Profile Definition ─────────────────────────────────────
-// SR1 §3.3.2: profiles.<id> = { description, extends, workspace_roots, filesystem, network }
+// §3.3.2: profiles.<id> = { description, extends, workspace_roots, filesystem, network }
 
 export const ProfileDefinition = Schema.Struct({
   description: Schema.String.pipe(Schema.optional),
@@ -46,7 +46,7 @@ export const Profiles = Schema.Record(Schema.String, ProfileDefinition).annotate
 export type Profiles = typeof Profiles.Type
 
 // ─── Sandbox Config ─────────────────────────────────────────
-// SR1 §3.3.2: the full sandbox key
+// §3.3.2: the full sandbox key
 
 export const SandboxConfig = Schema.Struct({
   profile: Schema.String.pipe(Schema.optional),
@@ -139,7 +139,7 @@ export function validateSandboxShape(raw: unknown): SandboxConfig | undefined {
 }
 
 // ─── Built-in Profile IDs ────────────────────────────────────
-// SR1 §3.3.2: read-only, workspace, full-access
+// §3.3.2: read-only, workspace, full-access
 
 export const BUILTIN_PROFILE_IDS = ["read-only", "workspace", "full-access"] as const
 export type BuiltinProfileId = (typeof BUILTIN_PROFILE_IDS)[number]
@@ -149,7 +149,7 @@ export function isBuiltinProfile(id: string): id is BuiltinProfileId {
 }
 
 // ─── Built-in Profile Equivalent Definitions ────────────────
-// SR1 §3.3.2
+// §3.3.2
 
 export const BUILTIN_PROFILES: Record<BuiltinProfileId, ProfileDefinition> = {
   "read-only": {
@@ -171,7 +171,7 @@ export const BUILTIN_PROFILES: Record<BuiltinProfileId, ProfileDefinition> = {
 }
 
 // ─── Validation Error ───────────────────────────────────────
-// SR1 §3.4.2: config_invalid
+// §3.4.2: config_invalid
 
 export class SandboxConfigError extends Schema.TaggedErrorClass<SandboxConfigError>()(
   "ConfigV2.Sandbox.SandboxConfigError",
@@ -183,40 +183,6 @@ export class SandboxConfigError extends Schema.TaggedErrorClass<SandboxConfigErr
 ) {
   override toString() {
     return `[config_invalid] ${this.rule}: ${this.message}${this.path ? ` (at ${this.path})` : ""}`
-  }
-}
-
-// ─── Constraint Error (SR1 deviations) ──────────────────────
-// SR1 §3.4.2: profile_not_supported, network_enforcement_unavailable, etc.
-
-export type SandboxConstraintTag =
-  | "profile_not_supported"
-  | "network_enforcement_unavailable"
-  | "sandbox_component_unavailable"
-  | "policy_compile_failed"
-  | "invalid_request"
-  | "target_cancelled"
-  | "target_timeout"
-
-export class SandboxConstraintError extends Schema.TaggedErrorClass<SandboxConstraintError>()(
-  "ConfigV2.Sandbox.SandboxConstraintError",
-  {
-    tag: Schema.Literals([
-      "profile_not_supported",
-      "network_enforcement_unavailable",
-      "sandbox_component_unavailable",
-      "policy_compile_failed",
-      "invalid_request",
-      "target_cancelled",
-      "target_timeout",
-    ]),
-    message: Schema.String,
-    profile_id: Schema.String.pipe(Schema.optional),
-    source_layer: Schema.String.pipe(Schema.optional),
-  },
-) {
-  override toString() {
-    return `[${this.tag}] ${this.message}`
   }
 }
 
@@ -232,7 +198,7 @@ export const ResolvedProfile = Schema.Struct({
   source_layer: Schema.String,
 }).annotate({
   identifier: "ConfigV2.Sandbox.ResolvedProfile",
-  description: "Effective profile after merge, flatten, selection, and SR1 constraint check",
+  description: "Effective profile after merge, flatten, selection, and constraint check",
 })
 export type ResolvedProfile = typeof ResolvedProfile.Type
 

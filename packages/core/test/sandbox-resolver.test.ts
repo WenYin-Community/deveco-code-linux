@@ -3,7 +3,6 @@ import { Effect } from "effect"
 import { SandboxResolver } from "../src/config/sandbox-resolver"
 import {
   SandboxConfigError,
-  SandboxConstraintError,
   BUILTIN_PROFILES,
   isBuiltinProfile,
   validateSandboxShape,
@@ -11,7 +10,7 @@ import {
 
 // ─── 测试文件说明 ───────────────────────────────────────────
 // 本文件测试沙箱配置模型（FR-CFG-001 ~ FR-CFG-012）。
-// 覆盖：三层配置合并、Profile 继承展平、加载期校验、选择解析、SR1 约束。
+// 覆盖：三层配置合并、Profile 继承展平、加载期校验、选择解析、sandbox 约束。
 // 对应需求文档：sandbox/doc/SR/macos_sandbox_sr1.md §3.1.1 / §3.3
 
 describe("SandboxResolver.mergeLayers", () => {
@@ -183,8 +182,8 @@ describe("SandboxResolver.resolveSelection", () => {
     expect(result.source_layer).toBe("runtime")
   })
 
-  // FR-CFG-005 S-SEL-2/D1: 无任何声明时隐式默认 read-only（SR1 偏离 D1）
-  it("S-SEL-2: implicit default is read-only (SR1 deviation D1)", () => {
+  // FR-CFG-005 S-SEL-2/D1: 无任何声明时隐式默认 read-only（偏离 D1）
+  it("S-SEL-2: implicit default is read-only (deviation D1)", () => {
     const result = SandboxResolver.resolveSelection({})
     expect(result.profile_id).toBe("read-only")
     expect(result.is_implicit).toBe(true)
@@ -201,11 +200,11 @@ describe("SandboxResolver.resolveSelection", () => {
   })
 })
 
-describe("SandboxResolver.resolveSR1", () => {
+describe("SandboxResolver.resolveSandbox", () => {
   // FR-CFG-005/007: read-only + network on 时正常解析
   it("succeeds for read-only with network on", async () => {
     const result = await Effect.runPromise(
-      SandboxResolver.resolveSR1({ global: { profile: "read-only" } }),
+      SandboxResolver.resolveSandbox({ global: { profile: "read-only" } }),
     )
     expect(result.profile_id).toBe("read-only")
     expect(result.network_enabled).toBe(true)
@@ -215,37 +214,29 @@ describe("SandboxResolver.resolveSR1", () => {
   // FR-CFG-005/D1: 无配置时隐式默认 read-only
   it("succeeds for implicit default (no config)", async () => {
     const result = await Effect.runPromise(
-      SandboxResolver.resolveSR1({}),
+      SandboxResolver.resolveSandbox({}),
     )
     expect(result.profile_id).toBe("read-only")
     expect(result.is_implicit).toBe(true)
   })
 
-  // FR-CFG-011 D2: 非 read-only 的生效 profile 被拒绝（profile_not_supported）
-  it("D2: fails with profile_not_supported for workspace", async () => {
-    const exit = await Effect.runPromiseExit(
-      SandboxResolver.resolveSR1({ global: { profile: "workspace" } }),
+  // D2 lifted: workspace profile is now allowed (no longer rejected)
+  it("D2 lifted: succeeds for workspace profile", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({ global: { profile: "workspace" } }),
     )
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      // The error should be a SandboxConstraintError with tag "profile_not_supported"
-      const errors = exit.cause instanceof Error ? exit.cause.message : String(exit.cause)
-      expect(errors).toContain("profile_not_supported")
-    }
+    expect(result.profile_id).toBe("workspace")
   })
 
-  // FR-CFG-007 D3: 网络开关 off 时被拒绝（network_enforcement_unavailable）
-  it("D3: fails with network_enforcement_unavailable when network off", async () => {
-    const exit = await Effect.runPromiseExit(
-      SandboxResolver.resolveSR1({
+  // D3 lifted: network off is now allowed (no longer rejected)
+  it("D3 lifted: succeeds with network off", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
         global: { profile: "read-only", network: { enabled: false } },
       }),
     )
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const errors = exit.cause instanceof Error ? exit.cause.message : String(exit.cause)
-      expect(errors).toContain("network_enforcement_unavailable")
-    }
+    expect(result.profile_id).toBe("read-only")
+    expect(result.network_enabled).toBe(false)
   })
 })
 
@@ -524,50 +515,49 @@ describe("S-AGENT-1: agent override covers project-layer top-level sandbox field
     expect(merged.profiles).toHaveProperty("read-only")
   })
 
-  it("S-AGENT-1: agent override does not override runtime layer (SR1 rejects non-read-only)", async () => {
+  it("S-AGENT-1: agent override does not override runtime layer", async () => {
     // agent override 覆盖 project 层后，runtime 层仍可覆盖它
     // 这里验证 runtime 层的 profile 优先于 agent override 合并后的 project 层
-    const exit = await Effect.runPromiseExit(
-      SandboxResolver.resolveSR1({
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
         project: { profile: "workspace", network: { enabled: true } },
         runtime: { profile: "read-only", network: { enabled: false } },
       }),
     )
-    // runtime 层 network off → SR1 拒绝
-    expect(exit._tag).toBe("Failure")
+    // runtime 层优先，profile=read-only, network=off
+    expect(result.profile_id).toBe("read-only")
+    expect(result.network_enabled).toBe(false)
   })
 })
 
-describe("D3 regression: network off rejected with network_enforcement_unavailable", () => {
-  // D3: 网络关闭时命令被拒绝（已在 resolveSR1 测试中覆盖，这里补充显式检查）
-  it("D3: fails with network_enforcement_unavailable when network off at runtime layer", async () => {
-    const exit = await Effect.runPromiseExit(
-      SandboxResolver.resolveSR1({
+describe("D3 regression: network off no longer rejected", () => {
+  // D3 lifted: 网络关闭不再被拒绝
+  it("D3 lifted: succeeds with network off at runtime layer", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
         global: { profile: "read-only" },
         runtime: { profile: "read-only", network: { enabled: false } },
       }),
     )
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const errorMsg = exit.cause instanceof Error ? exit.cause.message : String(exit.cause)
-      expect(errorMsg).toContain("network_enforcement_unavailable")
-    }
+    expect(result.profile_id).toBe("read-only")
+    expect(result.network_enabled).toBe(false)
   })
 
-  // D3: 网络关闭在 project 层也拒绝
-  it("D3: fails when network off at project layer", async () => {
-    const exit = await Effect.runPromiseExit(
-      SandboxResolver.resolveSR1({
+  // D3 lifted: 网络关闭在 project 层也不再拒绝
+  it("D3 lifted: succeeds with network off at project layer", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
         project: { profile: "read-only", network: { enabled: false } },
       }),
     )
-    expect(exit._tag).toBe("Failure")
+    expect(result.profile_id).toBe("read-only")
+    expect(result.network_enabled).toBe(false)
   })
 
-  // D3: 网络开启时不拒绝（read-only + network on 正常）
+  // D3: 网络开启时正常
   it("D3: succeeds when network on with read-only", async () => {
     const result = await Effect.runPromise(
-      SandboxResolver.resolveSR1({
+      SandboxResolver.resolveSandbox({
         global: { profile: "read-only", network: { enabled: true } },
       }),
     )

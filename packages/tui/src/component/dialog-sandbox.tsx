@@ -260,17 +260,21 @@ export function DialogSandbox() {
   const allowedProfiles = createMemo(() => sandboxConfig()?.allowed_profiles)
 
   function getDisableReason(profileId: string): string | undefined {
-    if (profileId !== "read-only") {
-      return t("dialog.sandbox.disabled_sr2")
-    }
     const whitelist = allowedProfiles()
-    if (whitelist && !whitelist.includes("read-only")) {
+    if (whitelist && !whitelist.includes(profileId)) {
       return t("dialog.sandbox.disabled_not_in_whitelist")
     }
     return undefined
   }
 
   async function selectProfile(profileId: string) {
+    // custom option: switch to custom tab, don't write config
+    if (profileId === "__custom__") {
+      setWriteStatus({ type: "idle" })
+      setActiveTab("custom")
+      return
+    }
+
     const reason = getDisableReason(profileId)
     if (reason) return
 
@@ -297,25 +301,26 @@ export function DialogSandbox() {
   }
 
   const builtinOptions = createMemo<DialogSelectOption<string>[]>(() => {
-    const readonlyDisabled = getDisableReason("read-only")
     return [
       {
         title: "read-only",
         value: "read-only",
         description: t("dialog.sandbox.readonly_desc"),
-        ...(readonlyDisabled ? { details: [readonlyDisabled] } : {}),
       },
       {
         title: "workspace",
         value: "workspace",
         description: t("dialog.sandbox.workspace_desc"),
-        details: [`${t("dialog.sandbox.disabled_sr2")} — ${t("dialog.sandbox.select_readonly_only")}`],
       },
       {
         title: "full-access",
         value: "full-access",
         description: t("dialog.sandbox.full_access_desc"),
-        details: [`${t("dialog.sandbox.disabled_sr2")} — ${t("dialog.sandbox.select_readonly_only")}`],
+      },
+      {
+        title: t("dialog.sandbox.custom"),
+        value: "__custom__",
+        description: t("dialog.sandbox.custom_desc"),
       },
     ]
   })
@@ -335,7 +340,7 @@ export function DialogSandbox() {
 
   const customOptions = createMemo<DialogSelectOption<string>[]>(() =>
     customProfiles().map((p) => {
-      const details: string[] = [`${t("dialog.sandbox.disabled_sr2")} — ${t("dialog.sandbox.select_readonly_only")}`]
+      const details: string[] = []
       if (p.extends) details.push(`${t("dialog.sandbox.custom_extends")}: ${p.extends}`)
       if (p.description) details.push(`${t("dialog.sandbox.custom_description")}: ${p.description}`)
       if (p.workspace_roots?.length)
@@ -440,7 +445,11 @@ export function DialogSandbox() {
             <DialogSelect
               title=""
               options={builtinOptions()}
-              current={effectiveProfile().id}
+              current={
+                ["read-only", "workspace", "full-access"].includes(effectiveProfile().id)
+                  ? effectiveProfile().id
+                  : "__custom__"
+              }
               skipFilter
               renderFilter={false}
               onSelect={(opt) => {
@@ -501,8 +510,10 @@ export function DialogSandbox() {
               <DialogSelect
                 title=""
                 options={customOptions()}
+                current={effectiveProfile().id}
                 onSelect={() => {
-                  // Custom profiles are read-only in SR1
+                  // Custom tab is read-only: profiles are viewed, not selected.
+                  // Use keyboard up/down to browse.
                 }}
                 footer={
                   <box flexDirection="column" gap={0}>

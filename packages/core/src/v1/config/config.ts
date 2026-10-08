@@ -227,7 +227,7 @@ export const Info = Schema.Struct({
       "Agreement/legal configuration for DevEco Code onboarding. All fields optional — absent values fall back to built-in defaults.",
   }),
   sandbox: Schema.optional(ConfigSandbox.SandboxConfig).annotate({
-    description: "Sandbox configuration for macOS Seatbelt read-only enforcement (SR1).",
+    description: "Sandbox configuration for macOS Seatbelt read-only enforcement.",
   }),
 }).annotate({ identifier: "Config" })
 

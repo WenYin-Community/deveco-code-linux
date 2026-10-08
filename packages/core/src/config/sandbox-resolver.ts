@@ -5,7 +5,6 @@ import {
   BUILTIN_PROFILES,
   isBuiltinProfile,
   SandboxConfigError,
-  SandboxConstraintError,
   type SandboxConfig,
   type ProfileDefinition,
   type MutableProfileDefinition,
@@ -184,7 +183,7 @@ export function flattenProfile(
 // ─── 3. Load-time validation (V-NAME-1 to V-SEL-2) ──────────
 
 /**
- * Execute all V-* validation rules from SR1 §3.3.4.
+ * Execute all V-* validation rules from §3.3.4.
  * Returns the first error encountered, or void if all pass.
  */
 export function validate(merged: SandboxConfig): Effect.Effect<void, SandboxConfigError> {
@@ -399,7 +398,7 @@ export interface SelectionResult {
 /**
  * Resolve the effective profile selection.
  * S-SEL-1: highest-priority layer's explicit sandbox.profile wins
- * S-SEL-2: no declaration → implicit default (SR1: read-only, deviation D1)
+ * S-SEL-2: no declaration → implicit default (read-only, deviation D1)
  * S-SEL-3: resolved result must pass V-SEL-1 / V-SEL-2
  */
 export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult {
@@ -415,7 +414,7 @@ export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult 
   }
 
   // S-SEL-2: no declaration → implicit default
-  // SR1 deviation D1: implicit default is read-only (upstream is workspace)
+  // deviation D1: implicit default is read-only (upstream is workspace)
   return { profile_id: "read-only", is_implicit: true, source_layer: "global" }
 }
 
@@ -483,54 +482,13 @@ export function resolveNetworkSwitch(
   return true // S-NET-3: default = true
 }
 
-// ─── 6. SR1 constraint check (deviations D1/D2/D3) ──────────
-
-/**
- * SR1-specific constraints:
- * - D2: effective profile not read-only → profile_not_supported
- * - D3: network off → network_enforcement_unavailable
- * These constraints are lifted in SR2.
- */
-export function checkSR1Constraints(
-  resolved: ResolvedProfile,
-): Effect.Effect<void, SandboxConstraintError> {
-  return Effect.gen(function* () {
-    // D2: only read-only is enforced in SR1
-    if (resolved.profile_id !== "read-only") {
-      yield* Effect.fail(
-        new SandboxConstraintError({
-          tag: "profile_not_supported",
-          message: `SR1 only enforces read-only profile; "${resolved.profile_id}" enforcement is delivered in SR2`,
-          profile_id: resolved.profile_id,
-          source_layer: resolved.source_layer,
-        }),
-      )
-    }
-
-    // D3: network off is not enforced in SR1
-    if (!resolved.network_enabled) {
-      yield* Effect.fail(
-        new SandboxConstraintError({
-          tag: "network_enforcement_unavailable",
-          message: `SR1 does not enforce network off; network enforcement is delivered in SR2`,
-          source_layer: resolved.source_layer,
-        }),
-      )
-    }
-  })
-}
-
 // ─── Full pipeline ──────────────────────────────────────────
 
 /**
- * Complete SR1 sandbox resolution: merge → validate → select → flatten → resolve → SR1 constraint check.
+ * Complete sandbox resolution: merge → validate → select → flatten → resolve.
  */
-export function resolveSR1(
+export function resolveSandbox(
   layers: LayeredSandboxConfig,
-): Effect.Effect<ResolvedProfile, SandboxConfigError | SandboxConstraintError> {
-  return Effect.gen(function* () {
-    const resolved = yield* resolveProfile(layers)
-    yield* checkSR1Constraints(resolved)
-    return resolved
-  })
+): Effect.Effect<ResolvedProfile, SandboxConfigError> {
+  return resolveProfile(layers)
 }

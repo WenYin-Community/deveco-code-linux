@@ -26,7 +26,6 @@ import { Global } from "./global"
 import { SandboxResolver } from "./config/sandbox-resolver"
 import {
   SandboxConfigError,
-  SandboxConstraintError,
   type ResolvedProfile,
   type SandboxConfig,
 } from "./config/sandbox"
@@ -37,7 +36,7 @@ import { getRuntimeSandbox, setRuntimeSandbox, clearRuntimeSandbox } from "./con
 // These mirror the Rust sandbox-contracts types that @bitfun-ai/sandbox
 // will expose via N-API. Until the native package is available,
 // we define matching TypeScript types.
-// Product-side errors use SR1 §3.4.2 tags; platform-side errors use
+// Product-side errors use §3.4.2 tags; platform-side errors use
 // the design doc §6.1 code/phase model.
 
 /** Target command to be sandboxed (sandbox-architecture.md §5) */
@@ -122,8 +121,7 @@ export type SandboxPrepareRequest = typeof SandboxPrepareRequest.Type
 
 // ─── Platform-side Error (sandbox-architecture.md §6.1) ─────
 // Used by @bitfun-ai/sandbox native package: code + phase + sanitized message.
-// Product-side (Deveco Code config resolver) uses SandboxConfigError /
-// SandboxConstraintError with SR1 §3.4.2 tags instead.
+// Product-side (Deveco Code config resolver) uses SandboxConfigError instead.
 
 export const SandboxErrorCode = Schema.Literals([
   "InvalidConfiguration",
@@ -153,8 +151,8 @@ export type SandboxErrorPhase = typeof SandboxErrorPhase.Type
  * Platform-side sandbox error (sandbox-architecture.md §6.1).
  * Returned by native probe/prepare. Message is sanitized (no argv/env/paths).
  *
- * Product-side errors (config_invalid, profile_not_supported, etc. from SR1 §3.4.2)
- * are handled by SandboxConfigError / SandboxConstraintError in config/sandbox.ts
+ * Product-side errors (config_invalid, etc. from config/sandbox.ts)
+ * are handled by SandboxConfigError in config/sandbox.ts
  * and mapped to SandboxError in the context layer when needed.
  */
 export class SandboxError extends Schema.TaggedErrorClass<SandboxError>()("SandboxError", {
@@ -169,7 +167,7 @@ export class SandboxError extends Schema.TaggedErrorClass<SandboxError>()("Sandb
   }
 }
 
-// ─── Product-side Error Tags (SR1 §3.4.2) ───────────────────
+// ─── Product-side Error Tags (§3.4.2) ───────────────────
 // These are used by the config resolver layer, not by the native package.
 // Mapping: config_invalid → code=InvalidConfiguration/phase=Configuration
 //          profile_not_supported → code=UnsupportedCapability/phase=Configuration
@@ -191,7 +189,7 @@ export type SandboxErrorTag =
   | "target_timeout"
 
 /**
- * Map a product-side error tag (SR1 §3.4.2) to platform-side code/phase.
+ * Map a product-side error tag (§3.4.2) to platform-side code/phase.
  * Used when the context layer needs to surface config errors as SandboxError.
  */
 export function mapErrorTagToCodePhase(tag: SandboxErrorTag): {
@@ -398,13 +396,13 @@ function toNativePermissions(permissions: SandboxPrepareRequest["permissions"]):
 
 // ─── Sandbox Context Resolver Service ───────────────────────
 // Resolves the effective sandbox config from Config layers and
-// applies SR1 constraints. Produces a PermissionProfile snapshot
+// applies constraints. Produces a PermissionProfile snapshot
 // that is bound to each command (FR-CFG-012).
 
 export interface SandboxContextInterface {
   /**
    * Resolve the effective sandbox profile from current config layers.
-   * Applies SR1 constraints (D1/D2/D3).
+   * Applies constraints (D1/D2/D3).
    *
    * FR-CFG-008: If an agentId is provided and the agent has a sandbox.profile
    * override, it is merged into the project layer (S-AGENT-1).
@@ -498,30 +496,20 @@ export class SandboxConfigWriterService extends Context.Service<SandboxConfigWri
 ) {}
 
 // ─── Shared resolve+error-mapping (C2 fix) ──────────────────
-// Pure function: given already-built layers, calls SandboxResolver.resolveSR1
-// and maps config/constraint errors into SandboxError with proper code/phase.
+// Pure function: given already-built layers, calls SandboxResolver.resolveSandbox
+// and maps config errors into SandboxError with proper code/phase.
 // Both core's contextLayer and opencode's shell.ts resolveSandboxProfile call
 // this so the resolve+error-mapping logic exists in exactly one place.
 // Note: layer construction itself stays in each caller because core uses
 // Config.Service while shell.ts reads files directly (see SR1_TASK_OVERVIEW §8.2).
-export function resolveSR1AndMapError(
+export function resolveSandboxAndMapError(
   layers: SandboxResolver.LayeredSandboxConfig,
 ): Effect.Effect<ResolvedProfile, SandboxError, never> {
-  return SandboxResolver.resolveSR1(layers).pipe(
+  return SandboxResolver.resolveSandbox(layers).pipe(
     Effect.mapError((error) => {
       if (error instanceof SandboxConfigError) {
         const { code, phase } = mapErrorTagToCodePhase("config_invalid")
         return new SandboxError({ code, phase, message: error.message })
-      }
-      if (error instanceof SandboxConstraintError) {
-        const { code, phase } = mapErrorTagToCodePhase(error.tag as SandboxErrorTag)
-        return new SandboxError({
-          code,
-          phase,
-          message: error.message,
-          profile_id: error.profile_id ?? undefined,
-          source_layer: error.source_layer ?? undefined,
-        })
       }
       const { code, phase } = mapErrorTagToCodePhase("invalid_request")
       // S24: avoid exposing internal details (paths, stack, env names) in
@@ -535,7 +523,7 @@ export function resolveSR1AndMapError(
 
 /**
  * Sandbox context layer: reads Config entries, extracts sandbox config
- * from each layer, resolves via SandboxResolver.resolveSR1.
+ * from each layer, resolves via SandboxResolver.resolveSandbox.
  * Runtime override (from /sandbox page writes) is merged as the
  * highest-priority layer (FR-UI-006: immediate effect without restart).
  */
@@ -593,7 +581,7 @@ export const contextLayer = Layer.effect(
             }
           }
 
-          return yield* resolveSR1AndMapError(layers)
+          return yield* resolveSandboxAndMapError(layers)
         }),
 
       buildRequest: (resolved, target) => ({
