@@ -31,7 +31,9 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA journal_mode = WAL")
     yield* db.run("PRAGMA synchronous = NORMAL")
     yield* db.run("PRAGMA busy_timeout = 5000")
-    yield* db.run("PRAGMA cache_size = -64000")
+    // 16MB page-cache ceiling (was 64MB): idle sessions barely use it, but
+    // heavy DB phases grow to whatever the pragma allows and never shrink.
+    yield* db.run("PRAGMA cache_size = -16000")
     yield* db.run("PRAGMA foreign_keys = ON")
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
