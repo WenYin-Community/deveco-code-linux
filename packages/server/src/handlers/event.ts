@@ -6,6 +6,10 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { Api } from "../api"
 
+// Per-subscriber backlog cap; an overflowing SSE subscriber is failed with
+// SubscriberOverflowError instead of growing the heap without bound.
+const subscriberCapacity = 256
+
 function eventData(data: unknown): Sse.Event {
   return {
     _tag: "Event",
@@ -31,18 +35,18 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
           }),
           data: {},
         }
+        // Acquiring the bounded stream installs its listener before readiness is observable.
+        const live = yield* EventV2.allBounded(events, subscriberCapacity)
         return HttpServerResponse.stream(
           Stream.make(connected).pipe(
             Stream.concat(
-              events
-                .all()
-                .pipe(
-                  Stream.filter(
-                    (event) =>
-                      event.location?.directory === location.directory &&
-                      event.location.workspaceID === location.workspaceID,
-                  ),
+              live.pipe(
+                Stream.filter(
+                  (event) =>
+                    event.location?.directory === location.directory &&
+                    event.location.workspaceID === location.workspaceID,
                 ),
+              ),
             ),
             Stream.map(eventData),
             Stream.pipeThroughChannel(Sse.encode()),

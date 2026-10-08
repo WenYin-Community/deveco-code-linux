@@ -1,6 +1,6 @@
 export * as EventV2 from "./event"
 
-import { Cause, Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect"
 import { and, asc, eq, gt } from "drizzle-orm"
 import { Database } from "./database/database"
 import { EventSequenceTable, EventTable } from "./event/sql"
@@ -77,6 +77,29 @@ export class InvalidSyncEventError extends Schema.TaggedErrorClass<InvalidSyncEv
     message: Schema.String,
   },
 ) {}
+
+export class SubscriberOverflowError extends Schema.TaggedErrorClass<SubscriberOverflowError>()(
+  "EventV2.SubscriberOverflow",
+  { capacity: Schema.Int },
+) {}
+
+// Bounded alternative to `all()` for network subscribers (SSE): a dropping
+// queue caps the per-subscriber backlog and an overflowing subscriber fails
+// itself without blocking publishers or other listeners. Ported from upstream
+// opencode (added after v1.17.9).
+export const allBounded = (events: Interface, capacity: number) =>
+  Effect.gen(function* () {
+    const queue = yield* Queue.dropping<Payload, SubscriberOverflowError>(capacity)
+    const unsubscribe = yield* events.listen((event) =>
+      Queue.offer(queue, event).pipe(
+        Effect.flatMap((accepted) =>
+          accepted ? Effect.void : Queue.fail(queue, new SubscriberOverflowError({ capacity })).pipe(Effect.asVoid),
+        ),
+      ),
+    )
+    yield* Effect.addFinalizer(() => unsubscribe.pipe(Effect.andThen(Queue.shutdown(queue)), Effect.asVoid))
+    return Stream.fromQueue(queue)
+  })
 
 export function versionedType(type: string, version: number) {
   return `${type}.${version}`
