@@ -21,6 +21,19 @@ import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
+// Ported from upstream opencode (post-v1.17.9): MCP tool results may embed
+// base64 resource blobs that land in message parts — persisted, reloaded on
+// every prompt step, and sent to the model. Cap them and restrict binary
+// attachments to types the model APIs actually accept.
+const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
+const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
+  "application/pdf",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+])
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -167,6 +180,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             for (const contentItem of result.content) {
               if (contentItem.type === "text") textParts.push(contentItem.text)
               else if (contentItem.type === "image") {
+                const size = base64Size(contentItem.data)
+                if (size > MAX_MCP_RESOURCE_BLOB_BYTES) {
+                  textParts.push(
+                    `[Binary MCP image omitted: (${contentItem.mimeType}, ${formatBytes(size)}) exceeds ${formatBytes(MAX_MCP_RESOURCE_BLOB_BYTES)}]`,
+                  )
+                  continue
+                }
                 attachments.push({
                   type: "file",
                   mime: contentItem.mimeType,
@@ -176,10 +196,24 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 const { resource } = contentItem
                 if (resource.text) textParts.push(resource.text)
                 if (resource.blob) {
+                  const mime = resource.mimeType ?? "application/octet-stream"
+                  const size = base64Size(resource.blob)
+                  if (!SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES.has(mime)) {
+                    textParts.push(
+                      `[Binary MCP resource omitted: ${resource.uri} (${mime}, ${formatBytes(size)}) is not a supported attachment type]`,
+                    )
+                    continue
+                  }
+                  if (size > MAX_MCP_RESOURCE_BLOB_BYTES) {
+                    textParts.push(
+                      `[Binary MCP resource omitted: ${resource.uri} (${mime}, ${formatBytes(size)}) exceeds ${formatBytes(MAX_MCP_RESOURCE_BLOB_BYTES)}]`,
+                    )
+                    continue
+                  }
                   attachments.push({
                     type: "file",
-                    mime: resource.mimeType ?? "application/octet-stream",
-                    url: `data:${resource.mimeType ?? "application/octet-stream"};base64,${resource.blob}`,
+                    mime,
+                    url: `data:${mime};base64,${resource.blob}`,
                     filename: resource.uri,
                   })
                 }
@@ -227,5 +261,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
 
   return tools
 })
+
+function base64Size(value: string) {
+  const trimmed = value.replace(/\s/g, "")
+  const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
+  return Math.max(0, Math.floor((trimmed.length * 3) / 4) - padding)
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${Math.ceil(value / 1024)} KB`
+  return `${Math.ceil(value / (1024 * 1024))} MB`
+}
 
 export * as SessionTools from "./tools"

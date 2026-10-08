@@ -30,6 +30,7 @@ import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.
 import { trustPrompt } from "@/cli/trust"
 
 const runtimeTask = import("./run/runtime")
+const ATTACH_FILE_MAX_BYTES = 10 * 1024 * 1024
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
 function pick(value: string | undefined): ModelInput | undefined {
@@ -364,7 +365,15 @@ export const RunCommand = effectCmd({
             process.exit(1)
           }
 
-          const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
+          const isDir = await Filesystem.isDir(resolvedPath)
+          if (!isDir) {
+            const size = (await Bun.file(resolvedPath).stat()).size
+            if (size > ATTACH_FILE_MAX_BYTES) {
+              UI.error(`Cannot attach local file larger than 10 MiB: ${filePath}`)
+              process.exit(1)
+            }
+          }
+          const mime = isDir ? "application/x-directory" : "text/plain"
 
           files.push({
             type: "file",
