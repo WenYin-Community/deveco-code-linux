@@ -40,6 +40,14 @@ const emptyConsoleState: ConsoleState = {
   switchableOrgCount: 0,
 }
 
+// `provider_next` only feeds id/name/connected reads (provider and auth
+// dialogs, /collect command gating). Strip each provider's model catalog
+// before storing so the TUI does not retain a second full copy of every
+// model object received over RPC.
+function slimProviderList(input: ProviderListResponse): ProviderListResponse {
+  return { ...input, all: input.all.map((provider) => ({ ...provider, models: {} })) }
+}
+
 function search<T>(items: T[], target: string, key: (item: T) => string) {
   let left = 0
   let right = items.length - 1
@@ -537,7 +545,7 @@ export const {
             batch(() => {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
+              setStore("provider_next", reconcile(slimProviderList(providerList)))
               setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
@@ -595,7 +603,7 @@ export const {
       batch(() => {
         setStore("provider", reconcile(providers.data.providers))
         setStore("provider_default", reconcile(providers.data.default))
-        setStore("provider_next", reconcile(providerList.data))
+        setStore("provider_next", reconcile(slimProviderList(providerList.data)))
         setStore("provider_auth", reconcile(providerAuth.data))
       })
     }

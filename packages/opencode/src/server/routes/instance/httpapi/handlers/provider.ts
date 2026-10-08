@@ -49,9 +49,14 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
       }
       const connected = yield* provider.list()
+      // Entries derived straight from models.dev are public catalog data — the
+      // toPublicInfo masking round-trip is unnecessary for them (it produced a
+      // multi-MB transient JSON string plus a full object copy on every call,
+      // during TUI bootstrap and every provider refresh). Only `connected`
+      // entries carry credentials and user options, so only those get masked.
       const providers = Object.assign(
         mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
-        connected,
+        mapValues(connected, Provider.toPublicInfo),
       )
       // Login choices must also exist before a cloud model catalog is available.
       // Keep this entry out of connected/default so it cannot complete setup or select a model.
@@ -70,7 +75,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         }
       }
       return {
-        all: [...loginProviders, ...Object.values(providers).map(Provider.toPublicInfo)],
+        all: [...loginProviders, ...Object.values(providers)],
         default: Provider.defaultModelIDs(providers),
         connected: Object.keys(connected),
       }
