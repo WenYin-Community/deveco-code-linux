@@ -358,7 +358,7 @@ test("a re-run gate that blocks on real-name verification shows the real-name st
 })
 
 test("third-party provider users still reach the ready state without an onboarding detour", async () => {
-  await using panel = await mount({ uploadState: "local", thirdParty: true })
+  await using panel = await mount({ uploadState: "local", thirdParty: true, env: { studioConfigured: true } })
 
   const first = await panel.frame("Agreements and privacy")
   expect(first).toContain("I have read and agree")
@@ -371,6 +371,29 @@ test("third-party provider users still reach the ready state without an onboardi
   const after = await panel.frame("PROMPT_READY")
   expect(after).not.toContain("Agreements and privacy")
   expect(after).not.toContain("Configure DevEco Studio Path")
+})
+
+test("third-party provider users configure DevEco Studio before entering", async () => {
+  await using panel = await mount({ uploadState: "local", thirdParty: true })
+
+  const first = await panel.frame("Agreements and privacy")
+  expect(first).toContain("I have read and agree")
+
+  await panel.setup.mockInput.typeText(" ")
+  await panel.frame("[✓]")
+  panel.setup.mockInput.pressEnter()
+
+  const studio = await panel.frame("Configure DevEco Studio Path")
+  expect(studio).toContain("Skip (DevEco Studio Tools will be unavailable)")
+  expect(studio).not.toContain("Get started with DevEco Code")
+
+  panel.setup.mockInput.pressArrow("down")
+  panel.setup.mockInput.pressEnter()
+
+  const after = await panel.frame("PROMPT_READY")
+  expect(after).not.toContain("Configure DevEco Studio Path")
+  expect(after).not.toContain("Real-name authentication required")
+  expect(after).not.toContain("Agreements and privacy")
 })
 
 test("a later gate decision is not shadowed by the real-name flag of an earlier one", async () => {

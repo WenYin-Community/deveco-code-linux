@@ -174,6 +174,13 @@ export function DevEcoHomeBody(props: {
         applyGate({ step: "product-privacy" })
         return
       }
+      if (!devecoHomeChecked) {
+        devecoHomeChecked = true
+        if (!(await hasConfiguredDevEcoHome())) {
+          applyGate({ step: "deveco-home" })
+          return
+        }
+      }
       applyGate({ step: "ready" })
       return
     }
