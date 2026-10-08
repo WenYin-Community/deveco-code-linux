@@ -1184,7 +1184,7 @@ export interface Interface {
 interface State {
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderV2.ID, Info>
-  catalog: Record<ProviderV2.ID, Info>
+  catalog: Record<ProviderV2.ID, Record<string, string | undefined>>
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
@@ -1312,12 +1312,16 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
-function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enableExperimentalModels: boolean) {
-  const available = provider
-    ? Object.keys(provider.models).filter((id) => {
-        const model = provider.models[id]
-        if (model.status === "deprecated") return false
-        if (model.status === "alpha" && !enableExperimentalModels) return false
+function modelSuggestions(
+  models: Record<string, string | undefined> | undefined,
+  modelID: ModelV2.ID,
+  enableExperimentalModels: boolean,
+) {
+  const available = models
+    ? Object.keys(models).filter((id) => {
+        const status = models[id]
+        if (status === "deprecated") return false
+        if (status === "alpha" && !enableExperimentalModels) return false
         return true
       })
     : []
@@ -1357,8 +1361,27 @@ export const layer = Layer.effect(
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
-        const catalog = mapValues(modelsDev, fromModelsDevProvider)
-        const database = mapValues(catalog, toPublicInfo)
+        // Single derived provider tree. This used to build two full copies:
+        // `catalog` (pristine) plus `database = mapValues(catalog, toPublicInfo)`
+        // (a JSON round-trip deep copy meant to mask secrets and strip
+        // functions). The round-trip bought nothing in practice: models.dev
+        // data is public, config extensions wrote unmasked options into
+        // `database` anyway, variants are plain data, and every external
+        // boundary (RPC handlers, plugin hooks, events) still masks through
+        // toPublicInfo at call time. Dropping the second tree removes ~8K
+        // model objects (plus api/cost/limit/capabilities/variants children)
+        // from the steady-state heap and a large transient JSON string from
+        // startup. `database` is destructively filtered later in init
+        // (deprecated/alpha/blacklisted models deleted via providers sharing
+        // mergeDeep references) and plugin `provider.models` hooks may replace
+        // entries wholesale, so suggestion fallbacks use the pristine
+        // `catalog` status index below instead.
+        const database = mapValues(modelsDev, fromModelsDevProvider)
+        // Pristine modelID → status index for ModelNotFoundError suggestions.
+        // Keys/values are string references shared with `database`, so this
+        // costs ~100KB instead of a second full derived tree. Built before
+        // plugin/config mutations below rebind database entries.
+        const catalog = mapValues(database, (provider) => mapValues(provider.models, (model) => model.status))
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1659,6 +1682,12 @@ export const layer = Layer.effect(
 
           const configProvider = cfg.provider?.[providerID]
 
+          // Detach the models record from the shared `database` tree: the
+          // deletes below must only filter what `providers` exposes, while
+          // `database` stays complete for ModelNotFoundError suggestion
+          // fallbacks (previously served by the dropped pristine catalog copy).
+          provider.models = { ...provider.models }
+
           for (const [modelID, model] of Object.entries(provider.models)) {
             model.api.id = model.api.id ?? model.id ?? modelID
             if (
@@ -1899,7 +1928,11 @@ export const layer = Layer.effect(
 
       const info = provider.models[modelID]
       if (!info) {
-        const current = modelSuggestions(provider, modelID, runtimeFlags.enableExperimentalModels)
+        const current = modelSuggestions(
+          mapValues(provider.models, (model) => model.status),
+          modelID,
+          runtimeFlags.enableExperimentalModels,
+        )
         const suggestions = current.length
           ? current
           : modelSuggestions(s.catalog[providerID], modelID, runtimeFlags.enableExperimentalModels)
