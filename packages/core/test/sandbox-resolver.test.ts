@@ -201,13 +201,13 @@ describe("SandboxResolver.resolveSelection", () => {
 })
 
 describe("SandboxResolver.resolveSandbox", () => {
-  // FR-CFG-005/007: read-only + network on 时正常解析
-  it("succeeds for read-only with network on", async () => {
+  // FR-CFG-005/007: read-only 默认 network off
+  it("succeeds for read-only with network off by default", async () => {
     const result = await Effect.runPromise(
       SandboxResolver.resolveSandbox({ global: { profile: "read-only" } }),
     )
     expect(result.profile_id).toBe("read-only")
-    expect(result.network_enabled).toBe(true)
+    expect(result.network_enabled).toBe(false)
     expect(result.is_implicit).toBe(false)
   })
 

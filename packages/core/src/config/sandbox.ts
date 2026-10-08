@@ -154,6 +154,7 @@ export function isBuiltinProfile(id: string): id is BuiltinProfileId {
 export const BUILTIN_PROFILES: Record<BuiltinProfileId, ProfileDefinition> = {
   "read-only": {
     filesystem: { ":root": "read" },
+    network: { enabled: false },
   },
   workspace: {
     filesystem: {
@@ -166,8 +167,11 @@ export const BUILTIN_PROFILES: Record<BuiltinProfileId, ProfileDefinition> = {
       ":workspace_roots/.bitfun": "read",
       ":workspace_roots/.codex": "read",
     },
+    network: { enabled: false },
   },
-  "full-access": {},
+  "full-access": {
+    network: { enabled: true },
+  },
 }
 
 // ─── Validation Error ───────────────────────────────────────

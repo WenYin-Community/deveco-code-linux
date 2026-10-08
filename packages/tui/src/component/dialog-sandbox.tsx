@@ -13,7 +13,7 @@ import { useBindings } from "../keymap"
 import { useTuiConfig } from "../config"
 import { useI18n } from "../i18n"
 import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
-import { type SandboxConfig as CoreSandboxConfig, validateSandboxShape as validateSandboxConfigShape } from "@opencode-ai/core/config/sandbox"
+import { type SandboxConfig as CoreSandboxConfig, validateSandboxShape as validateSandboxConfigShape, BUILTIN_PROFILES } from "@opencode-ai/core/config/sandbox"
 import { setRuntimeSandbox, getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
 import { useProject } from "../context/project"
 
@@ -241,7 +241,12 @@ export function DialogSandbox() {
     const rt = runtimeOverride()
     if (rt?.network) return rt.network.enabled
     const cfg = sandboxConfig()
-    return cfg?.network?.enabled ?? true
+    if (cfg?.network) return cfg.network.enabled
+    // Fall back to profile's network (BUILTIN_PROFILES or custom profile definition)
+    const profileId = effectiveProfile().id
+    const profileDef = BUILTIN_PROFILES[profileId as keyof typeof BUILTIN_PROFILES] ?? cfg?.profiles?.[profileId]
+    if (profileDef?.network) return profileDef.network.enabled
+    return true
   })
 
   const customProfiles = createMemo(() => {

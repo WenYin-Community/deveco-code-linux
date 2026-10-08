@@ -294,8 +294,9 @@ function toNativePermissionProfile(resolved: ResolvedProfile): NativePermissionP
     }),
   )
 
+  const isFullAccess = entries.length === 0
   const policy: NativeFileSystemSandboxPolicy = {
-    kind: { type: "Restricted" },
+    kind: isFullAccess ? { type: "Unrestricted" } : { type: "Restricted" },
     glob_scan_max_depth: null,
     entries,
   }
@@ -375,18 +376,19 @@ function toNativeFileSystemContext(request: SandboxPrepareRequest): NativeFileSy
 
 /** Build native PermissionProfile from internal permissions */
 function toNativePermissions(permissions: SandboxPrepareRequest["permissions"]): NativePermissionProfile {
+  const entries = Object.entries(permissions.filesystem).map(
+    ([key, mode]) => ({
+      path: toNativePath(key),
+      access: toNativeAccessMode(mode),
+      missing_path_behavior: null,
+    }),
+  )
   return {
     type: "Managed" as const,
     file_system: {
-      kind: { type: "Restricted" as const },
+      kind: entries.length === 0 ? { type: "Unrestricted" as const } : { type: "Restricted" as const },
       glob_scan_max_depth: null,
-      entries: Object.entries(permissions.filesystem).map(
-        ([key, mode]) => ({
-          path: toNativePath(key),
-          access: toNativeAccessMode(mode),
-          missing_path_behavior: null,
-        }),
-      ),
+      entries,
     },
     network: permissions.network_enabled
       ? { type: "Enabled" as const }
