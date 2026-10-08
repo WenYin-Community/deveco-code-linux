@@ -62,6 +62,10 @@ export const rpc = {
   async server(input: { port: number; hostname: string; mdns?: boolean; cors?: string[] }) {
     if (server) await server.stop(true)
     server = await Server.listen(input)
+    // One-shot delayed full GC: module evaluation plus the first instance
+    // bootstrap (provider catalog derivation, DB warmup) leaves transient
+    // garbage; returning it to the OS keeps the idle plateau lower.
+    setTimeout(() => Bun.gc(true), 10_000).unref()
     return { url: server.url.toString() }
   },
   async reload() {

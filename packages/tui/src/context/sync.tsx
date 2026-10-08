@@ -577,6 +577,10 @@ export const {
             console.error("Optional startup data could not be loaded", error)
           }).finally(() => {
             setStore("status", "complete")
+            // One-shot synchronous full GC: bootstrap evaluates every module and
+            // builds provider/session data, leaving transient garbage behind;
+            // returning it to the OS early lowers the idle plateau.
+            Bun.gc(true)
           })
         })
         .catch(async (e) => {
