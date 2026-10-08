@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.ui.JBColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.deveco.code.DevEcoTheme
@@ -36,6 +37,7 @@ import org.deveco.code.MyMessageBundle
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.util.devecoStorageRoot
 import org.deveco.code.util.hoverable
+import org.jetbrains.jewel.bridge.toComposeColor
 import org.jetbrains.jewel.ui.component.Text
 import java.nio.file.Files
 
@@ -46,6 +48,9 @@ import java.nio.file.Files
  * Visual spec (user-defined): deep-blue filled card, slightly brighter border,
  * white prompt text, a blue accent "Start Migration" button, plain
  * "Don't remind me" text button, and a close × in the top-right corner.
+ * Colors are theme-aware (PromptColors): the spec above is the dark-theme
+ * rendering; light theme swaps to a pale-blue card with deep-blue text and
+ * follows IDE theme switches like every DevEcoTheme token.
  *
  * Semantics unchanged: off-thread one-shot detection, marker-formula
  * visibility, three exits, migrating state blocks re-entry, settled
@@ -126,7 +131,7 @@ fun MigrationPromptBar(project: Project) {
                 text = MyMessageBundle.message("migration.prompt.text") +
                     promptTextSuffix,
                 fontSize = 12.sp,
-                color = Color.White,
+                color = PromptColors.promptText,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.align(Alignment.CenterStart).padding(end = 20.dp),
             )
@@ -199,15 +204,24 @@ fun MigrationPromptBar(project: Project) {
     }
 }
 
-/** User-specified palette: deep-blue card, brighter border, blue accent action. */
+/**
+ * Theme-aware palette: JBColor resolves the light/dark variant from the
+ * current IDE theme at composition time. The colors are plain conversions,
+ * not snapshot state — a live theme switch may leave the previous variant
+ * until the tool window recomposes for another reason (same staleness
+ * profile as the committed DevEcoTheme tokens). Dark keeps the user-spec
+ * deep-blue card with white text; light renders the pale-blue counterpart
+ * with deep-blue text. The accent action stays a blue pill in both.
+ */
 private object PromptColors {
-    val cardBackground = Color(0xFF1E3A5F)
-    val cardBorder = Color(0xFF3D5A80)
-    val accentBlue = Color(0xFF4A9EFF)
-    val accentBlueHover = Color(0xFF6BB3FF)
-    val plainTextOnCard = Color(0xFFC0CEDE)
-    val plainTextOnCardHover = Color.White
-    val migratingText = Color(0xFFC0CEDE)
+    val cardBackground: Color get() = JBColor(0xE9F1FB, 0x1E3A5F).toComposeColor()
+    val cardBorder: Color get() = JBColor(0xBFD2EC, 0x3D5A80).toComposeColor()
+    val promptText: Color get() = JBColor(0x16324F, 0xFFFFFF).toComposeColor()
+    val accentBlue: Color get() = JBColor(0x3574F0, 0x4A9EFF).toComposeColor()
+    val accentBlueHover: Color get() = JBColor(0x2B5CD9, 0x6BB3FF).toComposeColor()
+    val plainTextOnCard: Color get() = JBColor(0x4A6FA5, 0xC0CEDE).toComposeColor()
+    val plainTextOnCardHover: Color get() = JBColor(0x16324F, 0xFFFFFF).toComposeColor()
+    val migratingText: Color get() = JBColor(0x4A6FA5, 0xC0CEDE).toComposeColor()
 }
 
 @Composable
@@ -216,7 +230,7 @@ private fun CloseButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
     Text(
         text = "×",
         fontSize = 15.sp,
-        color = if (hovered) Color.White else PromptColors.plainTextOnCard,
+        color = if (hovered) PromptColors.plainTextOnCardHover else PromptColors.plainTextOnCard,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .clickable(
