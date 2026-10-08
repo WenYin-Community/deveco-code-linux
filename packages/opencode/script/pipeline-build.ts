@@ -287,7 +287,7 @@ for (const item of targets) {
       autoloadPackageJson: true,
       target: name.replace(pkg.name, "bun") as any,
       outfile: `dist/${name}/bin/deveco`,
-      execArgv: [`--user-agent=deveco/${Script.version}`, "--use-system-ca", "--"],
+      execArgv: [`--user-agent=deveco/${Script.version}`, "--use-system-ca", "--smol", "--"],
       windows: {},
     },
     files: embeddedFileMap ? { "deveco-web-ui.gen.ts": embeddedFileMap } : {},

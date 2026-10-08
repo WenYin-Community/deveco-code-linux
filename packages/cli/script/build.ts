@@ -83,7 +83,7 @@ for (const item of targets) {
       autoloadPackageJson: true,
       target: target.replace(binary, "bun") as Bun.Build.CompileTarget,
       outfile: `./dist/${name}/bin/${binary}`,
-      execArgv: [`--user-agent=${binary}/${Script.version}`, "--use-system-ca", "--"],
+      execArgv: [`--user-agent=${binary}/${Script.version}`, "--use-system-ca", "--smol", "--"],
       windows: {},
     },
     define: {

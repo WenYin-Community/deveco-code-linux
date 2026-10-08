@@ -129,6 +129,9 @@ async function createTuiWorker(directory: string) {
   }
   const cwd = Filesystem.resolve(process.cwd())
   const worker = new Worker(file, {
+    // Small-heap JSC config for the backend worker: GC runs more often in
+    // exchange for a lower RSS ceiling on long-lived TUI sessions.
+    smol: true,
     env: sanitizedProcessEnv({
       [DEVECO_PROCESS_ROLE]: "worker",
       [DEVECO_RUN_ID]: ensureRunID(),
