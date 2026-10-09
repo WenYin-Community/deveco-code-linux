@@ -153,6 +153,22 @@ const table = sqliteTable("session", {
 
 - Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
 
+## Skills
+
+Skills come in two modes. Decide by intent:
+
+- **Built-in** — the project maintains it and ships it to every user. Source
+  lives in `packages/opencode/resources/skills/`.
+- **User** — personal or temporary. Lives in a user directory: global
+  `~/.config/deveco/skills/`, or project `.deveco/skills/`.
+
+A skill in the wrong place fails silently at the next upgrade.
+`~/.local/share/deveco/skills/` is a runtime artifact — never hand-edit it.
+
+Other locations are also scanned; see
+[docs/skill-authoring.md](docs/skill-authoring.md) for the full list and the
+authoring convention.
+
 ## V2 Session Core
 
 - Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_input` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior. The serialized runner promotes admitted inputs into visible user messages at safe boundaries.

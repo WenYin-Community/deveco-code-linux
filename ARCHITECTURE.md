@@ -3,38 +3,47 @@
 ## Directory Structure
 
 ```
-deveco-cli/
-├── packages/
-│   ├── opencode/          # CLI core (Effect runtime, TUI, Agent logic)
-│   ├── app/               # Web App (SolidJS frontend)
-│   ├── web/               # Landing page and website
+deveco-code/
+├── packages/              # Bun workspace packages (see package.json → workspaces)
+│   ├── opencode/          # CLI core: agents, sessions, tools, config, skills
+│   ├── core/              # Shared primitives: paths, fs, flock, config, catalog
+│   ├── tui/               # Terminal UI (SolidJS via @opentui)
+│   ├── cli/               # CLI command framework and entry points
+│   ├── server/            # HTTP API server: routes, handlers, middleware
+│   ├── app/               # App frontend (SolidJS)
 │   ├── ui/                # Shared UI component library
-│   ├── desktop/           # Tauri desktop app
-│   ├── desktop-electron/  # Electron desktop app (legacy)
-│   ├── slack/             # Slack integration
-│   ├── shared/            # Shared utilities and types
-│   ├── sdk/js/            # JavaScript SDK
+│   ├── llm/               # Model providers, protocols, tool runtime
 │   ├── plugin/            # Plugin system
-│   ├── function/          # Serverless Function runtime
-│   ├── enterprise/        # Enterprise features
-│   ├── storybook/         # UI component documentation
-│   ├── script/            # Build and release scripts
-│   ├── containers/        # Docker image definitions
-│   └── console/           # Cloud console (SaaS)
-│       ├── app/           # Console frontend
-│       ├── core/          # Console backend core
-│       ├── function/      # Console serverless functions
-│       ├── mail/          # Email templates
-│       └── resource/      # Infrastructure resources
+│   ├── sdk/               # JavaScript SDK + OpenAPI spec
+│   ├── script/            # Shared build/release script helpers
+│   ├── http-recorder/     # Record and replay Effect HTTP traffic for tests
+│   ├── effect-drizzle-sqlite/   # Effect + Drizzle SQLite layer
+│   └── effect-sqlite-node/      # Effect SQLite driver for Node
+├── integrations/          # Editor integrations (intellij-plugin)
+├── script/                # Build and release scripts
 ├── specs/                 # Feature specifications
-├── docs/                  # Project documentation
-│   └── upstream-sync/     # Upstream sync guides and records
-├── github/                # GitHub Action release scripts
-├── infra/                 # Infrastructure as Code (SST / AWS)
-├── nix/                   # Nix packaging config
-├── sdks/                  # SDK related (including VS Code extension)
-└── .opencode/             # OpenCode self-configuration
+├── docs/                  # Project docs: user guide + subsystem design notes
+├── patches/               # Patches applied to dependencies
+├── assets/                # Static assets
+├── .opencode/             # OpenCode self-configuration (agents, commands, skills)
+└── .deveco/               # Project-scoped config, created at runtime (not committed)
 ```
+
+Directories only — file-level contents are not listed, so this stays accurate as
+files are added. Keep it in sync when a package is added or removed.
+
+`specs/` is listed in `.gitignore`, but a handful of files inside it are tracked
+anyway; they arrive with upstream syncs rather than through `git add`.
+
+## Skill Storage Invariant
+
+Built-in and user skills live in **separate, non-overlapping directories**, and
+the location is part of the contract: a skill placed in the wrong directory
+silently stops working at the next upgrade. The only source of built-in skills
+is `packages/opencode/resources/skills/`.
+
+See [docs/skill-authoring.md](docs/skill-authoring.md) for the directory layout
+and the authoring convention.
 
 ## Sub-package Spec Index
 
