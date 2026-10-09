@@ -171,6 +171,24 @@ export const {
     const touchPart = (sessionID: string, partID: string) => {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
+    // Drop a session's payload data (messages, their parts, diffs, todos,
+    // debug state) from the store. Session info, status, permission and
+    // question entries survive: the session list, badges and pending dialogs
+    // must keep working for evicted sessions. Clearing the full-sync marker
+    // makes the next visit re-fetch through sync().
+    const evictSession = (sessionID: string) => {
+      const messages = store.message[sessionID] ?? []
+      fullSyncedSessions.delete(sessionID)
+      setStore(
+        produce((draft) => {
+          for (const message of messages) delete draft.part[message.id]
+          delete draft.message[sessionID]
+          delete draft.session_diff[sessionID]
+          delete draft.todo[sessionID]
+          delete draft.debug_state[sessionID]
+        }),
+      )
+    }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
@@ -295,6 +313,7 @@ export const {
               }),
             )
           }
+          evictSession(event.properties.info.id)
           break
         }
         case "session.updated": {
@@ -382,17 +401,27 @@ export const {
         }
         case "message.removed": {
           touchMessage(event.properties.sessionID, event.properties.messageID)
-          const messages = store.message[event.properties.sessionID]
-          const index = messages.findIndex((message) => message.id === event.properties.messageID)
-          if (index !== -1) {
+          batch(() => {
+            const messages = store.message[event.properties.sessionID]
+            const index = messages?.findIndex((message) => message.id === event.properties.messageID) ?? -1
+            if (index !== -1) {
+              setStore(
+                "message",
+                event.properties.sessionID,
+                produce((draft) => {
+                  draft.splice(index, 1)
+                }),
+              )
+            }
+            // Parts are keyed by message ID only; without this the removed
+            // message's parts stay resident forever (orphan leak).
             setStore(
-              "message",
-              event.properties.sessionID,
+              "part",
               produce((draft) => {
-                draft.splice(index, 1)
+                delete draft[event.properties.messageID]
               }),
             )
-          }
+          })
           break
         }
         case "message.part.updated": {
@@ -652,6 +681,30 @@ export const {
           if (!last) return "idle"
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
+        },
+        // Evict payload data for every session except the kept tree: the
+        // session itself, its descendants (the sidebar's subagent aggregates
+        // reactively read their event-accumulated messages and would not
+        // recover after eviction), and sessions that are still working (their
+        // events would immediately rebuild the data anyway). Called on
+        // user-visible session switches; evicted sessions re-fetch through
+        // sync() when revisited.
+        evictOthers(keepSessionID: string) {
+          const keep = new Set([keepSessionID])
+          let grew = true
+          while (grew) {
+            grew = false
+            for (const session of store.session) {
+              if (!session.parentID || keep.has(session.id) || !keep.has(session.parentID)) continue
+              keep.add(session.id)
+              grew = true
+            }
+          }
+          for (const sessionID of Object.keys(store.message)) {
+            if (keep.has(sessionID)) continue
+            if (result.session.status(sessionID) !== "idle") continue
+            evictSession(sessionID)
+          }
         },
         async sync(sessionID: string) {
           if (fullSyncedSessions.has(sessionID)) return

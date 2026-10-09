@@ -329,6 +329,7 @@ export function Session() {
         } catch {}
       }
       editor.reconnect(result.data.directory)
+      sync.session.evictOthers(sessionID)
       await sync.session.sync(sessionID)
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
