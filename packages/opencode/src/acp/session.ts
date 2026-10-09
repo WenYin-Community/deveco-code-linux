@@ -91,7 +91,13 @@ export type Interface = {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ACP/Session") {}
 
-type State = Map<string, Info>
+// Stored sessions own a mutable knownParts map: recordPartMetadata and the
+// part-metadata lookups fire per streamed part, and copying the map on every
+// call made churn quadratic in the number of parts. Callers only ever see a
+// ReadonlyMap through Info snapshots.
+type StoredSession = Omit<Info, "knownParts"> & { knownParts: Map<string, KnownMessagePartMetadata> }
+
+type State = Map<string, StoredSession>
 
 export const layer = Layer.effect(
   Service,
@@ -116,7 +122,10 @@ export const layer = Layer.effect(
       return yield* new ACPError.SessionNotFoundError({ sessionId })
     })
 
-    const update = Effect.fn("ACP.Session.update")(function* (sessionId: string, fn: (session: Info) => Info) {
+    const update = Effect.fn("ACP.Session.update")(function* (
+      sessionId: string,
+      fn: (session: StoredSession) => StoredSession,
+    ) {
       const result = yield* Ref.modify(sessions, (state) => {
         const session = state.get(sessionId)
         if (!session) return [undefined, state] as const
@@ -149,21 +158,25 @@ export const layer = Layer.effect(
       update(sessionId, (session) => ({ ...session, modeId })),
     )
 
-    const recordPartMetadata: Interface["recordPartMetadata"] = Effect.fn("ACP.Session.recordPartMetadata")((input) => {
-      const metadata = {
-        messageId: input.messageId,
-        partId: input.partId,
-        partType: input.partType,
-        role: input.role,
-        ignored: input.ignored,
-        toolCallId: input.toolCallId,
-        metadata: input.metadata,
-      }
-      return update(input.sessionId, (session) => ({
-        ...session,
-        knownParts: new Map(session.knownParts).set(partMetadataKey(input), metadata),
-      })).pipe(Effect.as(metadata))
-    })
+    const recordPartMetadata: Interface["recordPartMetadata"] = Effect.fn("ACP.Session.recordPartMetadata")((input) =>
+      Ref.get(sessions).pipe(
+        Effect.flatMap((state) => {
+          const session = state.get(input.sessionId)
+          if (!session) return new ACPError.SessionNotFoundError({ sessionId: input.sessionId })
+          const metadata = {
+            messageId: input.messageId,
+            partId: input.partId,
+            partType: input.partType,
+            role: input.role,
+            ignored: input.ignored,
+            toolCallId: input.toolCallId,
+            metadata: input.metadata,
+          }
+          session.knownParts.set(partMetadataKey(input), metadata)
+          return Effect.succeed(metadata)
+        }),
+      ),
+    )
 
     return Service.of({
       create: store,
@@ -179,22 +192,30 @@ export const layer = Layer.effect(
       remove,
       setModel,
       getModel: Effect.fn("ACP.Session.getModel")(function* (sessionId) {
-        return (yield* get(sessionId)).model
+        const session = (yield* Ref.get(sessions)).get(sessionId)
+        if (!session) return yield* new ACPError.SessionNotFoundError({ sessionId })
+        return session.model
       }),
       setVariant,
       getVariant: Effect.fn("ACP.Session.getVariant")(function* (sessionId) {
-        return (yield* get(sessionId)).variant
+        const session = (yield* Ref.get(sessions)).get(sessionId)
+        if (!session) return yield* new ACPError.SessionNotFoundError({ sessionId })
+        return session.variant
       }),
       setMode,
       getMode: Effect.fn("ACP.Session.getMode")(function* (sessionId) {
-        return (yield* get(sessionId)).modeId
+        const session = (yield* Ref.get(sessions)).get(sessionId)
+        if (!session) return yield* new ACPError.SessionNotFoundError({ sessionId })
+        return session.modeId
       }),
       recordPartMetadata,
       getPartMetadata: Effect.fn("ACP.Session.getPartMetadata")(function* (input) {
-        return (yield* get(input.sessionId)).knownParts.get(partMetadataKey(input))
+        const session = (yield* Ref.get(sessions)).get(input.sessionId)
+        if (!session) return yield* new ACPError.SessionNotFoundError({ sessionId: input.sessionId })
+        return session.knownParts.get(partMetadataKey(input))
       }),
       tryGetPartMetadata: Effect.fn("ACP.Session.tryGetPartMetadata")(function* (input) {
-        return (yield* tryGet(input.sessionId))?.knownParts.get(partMetadataKey(input))
+        return (yield* Ref.get(sessions)).get(input.sessionId)?.knownParts.get(partMetadataKey(input))
       }),
     })
   }),
@@ -202,7 +223,7 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer
 
-function makeSession(input: StoreInput): Info {
+function makeSession(input: StoreInput): StoredSession {
   return {
     id: input.id,
     cwd: input.cwd,
@@ -215,12 +236,11 @@ function makeSession(input: StoreInput): Info {
   }
 }
 
-function snapshot(session: Info): Info {
+function snapshot(session: StoredSession): Info {
   return {
     ...session,
     mcpServers: [...session.mcpServers],
     createdAt: new Date(session.createdAt),
-    knownParts: new Map(session.knownParts),
   }
 }
 
