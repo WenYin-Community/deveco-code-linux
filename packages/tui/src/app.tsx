@@ -699,6 +699,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: t("command.manage_memory"),
         category: t("category.memory"),
         slashName: "memory",
+        hidden: Flag.DEVECO_DISABLE_MEMORY,
         run: () => {
           showMemory(dialog)
         },

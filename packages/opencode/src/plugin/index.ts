@@ -87,7 +87,7 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     AnalyticsMagpiePlugin,
     SnowflakeCortexAuthPlugin,
     XaiAuthPlugin,
-    MemoryPlugin,
+    ...(flags.disableMemory ? [] : [MemoryPlugin]),
   ]
 }
 

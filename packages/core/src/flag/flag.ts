@@ -84,6 +84,9 @@ export const Flag = {
   get DEVECO_DISABLE_CREDENTIAL_KEYCHAIN() {
     return truthy("DEVECO_DISABLE_CREDENTIAL_KEYCHAIN")
   },
+  get DEVECO_DISABLE_MEMORY() {
+    return truthy("DEVECO_DISABLE_MEMORY")
+  },
   get DEVECO_CLIENT() {
     return process.env["DEVECO_CLIENT"] ?? "cli"
   },

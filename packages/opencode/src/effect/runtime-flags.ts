@@ -28,6 +28,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   disableEmbeddedWebUi: bool("DEVECO_DISABLE_EMBEDDED_WEB_UI"),
   disableExternalSkills: bool("DEVECO_DISABLE_EXTERNAL_SKILLS"),
   disableLspDownload: bool("DEVECO_DISABLE_LSP_DOWNLOAD"),
+  disableMemory: bool("DEVECO_DISABLE_MEMORY"),
   disableClaudeCodePrompt: Config.all({
     broad: boolTrue("DEVECO_DISABLE_CLAUDE_CODE"),
     direct: boolTrue("DEVECO_DISABLE_CLAUDE_CODE_PROMPT"),

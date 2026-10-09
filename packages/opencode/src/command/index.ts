@@ -7,11 +7,22 @@ import { Effect, Layer, Context, Schema } from "effect"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
 import { Skill } from "../skill"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_DEBUG from "./template/debug.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_DFX from "./template/dfx.txt"
+
+const MEMORY_SKILL_NAMES = new Set([
+  "dream",
+  "dream-force",
+  "dream-approve",
+  "dream-reject",
+  "dream-trigger",
+  "auto-skill",
+  "skill-review-trigger",
+])
 
 type State = {
   commands: Record<string, Info>
@@ -73,6 +84,7 @@ export const layer = Layer.effect(
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
     const skill = yield* Skill.Service
+    const flags = yield* RuntimeFlags.Service
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -126,6 +138,7 @@ export const layer = Layer.effect(
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
+        if (flags.disableMemory && MEMORY_SKILL_NAMES.has(name)) continue
         commands[name] = {
           name,
           agent: command.agent,
@@ -141,6 +154,7 @@ export const layer = Layer.effect(
       }
 
       for (const [name, prompt] of Object.entries(yield* mcp.prompts())) {
+        if (flags.disableMemory && MEMORY_SKILL_NAMES.has(name)) continue
         commands[name] = {
           name,
           source: "mcp",
@@ -171,6 +185,7 @@ export const layer = Layer.effect(
 
       for (const item of yield* skill.all()) {
         if (commands[item.name]) continue
+        if (flags.disableMemory && MEMORY_SKILL_NAMES.has(item.name)) continue
         commands[item.name] = {
           name: item.name,
           description: item.description,
@@ -214,8 +229,9 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Config.defaultLayer),
   Layer.provide(MCP.defaultLayer),
   Layer.provide(Skill.defaultLayer),
+  Layer.provide(RuntimeFlags.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [Config.node, MCP.node, Skill.node])
+export const node = LayerNode.make(layer, [Config.node, MCP.node, Skill.node, RuntimeFlags.node])
 
 export * as Command from "."

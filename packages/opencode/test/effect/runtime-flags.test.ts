@@ -427,4 +427,38 @@ describe("RuntimeFlags", () => {
       expect(flags.disableClaudeCodeSkills).toBe(true)
     }),
   )
+
+  it.effect("disableMemory defaults to false in CLI mode", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+
+      expect(flags.disableMemory).toBe(false)
+    }),
+  )
+
+  it.effect("disableMemory defaults to false in ACP mode", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEVECO_CLIENT: "acp" })))
+
+      expect(flags.disableMemory).toBe(false)
+    }),
+  )
+
+  it.effect("disableMemory defaults to false in desktop mode", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEVECO_CLIENT: "desktop" })))
+
+      expect(flags.disableMemory).toBe(false)
+    }),
+  )
+
+  it.effect("disableMemory reads DEVECO_DISABLE_MEMORY", () =>
+    Effect.gen(function* () {
+      const flags = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEVECO_DISABLE_MEMORY: "true" })),
+      )
+
+      expect(flags.disableMemory).toBe(true)
+    }),
+  )
 })

@@ -243,7 +243,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const command = Command.layer.pipe(Layer.provide(config), Layer.provide(mcp), Layer.provide(skill))
+const command = Command.layer.pipe(Layer.provide(config), Layer.provide(mcp), Layer.provide(skill), Layer.provide(runtime))
 const instruction = Instruction.layer.pipe(
   Layer.provide(config),
   Layer.provide(Global.layer),
