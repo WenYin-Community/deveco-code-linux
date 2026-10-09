@@ -414,8 +414,8 @@ export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult 
   }
 
   // S-SEL-2: no declaration → implicit default
-  // deviation D1: implicit default is read-only (upstream is workspace)
-  return { profile_id: "read-only", is_implicit: true, source_layer: "global" }
+  // default is full-access (read-only is too restrictive for other features)
+  return { profile_id: "full-access", is_implicit: true, source_layer: "global" }
 }
 
 // ─── 5. Resolve effective profile (merge + flatten + select) ─

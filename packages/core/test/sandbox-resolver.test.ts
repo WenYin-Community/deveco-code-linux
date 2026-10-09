@@ -182,10 +182,10 @@ describe("SandboxResolver.resolveSelection", () => {
     expect(result.source_layer).toBe("runtime")
   })
 
-  // FR-CFG-005 S-SEL-2/D1: 无任何声明时隐式默认 read-only（偏离 D1）
-  it("S-SEL-2: implicit default is read-only (deviation D1)", () => {
+  // FR-CFG-005 S-SEL-2: 无任何声明时隐式默认 full-access
+  it("S-SEL-2: implicit default is full-access", () => {
     const result = SandboxResolver.resolveSelection({})
-    expect(result.profile_id).toBe("read-only")
+    expect(result.profile_id).toBe("full-access")
     expect(result.is_implicit).toBe(true)
   })
 
@@ -211,12 +211,12 @@ describe("SandboxResolver.resolveSandbox", () => {
     expect(result.is_implicit).toBe(false)
   })
 
-  // FR-CFG-005/D1: 无配置时隐式默认 read-only
+  // FR-CFG-005: 无配置时隐式默认 full-access
   it("succeeds for implicit default (no config)", async () => {
     const result = await Effect.runPromise(
       SandboxResolver.resolveSandbox({}),
     )
-    expect(result.profile_id).toBe("read-only")
+    expect(result.profile_id).toBe("full-access")
     expect(result.is_implicit).toBe(true)
   })
 
