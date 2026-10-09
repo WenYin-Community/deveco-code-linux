@@ -206,6 +206,22 @@ export const CompactionPart = Schema.Struct({
 }).annotate({ identifier: "CompactionPart" })
 export type CompactionPart = Types.DeepMutable<Schema.Schema.Type<typeof CompactionPart>>
 
+// History Snip Compact boundary marker. Attached to a standalone user message
+ 	 // (no text part), inserted after each snip execution. Carries the snip summary
+ 	 // for UI rendering and to prevent re-snipping already-processed turns. Invisible
+ 	 // to the model — projection skips `snip` parts and the host user message has no
+ 	 // text so it is dropped from the model-bound history.
+ 	 export const SnipPart = Schema.Struct({
+ 	   ...partBase,
+ 	   type: Schema.Literal("snip"),
+ 	   snippedCount: NonNegativeInt,
+ 	   replacedCount: NonNegativeInt,
+ 	   tokensFreed: NonNegativeInt,
+ 	   snippedTurnIds: Schema.mutable(Schema.Array(Schema.String)),
+ 	   auto: Schema.Boolean,
+ 	 }).annotate({ identifier: "SnipPart" })
+ 	 export type SnipPart = Types.DeepMutable<Schema.Schema.Type<typeof SnipPart>>
+
 // Transcript marker for entering, inspecting, and explicitly leaving sticky
 // debug mode. Only a "cleared" marker represents leaving the mode.
 export const DebugStatePart = Schema.Struct({
@@ -300,6 +316,11 @@ export const ToolStateCompleted = Schema.Struct({
     start: NonNegativeInt,
     end: NonNegativeInt,
     compacted: Schema.optional(NonNegativeInt),
+    // History Snip Compact marker: when set, the tool result output is replaced
+    // by the snip placeholder text when projecting to the model (the original
+    // output is preserved in storage for UI replay). Parallel to `compacted`
+    // (prune) and mutually exclusive with it in practice.
+    snipped: Schema.optional(NonNegativeInt),
   }),
   attachments: Schema.optional(Schema.Array(FilePart)),
 }).annotate({ identifier: "ToolStateCompleted" })
@@ -391,6 +412,7 @@ export const Part = Schema.Union([
   AgentPart,
   RetryPart,
   CompactionPart,
+  SnipPart,
   DebugStatePart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export type Part =
@@ -406,6 +428,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | SnipPart
   | DebugStatePart
 
 const AssistantErrorSchema = Schema.Union([

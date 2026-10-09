@@ -42,7 +42,7 @@ const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
-type Turn = {
+export type Turn = {
   start: number
   end: number
   id: MessageID
@@ -94,12 +94,14 @@ function preserveRecentBudget(input: { cfg: ConfigV1.Info; model: Provider.Model
   )
 }
 
-function turns(messages: SessionV1.WithParts[]) {
+export function turns(messages: SessionV1.WithParts[]) {
   const result: Turn[] = []
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
     if (msg.info.role !== "user") continue
-    if (msg.parts.some((part) => part.type === "compaction")) continue
+    // Skip compaction-trigger user messages and snip-boundary user messages
+    // (a snip boundary carries a SnipPart, not a real user turn).
+    if (msg.parts.some((part) => part.type === "compaction" || part.type === "snip")) continue
     result.push({
       start: i,
       end: messages.length,
@@ -275,7 +277,10 @@ export const layer = Layer.effect(
           if (part.type !== "tool") continue
           if (part.state.status !== "completed") continue
           if (PRUNE_PROTECTED_TOOLS.includes(part.tool)) continue
-          if (part.state.time.compacted) break loop
+          // Both prune (`compacted`) and snip (`snipped`) markers act as a
+          // hard stop — once either is seen walking back, stop entirely:
+          // neither re-prune nor re-snip already-processed history.
+          if (part.state.time.compacted || part.state.time.snipped) break loop
           const estimate = Token.estimate(part.state.output)
           total += estimate
           if (total <= PRUNE_PROTECT) continue

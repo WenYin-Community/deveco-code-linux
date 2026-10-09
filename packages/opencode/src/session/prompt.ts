@@ -13,6 +13,8 @@ import { Provider } from "@/provider/provider"
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
+ import { SessionSnip } from "./snip"
+ import { TURN_TAG_SYSTEM_NOTE } from "./snip-shared"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
@@ -105,6 +107,7 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const processor = yield* SessionProcessor.Service
     const compaction = yield* SessionCompaction.Service
+    const snip = yield* SessionSnip.Service
     const plugin = yield* Plugin.Service
     const commands = yield* Command.Service
     const config = yield* Config.Service
@@ -1299,6 +1302,21 @@ export const layer = Layer.effect(
             continue
           }
 
+          // History Snip Compact: a lightweight pre-compaction layer. When
+ 	        // accumulated tokens since the last snip/compaction boundary exceed
+ 	        // the threshold, snip Read/Grep/Glob tool results in older completed
+ 	        // turns (replacing them with a placeholder in the model projection),
+ 	        // then reload history. Runs before the overflow check so the freed
+ 	        // tokens may avoid a heavier summary compaction.
+ 	        if (yield* snip.shouldSnip({ messages: msgs })) {
+ 	          const result = yield* snip.execute({ sessionID })
+ 	          // Only reload when something was actually snipped. A no-op (nothing
+ 	          // eligible — e.g. all results in the tail-protection window) inserts
+ 	          // no boundary, so shouldSnip would stay true and loop forever.
+ 	          if (result.executed) continue
+ 	        }
+
+
           if (
             lastFinished &&
             lastFinished.summary !== true &&
@@ -1398,9 +1416,9 @@ export const layer = Layer.effect(
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              MessageV2.toModelMessagesEffect(msgs, model, { injectMessageIds: true }),
             ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+            const system = [...env, ...instructions, ...(skills ? [skills] : []), TURN_TAG_SYSTEM_NOTE]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1659,6 +1677,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        SessionSnip.defaultLayer,
       ),
     ),
   ),
@@ -1771,6 +1790,7 @@ export const node = LayerNode.make(layer, [
   Provider.node,
   SessionProcessor.node,
   SessionCompaction.node,
+  SessionSnip.node,
   Plugin.node,
   Command.node,
   Config.node,

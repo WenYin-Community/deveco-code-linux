@@ -33,6 +33,7 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
+import { SessionSnip } from "../../src/session/snip"
 import { SessionMessageTable } from "@opencode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -340,6 +341,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(instruction),
     Layer.provide(systemPrompt),
     Layer.provide(runtime),
+    Layer.provideMerge(SessionSnip.layer),
     Layer.provideMerge(deps),
     Layer.provide(summary),
   )
@@ -1547,7 +1549,10 @@ it.instance(
       expect(inputs).toHaveLength(2)
       const messages = inputs.at(-1)?.messages
       if (!Array.isArray(messages)) throw new Error("expected LLM messages")
-      expect(messages.at(-1)).toEqual({ role: "user", content: "second" })
+      const lastMsg = messages.at(-1)
+      expect(typeof lastMsg?.content).toBe("string")
+      expect(lastMsg?.content.startsWith("second")).toBe(true)
+      expect(lastMsg?.content).toMatch(/\n\[turn_[0-9a-z]{6}\]$/)
     }),
   3_000,
 )

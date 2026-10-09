@@ -590,6 +590,13 @@ export const layer = Layer.effect(
           result.compaction = { ...result.compaction, prune: false }
         }
 
+        // Defaults here must match DEFAULT_* constants in session/snip.ts
+       	yield* Effect.logInfo("snip config", {
+       	  auto: result.compaction?.snip?.auto ?? true,
+       	  tail_messages: result.compaction?.snip?.tail_messages ?? 15,
+       	  threshold_tokens: result.compaction?.snip?.threshold_tokens ?? 10_000,
+       	})
+
         return {
           config: result,
           directories,

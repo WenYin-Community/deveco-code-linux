@@ -74,6 +74,7 @@ export type Event =
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionCompacted
+  | EventSessionSnipped
   | EventLspUpdated
   | EventSessionDebugState
   | EventBtwStart
@@ -538,6 +539,7 @@ export type ToolStateCompleted = {
     start: number
     end: number
     compacted?: number
+    snipped?: number
   }
   attachments?: Array<FilePart>
 }
@@ -652,6 +654,18 @@ export type CompactionPart = {
   tail_start_id?: string
 }
 
+export type SnipPart = {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "snip"
+  snippedCount: number
+  replacedCount: number
+  tokensFreed: number
+  snippedTurnIds: Array<string>
+  auto: boolean
+}
+
 export type DebugStatePart = {
   id: string
   sessionID: string
@@ -675,6 +689,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | SnipPart
   | DebugStatePart
 
 export type Prompt = {
@@ -1501,6 +1516,18 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.snipped"
+        properties: {
+          sessionID: string
+          executed: boolean
+          snippedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          replacedCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          tokensFreed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          snippedTurnIds: Array<string>
+        }
+      }
+    | {
+        id: string
         type: "lsp.updated"
         properties: {
           [key: string]: unknown
@@ -2124,6 +2151,11 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+    snip?: {
+      auto?: boolean
+      tail_messages?: number
+      threshold_tokens?: number
+    }
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -5215,6 +5247,19 @@ export type EventSessionCompacted = {
   type: "session.compacted"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventSessionSnipped = {
+  id: string
+  type: "session.snipped"
+  properties: {
+    sessionID: string
+    executed: boolean
+    snippedCount: number | "NaN" | "Infinity" | "-Infinity"
+    replacedCount: number | "NaN" | "Infinity" | "-Infinity"
+    tokensFreed: number | "NaN" | "Infinity" | "-Infinity"
+    snippedTurnIds: Array<string>
   }
 }
 

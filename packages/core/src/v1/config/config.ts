@@ -161,6 +161,25 @@ export const Info = Schema.Struct({
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
+      snip: Schema.optional(
+        Schema.Struct({
+          auto: Schema.optional(Schema.Boolean).annotate({
+            description:
+              "Enable automatic history snip (replace old Read/Grep/Glob tool results with a placeholder) when accumulated tokens exceed the threshold (default: true)",
+          }),
+          tail_messages: Schema.optional(NonNegativeInt).annotate({
+            description:
+              "Number of most recent user messages whose turns are protected from snipping (default: 15)",
+          }),
+          threshold_tokens: Schema.optional(NonNegativeInt).annotate({
+            description:
+              "Accumulated token estimate since the last snip/compaction boundary that triggers an automatic snip (default: 10000)",
+          }),
+        }),
+      ).annotate({
+        description:
+          "History Snip Compact configuration. A lightweight context-compression layer that replaces Read/Grep/Glob tool results in older completed turns with a placeholder, preserving user queries and assistant final text.",
+      }),
     }),
   ),
   experimental: Schema.optional(

@@ -1506,6 +1506,7 @@ function UserMessage(props: {
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
+  const snip = createMemo(() => props.parts.find((x) => x.type === "snip"))
   const debugState = createMemo(() => props.parts.find((x) => x.type === "debug-state"))
 
   return (
@@ -1594,6 +1595,21 @@ function UserMessage(props: {
           titleAlignment="center"
           borderColor={theme.borderActive}
         />
+      </Show>
+      <Show when={snip()}>
+        <box
+          marginTop={1}
+          border={["top"]}
+          title=" Snip "
+          titleAlignment="center"
+          borderColor={theme.borderActive}
+        >
+          <box paddingLeft={2} paddingTop={1} paddingBottom={1}>
+            <text fg={theme.textMuted}>
+              Replaced {snip()!.replacedCount} tool result(s) in {snip()!.snippedCount} turn(s) · freed ~{snip()!.tokensFreed} tokens
+            </text>
+          </box>
+        </box>
       </Show>
       <Show when={debugState()}>{(part) => <DebugStatePartView part={part()} index={props.index} />}</Show>
     </>

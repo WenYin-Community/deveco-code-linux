@@ -31,6 +31,7 @@ import { Question } from "../../src/question"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "../../src/session/compaction"
+import { SessionSnip } from "../../src/session/snip"
 import { SessionDebugState } from "../../src/session/debug-state"
 import { SessionAgentMode } from "../../src/session/agent-mode/routing"
 import { ExitQueue } from "../../src/session/exit-queue"
@@ -178,6 +179,7 @@ function makePrompt() {
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provideMerge(SessionSnip.layer),
     Layer.provideMerge(deps),
   )
 }

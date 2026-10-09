@@ -36,6 +36,7 @@ import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
+import { SNIP_PLACEHOLDER, deriveShortId } from "./snip-shared"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { Effect, Schema } from "effect"
@@ -144,7 +145,7 @@ function providerMeta(metadata: Record<string, any> | undefined) {
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; injectMessageIds?: boolean },
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
@@ -209,18 +210,27 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
     if (msg.parts.length === 0) continue
 
     if (msg.info.role === "user") {
+      // Snip boundary markers carry only a SnipPart and must be invisible to
+      // the model; skip the whole message so it never enters the projection.
+      if (msg.parts.some((part) => part.type === "snip")) continue
       const userMessage: UIMessage = {
         id: msg.info.id,
         role: "user",
         parts: [],
       }
+      // Whether this user message is a real user query (has a non-synthetic
+     	// text part). Boundary/synthetic user messages are not tagged with a
+     	// turn id.
+     	let hasRealText = false
       for (const part of msg.parts) {
         // User message parts should never be empty
-        if (part.type === "text" && !part.ignored && part.text !== "")
+        if (part.type === "text" && !part.ignored && part.text !== "") {
+         	if (!part.synthetic) hasRealText = true
           userMessage.parts.push({
             type: "text",
             text: part.text,
           })
+        }
         // text/plain and directory files are converted into text parts, ignore them
         if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
           if (options?.stripMedia && isMedia(part.mime)) {
@@ -249,6 +259,20 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             type: "text",
             text: "The following tool was executed by the user",
           })
+        }
+      }
+      // Tag the last text part of a real user query with a short turn id so
+      // the model (and snip boundaries) can reference specific turns. Uses the
+      // `[turn_xxxxxx]` prefix (not `[id:...]`) to avoid being mistaken for a
+      // device/emulator identifier — see TURN_TAG_SYSTEM_NOTE in snip-shared.
+      if (hasRealText && options?.injectMessageIds) {
+       	const tag = `\n[turn_${deriveShortId(msg.info.id)}]`
+        for (let i = userMessage.parts.length - 1; i >= 0; i--) {
+          const p = userMessage.parts[i]
+          if (p.type === "text") {
+            p.text = p.text + tag
+            break
+          }
         }
       }
       if (userMessage.parts.length > 0) result.push(userMessage)
@@ -303,10 +327,21 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "tool") {
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
-            const outputText = part.state.time.compacted
-              ? "[Old tool result content cleared]"
-              : truncateToolOutput(part.state.output, options?.toolOutputMaxChars)
-            const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
+            // Snip (History Snip Compact) takes priority over prune: a snipped
+            // tool result is replaced by the generic placeholder; a pruned
+            // (`compacted`) result by the legacy cleared marker; otherwise the
+            // output is truncated to the configured max. Both snip and prune
+            // clear attachments. Call/input and toolCallId pairing are always
+            // preserved so the tool_use/tool_result structure stays API-legal.
+            const outputText = part.state.time.snipped
+              ? SNIP_PLACEHOLDER
+              : part.state.time.compacted
+                ? "[Old tool result content cleared]"
+                : truncateToolOutput(part.state.output, options?.toolOutputMaxChars)
+            const attachments =
+              part.state.time.snipped || part.state.time.compacted || options?.stripMedia
+                ? []
+                : (part.state.attachments ?? [])
 
             // For providers that don't support media in tool results, extract media files
             // (images, PDFs) to be sent as a separate user message
@@ -430,7 +465,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 export function toModelMessages(
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: { stripMedia?: boolean; toolOutputMaxChars?: number; injectMessageIds?: boolean },
 ): Promise<ModelMessage[]> {
   return Effect.runPromise(toModelMessagesEffect(input, model, options))
 }
