@@ -258,6 +258,7 @@ class SharedAcpBackend : Disposable {
                         mapOf(
                             "DEVECO_SERVER_USERNAME" to credentials.username,
                             "DEVECO_SERVER_PASSWORD" to credentials.password,
+                            "DEVECO_DISABLE_MEMORY" to "true",
                         ),
                     )
                     httpPort = candidatePort
