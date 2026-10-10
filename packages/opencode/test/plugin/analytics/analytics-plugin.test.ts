@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test"
 import { createAnalyticsPlugin, extractBuildExitCode } from "@/plugin/analytics/analytics-plugin"
 import type { CodeAttributionTracker, CodeAttributionTrackerOptions } from "@/plugin/analytics/code-attribution"
-import type { SessionStart } from "@/plugin/analytics/collector"
+import { SessionCollector, type SessionStart } from "@/plugin/analytics/collector"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
 import type {
   AiCodeAttributionEvent,
@@ -79,6 +79,7 @@ function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
       state.active = true
     }),
     recordTokenUsage: mock((_inputTokens: number, _outputTokens: number) => undefined),
+    recordUIVerificationModel: mock((_model: string | null) => undefined),
     recordBuildProjectInfo: mock((_entry: BuildProjectInfo) => undefined),
     recordToolExecution: mock(
       (_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess?: boolean) => undefined,
@@ -112,6 +113,7 @@ function createCollector(state: ReturnType<typeof createHarnessState>, calls: Re
     startSession: calls.startSession,
     recordResponseDelta: () => undefined,
     recordTokenUsage: calls.recordTokenUsage,
+    recordUIVerificationModel: calls.recordUIVerificationModel,
     recordBuildProjectInfo: calls.recordBuildProjectInfo,
     recordFileEdit: () => undefined,
     recordFileDiff: () => undefined,
@@ -210,7 +212,6 @@ test("starts ai_session for non-Huawei providers without collecting prompt conte
     providerId: "openai",
     modelId: "model-1",
     agentName: "build",
-    uiVerificationModel: null,
   })
   expect(JSON.stringify(harness.startSession.mock.calls[0]?.[0])).not.toContain("private prompt")
 })
@@ -469,32 +470,179 @@ test("still flags non-build tools whose output contains error text", async () =>
   expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, false, undefined, undefined)
 })
 
-test("captures the ui_verification model from the config hook and starts sessions with it", async () => {
+test("has no config hook and starts sessions without a ui_verification model", async () => {
   const harness = createHarness()
-  // Drive chat.message on the same hooks object: the helper would call plugin()
-  // again and produce a fresh closure with uiVerificationModel reset to null.
   const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
-  await hooks.config?.({ agent: { ui_verification: { model: "myprovider/qwen3-vl-plus" } } } as never)
+  // The model is no longer snapshotted from config; it is recorded per verify_ui call.
+  expect(hooks.config).toBeUndefined()
 
   await hooks["chat.message"]!(
     { sessionID: "session-1", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
     { message: { id: "message-1" }, parts: [] } as never,
   )
 
-  expect(harness.startSession.mock.calls[0]?.[0]?.uiVerificationModel).toBe("myprovider/qwen3-vl-plus")
+  const input = harness.startSession.mock.calls[0]?.[0]
+  expect(input).not.toHaveProperty("uiVerificationModel")
+  expect(input?.sessionID).toBe("session-1")
 })
 
-test("starts sessions with a null ui_verification model when the config hook sees no agent entry", async () => {
+test("records the ui_verification model from a verify_ui result", async () => {
   const harness = createHarness()
-  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
-  await hooks.config?.({} as never)
+  const hooks = await startSession(harness, "openai")
 
-  await hooks["chat.message"]!(
-    { sessionID: "session-1", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
-    { message: { id: "message-1" }, parts: [] } as never,
+  await hooks["tool.execute.before"]!({ tool: "verify_ui", sessionID: "session-1", callID: "verify-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "verify_ui", sessionID: "session-1", callID: "verify-1", args: {} },
+    { title: "UI verification", output: "ok", metadata: { id: "task-1", uiVerificationModel: "qwen3-vl-plus" } },
   )
 
-  expect(harness.startSession.mock.calls[0]?.[0]?.uiVerificationModel).toBe(null)
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(1)
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledWith("qwen3-vl-plus")
+})
+
+test("keeps the last ui_verification model when verify_ui runs twice in one turn", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  for (const [callID, model] of [
+    ["verify-1", "qwen3-vl-plus"],
+    ["verify-2", "qwen3-vl-max"],
+  ] as const) {
+    await hooks["tool.execute.before"]!({ tool: "verify_ui", sessionID: "session-1", callID }, { args: {} })
+    await hooks["tool.execute.after"]!(
+      { tool: "verify_ui", sessionID: "session-1", callID, args: {} },
+      { title: "UI verification", output: "ok", metadata: { uiVerificationModel: model } },
+    )
+  }
+
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(2)
+  expect(harness.recordUIVerificationModel).toHaveBeenLastCalledWith("qwen3-vl-max")
+})
+
+test("ignores ui_verification metadata from another session or a different tool", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  // Another session's verify_ui result must not leak into the tracked session.
+  await hooks["tool.execute.before"]!({ tool: "verify_ui", sessionID: "session-2", callID: "verify-2" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "verify_ui", sessionID: "session-2", callID: "verify-2", args: {} },
+    { title: "UI verification", output: "ok", metadata: { uiVerificationModel: "other-session-model" } },
+  )
+  // Only verify_ui consumes a multimodal model; a same-named key on another tool is ignored.
+  await hooks["tool.execute.before"]!({ tool: "get_ui_verification_log", sessionID: "session-1", callID: "log-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "get_ui_verification_log", sessionID: "session-1", callID: "log-1", args: {} },
+    { title: "Log", output: "ok", metadata: { uiVerificationModel: "not-a-model-call" } },
+  )
+
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(0)
+})
+
+test("ignores a verify_ui result that arrives after the session event was reported", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+  await finishSession(hooks)
+  // session.idle uploaded and cleared the collector context (isActive=false).
+  expect(harness.isActive()).toBe(false)
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(0)
+
+  // A late tool result from the already-reported window must not be recorded.
+  await hooks["tool.execute.before"]!({ tool: "verify_ui", sessionID: "session-1", callID: "late-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "verify_ui", sessionID: "session-1", callID: "late-1", args: {} },
+    { title: "UI verification", output: "ok", metadata: { uiVerificationModel: "late-model" } },
+  )
+
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(0)
+})
+
+test("end-to-end: verify_ui metadata reaches the uploaded ai_session event per window", async () => {
+  // Real SessionCollector wired to the real plugin: only the uploader and the
+  // external boundaries are stubbed, so this covers metadata -> after hook -> buildEvent.
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  const uploads: AnalyticsSubmission[] = []
+  const plugin = createAnalyticsPlugin({
+    collector,
+    uploader: {
+      restorePending: async () => undefined,
+      startPeriodicFlush: () => undefined,
+      stopPeriodicFlush: () => undefined,
+      clearQueue: async () => undefined,
+      shutdown: async () => undefined,
+      upload: async (submission) => {
+        uploads.push(submission)
+        return true
+      },
+      flush: async () => ({ success: true }),
+    },
+    isLoggedIn: async () => true,
+    isJwtExpired: async () => false,
+    toolImprovementEnabled: async () => false,
+    diagnostic: async () => undefined,
+    projectId: async () => "550e8400-e29b-41d4-a716-446655440000",
+    codeAttribution: async () => ({
+      setEnabled: async () => undefined,
+      purge: async () => undefined,
+      beforeAiTool: async () => undefined,
+      afterAiTool: async () => undefined,
+      poll: async () => undefined,
+      shutdown: async () => undefined,
+    }),
+    version: () => "1.2.3",
+  })
+  const hooks = await plugin({ directory: "/tmp/analytics-e2e" } as never)
+  const startTurn = () =>
+    hooks["chat.message"]!(
+      { sessionID: "session-e2e", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
+      { message: { id: "message-1" }, parts: [] } as never,
+    )
+  const endTurn = () =>
+    hooks.event!({ event: { type: "session.idle", properties: { sessionID: "session-e2e" } } as never })
+
+  await startTurn()
+  await hooks["tool.execute.before"]!(
+    { tool: "verify_ui", sessionID: "session-e2e", callID: "verify-e2e" },
+    { args: {} },
+  )
+  await hooks["tool.execute.after"]!(
+    { tool: "verify_ui", sessionID: "session-e2e", callID: "verify-e2e", args: {} },
+    { title: "UI verification", output: "ok", metadata: { id: "task-1", uiVerificationModel: "e2e-actual-model" } },
+  )
+  await endTurn()
+
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0]).toMatchObject({
+    action: ANALYTICS_ACTION.AI_SESSION,
+    event: { uiVerificationModel: "e2e-actual-model" },
+  })
+
+  // Window semantics: the next turn starts empty, so a turn without verify_ui reports null.
+  await startTurn()
+  await endTurn()
+
+  expect(uploads).toHaveLength(2)
+  expect(uploads[1]).toMatchObject({ action: ANALYTICS_ACTION.AI_SESSION, event: { uiVerificationModel: null } })
+})
+
+test("ignores null, empty, and malformed ui_verification metadata", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  for (const [index, metadata] of [
+    { uiVerificationModel: null },
+    { uiVerificationModel: "" },
+    {},
+    { uiVerificationModel: 42 },
+  ].entries()) {
+    await hooks["tool.execute.before"]!({ tool: "verify_ui", sessionID: "session-1", callID: `verify-${index}` }, { args: {} })
+    await hooks["tool.execute.after"]!(
+      { tool: "verify_ui", sessionID: "session-1", callID: `verify-${index}`, args: {} },
+      { title: "UI verification", output: "ok", metadata },
+    )
+  }
+
+  expect(harness.recordUIVerificationModel).toHaveBeenCalledTimes(0)
 })
 
 test("accumulates step-finish token usage only for the tracked session", async () => {

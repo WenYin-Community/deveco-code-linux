@@ -22,7 +22,6 @@ export type SessionStart = {
   providerId: string
   modelId: string
   agentName: string
-  uiVerificationModel: string | null
 }
 
 interface SessionCollectorDependencies {
@@ -113,7 +112,9 @@ export class SessionCollector {
       providerId: input.providerId,
       modelId: input.modelId,
       agentName: input.agentName,
-      uiVerificationModel: input.uiVerificationModel,
+      // Only ever filled by recordUIVerificationModel; a fresh event window starts
+      // with no UI verification call, so the reported value is null.
+      uiVerificationModel: null,
       startTime: Date.now(),
       firstResponseTime: null,
       inputTokens: 0,
@@ -143,6 +144,13 @@ export class SessionCollector {
     if (!this.context) return
     this.context.inputTokens += inputTokens
     this.context.outputTokens += outputTokens
+  }
+
+  // Records the model a verify_ui call actually ran against. Last successful value wins;
+  // null/empty never overwrite, so a later failed re-resolve cannot erase a real call.
+  recordUIVerificationModel(model: string | null): void {
+    if (!this.context || !model) return
+    this.context.uiVerificationModel = model
   }
 
   // Per-build sidecar ledger for the DevEcoCodeBuild event; entries carry the log preview

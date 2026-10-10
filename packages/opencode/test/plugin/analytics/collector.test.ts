@@ -11,7 +11,6 @@ test("ai_session contains only approved aggregate fields", async () => {
     providerId: "openai",
     modelId: "model-1",
     agentName: "build",
-    uiVerificationModel: null,
   })
   collector.recordResponseDelta()
   collector.recordFileEdit("/Users/alice/private/src/a.ts")
@@ -33,6 +32,8 @@ test("ai_session contains only approved aggregate fields", async () => {
   expect(event?.toolExecutions[0]?.isSuccess).toBe(false)
   expect(event?.isFirstBuildSuccess).toBe(null)
   expect(event?.isFinalBuildSuccess).toBe(null)
+  // No verify_ui call in this turn: the field stays null instead of echoing config.
+  expect(event?.uiVerificationModel).toBe(null)
 
   const json = JSON.stringify(event)
   for (const forbidden of [
@@ -69,7 +70,6 @@ test("tracks devecocli build first/final results", async () => {
     providerId: "deveco",
     modelId: "deepseek-chat",
     agentName: "build",
-    uiVerificationModel: null,
   })
   collector.recordBuildExecution(false)
   collector.recordBuildExecution(true)
@@ -89,7 +89,6 @@ test("does not infer build results from ordinary tool executions", async () => {
     providerId: "deveco",
     modelId: "deepseek-chat",
     agentName: "build",
-    uiVerificationModel: null,
   })
   collector.recordToolExecution("bash", 5000, false)
   collector.recordBuildExecution(true)
@@ -99,7 +98,7 @@ test("does not infer build results from ordinary tool executions", async () => {
   expect(event?.isFinalBuildSuccess).toBe(true)
 })
 
-test("accumulates token usage and passes the configured ui_verification model through", async () => {
+test("accumulates token usage and records the ui_verification model actually used", async () => {
   const collector = new SessionCollector({ analyticsEnabled: async () => true })
   collector.setLoggedIn(true)
   collector.startSession({
@@ -109,15 +108,91 @@ test("accumulates token usage and passes the configured ui_verification model th
     providerId: "deveco",
     modelId: "glm-5",
     agentName: "build",
-    uiVerificationModel: "myprovider/qwen3-vl-plus",
   })
   collector.recordTokenUsage(120, 45)
   collector.recordTokenUsage(80, 15)
+  // The plugin only calls this after a verify_ui tool result carrying the bound model.
+  collector.recordUIVerificationModel("qwen3-vl-plus")
 
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.inputTokens).toBe(200)
   expect(event?.outputTokens).toBe(60)
-  expect(event?.uiVerificationModel).toBe("myprovider/qwen3-vl-plus")
+  expect(event?.uiVerificationModel).toBe("qwen3-vl-plus")
+})
+
+test("reports a null ui_verification model when the turn never called verify_ui", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-no-verify",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+  })
+  collector.recordToolExecution("bash", 10, true)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.uiVerificationModel).toBe(null)
+})
+
+test("keeps the last successfully recorded ui_verification model across calls", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-multi-verify",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+  })
+  collector.recordUIVerificationModel("model-x")
+  collector.recordUIVerificationModel("model-y")
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.uiVerificationModel).toBe("model-y")
+})
+
+test("null and empty ui_verification models never overwrite a recorded model", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-null-verify",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+  })
+  collector.recordUIVerificationModel("model-a")
+  collector.recordUIVerificationModel(null)
+  collector.recordUIVerificationModel("")
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.uiVerificationModel).toBe("model-a")
+})
+
+test("ignores ui_verification models recorded without an active session context", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+
+  // No context yet: must be a no-op rather than throwing.
+  collector.recordUIVerificationModel("model-before")
+  expect(await collector.buildEvent("project-id", "/tmp/non-harmony")).toBe(null)
+
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-cleared",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "glm-5",
+    agentName: "build",
+  })
+  collector.clear()
+  collector.recordUIVerificationModel("model-after-clear")
+  expect(await collector.buildEvent("project-id", "/tmp/non-harmony")).toBe(null)
 })
 
 test("records first/final build elapsed from prompt submission, not build duration", async () => {
@@ -131,7 +206,6 @@ test("records first/final build elapsed from prompt submission, not build durati
     providerId: "deveco",
     modelId: "glm-5",
     agentName: "build",
-    uiVerificationModel: null,
   })
   // Prompt submitted at 00:00:00; first build finishes 60s later and fails, final build finishes 180s later.
   setSystemTime(new Date("2026-01-01T00:01:00Z"))
@@ -158,7 +232,6 @@ test("keeps build elapsed null and token counts zero when no build or llm step r
     providerId: "deveco",
     modelId: "glm-5",
     agentName: "build",
-    uiVerificationModel: null,
   })
   collector.recordToolExecution("bash", 100, true)
 
@@ -190,7 +263,6 @@ test("emits a build project event listing every build of the turn", async () => 
     providerId: "deveco",
     modelId: "glm-5",
     agentName: "build",
-    uiVerificationModel: null,
   })
   collector.recordBuildProjectInfo({
     toolName: "build_project",
@@ -230,7 +302,6 @@ test("returns null build project event when the turn had no build", async () => 
     providerId: "deveco",
     modelId: "glm-5",
     agentName: "build",
-    uiVerificationModel: null,
   })
 
   expect(collector.buildProjectEvent()).toBe(null)
@@ -246,7 +317,6 @@ test("classifies tools by origin and keeps custom, MCP, and skill counts separat
     providerId: "deveco",
     modelId: "model-1",
     agentName: "build",
-    uiVerificationModel: null,
   })
   const builtin = [
     "invalid",
@@ -319,7 +389,6 @@ test("uses skill names for details and counts without changing tool identity", a
     providerId: "deveco",
     modelId: "model-1",
     agentName: "build",
-    uiVerificationModel: null,
   })
   for (const name of ["arkts-error-fixes", "arkts-error-fixes", "read", "build_project", "", "   ", undefined]) {
     collector.recordToolExecution("skill", 10, true, false, "builtin", name)

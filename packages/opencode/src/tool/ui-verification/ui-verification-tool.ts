@@ -66,6 +66,11 @@ type RuntimeState = {
   params: UiVerifyParams
 }
 
+// Tool result metadata consumed by the analytics plugin's tool.execute.after hook
+// (see plugin/analytics/analytics-plugin.ts). `uiVerificationModel` is the model the
+// ui-verification MCP child is actually bound to; null means no model call happened.
+type UiVerifyMetadata = { id?: string; uiVerificationModel?: string | null }
+
 const TOOL_NAME_MAP: Record<ToolName, string> = {
   verify_ui: "verifyUI",
   get_ui_verification_log: "getLog",
@@ -80,8 +85,8 @@ let bound = ""
 let runtime: RuntimeState | undefined
 
 export const VerifyUiTool: ReturnType<
-  typeof define<typeof VerifyUiParameters, { id?: string }, Session.Service, "verify_ui">
-> = define<typeof VerifyUiParameters, { id?: string }, Session.Service, "verify_ui">(
+  typeof define<typeof VerifyUiParameters, UiVerifyMetadata, Session.Service, "verify_ui">
+> = define<typeof VerifyUiParameters, UiVerifyMetadata, Session.Service, "verify_ui">(
   "verify_ui",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -89,7 +94,7 @@ export const VerifyUiTool: ReturnType<
       description:
         "在提供自然语言描述的功能步骤之后，本工具可以在HarmonyOS设备上运行应用，根据截图进行判断，执行UI操作，验证功能是否可以正确完成。\n注意：当前支持点击、双击、滑动、长按、按键等触控操作，以及鼠标和键盘操作。\n返回的successPart、failPart字段描述了本次验证过程的主要步骤，id字段是本次校验的唯一标识符，可用于后续的日志查询。\n使用场景：\n开发时验证：通过自然语言描述测试用例，自动执行UI操作，验证应用功能。\n获取运行时日志：配合getLog工具使用，在执行UI操作的同时，收集设备日志，帮助定位问题。\n保存截图：配合saveScreenshot工具使用，在执行UI操作的同时，保存截图，帮助定位问题。",
       parameters: VerifyUiParameters,
-      execute: (args, ctx): Effect.Effect<ExecuteResult<{ id?: string }>> =>
+      execute: (args, ctx): Effect.Effect<ExecuteResult<UiVerifyMetadata>> =>
         Effect.gen(function* () {
           yield* ctx.ask({ permission: "verify_ui", metadata: {}, patterns: ["*"], always: ["*"] })
           const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
@@ -98,7 +103,13 @@ export const VerifyUiTool: ReturnType<
           }
           const params = yield* Effect.promise(() => resolveUIVerifyParams(worktree))
           if (!params.baseURL || !params.apiKey || !params.modelName) {
-            return { title: "UI verification unavailable", output: MISSING_MODEL_MESSAGE, metadata: {} }
+            // Unresolvable credentials/params: no model was called, so report no model
+            // rather than the absent config value.
+            return {
+              title: "UI verification unavailable",
+              output: MISSING_MODEL_MESSAGE,
+              metadata: { uiVerificationModel: null },
+            }
           }
 
           const bundleName = args.bundleName ?? (yield* Effect.promise(() => readBundleName(worktree)))
@@ -113,7 +124,11 @@ export const VerifyUiTool: ReturnType<
           return {
             title: "UI verification",
             output: textFromCallResult(result),
-            metadata: readResultId(result),
+            // Report what the MCP child is actually bound to. `resolveUIVerifyParams` above
+            // is only a pre-check: ensureInitialized() reuses an already-started child when
+            // the binding is still valid, so a config hot-reload can leave runtime.params
+            // (the values written into the child's UI_VERIFY_* env) different from `params`.
+            metadata: { ...readResultId(result), uiVerificationModel: runtime?.params.modelName ?? null },
           }
         }).pipe(Effect.orDie),
     }

@@ -25,6 +25,7 @@ interface AnalyticsCollectorDependency {
   startSession(input: SessionStart): void
   recordResponseDelta(): void
   recordTokenUsage(inputTokens: number, outputTokens: number): void
+  recordUIVerificationModel(model: string | null): void
   recordBuildProjectInfo(entry: BuildProjectInfo): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
@@ -123,7 +124,6 @@ async function createAttribution(dependencies: AnalyticsPluginDependencies, proj
 class AnalyticsRuntime {
   private readonly toolStartTimes = new Map<string, number>()
   private readonly attributionCalls = new Set<string>()
-  private uiVerificationModel: string | null = null
   private sessionProviderId = "unknown"
   private attributionEligibility: boolean | undefined
   private uploaderReady = false
@@ -163,9 +163,6 @@ class AnalyticsRuntime {
 
   hooks(): Hooks {
     return {
-      config: async (cfg) => {
-        this.uiVerificationModel = cfg.agent?.ui_verification?.model ?? null
-      },
       event: async ({ event }) => this.event(event),
       "chat.message": async (input, output) => this.chatMessage(input, output),
       "tool.execute.before": async (input) => this.toolBefore(input),
@@ -312,7 +309,6 @@ class AnalyticsRuntime {
       providerId,
       modelId,
       agentName,
-      uiVerificationModel: this.uiVerificationModel,
     })
     await this.log(`Session started, provider: ${providerId}, model: ${modelId}, agent: ${agentName}`)
   }
@@ -347,9 +343,25 @@ class AnalyticsRuntime {
       input.source,
       input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
     )
+    this.recordUIVerificationModel(input, metadata)
     this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
     this.recordDevecoBuilds(metadata)
     this.recordFileDiff(input, metadata)
+  }
+
+  // The ui_verification tool advertises the model its MCP child is actually bound to on
+  // the verify_ui result metadata. Only verify_ui counts: get_ui_verification_log and
+  // save_ui_screenshot do not consume a multimodal model.
+  private recordUIVerificationModel(
+    input: Parameters<ToolAfterHook>[0],
+    metadata: Record<string, unknown> | undefined,
+  ) {
+    if (input.tool !== "verify_ui") return
+    // Same ownership guard as recordTokenUsage: ignore other sessions' tool results.
+    if (this.dependencies.collector.getSessionID() !== input.sessionID) return
+    const model = metadata?.uiVerificationModel
+    if (typeof model !== "string" || !model) return
+    this.dependencies.collector.recordUIVerificationModel(model)
   }
 
   private recordBuildProject(

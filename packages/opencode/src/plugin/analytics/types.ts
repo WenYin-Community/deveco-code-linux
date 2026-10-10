@@ -68,8 +68,9 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   firstResultElapsed: number
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
-  // Multimodal model configured via agent.ui_verification.model ("provider/model"), null when unset.
-  // Cross-reference toolExecutions verify_ui entries to distinguish configured-but-unused from active use.
+  // Model the last successful verify_ui call of this event window was actually bound to
+  // (the ui-verification MCP child's model), null when verify_ui was never called or its
+  // params could not be resolved. The uploader serializes null as the string "null".
   uiVerificationModel: string | null
   // Sum of step-finish input/output tokens for this session turn; matches the session row's
   // tokens_input/tokens_output accumulation (projector sums the same step-finish parts). output excludes reasoning.
