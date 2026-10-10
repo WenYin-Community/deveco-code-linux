@@ -253,9 +253,10 @@ export function DevEcoHomeBody(props: {
     }
 
     const result = await sdk.client.global.retryAgreementUpload({ force: false })
-    if (result.data?.upload.state === "review_required")
+    if (result.data?.upload.state === "review_required") {
       applyGate({ step: "privacy", reviewRevision: result.data.upload.revision })
       return
+    }
     if (result.error) {
       logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
     }

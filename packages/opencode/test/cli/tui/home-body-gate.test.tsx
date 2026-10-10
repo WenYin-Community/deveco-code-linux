@@ -396,6 +396,26 @@ test("third-party provider users configure DevEco Studio before entering", async
   expect(after).not.toContain("Agreements and privacy")
 })
 
+test("an all-clear first gate run for a deveco-only user lands on ready instead of hanging on the setup check", async () => {
+  // Unlike the third-party cases above — which return from the product-agreement
+  // branch — a deveco-only user with everything in order reaches the final
+  // upload retry, and only the fall-through after it can flip the gate to
+  // ready. A `return` that escapes the `review_required` branch swallows that
+  // transition and the UI stays on "Checking setup..." forever.
+  await using panel = await mount({
+    uploadState: "uploaded",
+    accepted: true,
+    env: { studioConfigured: true },
+  })
+
+  const frame = await panel.frame("PROMPT_READY")
+  expect(frame).not.toContain("Checking setup")
+  expect(frame).not.toContain("Agreements and privacy")
+  expect(frame).not.toContain("Configure DevEco Studio Path")
+  // Ready must come *after* the upload retry ran, not from an earlier exit.
+  expect(panel.retries()).toBe(1)
+})
+
 test("a later gate decision is not shadowed by the real-name flag of an earlier one", async () => {
   // Run 1 blocks on real-name, and `initialRealName` is a one-shot hint the
   // onboarding only reads while mounting. Once the user completes real-name in
