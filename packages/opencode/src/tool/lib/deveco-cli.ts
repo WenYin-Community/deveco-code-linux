@@ -142,9 +142,26 @@ function windowsArg(input: string) {
   return `"${input.replaceAll('"', '""')}"`
 }
 
-export function resolveDevecoCodeProxyLauncher(main = Bun.main, executable = process.execPath) {
-  // Bun exposes an embedded entry under /$bunfs in compiled binaries; the executable must re-enter itself directly.
+// 开发态下 shim 应重入的入口：一个只加载 devecocli 代理的瘦入口。
+// 不能用 Bun.main：TUI 的工具在 Worker 线程里执行，那里 Bun.main 是 cli/tui/worker.ts，
+// 它不处理 __devecocli-proxy（会把 worker 起起来并挂死），于是所有 devecocli 调用都不写事件。
+// 也不能用 src/index.ts：它会拉入 TUI 的 .tsx，依赖 cwd 下的 tsconfig，换目录即加载失败。
+const PROXY_ENTRY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../deveco-cli/proxy.ts")
+
+export function resolveDevecoCodeProxyLauncher(
+  main = Bun.main,
+  executable = process.execPath,
+  proxyEntry = PROXY_ENTRY,
+) {
+  // 编译产物：入口嵌在 /$bunfs（Windows 为 ~BUN/root），直接重入自身。
+  // 放在最前是防御性的：bunfs 里并不存在 .ts 源文件，后面的判断本会得出同一个结果，
+  // 但显式短路更清楚，也不依赖 fs 在虚拟文件系统上的行为。
   if (main.startsWith("/$bunfs/") || /^[A-Za-z]:[\\/]~BUN[\\/]root[\\/]/i.test(main)) return [executable]
+  // 开发态：优先用与 cwd 无关的瘦入口（见 src/deveco-cli/proxy.ts）。
+  if (exists(proxyEntry) && /\.[cm]?[jt]s$/i.test(proxyEntry)) {
+    return [executable, "run", "--conditions=browser", proxyEntry]
+  }
+  // 兜底：瘦入口缺失时沿用调用方进程的入口（例如非编译的 bun build 产物形态）。
   if (exists(main) && /\.[cm]?[jt]s$/i.test(main)) {
     return [executable, "run", "--conditions=browser", main]
   }

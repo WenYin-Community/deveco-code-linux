@@ -45,18 +45,41 @@ describe("deveco-cli runtime", () => {
     ).toEqual(["C:\\app\\deveco.exe"])
   })
 
-  test("resolveDevecoCodeProxyLauncher() runs a source entry through Bun", async () => {
+  test("resolveDevecoCodeProxyLauncher() prefers the cwd-independent proxy entry in source runs", async () => {
+    await using tmp = await tmpdir()
+    // TUI 的工具在 Worker 线程里执行，那里 Bun.main 是 worker 脚本：它不处理 __devecocli-proxy，
+    // 一旦被写进 shim，所有 devecocli 调用都会挂死且不写事件——所以绝不能选它。
+    const worker = path.join(tmp.path, "src", "cli", "tui", "worker.ts")
+    const proxyEntry = path.join(tmp.path, "src", "deveco-cli", "proxy.ts")
+    await fs.mkdir(path.dirname(worker), { recursive: true })
+    await fs.mkdir(path.dirname(proxyEntry), { recursive: true })
+    await Bun.write(worker, "console.log('worker')\n")
+    await Bun.write(proxyEntry, "console.log('proxy')\n")
+
+    const launcher = resolveDevecoCodeProxyLauncher(worker, "/bin/bun", proxyEntry)
+    expect(launcher).toEqual(["/bin/bun", "run", "--conditions=browser", proxyEntry])
+    expect(launcher).not.toContain(worker)
+  })
+
+  test("resolveDevecoCodeProxyLauncher() falls back to the caller entry when the proxy entry is missing", async () => {
     await using tmp = await tmpdir()
     const main = path.join(tmp.path, "src", "index.ts")
     await fs.mkdir(path.dirname(main), { recursive: true })
     await Bun.write(main, "console.log('ok')\n")
 
-    expect(resolveDevecoCodeProxyLauncher(main, "/bin/bun")).toEqual([
-      "/bin/bun",
-      "run",
-      "--conditions=browser",
-      main,
-    ])
+    expect(
+      resolveDevecoCodeProxyLauncher(main, "/bin/bun", path.join(tmp.path, "missing", "proxy.ts")),
+    ).toEqual(["/bin/bun", "run", "--conditions=browser", main])
+  })
+
+  test("resolveDevecoCodeProxyLauncher() points the shim at the committed slim proxy entry", async () => {
+    // 默认参数：main = Bun.main（本测试文件，存在），proxyEntry = 仓库里的 src/deveco-cli/proxy.ts。
+    // 若那个文件被删除或漏提交，launcher 会静默退化到 main（Worker 线程下 = 原 bug），
+    // 所以这里断言瘦入口确实是仓库里存在的那一个。
+    const launcher = resolveDevecoCodeProxyLauncher(undefined, "/bin/bun", undefined)
+    const entry = launcher.at(-1)!
+    expect(entry.endsWith(path.join("deveco-cli", "proxy.ts"))).toBe(true)
+    expect(await Bun.file(entry).exists()).toBe(true)
   })
 
   test("resolveBundledDevecoCliEntry() uses test entry override", async () => {
@@ -325,11 +348,14 @@ describe("deveco-cli runtime", () => {
     expect(marker.trim()).toBe(path.resolve(cli))
 
     if (process.platform === "win32") {
-      expect(await Bun.file(path.join(binDir, "devecocli.cmd")).exists()).toBe(true)
-      expect(await Bun.file(path.join(binDir, "devecocli.cmd")).text()).toContain("__devecocli-proxy -- %*")
+      const shim = await Bun.file(path.join(binDir, "devecocli.cmd")).text()
+      expect(shim).toContain("__devecocli-proxy -- %*")
+      // .cmd 里也必须写入与 cwd 无关的瘦入口（源码态），否则 Windows 上同样会挂死。
+      expect(shim).toContain("proxy.ts")
     } else {
-      expect(await Bun.file(path.join(binDir, "devecocli")).exists()).toBe(true)
-      expect(await Bun.file(path.join(binDir, "devecocli")).text()).toContain('__devecocli-proxy -- "$@"')
+      const shim = await Bun.file(path.join(binDir, "devecocli")).text()
+      expect(shim).toContain('__devecocli-proxy -- "$@"')
+      expect(shim).toContain("proxy.ts")
     }
 
     __resetDevecoCliShellEnvCache()
@@ -340,6 +366,64 @@ describe("deveco-cli runtime", () => {
     expect(env?.DEVECO_CODE_AUTH_DIR).toBe(Global.Path.config)
     expect(env?.DEVECO_CLI_DISABLE_UPDATE).toBe("all")
   })
+
+  // 回归：shim 必须能从「非包目录」的 cwd 跑通并写出 CLI 事件。
+  // 这条用例同时能抓住两类回归——shim 指向 worker.ts 会挂死（原 bug），
+  // 或指向依赖 cwd 下 tsconfig 的入口（如 src/index.ts）会加载失败。
+  // 注意：shim 在**子进程**里解析内置 CLI 入口，进程内的 __setTestDevecoCliEntry 覆盖不会被
+  // 继承，所以这里跑的是仓库自带的 @deveco/deveco-cli。断言只锁定我们自己的契约（事件形态 +
+  // 不再挂死），不依赖那个 CLI 的具体输出或退出码。
+  test.skipIf(process.platform === "win32")(
+    "ensureDevecoCliShim() shim runs devecocli from an unrelated cwd and records a CLI event",
+    async () => {
+      await using tmp = await tmpdir()
+      const binDir = path.join(tmp.path, "bin")
+      expect(await ensureDevecoCliShim(binDir)).toBe(binDir)
+      const events = path.join(tmp.path, "events.jsonl")
+      const proc = Bun.spawn({
+        cmd: [path.join(binDir, "devecocli"), "docs", "search", "@State"],
+        cwd: tmp.path,
+        env: { ...process.env, DEVECO_CODE_CLI_EVENT_FILE: events },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      // 守卫只为兜底：真挂死时杀掉进程，让下面的事件断言失败，而不是拖住 CI 两分钟。
+      const guard = setTimeout(() => proc.kill(9), 20_000)
+      const exitCode = await proc.exited
+      clearTimeout(guard)
+
+      const lines = (await Bun.file(events).text().catch(() => "")).split(/\r?\n/).filter(Boolean)
+      expect(lines, `shim exited with ${exitCode} but wrote no CLI event`).toHaveLength(1)
+      expect(JSON.parse(lines[0]!)).toMatchObject({ command: "docs", subcommand: "search" })
+    },
+    30_000,
+  )
+
+  test.skipIf(process.platform === "win32")(
+    "ensureDevecoCliShim() shim records no CLI event for usage tokens",
+    async () => {
+      await using tmp = await tmpdir()
+      const binDir = path.join(tmp.path, "bin")
+      expect(await ensureDevecoCliShim(binDir)).toBe(binDir)
+      const events = path.join(tmp.path, "events.jsonl")
+      const proc = Bun.spawn({
+        cmd: [path.join(binDir, "devecocli"), "--version"],
+        cwd: tmp.path,
+        env: { ...process.env, DEVECO_CODE_CLI_EVENT_FILE: events },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const guard = setTimeout(() => proc.kill(9), 20_000)
+      const exitCode = await proc.exited
+      clearTimeout(guard)
+
+      // 挂死被守卫 SIGKILL（137）时同样"没有事件文件"，只断言文件不存在会假通过，
+      // 所以必须同时断言正常退出。`--version` 是纯 flag，真 CLI 必定 exit 0。
+      expect(exitCode).toBe(0)
+      expect(await Bun.file(events).exists()).toBe(false)
+    },
+    30_000,
+  )
 
   test("runBundledDevecoCli() invokes the bundled entry instead of global devecocli", async () => {
     await using tmp = await tmpdir()
