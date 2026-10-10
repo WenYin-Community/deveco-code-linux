@@ -414,7 +414,6 @@ export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult 
   }
 
   // S-SEL-2: no declaration → implicit default
-  // default is full-access (read-only is too restrictive for other features)
   return { profile_id: "full-access", is_implicit: true, source_layer: "global" }
 }
 

@@ -750,6 +750,8 @@ export const ShellTool = Tool.define(
       // Sandbox: resolve effective profile from config files, then prepare
       // command via native runtime (FR-CFG-010/011, FR-OBS-001/002, FR-FAIL-001).
       // On macOS: prepare() generates a Seatbelt policy wrapped in sandbox-exec.
+      // full-access skips prepare() and spawns directly — sandbox-exec with
+      // Unrestricted filesystem still blocks macOS system services (§8.22).
       // On non-macOS: sandbox is macOS-only, commands execute without sandbox.
       const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const commandTag = input.command.trim().split(/\s+/)[0] || "unknown"
@@ -799,7 +801,9 @@ export const ShellTool = Tool.define(
       let failureStage: string | undefined
       let errorType: string | undefined
 
-      if (isMac && profile) {
+      // full-access: direct execution without sandbox-exec. read-only/workspace
+      // go through native prepare() to generate Seatbelt policy.
+      if (isMac && profile && profile.profile_id !== "full-access") {
         const prepareRequest = toNativePrepareRequest(profile, {
           executable: input.shell,
           args: ["-c", input.command],
@@ -869,7 +873,7 @@ export const ShellTool = Tool.define(
         ),
       ])
 
-      const enforcementResult = isMac ? "applied" : "bypassed"
+      const enforcementResult = isMac ? (profile?.profile_id === "full-access" ? "bypassed" : "applied") : "bypassed"
       const executionResult = exit.kind === "exit" ? (exit.code === 0 ? "success" : "failed") : exit.kind === "timeout" ? "timeout" : "cancelled"
       const cleanupResult = exit.kind === "exit" ? "none" : "killed"
       const finishedParts = [
