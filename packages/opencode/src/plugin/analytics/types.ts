@@ -18,12 +18,33 @@ export interface ToolSummary {
   count: number
 }
 
+// The buckets recordToolExecution maintains. devecoCliCommands is deliberately not a ToolBucket:
+// it is fed by the CLI event channel, not by tool executions.
+export type ToolBucket = "builtinTools" | "mcpTools" | "skillTools" | "customTools"
+
 export interface Operations {
   builtinTools: ToolSummary[]
   mcpTools: ToolSummary[]
   skillTools: ToolSummary[]
   customTools: ToolSummary[]
+  // devecocli invocations, keyed by the first two command levels ("docs.search", "build").
+  // Every executed call counts, including failed ones; the CLI-side usage-token rule already
+  // dropped help/version before the event was written.
+  devecoCliCommands: ToolSummary[]
 }
+
+// Session task classification. Only "default" is produced in this iteration; A2H/D2C are
+// reserved for the upcoming task-type detection. Storage only checks that the value is a string,
+// so adding a member here does not need a schema change (it does not narrow storage).
+export type TaskType = "default" | "A2H" | "D2C"
+
+export const DEFAULT_TASK_TYPE: TaskType = "default"
+
+// Sentinel for "no UI reconstruction check ran in this event window". It is deliberately
+// negative so downstream analysis can filter `uiReconstructionScore >= 0` before averaging;
+// -1 must never enter a mean. (Unlike uiVerificationModel's null, a number keeps the field
+// type-stable for the platform; the uploader does not rewrite it.)
+export const UI_RECONSTRUCTION_SCORE_UNAVAILABLE = -1
 
 export interface AnalyticsEnvironmentFields {
   sourceType: AnalyticsSourceType
@@ -57,6 +78,9 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   sessionid: string
   messageId: string
   agentName: string
+  // Session task classification for this event window. Fixed to "default" until task-type
+  // detection lands; storage only validates that it is a string.
+  taskType: TaskType
   projectId: string
   bundleName: string
   modifiedFileCount: number
@@ -72,6 +96,10 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   // (the ui-verification MCP child's model), null when verify_ui was never called or its
   // params could not be resolved. The uploader serializes null as the string "null".
   uiVerificationModel: string | null
+  // UI reconstruction score for this window, or UI_RECONSTRUCTION_SCORE_UNAVAILABLE (-1)
+  // when the turn ran no verify_ui-driven reconstruction. Storage only validates number;
+  // analyzers must exclude negative values from averages.
+  uiReconstructionScore: number
   // Sum of step-finish input/output tokens for this session turn; matches the session row's
   // tokens_input/tokens_output accumulation (projector sums the same step-finish parts). output excludes reasoning.
   inputTokens: number
@@ -169,7 +197,9 @@ export interface SessionContext {
   outputTokens: number
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
-  toolCounts: Map<string, { name: string; category: keyof Operations; count: number }>
+  toolCounts: Map<string, { name: string; category: ToolBucket; count: number }>
+  // devecocli invocation counts keyed by the resolved two-level name ("docs.search").
+  devecoCliCommandCounts: Map<string, number>
   buildProjectInfo: BuildProjectInfo[]
   buildResults: BuildResults
 }

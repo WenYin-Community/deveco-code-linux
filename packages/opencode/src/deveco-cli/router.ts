@@ -6,6 +6,8 @@ import { Global } from "@opencode-ai/core/global"
 import { formatBuildProjectOutput, TRUNCATE_NOTICE } from "@/tool/lib/build-project-output"
 import { runBundledDevecoCli } from "@/tool/lib/deveco-cli"
 import { findDevEcoHome, hdcPath } from "@/tool/lib/env"
+import { resolveCliInvocation } from "./commands"
+import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "./event"
 
 export type CliResult = {
   stdout: string
@@ -15,16 +17,10 @@ export type CliResult = {
 
 export type CliRunner = (args: string[], cwd: string, options?: { skipVersionCheck?: boolean }) => Promise<CliResult>
 
-export type DevecoCliEvent = {
-  command: "build" | "create"
-  exitCode: number
-  durationMs: number
-  projectRoot?: string
-}
-
-export const DEVECO_CLI_EVENT_FILE = "DEVECO_CODE_CLI_EVENT_FILE"
-
 export const MAX_DOCS_OUTPUT_LENGTH = 5_000
+
+// The devecocli command-identity policy (allowlist + usage-token rule) is dependency-free and
+// lives in ./commands; this module only consumes it when writing an event.
 
 type CreateTargetState = "missing" | "empty" | "non-empty" | "invalid"
 
@@ -145,9 +141,9 @@ async function truncateDocsOutput(result: CliResult) {
   return { ...result, stdout: truncated, stderr: "" }
 }
 
-export async function runDevecoCliProxy(args: string[], cwd: string) {
+export async function runDevecoCliProxy(args: string[], cwd: string, runner: CliRunner = runBundledDevecoCli) {
   const started = Date.now()
-  const result = await executeDevecoCliProxy(args, cwd)
+  const result = await executeDevecoCliProxy(args, cwd, runner)
   await writeCliEvent(args, result, Date.now() - started).catch(() => undefined)
   const output = result.fullOutput ? await persistFullOutput(result) : result.stdout
   if (output) process.stdout.write(output.endsWith("\n") ? output : `${output}\n`)
@@ -469,10 +465,14 @@ async function runCommand(cmd: string[]): Promise<CliResult> {
 
 async function writeCliEvent(args: string[], result: CliResult, durationMs: number) {
   const file = process.env[DEVECO_CLI_EVENT_FILE]
-  if (!file || (args[0] !== "build" && args[0] !== "create")) return
-  const projectRoot = args[0] === "create" && result.exitCode === 0 ? readProjectRoot(result.stdout) : undefined
+  if (!file) return
+  const invocation = resolveCliInvocation(args)
+  if (!invocation) return
+  const projectRoot =
+    invocation.command === "create" && result.exitCode === 0 ? readProjectRoot(result.stdout) : undefined
   const event: DevecoCliEvent = {
-    command: args[0],
+    command: invocation.command,
+    ...(invocation.subcommand ? { subcommand: invocation.subcommand } : {}),
     exitCode: result.exitCode,
     durationMs,
     ...(projectRoot ? { projectRoot } : {}),

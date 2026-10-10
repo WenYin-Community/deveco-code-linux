@@ -96,6 +96,99 @@ function isToolExecution(value: unknown): value is ToolExecution {
   );
 }
 
+// AiSessionEvent field groups. Listing them keeps the validator down to a handful of branches
+// instead of one long &&-chain (the repository gate caps cyclomatic complexity at 20).
+const AI_SESSION_STRING_FIELDS = [
+  'sourceVersion',
+  'os_arch',
+  'os_name',
+  'os_version',
+  'providerId',
+  'modelId',
+  'sessionid',
+  'messageId',
+  'agentName',
+  'projectId',
+  'bundleName',
+] as const;
+
+const AI_SESSION_NUMBER_FIELDS = [
+  'modifiedFileCount',
+  'totalAdditions',
+  'totalDeletions',
+  'totalElapsed',
+  'firstResultElapsed',
+  'inputTokens',
+  'outputTokens',
+] as const;
+
+const AI_SESSION_NULLABLE_BOOLEAN_FIELDS = ['isFirstBuildSuccess', 'isFinalBuildSuccess'] as const;
+
+const AI_SESSION_NULLABLE_NUMBER_FIELDS = ['firstBuildElapsed', 'finalBuildElapsed'] as const;
+
+function hasStrings(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => typeof value[key] === 'string');
+}
+
+function hasNumbers(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => typeof value[key] === 'number');
+}
+
+function hasNullableBooleans(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => value[key] === null || typeof value[key] === 'boolean');
+}
+
+function hasNullableNumbers(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => {
+    const field = value[key];
+    return field === null || typeof field === 'number';
+  });
+}
+
+function isToolSummaryArray(value: unknown): value is ToolSummary[] {
+  return Array.isArray(value) && value.every(isToolSummary);
+}
+
+function isToolExecutionArray(value: unknown): value is ToolExecution[] {
+  return Array.isArray(value) && value.every(isToolExecution);
+}
+
+// operations may predate customTools/devecoCliCommands: a missing key is tolerated, a present one
+// must be a well-formed summary list.
+function isOperations(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (
+    !hasExactKeys(value, [
+      'builtinTools',
+      'mcpTools',
+      'skillTools',
+      ...(Object.hasOwn(value, 'customTools') ? ['customTools'] : []),
+      ...(Object.hasOwn(value, 'devecoCliCommands') ? ['devecoCliCommands'] : []),
+    ])
+  ) {
+    return false;
+  }
+  return (
+    isToolSummaryArray(value.builtinTools) &&
+    isToolSummaryArray(value.mcpTools) &&
+    isToolSummaryArray(value.skillTools) &&
+    (!Object.hasOwn(value, 'customTools') || isToolSummaryArray(value.customTools)) &&
+    (!Object.hasOwn(value, 'devecoCliCommands') || isToolSummaryArray(value.devecoCliCommands))
+  );
+}
+
+// taskType and uiReconstructionScore landed after the current schema version was sealed; events
+// queued before them must keep uploading, so both keys are optional (tolerate missing, validate
+// when present). Do NOT bump ANALYTICS_SCHEMA_VERSION: a bump discards the whole pending queue.
+// No Number.isFinite for the score — JSON.parse can never yield NaN/Infinity.
+function hasOptionalTelemetryFields(value: Record<string, unknown>): boolean {
+  return (
+    (value.uiVerificationModel === null || typeof value.uiVerificationModel === 'string') &&
+    (value.taskType === undefined || typeof value.taskType === 'string') &&
+    (value.uiReconstructionScore === undefined || typeof value.uiReconstructionScore === 'number')
+  );
+}
+
 function isAiSessionEvent(value: unknown): value is AiSessionEvent {
   if (!isRecord(value)) {
     return false;
@@ -112,6 +205,11 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
       'sessionid',
       'messageId',
       'agentName',
+      // taskType and uiReconstructionScore landed after the current schema version was
+      // sealed; events queued before them must keep uploading, so both keys are optional
+      // (tolerate missing, validate when present). Do NOT bump ANALYTICS_SCHEMA_VERSION:
+      // a bump discards the whole pending queue.
+      ...(Object.hasOwn(value, 'taskType') ? ['taskType'] : []),
       'projectId',
       'bundleName',
       'modifiedFileCount',
@@ -124,6 +222,7 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
       'isFirstBuildSuccess',
       'isFinalBuildSuccess',
       'uiVerificationModel',
+      ...(Object.hasOwn(value, 'uiReconstructionScore') ? ['uiReconstructionScore'] : []),
       'inputTokens',
       'outputTokens',
       'firstBuildElapsed',
@@ -132,50 +231,18 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
   ) {
     return false;
   }
-
-  const operations = value.operations;
-  // Pending events written before customTools was introduced remain uploadable.
-  if (
-    !isRecord(operations) ||
-    !hasExactKeys(operations, ['builtinTools', 'mcpTools', 'skillTools', ...(Object.hasOwn(operations, 'customTools') ? ['customTools'] : [])]) ||
-    (Object.hasOwn(operations, 'customTools') && (!Array.isArray(operations.customTools) || !operations.customTools.every(isToolSummary))) ||
-    !Array.isArray(operations.builtinTools) ||
-    !operations.builtinTools.every(isToolSummary) ||
-    !Array.isArray(operations.mcpTools) ||
-    !operations.mcpTools.every(isToolSummary) ||
-    !Array.isArray(operations.skillTools) ||
-    !operations.skillTools.every(isToolSummary)
-  ) {
+  if (!isOperations(value.operations)) {
     return false;
   }
 
   return (
     isAnalyticsSourceType(value.sourceType) &&
-    typeof value.sourceVersion === 'string' &&
-    typeof value.os_arch === 'string' &&
-    typeof value.os_name === 'string' &&
-    typeof value.os_version === 'string' &&
-    typeof value.providerId === 'string' &&
-    typeof value.modelId === 'string' &&
-    typeof value.sessionid === 'string' &&
-    typeof value.messageId === 'string' &&
-    typeof value.agentName === 'string' &&
-    typeof value.projectId === 'string' &&
-    typeof value.bundleName === 'string' &&
-    typeof value.modifiedFileCount === 'number' &&
-    typeof value.totalAdditions === 'number' &&
-    typeof value.totalDeletions === 'number' &&
-    Array.isArray(value.toolExecutions) &&
-    value.toolExecutions.every(isToolExecution) &&
-    typeof value.totalElapsed === 'number' &&
-    typeof value.firstResultElapsed === 'number' &&
-    (value.isFirstBuildSuccess === null || typeof value.isFirstBuildSuccess === 'boolean') &&
-    (value.isFinalBuildSuccess === null || typeof value.isFinalBuildSuccess === 'boolean') &&
-    (value.uiVerificationModel === null || typeof value.uiVerificationModel === 'string') &&
-    typeof value.inputTokens === 'number' &&
-    typeof value.outputTokens === 'number' &&
-    (value.firstBuildElapsed === null || typeof value.firstBuildElapsed === 'number') &&
-    (value.finalBuildElapsed === null || typeof value.finalBuildElapsed === 'number')
+    hasStrings(value, AI_SESSION_STRING_FIELDS) &&
+    hasNumbers(value, AI_SESSION_NUMBER_FIELDS) &&
+    hasNullableBooleans(value, AI_SESSION_NULLABLE_BOOLEAN_FIELDS) &&
+    hasNullableNumbers(value, AI_SESSION_NULLABLE_NUMBER_FIELDS) &&
+    hasOptionalTelemetryFields(value) &&
+    isToolExecutionArray(value.toolExecutions)
   );
 }
 

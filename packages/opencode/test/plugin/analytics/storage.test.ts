@@ -33,18 +33,20 @@ function event(): AiSessionEvent {
     sessionid: "session-1",
     messageId: "message-1",
     agentName: "build",
+    taskType: "default",
     projectId: "550e8400-e29b-41d4-a716-446655440000",
     bundleName: "",
     modifiedFileCount: 0,
     totalAdditions: 0,
     totalDeletions: 0,
-    operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
+    operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [], devecoCliCommands: [] },
     toolExecutions: [],
     totalElapsed: 10,
     firstResultElapsed: 5,
     isFirstBuildSuccess: null,
     isFinalBuildSuccess: null,
     uiVerificationModel: null,
+    uiReconstructionScore: -1,
     inputTokens: 0,
     outputTokens: 0,
     firstBuildElapsed: null,
@@ -323,4 +325,70 @@ test("queue accepts legacy and custom tool summaries but rejects malformed categ
   const pending = await preparePendingBatch(10)
   expect(pending.map((item) => item.queueId)).toEqual(["queue-0", "queue-1"])
   expect(pending[1]?.event).toMatchObject({ operations: { customTools: [{ name: "my_check", count: 2 }] } })
+})
+
+async function stageEncryptedStorage(root: string, events: unknown[]) {
+  const file = path.join(root, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(
+    file,
+    JSON.stringify(
+      LocalCrypto.encryptForLocalStorage(
+        JSON.stringify({
+          schemaVersion: ANALYTICS_SCHEMA_VERSION,
+          pendingEvents: events.map((event, index) => ({
+            action: ANALYTICS_ACTION.AI_SESSION,
+            event,
+            uid: `uid-${index}`,
+            queueId: `queue-${index}`,
+            sealed: false,
+          })),
+          lastFlush: 1,
+        }),
+      ),
+    ),
+  )
+}
+
+test("legacy pending events without the new fields stay uploadable", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  // Shape of an event queued before taskType / uiReconstructionScore / devecoCliCommands
+  // existed: the schema version is unchanged, so these must survive a load instead of
+  // being dropped as malformed.
+  const legacy: Record<string, unknown> = { ...event(), operations: { builtinTools: [], mcpTools: [], skillTools: [] } }
+  delete legacy.taskType
+  delete legacy.uiReconstructionScore
+  await stageEncryptedStorage(tmp.path, [legacy])
+
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-0"])
+  if (pending[0]?.action === ANALYTICS_ACTION.AI_SESSION) {
+    expect(pending[0].event).not.toHaveProperty("taskType")
+    expect(pending[0].event).not.toHaveProperty("uiReconstructionScore")
+    expect(Object.hasOwn(pending[0].event.operations, "devecoCliCommands")).toBe(false)
+  }
+})
+
+test("queue rejects malformed new fields while accepting the valid shape", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const operations = () => event().operations
+  await stageEncryptedStorage(tmp.path, [
+    { ...event(), taskType: 42 },
+    { ...event(), uiReconstructionScore: "x" },
+    { ...event(), operations: { ...operations(), devecoCliCommands: "invalid" } },
+    { ...event(), operations: { ...operations(), devecoCliCommands: [{ name: "docs.search", count: "2" }] } },
+    // Control: the same fields with their real types must still be accepted, otherwise the
+    // rejection assertions above would pass for the wrong reason.
+    event(),
+  ])
+
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-4"])
+  expect(pending[0]?.event).toMatchObject({
+    taskType: "default",
+    uiReconstructionScore: -1,
+    operations: { devecoCliCommands: [] },
+  })
 })

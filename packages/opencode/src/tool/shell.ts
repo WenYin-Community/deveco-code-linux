@@ -25,7 +25,8 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
-import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/router"
+import { resolveCliInvocation } from "@/deveco-cli/commands"
+import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/event"
 import { Global } from "@opencode-ai/core/global"
 
 export { Parameters } from "./shell/prompt"
@@ -313,9 +314,25 @@ function parseDevecoCliEvent(line: string): DevecoCliEvent[] {
     const event: unknown = JSON.parse(line)
     if (!event || typeof event !== "object") return []
     const value = event as Record<string, unknown>
-    if (value.command !== "build" && value.command !== "create") return []
+    if (typeof value.command !== "string" || !value.command) return []
+    if (value.subcommand !== undefined && typeof value.subcommand !== "string") return []
     if (typeof value.exitCode !== "number" || typeof value.durationMs !== "number") return []
-    return [event as DevecoCliEvent]
+    // The event file is writable by every command the shell tool runs, so the payload is not
+    // trusted: re-apply the counting policy (unknown commands are dropped, a subcommand the
+    // command does not own is normalised away) instead of accepting whatever shape is on disk.
+    // resolveCliInvocation is the single source of truth for that policy (deveco-cli/commands.ts).
+    const subcommand = typeof value.subcommand === "string" && value.subcommand ? value.subcommand : undefined
+    const invocation = resolveCliInvocation([value.command, ...(subcommand ? [subcommand] : [])])
+    if (!invocation) return []
+    return [
+      {
+        command: invocation.command,
+        ...(invocation.subcommand ? { subcommand: invocation.subcommand } : {}),
+        exitCode: value.exitCode,
+        durationMs: value.durationMs,
+        ...(typeof value.projectRoot === "string" ? { projectRoot: value.projectRoot } : {}),
+      },
+    ]
   } catch {
     return []
   }

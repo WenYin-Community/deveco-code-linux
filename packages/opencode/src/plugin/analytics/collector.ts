@@ -12,8 +12,9 @@ import type {
   BuildResults,
   Operations,
   SessionContext,
+  ToolBucket,
 } from "./types"
-import { isBuiltinTool, isSkillTool } from "./types"
+import { isBuiltinTool, isSkillTool, DEFAULT_TASK_TYPE, UI_RECONSTRUCTION_SCORE_UNAVAILABLE } from "./types"
 
 export type SessionStart = {
   sessionID: string
@@ -122,6 +123,7 @@ export class SessionCollector {
       modifiedFiles: new Map(),
       toolExecutions: [],
       toolCounts: new Map(),
+      devecoCliCommandCounts: new Map(),
       buildProjectInfo: [],
       buildResults: {
         isFirstBuildSuccess: null,
@@ -171,7 +173,7 @@ export class SessionCollector {
     skillName?: string,
   ): void {
     if (!this.context) return
-    const category: keyof Operations =
+    const category: ToolBucket =
       source === "mcp"
         ? "mcpTools"
         : source === "custom"
@@ -213,6 +215,15 @@ export class SessionCollector {
     }
     results.isFinalBuildSuccess = isBuildSuccess
     results.finalBuildElapsed = elapsed
+  }
+
+  // Records one devecocli command execution. The name is the first two command levels
+  // ("docs.search"); a missing subcommand degrades to the top level ("build"). There is
+  // deliberately no success parameter: this is invocation counting, so failed calls count too.
+  recordDevecoCliCommand(command: string, subcommand?: string): void {
+    if (!this.context || !command) return
+    const name = subcommand ? `${command}.${subcommand}` : command
+    this.context.devecoCliCommandCounts.set(name, (this.context.devecoCliCommandCounts.get(name) ?? 0) + 1)
   }
 
   recordFileDiff(filePath: string, additions: number, deletions: number): void {
@@ -258,6 +269,9 @@ export class SessionCollector {
       sessionid: this.context.sessionID,
       messageId: this.context.messageId,
       agentName: this.context.agentName,
+      // Both are fixed placeholders for now: no task-type detection yet, and this window
+      // ran no UI reconstruction (the -1 sentinel, not a real score).
+      taskType: DEFAULT_TASK_TYPE,
       projectId,
       bundleName: readBundleName(projectPath),
       modifiedFileCount: this.context.modifiedFiles.size,
@@ -270,6 +284,7 @@ export class SessionCollector {
       isFirstBuildSuccess: this.context.buildResults.isFirstBuildSuccess,
       isFinalBuildSuccess: this.context.buildResults.isFinalBuildSuccess,
       uiVerificationModel: this.context.uiVerificationModel,
+      uiReconstructionScore: UI_RECONSTRUCTION_SCORE_UNAVAILABLE,
       inputTokens: this.context.inputTokens,
       outputTokens: this.context.outputTokens,
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
@@ -294,10 +309,21 @@ export class SessionCollector {
   }
 
   private buildOperations(): Operations {
-    const operations: Operations = { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] }
+    const operations: Operations = {
+      builtinTools: [],
+      mcpTools: [],
+      skillTools: [],
+      customTools: [],
+      devecoCliCommands: [],
+    }
     this.context?.toolCounts.forEach(({ name, category, count }) => {
       operations[category].push({ name, count })
     })
+    // Most-used commands first; ties fall back to the name so the payload is deterministic
+    // (localeCompare is avoided: it is locale-dependent and would break byte-stable output).
+    operations.devecoCliCommands = Array.from(this.context?.devecoCliCommandCounts ?? [])
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     return operations
   }
 

@@ -371,6 +371,7 @@ test("classifies tools by origin and keeps custom, MCP, and skill counts separat
       { name: "skill", count: 1 },
     ],
     skillTools: [{ name: "skill", count: 2 }],
+    devecoCliCommands: [],
   })
   expect(event?.toolExecutions).toHaveLength((builtin.length + fallback.length + 1) * 2 + 5)
   expect(event?.toolExecutions.slice(0, 2)).toEqual([
@@ -406,6 +407,7 @@ test("uses skill names for details and counts without changing tool identity", a
     ],
     customTools: [{ name: "skill", count: 1 }],
     mcpTools: [{ name: "skill", count: 1 }],
+    devecoCliCommands: [],
   })
   expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual([
     "arkts-error-fixes",
@@ -420,4 +422,116 @@ test("uses skill names for details and counts without changing tool identity", a
   ])
   expect(event?.isFirstBuildSuccess).toBeNull()
   expect(event?.isFinalBuildSuccess).toBeNull()
+})
+
+test("aggregates devecocli commands by two-level name, most frequent first", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-cli-counts",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  collector.recordDevecoCliCommand("docs", "search")
+  collector.recordDevecoCliCommand("docs", "search")
+  collector.recordDevecoCliCommand("docs", "read")
+  collector.recordDevecoCliCommand("build")
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.operations.devecoCliCommands).toEqual([
+    { name: "docs.search", count: 2 },
+    // Equal counts fall back to ascending name order so the payload stays deterministic.
+    { name: "build", count: 1 },
+    { name: "docs.read", count: 1 },
+  ])
+})
+
+test("counts every devecocli execution regardless of success and degrades empty subcommands", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-cli-failures",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  // No success parameter exists by design: "executed => counted", failures included.
+  collector.recordDevecoCliCommand("build")
+  collector.recordDevecoCliCommand("build")
+  // An empty subcommand degrades to the top-level name instead of producing "build.".
+  collector.recordDevecoCliCommand("build", "")
+  // Blank commands are never recorded.
+  collector.recordDevecoCliCommand("")
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.operations.devecoCliCommands).toEqual([{ name: "build", count: 3 }])
+})
+
+test("ignores devecocli commands recorded without an active session context", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+
+  collector.recordDevecoCliCommand("docs", "search")
+  expect(await collector.buildEvent("project-id", "/tmp/non-harmony")).toBeNull()
+
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-cli-cleared",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  collector.clear()
+  collector.recordDevecoCliCommand("docs", "search")
+  expect(await collector.buildEvent("project-id", "/tmp/non-harmony")).toBeNull()
+})
+
+test("reports empty devecocli commands when the turn ran none", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-cli-empty",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.operations.devecoCliCommands).toEqual([])
+})
+
+test("emits the fixed taskType and UI reconstruction sentinel in every window", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  const start = (sessionID: string) =>
+    collector.startSession({
+      sessionID,
+      messageId: "message-1",
+      sourceVersion: "1.2.3",
+      providerId: "deveco",
+      modelId: "model-1",
+      agentName: "build",
+    })
+
+  start("session-window-1")
+  const first = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(first?.taskType).toBe("default")
+  expect(first?.uiReconstructionScore).toBe(-1)
+
+  // A second window must not inherit any per-window state: both placeholders are constants,
+  // and a UI-verification model recorded in window 1 still does not produce a score.
+  collector.recordUIVerificationModel("qwen3-vl-plus")
+  collector.clear()
+  start("session-window-2")
+  const second = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(second?.taskType).toBe("default")
+  expect(second?.uiReconstructionScore).toBe(-1)
 })

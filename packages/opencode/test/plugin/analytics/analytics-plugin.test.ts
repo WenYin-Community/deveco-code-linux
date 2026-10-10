@@ -43,18 +43,20 @@ const builtEvent: AiSessionEvent = {
   sessionid: "session-1",
   messageId: "message-1",
   agentName: "build",
+  taskType: "default",
   projectId: "550e8400-e29b-41d4-a716-446655440000",
   bundleName: "",
   modifiedFileCount: 0,
   totalAdditions: 0,
   totalDeletions: 0,
-  operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
+  operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [], devecoCliCommands: [] },
   toolExecutions: [],
   totalElapsed: 10,
   firstResultElapsed: 5,
   isFirstBuildSuccess: null,
   isFinalBuildSuccess: null,
   uiVerificationModel: null,
+  uiReconstructionScore: -1,
   inputTokens: 0,
   outputTokens: 0,
   firstBuildElapsed: null,
@@ -85,6 +87,7 @@ function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
       (_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess?: boolean) => undefined,
     ),
     recordBuildExecution: mock((_isBuildSuccess: boolean) => undefined),
+    recordDevecoCliCommand: mock((_command: string, _subcommand?: string) => undefined),
     buildEvent: mock(async () => builtEvent),
     buildProjectEvent: mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent),
     upload: mock(async (_submission: AnalyticsSubmission) => true),
@@ -119,6 +122,7 @@ function createCollector(state: ReturnType<typeof createHarnessState>, calls: Re
     recordFileDiff: () => undefined,
     recordToolExecution: calls.recordToolExecution,
     recordBuildExecution: calls.recordBuildExecution,
+    recordDevecoCliCommand: calls.recordDevecoCliCommand,
     getSessionID: () => (state.active ? "session-1" : null),
     buildEvent: calls.buildEvent,
     buildProjectEvent: calls.buildProjectEvent,
@@ -431,6 +435,82 @@ test("records failed devecocli build metadata", async () => {
 
   expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true, false, undefined, undefined)
   expect(harness.recordBuildExecution).toHaveBeenCalledWith(false)
+})
+
+test("forwards every devecocli command from bash metadata, failures included", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "cli-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "cli-1", args: {} },
+    {
+      title: "CLI",
+      output: "ok",
+      metadata: {
+        devecoCliEvents: [
+          { command: "docs", subcommand: "search", exitCode: 0, durationMs: 10 },
+          // Failed executions count too: there is no success filter on this channel.
+          { command: "build", exitCode: 1, durationMs: 20 },
+          { command: "run", subcommand: "start", exitCode: 2, durationMs: 30 },
+        ],
+      },
+    },
+  )
+
+  expect(harness.recordDevecoCliCommand.mock.calls).toEqual([
+    ["docs", "search"],
+    ["build", undefined],
+    ["run", "start"],
+  ])
+  // The build-only regression net still holds: "build" drives build results, "run" does not.
+  expect(harness.recordBuildExecution).toHaveBeenCalledTimes(1)
+  expect(harness.recordBuildExecution).toHaveBeenCalledWith(false)
+})
+
+test("ignores malformed devecocli command metadata", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "cli-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "cli-1", args: {} },
+    {
+      title: "CLI",
+      output: "ok",
+      metadata: {
+        devecoCliEvents: [
+          null,
+          "docs search",
+          { command: 42, exitCode: 0, durationMs: 1 },
+          { command: "", exitCode: 0, durationMs: 1 },
+          { command: "docs", subcommand: 42, exitCode: 0, durationMs: 1 },
+          { command: "docs", subcommand: null, exitCode: 0, durationMs: 1 },
+        ],
+      },
+    },
+  )
+
+  expect(harness.recordDevecoCliCommand).toHaveBeenCalledTimes(0)
+})
+
+test("ignores devecocli command metadata from another session", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  // Same ownership guard as uiVerificationModel: a concurrent session's CLI executions must not
+  // land in the tracked session's tally.
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-2", callID: "cli-2" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-2", callID: "cli-2", args: {} },
+    {
+      title: "CLI",
+      output: "ok",
+      metadata: { devecoCliEvents: [{ command: "docs", subcommand: "search", exitCode: 0, durationMs: 5 }] },
+    },
+  )
+
+  expect(harness.recordDevecoCliCommand).toHaveBeenCalledTimes(0)
 })
 
 test("records build_project compile failure as a successful tool execution", async () => {
@@ -891,4 +971,73 @@ test("takes the skill name from arguments rather than result metadata", async ()
       typeof name === "string" ? name : undefined,
     )
   }
+})
+
+test("end-to-end: one turn of devecocli commands uploads sorted counts and placeholders", async () => {
+  // Real SessionCollector wired to the real plugin: metadata -> after hook -> collector
+  // aggregation -> buildEvent, so names and ordering are asserted on the uploaded payload.
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  const uploads: AnalyticsSubmission[] = []
+  const plugin = createAnalyticsPlugin({
+    collector,
+    uploader: {
+      restorePending: async () => undefined,
+      startPeriodicFlush: () => undefined,
+      stopPeriodicFlush: () => undefined,
+      clearQueue: async () => undefined,
+      shutdown: async () => undefined,
+      upload: async (submission) => {
+        uploads.push(submission)
+        return true
+      },
+      flush: async () => ({ success: true }),
+    },
+    isLoggedIn: async () => true,
+    isJwtExpired: async () => false,
+    toolImprovementEnabled: async () => false,
+    diagnostic: async () => undefined,
+    projectId: async () => "550e8400-e29b-41d4-a716-446655440000",
+    codeAttribution: async () => ({
+      setEnabled: async () => undefined,
+      purge: async () => undefined,
+      beforeAiTool: async () => undefined,
+      afterAiTool: async () => undefined,
+      poll: async () => undefined,
+      shutdown: async () => undefined,
+    }),
+    version: () => "1.2.3",
+  })
+  const hooks = await plugin({ directory: "/tmp/analytics-cli-e2e" } as never)
+
+  await hooks["chat.message"]!(
+    { sessionID: "session-cli-e2e", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,
+    { message: { id: "message-1" }, parts: [] } as never,
+  )
+  const runCli = (callID: string, metadata: Record<string, unknown>) =>
+    hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-cli-e2e", callID }, { args: {} }).then(() =>
+      hooks["tool.execute.after"]!(
+        { tool: "bash", sessionID: "session-cli-e2e", callID, args: {} },
+        { title: "CLI", output: "ok", metadata },
+      ),
+    )
+
+  await runCli("cli-1", { devecoCliEvents: [{ command: "docs", subcommand: "search", exitCode: 0, durationMs: 5 }] })
+  await runCli("cli-2", { devecoCliEvents: [{ command: "build", exitCode: 0, durationMs: 5 }] })
+  await runCli("cli-3", { devecoCliEvents: [{ command: "docs", subcommand: "search", exitCode: 1, durationMs: 5 }] })
+  await hooks.event!({ event: { type: "session.idle", properties: { sessionID: "session-cli-e2e" } } as never })
+
+  expect(uploads).toHaveLength(1)
+  expect(uploads[0]).toMatchObject({
+    action: ANALYTICS_ACTION.AI_SESSION,
+    event: {
+      taskType: "default",
+      uiReconstructionScore: -1,
+      operations: {
+        devecoCliCommands: [
+          { name: "docs.search", count: 2 },
+          { name: "build", count: 1 },
+        ],
+      },
+    },
+  })
 })

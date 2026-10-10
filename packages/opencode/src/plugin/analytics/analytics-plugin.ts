@@ -38,6 +38,7 @@ interface AnalyticsCollectorDependency {
     skillName?: string,
   ): void
   recordBuildExecution(isBuildSuccess: boolean): void
+  recordDevecoCliCommand(command: string, subcommand?: string): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
   buildProjectEvent(): BuildProjectAnalyticsEvent | null
@@ -346,6 +347,7 @@ class AnalyticsRuntime {
     this.recordUIVerificationModel(input, metadata)
     this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
     this.recordDevecoBuilds(metadata)
+    this.recordDevecoCliCommands(input, metadata)
     this.recordFileDiff(input, metadata)
   }
 
@@ -406,6 +408,28 @@ class AnalyticsRuntime {
       const value = event as Record<string, unknown>
       if (value.command !== "build" || typeof value.exitCode !== "number") continue
       this.dependencies.collector.recordBuildExecution(value.exitCode === 0)
+    }
+  }
+
+  // Feeds every recorded devecocli invocation into the session's command tally. Unlike
+  // recordDevecoBuilds this is not filtered by command name or exit code: the counting
+  // contract is "executed => counted", failures included.
+  private recordDevecoCliCommands(
+    input: Parameters<ToolAfterHook>[0],
+    metadata: Record<string, unknown> | undefined,
+  ) {
+    // Same ownership guard as recordUIVerificationModel: another session's CLI calls must not
+    // land in the tracked session's tally.
+    if (this.dependencies.collector.getSessionID() !== input.sessionID) return
+    const events = Array.isArray(metadata?.devecoCliEvents) ? metadata.devecoCliEvents : []
+    for (const event of events) {
+      if (!event || typeof event !== "object") continue
+      const value = event as Record<string, unknown>
+      const command = value.command
+      const subcommand = value.subcommand
+      if (typeof command !== "string" || !command) continue
+      if (subcommand !== undefined && typeof subcommand !== "string") continue
+      this.dependencies.collector.recordDevecoCliCommand(command, subcommand)
     }
   }
 

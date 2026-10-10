@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { executeDevecoCliProxy, type CliResult } from "../../src/deveco-cli/router"
+import { CLI_USAGE_TOKENS, resolveCliInvocation } from "../../src/deveco-cli/commands"
+import { DEVECO_CLI_EVENT_FILE } from "../../src/deveco-cli/event"
+import { executeDevecoCliProxy, runDevecoCliProxy, type CliResult } from "../../src/deveco-cli/router"
 import { hdcPath } from "../../src/tool/lib/env"
 import { tmpdir } from "../fixture/fixture"
 
@@ -679,5 +681,166 @@ describe("devecocli proxy router", () => {
     )
 
     expect(result).toEqual({ stdout: failure, stderr: "", exitCode: 1 })
+  })
+})
+
+describe("devecocli cli event recording", () => {
+  async function readEvents(file: string) {
+    const text = await Bun.file(file)
+      .text()
+      .catch(() => "")
+    return text
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  async function withEventFile<T>(file: string, run: () => Promise<T>): Promise<T> {
+    process.env[DEVECO_CLI_EVENT_FILE] = file
+    try {
+      return await run()
+    } finally {
+      delete process.env[DEVECO_CLI_EVENT_FILE]
+    }
+  }
+
+  test("resolveCliInvocation keeps the first two levels only for owned subcommands", () => {
+    expect(resolveCliInvocation(["docs", "search", "@State", "--limit", "3"])).toEqual({
+      command: "docs",
+      subcommand: "search",
+    })
+    expect(resolveCliInvocation(["build"])).toEqual({ command: "build" })
+    expect(resolveCliInvocation(["build", "clean"])).toEqual({ command: "build", subcommand: "clean" })
+    expect(resolveCliInvocation(["log", "clear"])).toEqual({ command: "log", subcommand: "clear" })
+    expect(resolveCliInvocation(["docs", "--limit", "3"])).toEqual({ command: "docs" })
+    // Leaf commands take a VALUE, not a subcommand: `create MyApp` must not leak the app name.
+    expect(resolveCliInvocation(["create", "MyApp"])).toEqual({ command: "create" })
+    expect(resolveCliInvocation(["init", "myagent"])).toEqual({ command: "init" })
+    expect(resolveCliInvocation(["run", "--apply", "changes.txt"])).toEqual({ command: "run" })
+    // Subcommands the command does not own (typos, future additions) degrade to the top level.
+    expect(resolveCliInvocation(["docs", "no-such-subcommand"])).toEqual({ command: "docs" })
+    // Options may precede the subcommand; a flag's value is not mistaken for one.
+    expect(resolveCliInvocation(["build", "--product", "default", "clean"])).toEqual({
+      command: "build",
+      subcommand: "clean",
+    })
+    expect(resolveCliInvocation(["build", "--product", "clean"])).toEqual({ command: "build" })
+    expect(resolveCliInvocation(["build", "--product=clean"])).toEqual({ command: "build" })
+    // Only allowlisted command names are counted: paths, filenames and other values from an
+    // incomplete/invalid invocation never reach telemetry.
+    expect(resolveCliInvocation(["/Users/zhuyu/private/secret-app"])).toBeUndefined()
+    expect(resolveCliInvocation(["app.ets"])).toBeUndefined()
+    expect(resolveCliInvocation(["MyApp"])).toBeUndefined()
+    expect(resolveCliInvocation(["my-secret-project"])).toBeUndefined()
+    expect(resolveCliInvocation(["constructor", "clean"])).toBeUndefined()
+    // Usage requests: the flag form counts anywhere after the command, the bare `help` only in the
+    // subcommand slot — further right it is a legitimate value (`docs search help`).
+    for (const token of ["-h", "--help", "-V", "-v", "--version"]) {
+      expect(CLI_USAGE_TOKENS.has(token)).toBe(true)
+      expect(resolveCliInvocation([token])).toBeUndefined()
+      expect(resolveCliInvocation(["docs", token])).toBeUndefined()
+      expect(resolveCliInvocation(["docs", "search", token])).toBeUndefined()
+    }
+    expect(CLI_USAGE_TOKENS.has("help")).toBe(true)
+    expect(resolveCliInvocation(["help"])).toBeUndefined()
+    expect(resolveCliInvocation(["docs", "help"])).toBeUndefined()
+    // The CLI rewrites a TRAILING bare `help` into `--help`; only a non-trailing one is a value.
+    expect(resolveCliInvocation(["docs", "search", "help"])).toBeUndefined()
+    expect(resolveCliInvocation(["docs", "search", "help", "extra"])).toEqual({
+      command: "docs",
+      subcommand: "search",
+    })
+    expect(resolveCliInvocation(["docs", "search", "--limit", "3", "help"])).toBeUndefined()
+    expect(resolveCliInvocation([])).toBeUndefined()
+  })
+
+  test("writes one two-level event per executed command", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "cli-events.jsonl")
+    await withEventFile(file, async () => {
+      const cli = runner({
+        "docs search @State": { stdout: "result" },
+        "docs read date-picker": { stdout: "content" },
+        "device list": { stdout: "raw" },
+        // Special run modes bypass device discovery, which keeps this focused on event writing.
+        "run --hotreload": { stdout: "hot reload" },
+      })
+      expect(await runDevecoCliProxy(["docs", "search", "@State"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["docs", "read", "date-picker"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["device", "list"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["run", "--hotreload"], tmp.path, cli.run)).toBe(0)
+    })
+
+    // Four calls => four JSONL lines; only the first two command levels are kept.
+    expect(await readEvents(file)).toEqual([
+      { command: "docs", subcommand: "search", exitCode: 0, durationMs: expect.any(Number) },
+      { command: "docs", subcommand: "read", exitCode: 0, durationMs: expect.any(Number) },
+      { command: "device", subcommand: "list", exitCode: 0, durationMs: expect.any(Number) },
+      { command: "run", exitCode: 0, durationMs: expect.any(Number) },
+    ])
+  })
+
+  test("keeps build events and adds projectRoot only to successful create events", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "cli-events.jsonl")
+    await withEventFile(file, async () => {
+      const cli = runner({
+        build: { stderr: "ArkTS error", exitCode: 1 },
+        create: { stdout: "Project root: /tmp/generated-demo\n" },
+      })
+      expect(await runDevecoCliProxy(["build"], tmp.path, cli.run)).toBe(1)
+      expect(await runDevecoCliProxy(["create"], tmp.path, cli.run)).toBe(0)
+    })
+
+    expect(await readEvents(file)).toEqual([
+      { command: "build", exitCode: 1, durationMs: expect.any(Number) },
+      { command: "create", exitCode: 0, durationMs: expect.any(Number), projectRoot: "/tmp/generated-demo" },
+    ])
+  })
+
+  test("records failed invocations too", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "cli-events.jsonl")
+    await withEventFile(file, async () => {
+      const cli = runner({ "docs read broken": { stderr: "boom", exitCode: 2 } })
+      expect(await runDevecoCliProxy(["docs", "read", "broken"], tmp.path, cli.run)).toBe(2)
+    })
+
+    expect(await readEvents(file)).toEqual([
+      { command: "docs", subcommand: "read", exitCode: 2, durationMs: expect.any(Number) },
+    ])
+  })
+
+  test("never writes events for usage tokens or bare flags", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "cli-events.jsonl")
+    await withEventFile(file, async () => {
+      const cli = runner({ help: { stdout: "usage" } })
+      expect(await runDevecoCliProxy(["help"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["--version"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["-h"], tmp.path, cli.run)).toBe(0)
+      // A path-like top-level token is a value from an invalid invocation, not a command:
+      // it must never reach telemetry (see the path-shape guard in resolveCliInvocation).
+      expect(await runDevecoCliProxy(["/tmp/secret-app"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["app.ets"], tmp.path, cli.run)).toBe(0)
+      // A help flag is a usage request even after a subcommand (`docs search --help`), and so is
+      // the CLI's trailing bare `help` form (`docs search help`).
+      expect(await runDevecoCliProxy(["docs", "search", "--help"], tmp.path, cli.run)).toBe(0)
+      expect(await runDevecoCliProxy(["docs", "search", "help"], tmp.path, cli.run)).toBe(0)
+    })
+
+    // Nothing counted => the event file is never even created.
+    expect(await Bun.file(file).exists()).toBe(false)
+  })
+
+  test("stays silent when the event file is not configured", async () => {
+    delete process.env[DEVECO_CLI_EVENT_FILE]
+    const cli = runner({ "docs search @State": { stdout: "result" } })
+    expect(await runDevecoCliProxy(["docs", "search", "@State"], "/tmp", cli.run)).toBe(0)
+    // The early return must not change the control flow: the command still runs and its exit
+    // code still propagates (otherwise this test would pass even if the proxy swallowed the call).
+    expect(cli.calls).toEqual([["docs", "search", "@State"]])
+    const failing = runner({ "docs search @State": { stderr: "boom", exitCode: 3 } })
+    expect(await runDevecoCliProxy(["docs", "search", "@State"], "/tmp", failing.run)).toBe(3)
   })
 })

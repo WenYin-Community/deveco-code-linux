@@ -18,18 +18,20 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
       sessionid: "session-1",
       messageId: "message-1",
       agentName: "build",
+      taskType: "default",
       projectId: "550e8400-e29b-41d4-a716-446655440000",
       bundleName: "",
       modifiedFileCount: 0,
       totalAdditions: 0,
       totalDeletions: 0,
-      operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [] },
+      operations: { builtinTools: [], mcpTools: [], skillTools: [], customTools: [], devecoCliCommands: [] },
       toolExecutions: [],
       totalElapsed: 10,
       firstResultElapsed: 5,
       isFirstBuildSuccess: null,
       isFinalBuildSuccess: null,
       uiVerificationModel: null,
+      uiReconstructionScore: -1,
       inputTokens: 0,
       outputTokens: 0,
       firstBuildElapsed: null,
@@ -48,6 +50,9 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
   expect(detail.firstBuildElapsed).toBe("null")
   expect(detail.providerId).toBe("openai")
   expect(detail.inputTokens).toBe(0)
+  // The numeric -1 sentinel is a real value, not a null to localize: it must survive as-is.
+  expect(detail.taskType).toBe("default")
+  expect(detail.uiReconstructionScore).toBe(-1)
   expect(Object.keys(payload).sort()).toEqual(["action", "detail", "timestamp"])
 })
 
