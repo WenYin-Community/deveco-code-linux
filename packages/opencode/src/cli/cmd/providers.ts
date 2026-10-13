@@ -392,15 +392,14 @@ export const ProvidersLoginCommand = effectCmd({
     const hooks = yield* pluginSvc.list()
 
     const priority: Record<string, number> = {
-      "alibaba-cn": 0,
+      zhipuai: 0,
       deepseek: 1,
-      zhipuai: 2,
-      anthropic: 3,
-      openai: 4,
-      google: 5,
-      "github-copilot": 6,
-      openrouter: 7,
-      vercel: 8,
+      "alibaba-cn": 2,
+      "moonshotai-cn": 3,
+      "minimax-cn": 4,
+      "github-copilot": 5,
+      openrouter: 6,
+      vercel: 7,
     }
     const pluginProviders = resolvePluginProviders({
       hooks,

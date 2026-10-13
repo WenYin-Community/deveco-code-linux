@@ -58,13 +58,15 @@ function providerLabel(id: string, name: string): string {
 }
 
 const PROVIDER_PRIORITY: Record<string, number> = {
-  opencode: 0,
-  'opencode-go': 1,
-  openai: 2,
-  'github-copilot': 3,
-  anthropic: 4,
-  google: 5,
-  openrouter: 6,
+  zhipuai: 0,
+  deepseek: 1,
+  'alibaba-cn': 2,
+  'moonshotai-cn': 3,
+  'minimax-cn': 4,
+  opencode: 5,
+  'opencode-go': 6,
+  'github-copilot': 7,
+  openrouter: 8,
 };
 
 const DEFAULT_AUTH_METHODS: ProviderAuthMethod[] = [{ type: 'api', label: 'API key' }];
