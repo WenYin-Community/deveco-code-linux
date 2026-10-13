@@ -20,12 +20,11 @@ import { useClipboard } from "../context/clipboard"
 import { useI18n } from "../i18n"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
-  "alibaba-cn": 0,
+  zhipuai: 0,
   deepseek: 1,
-  zhipuai: 2,
-  anthropic: 3,
-  openai: 4,
-  google: 5,
+  "alibaba-cn": 2,
+  "moonshotai-cn": 3,
+  "minimax-cn": 4,
 }
 
 const CUSTOM_PROVIDER_OPTION_VALUE = "__opencode_custom_provider__"
@@ -64,6 +63,8 @@ export function providerOptions(list: { id: string; name: string }[], t?: (key: 
         description: {
           deepseek: t ? t("dialog.provider_api_key") : "(API key)",
           zhipuai: t ? t("dialog.provider_api_key") : "(API key)",
+          "moonshotai-cn": t ? t("dialog.provider_api_key") : "(API key)",
+          "minimax-cn": t ? t("dialog.provider_api_key") : "(API key)",
           anthropic: t ? t("dialog.provider_api_key") : "(API key)",
           openai: t ? t("dialog.provider_openai") : "(ChatGPT Plus/Pro or API key)",
           google: t ? t("dialog.provider_api_key") : "(API key)",

@@ -18,12 +18,46 @@ describe("providerOptions", () => {
     expect(
       providerOptions([
         { id: "openai", name: "OpenAI" },
+        { id: "minimax-cn", name: "MiniMax (minimax.cn)" },
         { id: "custom-z", name: "Zebra Provider" },
-        { id: "anthropic", name: "Anthropic" },
+        { id: "zhipuai", name: "Zhipu AI" },
+        { id: "deepseek", name: "DeepSeek" },
+        { id: "moonshotai-cn", name: "Moonshot AI (China)" },
+        { id: "alibaba-cn", name: "Alibaba (China)" },
         { id: "mistral", name: "Mistral" },
         { id: "aws", name: "AWS Bedrock" },
       ]).map((option) => option.value),
-    ).toEqual(["anthropic", "openai", "aws", "mistral", "custom-z", "__opencode_custom_provider__"])
+    ).toEqual([
+      "zhipuai",
+      "deepseek",
+      "alibaba-cn",
+      "moonshotai-cn",
+      "minimax-cn",
+      "aws",
+      "mistral",
+      "openai",
+      "custom-z",
+      "__opencode_custom_provider__",
+    ])
+  })
+
+  test("categories only the curated popular providers as Popular", () => {
+    const options = providerOptions([
+      { id: "zhipuai", name: "Zhipu AI" },
+      { id: "deepseek", name: "DeepSeek" },
+      { id: "alibaba-cn", name: "Alibaba (China)" },
+      { id: "moonshotai-cn", name: "Moonshot AI (China)" },
+      { id: "minimax-cn", name: "MiniMax (minimax.cn)" },
+      { id: "anthropic", name: "Anthropic" },
+      { id: "openai", name: "OpenAI" },
+    ])
+    expect(options.filter((option) => option.category === "Popular").map((option) => option.value)).toEqual([
+      "zhipuai",
+      "deepseek",
+      "alibaba-cn",
+      "moonshotai-cn",
+      "minimax-cn",
+    ])
   })
 
   test("does not collide with a configured provider named other", () => {

@@ -1,6 +1,6 @@
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "../context/local"
-import { map, pipe, flatMap, entries, filter, sortBy, take } from "remeda"
+import { map, pipe, flatMap, entries, filter, sortBy } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { createDialogProviderOptions, DialogProvider } from "./dialog-provider"
@@ -111,11 +111,11 @@ export function DialogModel(props: { providerID?: string }) {
     const popularProviders = !connected()
       ? pipe(
           providers(),
+          filter((option) => option.category === t("category.popular")),
           map((option) => ({
             ...option,
             category: t("category.popular_providers"),
           })),
-          take(6),
         )
       : []
 
