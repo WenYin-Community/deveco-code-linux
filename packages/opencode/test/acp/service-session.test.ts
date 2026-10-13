@@ -1102,6 +1102,65 @@ describe("ACP service sessions", () => {
     ])
   })
 
+  it("returns stopReason refusal when the prompt response carries an error", async () => {
+    const { service } = makeService()
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+    const failing = ACPService.make({
+      sdk: {
+        config: {
+          providers: () => Promise.resolve({ data: { providers: [provider], default: { test: modelID } } }),
+          get: () => Promise.resolve({ data: {} }),
+        },
+        app: {
+          agents: () => Promise.resolve({ data: [{ name: "build", mode: "primary", permission: [], options: {} }] }),
+          skills: () => Promise.resolve({ data: [] }),
+        },
+        command: {
+          list: () => Promise.resolve({ data: [] }),
+        },
+        session: {
+          create: () => Promise.resolve({ data: { id: "ses_err" } }),
+          get: () => Promise.resolve({ data: { id: "ses_err" } }),
+          list: () => Promise.resolve({ data: [] }),
+          messages: () => Promise.resolve({ data: [] }),
+          prompt: () =>
+            Promise.resolve({
+              data: {
+                info: {
+                  ...assistantInfo({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }),
+                  id: "msg_err",
+                  sessionID: session.sessionId,
+                  error: { name: "APIError", data: { message: "quota exceeded", isRetryable: false } },
+                },
+              },
+            }),
+          summarize: () => Promise.resolve({ data: true }),
+          abort: () => Promise.resolve({ data: true }),
+          fork: () => Promise.resolve({ data: { id: "fork" } }),
+        },
+        mcp: { add: () => Promise.resolve({ data: {} }) },
+      } as unknown as OpencodeClient,
+      connection: {
+        sessionUpdate: () => Promise.resolve(),
+        unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
+      } as Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation">,
+      usage: UsageService.Service.of({
+        buildUsage: UsageService.buildUsage,
+        latestAssistantMessage: UsageService.latestAssistantMessage,
+        totalSessionCost: UsageService.totalSessionCost,
+        contextLimit: () => Effect.succeed(128000),
+        sendUpdate: () => Effect.void,
+      }),
+    })
+    await Effect.runPromise(failing.loadSession({ cwd: "/workspace", sessionId: session.sessionId, mcpServers: [] }))
+
+    const result = await Effect.runPromise(
+      failing.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }),
+    )
+
+    expect(result.stopReason).toBe("refusal")
+  })
+
   it("maps prompt auth failures to auth-required request errors", async () => {
     const { service } = makeService()
     const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))

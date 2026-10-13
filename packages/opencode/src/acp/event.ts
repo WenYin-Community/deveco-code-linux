@@ -3,12 +3,13 @@ import type {
   Event,
   EventMessagePartDelta,
   EventMessagePartUpdated,
+  EventSessionError,
   OpencodeClient,
   Part,
   SessionMessageResponse,
   ToolPart,
 } from "@opencode-ai/sdk/v2"
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { ACPElicitation } from "./elicitation"
@@ -29,6 +30,69 @@ type GlobalEventEnvelope = {
 }
 type GlobalEventStream = {
   stream: AsyncIterable<GlobalEventEnvelope>
+}
+
+type SessionErrorPayload = NonNullable<EventSessionError["properties"]["error"]>
+
+const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+const GatewayErrorBody = Schema.Struct({
+  error: Schema.optional(Schema.Struct({ type: Schema.optional(Schema.String) })),
+})
+
+// Reads the human-readable failure text off a serialized session error payload
+// ({ name, data }). The TUI's `formatError` (session-data.ts) has an additional
+// `error.message` branch for live Error instances, but ACP only handles the
+// serialized `NamedError.toObject()` shape, so that branch is unreachable here.
+// MessageOutputLengthError carries no message at all, so it falls through to
+// the name.
+function sessionErrorText(error: SessionErrorPayload): string {
+  const dataMsg = (error.data as { message?: unknown }).message
+  if (typeof dataMsg === "string" && dataMsg.trim()) return dataMsg
+  return error.name || "unknown error"
+}
+
+// The model service tags a failure with a machine-readable type (ScasReject,
+// QuotaExhausted, WaitingInLine, ...) inside `responseBody.error.type`, and
+// APIError carries the HTTP status. Neither is rendered anywhere today — the
+// TUI only ever shows `error.data.message` — so the classification travels next
+// to the text and lets the client pick a terminal error card over a retry notice.
+//
+// All errors reaching this path are terminal (retries exhausted or non-retryable),
+// so there is no `retryable` field — `APIError.isRetryable` reflects the error
+// type's retry support, not whether this specific failure will be retried.
+function sessionErrorMeta(error: SessionErrorPayload) {
+  const data = typeof error.data === "object" && error.data !== null ? error.data : undefined
+  const type = data ? gatewayErrorType(data) : undefined
+  const statusCode =
+    data && "statusCode" in data && typeof data.statusCode === "number" ? data.statusCode : undefined
+  return {
+    name: error.name,
+    ...(type ? { type } : {}),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+  }
+}
+
+// Extracts the gateway error type from `responseBody`. FreeUsageLimitError and
+// GoUsageLimitError are embedded as substrings rather than structured
+// `error.type` fields — keep in sync with `SessionRetry.getRetryCategory`
+// (retry.ts) which classifies the same patterns for retry budgeting.
+function gatewayErrorType(data: Record<string, unknown>) {
+  if (typeof data.responseBody !== "string") return undefined
+  if (data.responseBody.includes("FreeUsageLimitError")) return "FreeUsageLimitError"
+  if (data.responseBody.includes("GoUsageLimitError")) return "GoUsageLimitError"
+  const parsed = Option.getOrUndefined(decodeJson(data.responseBody))
+  return Option.getOrUndefined(Schema.decodeUnknownOption(GatewayErrorBody)(parsed))?.error?.type
+}
+
+// The wire shape for a mirrored turn failure. Shared by the live session.error
+// path and message replay so both emit identical chunks.
+function sessionErrorChunk(messageId: string, error: SessionErrorPayload) {
+  return {
+    sessionUpdate: "agent_message_chunk" as const,
+    messageId,
+    content: { type: "text" as const, text: sessionErrorText(error) },
+    _meta: { error: sessionErrorMeta(error) },
+  }
 }
 
 export function start(input: { sdk: OpencodeClient; connection: Connection; session: ACPSession.Interface }) {
@@ -76,11 +140,40 @@ export class Subscription {
       case "question.asked":
         this.elicitation.handle(event)
         return
+      case "session.error":
+        return this.handleSessionError(event)
       case "message.part.updated":
         return this.handlePartUpdated(event)
       case "message.part.delta":
         return this.handlePartDelta(event)
     }
+  }
+
+  // A failed turn lives on the assistant message (`message.error`) and is
+  // broadcast as `session.error`; ACP has no error session-update variant, so
+  // the failure is mirrored into the conversation as an agent chunk. This is
+  // the same thing the TUI does by rendering `message.error.data.message`
+  // inline at the tail of the turn, and it keeps a failed turn from reaching
+  // the client as an empty reply.
+  private async handleSessionError(event: EventSessionError) {
+    const sessionId = event.properties.sessionID
+    const error = event.properties.error
+    // Aborted turns are user-initiated, not failures — the TUI skips them too.
+    // ContextOverflowError is transient when auto-compaction handles it — the
+    // processor sets needsCompaction and continues without writing
+    // message.error. Terminal ContextOverflowError (auto-compaction off) is
+    // durable on message.info.error and replayed separately.
+    if (!sessionId || !error || error.name === "MessageAbortedError" || error.name === "ContextOverflowError") return
+
+    const session = await Effect.runPromise(this.input.session.tryGet(sessionId))
+    // Unregistered session: a task subagent. Its failures stay inside the
+    // parent's task card rather than surfacing as a top-level turn error.
+    if (!session) return
+
+    await this.input.connection.sessionUpdate({
+      sessionId: session.id,
+      update: sessionErrorChunk(`error-${event.id}`, error),
+    })
   }
 
   async replayMessage(message: SessionMessageResponse) {
@@ -94,6 +187,23 @@ export class Subscription {
         continue
       }
       await this.replayContentPart(message, part)
+    }
+
+    // A failed turn is durable on the assistant message (`message.error`), but
+    // the live session.error mirror is wire-only. Re-emit the same chunk during
+    // replay so a reconnected client still sees the failure text instead of an
+    // empty turn. Using the assistant message's own id as messageId keeps each
+    // failed turn in its own message bubble — ACP clients aggregate chunks by
+    // messageId, so a session-scoped id would merge unrelated failures.
+    if (
+      message.info.role === "assistant" &&
+      message.info.error &&
+      message.info.error.name !== "MessageAbortedError"
+    ) {
+      await this.input.connection.sessionUpdate({
+        sessionId: message.info.sessionID,
+        update: sessionErrorChunk(message.info.id, message.info.error),
+      })
     }
   }
 

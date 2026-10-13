@@ -546,7 +546,7 @@ export function make(input: {
           "session",
         )
         yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-        return promptResponse(response.info, params.messageId)
+        return promptResponse(response.info, params.messageId, !!response.info.error)
       }
 
       if (command.name === "compact") {
@@ -589,7 +589,7 @@ export function make(input: {
         "session",
       )
       yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-      return promptResponse(response.info, params.messageId)
+      return promptResponse(response.info, params.messageId, !!response.info.error)
     }),
     cancel,
   }
@@ -837,9 +837,9 @@ function detectSlashCommand(parts: ReturnType<typeof promptContentToParts>) {
   return { name, args: rest.join(" ").trim() }
 }
 
-function promptResponse(info: AssistantInfo, messageId: string | null | undefined): PromptResponse {
+function promptResponse(info: AssistantInfo, messageId: string | null | undefined, hasError = false): PromptResponse {
   return {
-    stopReason: "end_turn",
+    stopReason: hasError ? "refusal" : "end_turn",
     ...(info ? { usage: UsageService.buildUsage(info) } : {}),
     ...(messageId ? { userMessageId: messageId } : {}),
     _meta: {},

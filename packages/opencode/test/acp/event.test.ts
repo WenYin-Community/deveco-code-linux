@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test"
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
-import type { Event, Message, OpencodeClient, Part, SessionMessageResponse, ToolPart } from "@opencode-ai/sdk/v2"
+import type {
+  Event,
+  EventSessionError,
+  Message,
+  OpencodeClient,
+  Part,
+  SessionMessageResponse,
+  ToolPart,
+} from "@opencode-ai/sdk/v2"
 import { Effect, ManagedRuntime } from "effect"
 import { ACPEvent } from "@/acp/event"
 import * as ACPService from "@/acp/service"
@@ -125,6 +133,14 @@ function textDelta(sessionID: string, messageID: string, partID: string, delta: 
       delta,
     },
   }
+}
+
+function sessionError(
+  sessionID: string,
+  id: string,
+  error: NonNullable<EventSessionError["properties"]["error"]>,
+): Event {
+  return { id, type: "session.error", properties: { sessionID, error } }
 }
 
 function partUpdated(sessionID: string, messageID: string, partID: string, type: DeltaPartType): Event {
@@ -328,6 +344,170 @@ describe("acp event routing", () => {
 
     expect(harness.updates.map((update) => update.sessionId)).toEqual(["ses_b"])
     expect(harness.updates[0]?.update.sessionUpdate).toBe("agent_message_chunk")
+  })
+
+  it("forwards a session error as an agent chunk so the turn is not silently empty", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    await harness.subscription.handle(
+      sessionError("ses_a", "evt_1", { name: "UnknownError", data: { message: "model unavailable" } }),
+    )
+
+    expect(harness.updates).toHaveLength(1)
+    expect(harness.updates[0]?.sessionId).toBe("ses_a")
+    expect(harness.updates[0]?.update).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "error-evt_1",
+      content: { type: "text", text: "model unavailable" },
+      _meta: { error: { name: "UnknownError" } },
+    })
+  })
+
+  it("carries the gateway error type and status for terminal classification", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    await harness.subscription.handle(
+      sessionError("ses_a", "evt_2", {
+        name: "APIError",
+        data: {
+          message: "quota exceeded",
+          statusCode: 403,
+          isRetryable: false,
+          responseBody: JSON.stringify({ error: { type: "QuotaExhausted", message: "quota exceeded" } }),
+        },
+      }),
+    )
+
+    expect(harness.updates[0]?.update).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "error-evt_2",
+      content: { type: "text", text: "quota exceeded" },
+      _meta: { error: { name: "APIError", type: "QuotaExhausted", statusCode: 403 } },
+    })
+  })
+
+  it("classifies FreeUsageLimitError and GoUsageLimitError from responseBody substrings", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    await harness.subscription.handle(
+      sessionError("ses_a", "evt_free", {
+        name: "APIError",
+        data: {
+          message: "free tier limit",
+          statusCode: 403,
+          isRetryable: false,
+          responseBody: JSON.stringify({ error: { type: "FreeUsageLimitError", message: "free tier limit" } }),
+        },
+      }),
+    )
+
+    expect(harness.updates[0]?.update).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "error-evt_free",
+      content: { type: "text", text: "free tier limit" },
+      _meta: { error: { name: "APIError", type: "FreeUsageLimitError", statusCode: 403 } },
+    })
+  })
+
+  it("skips aborted turns and unregistered subagent sessions for session errors", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    await harness.subscription.handle(
+      sessionError("ses_a", "evt_1", { name: "MessageAbortedError", data: { message: "aborted" } }),
+    )
+    await harness.subscription.handle(
+      sessionError("ses_child", "evt_2", { name: "UnknownError", data: { message: "subagent blew up" } }),
+    )
+
+    expect(harness.updates).toHaveLength(0)
+  })
+
+  it("skips transient ContextOverflowError in the live path (auto-compaction will retry)", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    await harness.subscription.handle(
+      sessionError("ses_a", "evt_ctx", { name: "ContextOverflowError", data: { message: "context length exceeded" } }),
+    )
+
+    expect(harness.updates).toHaveLength(0)
+  })
+
+  it("replays a persisted turn error so a reconnected client still sees the failure text", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    const failed = {
+      info: {
+        id: "msg_err",
+        sessionID: "ses_a",
+        role: "assistant",
+        time: { created: Date.now() },
+        parentID: "msg_parent",
+        modelID: "model",
+        providerID: "provider",
+        mode: "build",
+        agent: "build",
+        path: { cwd: "/workspace", root: "/workspace" },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        error: {
+          name: "APIError",
+          data: {
+            message: "quota exceeded",
+            statusCode: 403,
+            isRetryable: false,
+            responseBody: JSON.stringify({ error: { type: "QuotaExhausted", message: "quota exceeded" } }),
+          },
+        },
+      },
+      parts: [],
+    } satisfies SessionMessageResponse
+
+    await harness.subscription.replayMessage(failed)
+
+    expect(harness.updates).toHaveLength(1)
+    expect(harness.updates[0]?.sessionId).toBe("ses_a")
+    expect(harness.updates[0]?.update).toEqual({
+      sessionUpdate: "agent_message_chunk",
+      messageId: "msg_err",
+      content: { type: "text", text: "quota exceeded" },
+      _meta: { error: { name: "APIError", type: "QuotaExhausted", statusCode: 403 } },
+    })
+  })
+
+  it("does not replay aborted turns or clean assistant messages as errors", async () => {
+    const harness = createHarness()
+    await createKnownSession(harness.session, "ses_a", { messageId: "msg_a", partId: "part_a", partType: "text" })
+
+    const base = {
+      id: "msg_x",
+      sessionID: "ses_a",
+      role: "assistant" as const,
+      time: { created: Date.now() },
+      parentID: "msg_parent",
+      modelID: "model",
+      providerID: "provider",
+      mode: "build",
+      agent: "build",
+      path: { cwd: "/workspace", root: "/workspace" },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    }
+    const aborted = {
+      info: { ...base, id: "msg_abort", error: { name: "MessageAbortedError", data: { message: "aborted" } } },
+      parts: [],
+    } satisfies SessionMessageResponse
+    const clean = { info: { ...base, id: "msg_ok" }, parts: [] } satisfies SessionMessageResponse
+
+    await harness.subscription.replayMessage(aborted)
+    await harness.subscription.replayMessage(clean)
+
+    expect(harness.updates).toHaveLength(0)
   })
 
   it("keeps interleaved sessions isolated for text and reasoning deltas", async () => {
