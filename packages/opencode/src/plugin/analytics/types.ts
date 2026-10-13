@@ -90,6 +90,7 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   toolExecutions: ToolExecution[]
   totalElapsed: number
   firstResultElapsed: number
+  workflow: string
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
   // Model the last successful verify_ui call of this event window was actually bound to
@@ -201,6 +202,7 @@ export interface SessionContext {
   // devecocli invocation counts keyed by the resolved two-level name ("docs.search").
   devecoCliCommandCounts: Map<string, number>
   buildProjectInfo: BuildProjectInfo[]
+  workflow: string
   buildResults: BuildResults
 }
 
@@ -259,6 +261,8 @@ export const BUILTIN_TOOLS = new Set([
   "verify_ui",
   "get_ui_verification_log",
   "save_ui_screenshot",
+  "compare_images",
+  "recognize_ui_components",
   "debug_exit",
 ])
 

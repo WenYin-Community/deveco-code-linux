@@ -38,6 +38,7 @@ interface AnalyticsCollectorDependency {
     skillName?: string,
   ): void
   recordBuildExecution(isBuildSuccess: boolean): void
+  markWorkflow(name: string): void
   recordDevecoCliCommand(command: string, subcommand?: string): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
@@ -344,6 +345,12 @@ class AnalyticsRuntime {
       input.source,
       input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
     )
+    if (input.tool === "skill" && input.args?.name === "hmos-d2a-design-to-arkts-entry") {
+      // Same ownership guard as recordTokenUsage: ignore other sessions' tool results.
+      if (this.dependencies.collector.getSessionID() === input.sessionID) {
+        this.dependencies.collector.markWorkflow("design-to-arkts")
+      }
+    }
     this.recordUIVerificationModel(input, metadata)
     this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
     this.recordDevecoBuilds(metadata)

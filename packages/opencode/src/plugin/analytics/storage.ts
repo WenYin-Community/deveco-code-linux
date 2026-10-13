@@ -177,15 +177,17 @@ function isOperations(value: unknown): boolean {
   );
 }
 
-// taskType and uiReconstructionScore landed after the current schema version was sealed; events
-// queued before them must keep uploading, so both keys are optional (tolerate missing, validate
-// when present). Do NOT bump ANALYTICS_SCHEMA_VERSION: a bump discards the whole pending queue.
+// taskType, uiReconstructionScore and workflow landed after the current schema version was
+// sealed; events queued before them must keep uploading, so all three keys are optional
+// (tolerate missing, validate when present). Do NOT bump ANALYTICS_SCHEMA_VERSION: a bump
+// discards the whole pending queue.
 // No Number.isFinite for the score — JSON.parse can never yield NaN/Infinity.
 function hasOptionalTelemetryFields(value: Record<string, unknown>): boolean {
   return (
     (value.uiVerificationModel === null || typeof value.uiVerificationModel === 'string') &&
     (value.taskType === undefined || typeof value.taskType === 'string') &&
-    (value.uiReconstructionScore === undefined || typeof value.uiReconstructionScore === 'number')
+    (value.uiReconstructionScore === undefined || typeof value.uiReconstructionScore === 'number') &&
+    (value.workflow === undefined || typeof value.workflow === 'string')
   );
 }
 
@@ -219,6 +221,7 @@ function isAiSessionEvent(value: unknown): value is AiSessionEvent {
       'toolExecutions',
       'totalElapsed',
       'firstResultElapsed',
+      ...(Object.hasOwn(value, 'workflow') ? ['workflow'] : []),
       'isFirstBuildSuccess',
       'isFinalBuildSuccess',
       'uiVerificationModel',

@@ -53,6 +53,7 @@ const builtEvent: AiSessionEvent = {
   toolExecutions: [],
   totalElapsed: 10,
   firstResultElapsed: 5,
+  workflow: "",
   isFirstBuildSuccess: null,
   isFinalBuildSuccess: null,
   uiVerificationModel: null,
@@ -87,6 +88,7 @@ function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
       (_toolName: string, _duration: number, _isSuccess: boolean, _isBuildSuccess?: boolean) => undefined,
     ),
     recordBuildExecution: mock((_isBuildSuccess: boolean) => undefined),
+    markWorkflow: mock((_workflow: string) => undefined),
     recordDevecoCliCommand: mock((_command: string, _subcommand?: string) => undefined),
     buildEvent: mock(async () => builtEvent),
     buildProjectEvent: mock((): BuildProjectAnalyticsEvent | null => builtBuildProjectEvent),
@@ -122,6 +124,7 @@ function createCollector(state: ReturnType<typeof createHarnessState>, calls: Re
     recordFileDiff: () => undefined,
     recordToolExecution: calls.recordToolExecution,
     recordBuildExecution: calls.recordBuildExecution,
+    markWorkflow: calls.markWorkflow,
     recordDevecoCliCommand: calls.recordDevecoCliCommand,
     getSessionID: () => (state.active ? "session-1" : null),
     buildEvent: calls.buildEvent,
@@ -1040,4 +1043,30 @@ test("end-to-end: one turn of devecocli commands uploads sorted counts and place
       },
     },
   })
+})
+
+test("marks the design-to-arkts workflow when the entry skill is invoked", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "skill", sessionID: "session-1", callID: "skill-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "session-1", callID: "skill-1", args: { name: "hmos-d2a-design-to-arkts-entry" } },
+    { title: "skill", output: "skill loaded", metadata: {} },
+  )
+
+  expect(harness.markWorkflow).toHaveBeenCalledWith("design-to-arkts")
+})
+
+test("does not mark the workflow for other skills", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "skill", sessionID: "session-1", callID: "skill-2" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "skill", sessionID: "session-1", callID: "skill-2", args: { name: "hmos-arkui-develop-skill" } },
+    { title: "skill", output: "skill loaded", metadata: {} },
+  )
+
+  expect(harness.markWorkflow).not.toHaveBeenCalled()
 })

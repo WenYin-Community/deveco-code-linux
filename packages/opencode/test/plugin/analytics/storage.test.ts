@@ -43,6 +43,7 @@ function event(): AiSessionEvent {
     toolExecutions: [],
     totalElapsed: 10,
     firstResultElapsed: 5,
+    workflow: "",
     isFirstBuildSuccess: null,
     isFinalBuildSuccess: null,
     uiVerificationModel: null,
@@ -391,4 +392,38 @@ test("queue rejects malformed new fields while accepting the valid shape", async
     uiReconstructionScore: -1,
     operations: { devecoCliCommands: [] },
   })
+})
+
+test("current schema accepts ai_session events with a non-empty workflow", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const markedEvent: AiSessionEvent = { ...event(), workflow: "design-to-arkts" }
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.AI_SESSION, event: markedEvent })
+  const pending = await getPendingEvents()
+  expect(pending).toHaveLength(1)
+})
+
+test("current-schema queue rejects ai_session events with a non-string workflow", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const invalidEvent = { ...event(), workflow: 123 }
+  const encrypted = LocalCrypto.encryptForLocalStorage(
+    JSON.stringify({
+      schemaVersion: ANALYTICS_SCHEMA_VERSION,
+      pendingEvents: [
+        {
+          action: ANALYTICS_ACTION.AI_SESSION,
+          event: invalidEvent,
+          uid: "uid-1",
+          queueId: "queue-1",
+          sealed: false,
+        },
+      ],
+      lastFlush: 1,
+    }),
+  )
+  await fs.writeFile(file, JSON.stringify(encrypted))
+  expect((await loadStorage()).pendingEvents).toEqual([])
 })

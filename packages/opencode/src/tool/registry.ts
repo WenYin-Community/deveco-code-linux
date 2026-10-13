@@ -19,6 +19,8 @@ import { SkillTool } from "./skill"
 import { SwitchCwdTool } from "./switch-cwd"
 import { ArktsCheckTool } from "./arkts_check"
 import { GetUiVerificationLogTool, SaveUiScreenshotTool, VerifyUiTool } from "./ui-verification/ui-verification-tool"
+import { CompareImagesTool } from "./design-tools/image-compare/image-compare-tool"
+import { RecognizeUIComponentsTool } from "./design-tools/component-recognition/component-recognition-tool"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -120,6 +122,8 @@ export const layer = Layer.effect(
     const verifyui = yield* VerifyUiTool
     const getuilog = yield* GetUiVerificationLogTool
     const saveuiscreenshot = yield* SaveUiScreenshotTool
+    const compareimages = yield* CompareImagesTool
+    const recognizeuicomponents = yield* RecognizeUIComponentsTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -237,6 +241,8 @@ export const layer = Layer.effect(
           verify_ui: Tool.init(verifyui),
           get_ui_verification_log: Tool.init(getuilog),
           save_ui_screenshot: Tool.init(saveuiscreenshot),
+          compare_images: Tool.init(compareimages),
+          recognize_ui_components: Tool.init(recognizeuicomponents),
           debugexit: Tool.init(debugexit),
         })
 
@@ -266,6 +272,8 @@ export const layer = Layer.effect(
             tool.verify_ui,
             tool.get_ui_verification_log,
             tool.save_ui_screenshot,
+            tool.compare_images,
+            tool.recognize_ui_components,
             tool.debugexit,
           ],
           task: tool.task,

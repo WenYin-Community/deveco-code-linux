@@ -125,6 +125,7 @@ export class SessionCollector {
       toolCounts: new Map(),
       devecoCliCommandCounts: new Map(),
       buildProjectInfo: [],
+      workflow: "",
       buildResults: {
         isFirstBuildSuccess: null,
         isFinalBuildSuccess: null,
@@ -205,6 +206,10 @@ export class SessionCollector {
   recordBuildExecution(isBuildSuccess: boolean): void {
     if (!this.context) return
     this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
+  }
+
+  markWorkflow(name: string): void {
+    if (this.context) this.context.workflow = name
   }
 
   private updateBuildResults(results: BuildResults, isBuildSuccess: boolean, elapsed: number): void {
@@ -289,6 +294,7 @@ export class SessionCollector {
       outputTokens: this.context.outputTokens,
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
       finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
+      workflow: this.context.workflow,
     }
   }
 
