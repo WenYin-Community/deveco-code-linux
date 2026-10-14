@@ -38,7 +38,7 @@ const DEFAULT_PLUGIN_CONFIG = {
     autoMemory: { enabled: true },
     autoDream: { enabled: true },
     extraction: { enabled: true },
-    skills: { enabled: true, autoTrigger: false },
+    skills: { enabled: false, autoTrigger: false },
     slashCommands: { enabled: true },
     logLevel: 'error',
     memoryRecall: { enabled: true, visibleRecall: true, visibleWrite: true, minRelevanceScore: 0.3, maxInjectChars: 200 },

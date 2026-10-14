@@ -88,10 +88,11 @@ describe("skills.autoTrigger — path A (checkSkillThreshold)", () => {
     expect(checkSkillThreshold(stateWithIters(10), config).shouldTrigger).toBe(false)
   })
 
-  it("default config enables skills but keeps background auto-triggering off", () => {
-    // DEFAULT_SKILL_CONFIG: enabled=true, autoTrigger=false — skills are
-    // available on demand, but the count-based trigger stays silent by default
-    expect(DEFAULT_SKILL_CONFIG.enabled).toBe(true)
+  it("default config keeps the skill system off, and auto-triggering off with it", () => {
+    // DEFAULT_SKILL_CONFIG: enabled=false, autoTrigger=false — the skill
+    // system is opt-in; enabling it still leaves background auto-triggering
+    // off until autoTrigger=true is set explicitly
+    expect(DEFAULT_SKILL_CONFIG.enabled).toBe(false)
     expect(DEFAULT_SKILL_CONFIG.autoTrigger).toBe(false)
     expect(checkSkillThreshold(stateWithIters(10)).shouldTrigger).toBe(false)
   })

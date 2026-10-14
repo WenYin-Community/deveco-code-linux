@@ -311,13 +311,13 @@ export const DEFAULT_EXTRACTION_CONFIG: ExtractionConfig = {
  */
 export interface SkillConfig {
   // Enable/disable the skill system (tools, manual review, prompt injection).
-  // Default true — skills are available out of the box; set false to fully
-  // opt out (manual paths like "提取技能" / /auto-skill included).
+  // Default false — opt in via config; once enabled, reviews are on-demand
+  // (natural language "提取技能" / /auto-skill) unless autoTrigger is set.
   enabled: boolean
   // Enable/disable the automatic count-based review trigger (every
   // skillReviewInterval tool calls, and the extraction 'combined' piggyback).
-  // Default false — reviews are on-demand only; background auto-triggering
-  // is opt-in and independent of skillReviewInterval.
+  // Default false — background auto-triggering is opt-in and independent of
+  // skillReviewInterval.
   autoTrigger: boolean
   // Tool call threshold for skill review trigger
   skillReviewInterval: number
@@ -327,12 +327,12 @@ export interface SkillConfig {
 
 /**
  * Default Skill System Configuration
- * enabled=true + autoTrigger=false: the skill system is on by default but
- * only runs reviews on demand (natural language / /auto-skill), never
- * silently in the background.
+ * enabled=false + autoTrigger=false: the skill system is opt-in, and even
+ * once enabled, reviews run on demand only — background auto-triggering
+ * requires an explicit autoTrigger=true.
  */
 export const DEFAULT_SKILL_CONFIG: SkillConfig = {
-  enabled: true,
+  enabled: false,
   autoTrigger: false,
   skillReviewInterval: 10,
   reviewTimeoutMs: 120000,
