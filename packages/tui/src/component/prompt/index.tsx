@@ -748,6 +748,19 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Start or control a long-running goal",
+        name: "prompt.goal",
+        category: t("category.prompt"),
+        slashName: "goal",
+        enabled: local.agent.current()?.name === GOAL_AGENT,
+        run: () => {
+          const text = "/goal "
+          input.setText(text)
+          setStore("prompt", { input: text, parts: [] })
+          input.gotoBufferEnd()
+        },
+      },
+      {
         title: t("command.warp"),
         desc: t("command.warp_desc"),
         name: "workspace.set",

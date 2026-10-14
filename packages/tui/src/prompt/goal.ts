@@ -29,7 +29,7 @@ export type GoalCommand =
 
 export const GOAL_AGENT = "build"
 
-export const GOAL_HELP = `/goal <objective>  Start or replace a goal (build agent only)
+export const GOAL_HELP = `/goal <objective>  Start or replace a goal
 /goal stop         Pause the active goal
 /goal clear        Delete the current goal
 /goal resume       Resume the paused goal

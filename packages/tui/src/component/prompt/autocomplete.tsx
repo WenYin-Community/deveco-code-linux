@@ -483,11 +483,13 @@ export function Autocomplete(props: {
     }
 
     const results: AutocompleteOption[] = [...slashes()]
+    const localCommands = new Set(results.map((item) => item.display))
 
     for (const serverCommand of sync.data.command) {
       if (serverCommand.source === "skill") continue
       if (serverCommand.name === "goal" && !goalCommandsEnabled()) continue
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
+      if (localCommands.has("/" + serverCommand.name + label)) continue
       results.push({
         display: "/" + serverCommand.name + label,
         description: commandDescOverrides[serverCommand.name] ?? serverCommand.description,
