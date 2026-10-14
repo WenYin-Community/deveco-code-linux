@@ -71,8 +71,8 @@ describe("skills.autoTrigger — path A (checkSkillThreshold)", () => {
     expect(result.newState.lastReviewTime).toBeNull()
   })
 
-  it("autoTrigger=true (default) fires at the interval and resets the counter", () => {
-    const config = { ...DEFAULT_SKILL_CONFIG, enabled: true, skillReviewInterval: 10 }
+  it("autoTrigger=true fires at the interval and resets the counter", () => {
+    const config = { ...DEFAULT_SKILL_CONFIG, enabled: true, autoTrigger: true, skillReviewInterval: 10 }
     const below = checkSkillThreshold(stateWithIters(9), config)
     expect(below.shouldTrigger).toBe(false)
     expect(below.newState.itersSinceSkill).toBe(9)
@@ -88,9 +88,11 @@ describe("skills.autoTrigger — path A (checkSkillThreshold)", () => {
     expect(checkSkillThreshold(stateWithIters(10), config).shouldTrigger).toBe(false)
   })
 
-  it("default config keeps auto-trigger semantics off via enabled=false", () => {
-    // DEFAULT_SKILL_CONFIG: enabled=false, autoTrigger=true — the master switch still rules
-    expect(DEFAULT_SKILL_CONFIG.autoTrigger).toBe(true)
+  it("default config enables skills but keeps background auto-triggering off", () => {
+    // DEFAULT_SKILL_CONFIG: enabled=true, autoTrigger=false — skills are
+    // available on demand, but the count-based trigger stays silent by default
+    expect(DEFAULT_SKILL_CONFIG.enabled).toBe(true)
+    expect(DEFAULT_SKILL_CONFIG.autoTrigger).toBe(false)
     expect(checkSkillThreshold(stateWithIters(10)).shouldTrigger).toBe(false)
   })
 })
