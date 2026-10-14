@@ -93,7 +93,7 @@ export function checkSkillThreshold(
   state: SkillTriggerState,
   config: SkillConfig = DEFAULT_SKILL_CONFIG
 ): { shouldTrigger: boolean; newState: SkillTriggerState } {
-  if (!config.enabled) {
+  if (!config.enabled || !config.autoTrigger) {
     return {
       shouldTrigger: false,
       newState: state,

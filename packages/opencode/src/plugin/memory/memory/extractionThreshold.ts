@@ -117,7 +117,7 @@ export function shouldTriggerExtraction(
   newMessageCount: number,
   skillConfig: SkillConfig = DEFAULT_SKILL_CONFIG
 ): AutoMemoryThresholdCheckResult {
-  const skillThresholdMet = state.skill_iters_since_review >= skillConfig.skillReviewInterval;
+  const skillThresholdMet = skillConfig.autoTrigger && state.skill_iters_since_review >= skillConfig.skillReviewInterval;
   const build = (trigger: boolean, reason: string) =>
     buildThresholdResult(state, trigger, reason, newMessageCount, skillThresholdMet);
 

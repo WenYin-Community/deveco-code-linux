@@ -312,6 +312,11 @@ export const DEFAULT_EXTRACTION_CONFIG: ExtractionConfig = {
 export interface SkillConfig {
   // Enable/disable skill system
   enabled: boolean
+  // Enable/disable the automatic count-based review trigger (every
+  // skillReviewInterval tool calls, and the extraction 'combined' piggyback).
+  // When false, reviews stay reachable via the skill-review-trigger tool
+  // (natural language / /auto-skill); only background auto-triggering stops.
+  autoTrigger: boolean
   // Tool call threshold for skill review trigger
   skillReviewInterval: number
   // Timeout for skill review agent in milliseconds
@@ -323,6 +328,7 @@ export interface SkillConfig {
  */
 export const DEFAULT_SKILL_CONFIG: SkillConfig = {
   enabled: false,
+  autoTrigger: true,
   skillReviewInterval: 10,
   reviewTimeoutMs: 120000,
 }

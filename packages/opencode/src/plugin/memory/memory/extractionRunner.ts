@@ -272,7 +272,7 @@ export async function executeExtraction(
     }
     
     const thresholdState = getThresholdState()
-    const skillThresholdMet = thresholdState.skill_iters_since_review >= initializedSkillConfig.skillReviewInterval
+    const skillThresholdMet = initializedSkillConfig.autoTrigger && thresholdState.skill_iters_since_review >= initializedSkillConfig.skillReviewInterval
     // Respect throttle + minMessages via shouldTriggerExtraction (replaces hardcoded true).
     // skipThrottle bypasses for manual triggers (e.g. /extract).
     const triggerCheck = shouldTriggerExtraction(

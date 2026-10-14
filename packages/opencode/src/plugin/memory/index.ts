@@ -750,6 +750,7 @@ async function handleSkillReviewTrigger(
     projectID: string,
     directory: string,
 ): Promise<void> {
+    if (!state.skillConfig.autoTrigger) { return }
     state.skillTriggerState = incrementSkillCounter(state.skillTriggerState);
     if (await isSkillReviewInProgress(state.storage.getMemoryPath())) { return }
     const { shouldTrigger, newState } = checkSkillThreshold(state.skillTriggerState, state.skillConfig);
@@ -803,7 +804,7 @@ async function handleToolExecuteAfter(
         if (isSubagentSession(input.sessionID) && !state.subagentHooksConfig.skillReviewTrigger) { return }
     }
     await handleSkillTrigger(input, state, client, projectID, directory);
-    if (state.skillConfig.enabled && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
+    if (state.skillConfig.enabled && state.skillConfig.autoTrigger && (!isSubagentSession(input.sessionID) || state.subagentHooksConfig.skillReviewTrigger)) {
         try {
             processToolCallForSkill(input.tool);
         }
