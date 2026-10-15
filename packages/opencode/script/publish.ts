@@ -3,6 +3,7 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
 import { fileURLToPath } from "url"
+import fs from "fs"
 import path from "path"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
@@ -24,20 +25,33 @@ async function published(name: string, version: string) {
   return (await $`npm view ${name}@${version} version --registry ${registry}`.nothrow()).exitCode === 0
 }
 
+async function clearTarballs(cwd: string) {
+  // Bun shell errors on an empty glob, so remove leftover tarballs via Bun.Glob instead
+  // of `rm -f *.tgz` (a stale *.tgz next to the fresh one makes npm publish EUSAGE).
+  for (const tgz of new Bun.Glob("*.tgz").scanSync({ cwd })) await fs.promises.rm(path.join(cwd, tgz), { force: true })
+}
+
 async function publish(cwd: string, name: string, version: string) {
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(cwd)
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
-    await $`rm -f *.tgz`.cwd(cwd)
+    await clearTarballs(cwd)
     return
   }
+  // Clear tarballs left by interrupted runs: a stale *.tgz next to the fresh one makes
+  // `npm stage publish *.tgz` fail with EUSAGE (multiple package specs).
+  await clearTarballs(cwd)
   await $`bun pm pack`.cwd(cwd)
+  // Staged publishing for 2FA-bound releases (needs npm CLI >= 11.15.0): upload now, a
+  // maintainer approves later with 2FA — `npm stage approve <stage-id>` or the
+  // npmjs.com Staged Packages tab. Staging itself needs only publish access, no OTP.
   if (token) {
-    await $`npm publish *.tgz --access public --registry ${registry} --tag ${Script.channel} --//registry.npmjs.org/:_authToken=${token}`.cwd(cwd)
+    await $`npm stage publish *.tgz --access public --registry ${registry} --tag ${Script.channel} --//registry.npmjs.org/:_authToken=${token}`.cwd(cwd)
   } else {
-    await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(cwd)
+    await $`npm stage publish *.tgz --access public --registry ${registry} --tag ${Script.channel}`.cwd(cwd)
   }
-  await $`rm -f *.tgz`.cwd(cwd)
+  await clearTarballs(cwd)
+  console.log(`staged ${name}@${version} (tag ${Script.channel}) — approve via: npm stage list ${name} --json, then npm stage approve <stage-id> (2FA)`)
 }
 
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])

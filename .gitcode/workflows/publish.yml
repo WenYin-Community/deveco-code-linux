@@ -44,6 +44,10 @@ jobs:
       - name: 安装 Bun
         run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
 
+      - name: 升级 npm
+        # npm stage publish 需要 npm CLI >= 11.15.0（Node 22 自带的 npm 10.x 不支持）
+        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g npm@latest
+
       - name: 配置 npm 认证
         run: |
           echo "@${DEVECO_SCOPE}:registry=https://registry.npmjs.org/" >> ~/.npmrc
@@ -77,16 +81,18 @@ jobs:
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
           echo "✅ CLI 二进制构建完成" >> "$ATOMGIT_STEP_SUMMARY"
 
-      - name: 组装并发布到 npm
+      - name: 组装并 stage 发布到 npm
         run: |
           cd packages/opencode && bun run script/publish.ts
-          echo "## npm 发布" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "## npm Stage 发布" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| 包名 | 链接 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 包名 | 状态 |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
-          for pkgjson in dist/deveco-*/package.json; do
+          for pkgjson in dist/deveco*/package.json; do
             name=$(jq -r '.name' "$pkgjson")
-            echo "| \`$name\` | [npm](https://www.npmjs.com/package/$name) |" >> "$ATOMGIT_STEP_SUMMARY"
+            echo "| \`$name\` | 已 stage，等待 2FA 审批（[npm](https://www.npmjs.com/package/$name)） |" >> "$ATOMGIT_STEP_SUMMARY"
           done
+          echo "" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "> Stage 发布不会立即公开新版本，需要维护者审批：\`npm stage list <包名> --json\` 查询 stage-id，然后执行 \`npm stage approve <stage-id>\`（需要 2FA）；或在 npmjs.com 的 Staged Packages 页面审批。" >> "$ATOMGIT_STEP_SUMMARY"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
