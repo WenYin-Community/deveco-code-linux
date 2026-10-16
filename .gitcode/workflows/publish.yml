@@ -45,8 +45,18 @@ jobs:
         run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
 
       - name: 升级 npm
-        # npm stage publish 需要 npm CLI >= 11.15.0（Node 22 自带的 npm 10.x 不支持）
-        run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g npm@latest
+        # npm stage publish 需要 npm CLI >= 11.15.0（Node 22 自带的 npm 10.x 不支持）。
+        # npm 原位全局自升级会在收尾输出阶段因自身文件被新版本替换而崩溃（MODULE_NOT_FOUND），
+        # 此时新版本通常已安装成功：重试一次，并以 npm --version 硬性校验兜底。
+        run: |
+          export NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/
+          npm install -g npm@11 || npm install -g npm@11 || true
+          NPM_VERSION=$(npm --version 2>/dev/null || echo 0.0.0)
+          echo "npm version: $NPM_VERSION"
+          if [ "$(printf '%s\n' 11.15.0 "$NPM_VERSION" | sort -V | head -1)" != "11.15.0" ]; then
+            echo "::error::npm 升级失败：$NPM_VERSION < 11.15.0（npm stage 需要）"
+            exit 1
+          fi
 
       - name: 配置 npm 认证
         run: |
