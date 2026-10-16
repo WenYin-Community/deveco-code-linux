@@ -31,20 +31,6 @@ jobs:
       - name: 安装 Bun
         run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
 
-      - name: 升级 npm
-        # npm stage publish 需要 npm CLI >= 11.15.0（Node 22 自带的 npm 10.x 不支持）。
-        # npm 原位全局自升级会在收尾输出阶段因自身文件被新版本替换而崩溃（MODULE_NOT_FOUND），
-        # 此时新版本通常已安装成功：重试一次，并以 npm --version 硬性校验兜底。
-        run: |
-          export NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/
-          npm install -g npm@11 || npm install -g npm@11 || true
-          NPM_VERSION=$(npm --version 2>/dev/null || echo 0.0.0)
-          echo "npm version: $NPM_VERSION"
-          if [ "$(printf '%s\n' 11.15.0 "$NPM_VERSION" | sort -V | head -1)" != "11.15.0" ]; then
-            echo "::error::npm 升级失败：$NPM_VERSION < 11.15.0（npm stage 需要）"
-            exit 1
-          fi
-
       - name: 配置 npm 认证
         run: |
           echo "@${DEVECO_SCOPE}:registry=https://registry.npmjs.org/" >> ~/.npmrc
@@ -81,19 +67,17 @@ jobs:
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
           echo "✅ CLI 二进制构建完成" >> "$ATOMGIT_STEP_SUMMARY"
 
-      - name: 组装并 stage 发布到 npm
+      - name: 组装并发布到 npm
         run: |
           cd packages/opencode && bun run script/publish.ts
-          echo "## npm Stage 发布" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "## npm 发布" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| 包名 | 状态 |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| 包名 | 链接 |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
-          for pkgjson in dist/deveco*/package.json; do
+          for pkgjson in dist/deveco-*/package.json; do
             name=$(jq -r '.name' "$pkgjson")
-            echo "| \`$name\` | 已 stage，等待 2FA 审批（[npm](https://www.npmjs.com/package/$name)） |" >> "$ATOMGIT_STEP_SUMMARY"
+            echo "| \`$name\` | [npm](https://www.npmjs.com/package/$name) |" >> "$ATOMGIT_STEP_SUMMARY"
           done
-          echo "" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "> Stage 发布不会立即公开新版本，需要维护者审批：\`npm stage list <包名> --json\` 查询 stage-id，然后执行 \`npm stage approve <stage-id>\`（需要 2FA）；或在 npmjs.com 的 Staged Packages 页面审批。" >> "$ATOMGIT_STEP_SUMMARY"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -200,8 +184,6 @@ jobs:
           echo "| 产物数 | $(ls dist/*.zip 2>/dev/null | wc -l) |" >> "$ATOMGIT_STEP_SUMMARY"
 
       - name: 同步 npmmirror
-        # Stage 发布的新版本要等 2FA 审批后才会出现在 npmjs，此处 sync 只刷新已发布的旧版本；
-        # 审批通过后需手动执行 `cnpm sync <包名>` 让 npmmirror 拉取新版本。
         run: |
           npm install -g cnpm --registry=https://registry.npmjs.org
           cnpm sync @${DEVECO_SCOPE}/deveco-code
