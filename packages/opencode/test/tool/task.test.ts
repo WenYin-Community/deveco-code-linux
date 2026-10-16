@@ -14,7 +14,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskTool, type TaskBackgroundDelivery, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -89,7 +89,11 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void; text?: string }): TaskPromptOps {
+function stubOps(opts?: {
+  onPrompt?: (input: SessionPrompt.PromptInput) => void
+  onDeliver?: (input: TaskBackgroundDelivery) => void
+  text?: string
+}): TaskPromptOps {
   return {
     cancel: () => Effect.void,
     resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
@@ -97,6 +101,10 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
       Effect.sync(() => {
         opts?.onPrompt?.(input)
         return reply(input, opts?.text ?? "done")
+      }),
+    deliverBackground: (input) =>
+      Effect.sync(() => {
+        opts?.onDeliver?.(input)
       }),
   }
 }
@@ -313,6 +321,7 @@ describe("tool.task", () => {
             ready.resolve(input)
             return cancelled.promise
           }).pipe(Effect.as(reply(input, "cancelled"))),
+        deliverBackground: () => Effect.void,
       }
 
       const fiber = yield* def
@@ -488,22 +497,19 @@ describe("tool.task", () => {
       const def = yield* tool.init()
       const ready = yield* Deferred.make<void>()
       const done = yield* Deferred.make<void>()
-      const injected = yield* Deferred.make<SessionPrompt.PromptInput>()
+      const injected = yield* Deferred.make<TaskBackgroundDelivery>()
       let runs = 0
       const promptOps: TaskPromptOps = {
         cancel: () => Effect.void,
         resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
-        prompt: (input) => {
-          if (input.sessionID === chat.id) {
-            return Deferred.succeed(injected, input).pipe(Effect.as(reply(input, "injected")))
-          }
-          return Effect.gen(function* () {
+        prompt: (input) =>
+          Effect.gen(function* () {
             runs += 1
             yield* Deferred.succeed(ready, undefined)
             yield* Deferred.await(done)
             return reply(input, "background done")
-          })
-        },
+          }),
+        deliverBackground: (input) => Deferred.succeed(injected, input),
       }
 
       const fiber = yield* def
@@ -541,7 +547,10 @@ describe("tool.task", () => {
 
       yield* Deferred.succeed(done, undefined)
       expect((yield* jobs.wait({ id: result.metadata.sessionId })).info?.output).toBe("background done")
-      expect((yield* Deferred.await(injected)).parts[0]?.type).toBe("text")
+      const delivered = yield* Deferred.await(injected)
+      expect(delivered.sessionID).toBe(chat.id)
+      expect(delivered.text).toContain(`state="completed"`)
+      expect(delivered.text).toContain("background done")
       expect(runs).toBe(1)
     }),
   )
@@ -593,20 +602,20 @@ describe("tool.task", () => {
       const first = defer<void>()
       const second = defer<void>()
       const updated = defer<SessionPrompt.PromptInput>()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const injected = defer<TaskBackgroundDelivery>()
       let prompts = 0
       const promptOps: TaskPromptOps = {
         ...stubOps(),
         prompt: (input) => {
-          if (input.sessionID === chat.id) {
-            injected.resolve(input)
-            return Effect.succeed(reply(input, "done"))
-          }
           prompts++
           if (prompts === 1) return Effect.promise(() => first.promise).pipe(Effect.as(reply(input, "first done")))
           updated.resolve(input)
           return Effect.promise(() => second.promise).pipe(Effect.as(reply(input, "second done")))
         },
+        deliverBackground: (input) =>
+          Effect.sync(() => {
+            injected.resolve(input)
+          }),
       }
       const context = {
         sessionID: chat.id,
@@ -653,8 +662,7 @@ describe("tool.task", () => {
       expect(waited.info?.output).toBe("second done")
       const notification = yield* Effect.promise(() => injected.promise)
       expect(notification.variant).toBe("xhigh")
-      expect(notification.parts[0]?.type).toBe("text")
-      if (notification.parts[0]?.type === "text") expect(notification.parts[0].text).toContain("second done")
+      expect(notification.text).toContain("second done")
     }),
   )
 
@@ -774,7 +782,7 @@ describe("tool.task", () => {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
-      const injected = defer<SessionPrompt.PromptInput>()
+      const injected = defer<TaskBackgroundDelivery>()
       const started = defer<void>()
 
       const result = yield* def.execute(
@@ -792,14 +800,14 @@ describe("tool.task", () => {
           extra: {
             promptOps: {
               ...stubOps(),
-              prompt: (input) => {
-                if (input.sessionID === chat.id) {
-                  injected.resolve(input)
-                  return Effect.succeed(reply(input, "done"))
-                }
+              prompt: () => {
                 started.resolve()
                 return Effect.never
               },
+              deliverBackground: (input) =>
+                Effect.sync(() => {
+                  injected.resolve(input)
+                }),
             } satisfies TaskPromptOps,
           },
           messages: [],
@@ -815,12 +823,9 @@ describe("tool.task", () => {
       expect(waited.info?.status).toBe("cancelled")
 
       const notification = yield* Effect.promise(() => injected.promise)
-      expect(notification.parts[0]?.type).toBe("text")
-      if (notification.parts[0]?.type === "text") {
-        expect(notification.parts[0].text).toContain('state="cancelled"')
-        expect(notification.parts[0].text).toContain("Background task cancelled: inspect bug")
-        expect(notification.parts[0].text).toContain("The background task was cancelled")
-      }
+      expect(notification.text).toContain('state="cancelled"')
+      expect(notification.text).toContain("Background task cancelled: inspect bug")
+      expect(notification.text).toContain("The background task was cancelled")
     }),
   )
 

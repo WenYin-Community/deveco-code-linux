@@ -15,10 +15,18 @@ import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 
+export interface TaskBackgroundDelivery {
+  sessionID: SessionID
+  agent: string
+  variant?: SessionPrompt.PromptInput["variant"]
+  text: string
+}
+
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
   prompt(input: SessionPrompt.PromptInput): Effect.Effect<SessionV1.WithParts>
+  deliverBackground(input: TaskBackgroundDelivery): Effect.Effect<void>
 }
 
 const id = "task"
@@ -217,25 +225,17 @@ export const TaskTool = Tool.define(
         const spec = job && BACKGROUND_OUTCOMES[job.status]
         if (!spec) return
         const currentParent = yield* sessions.get(ctx.sessionID)
-        yield* ops
-          .prompt({
-            sessionID: ctx.sessionID,
-            agent: currentParent.agent ?? ctx.agent,
-            variant,
-            parts: [
-              {
-                type: "text",
-                synthetic: true,
-                text: renderOutput({
-                  sessionID: nextSession.id,
-                  state: job.status,
-                  summary: `Background task ${spec.verb}: ${params.description}`,
-                  text: spec.body(job),
-                }),
-              },
-            ],
-          })
-          .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+        yield* ops.deliverBackground({
+          sessionID: ctx.sessionID,
+          agent: currentParent.agent ?? ctx.agent,
+          variant,
+          text: renderOutput({
+            sessionID: nextSession.id,
+            state: job.status,
+            summary: `Background task ${spec.verb}: ${params.description}`,
+            text: spec.body(job),
+          }),
+        })
       })
 
       const notify = Effect.fn("TaskTool.notifyBackgroundResult")(function* (jobID: string) {

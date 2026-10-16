@@ -2628,3 +2628,75 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+noLLMServer.instance(
+  "cancel defers background task results into the next user prompt",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({})
+
+      yield* prompt.cancel(chat.id)
+      yield* prompt.deliverBackground({
+        sessionID: chat.id,
+        agent: "build",
+        text: '<task id="ses_child" state="cancelled">The background task was cancelled and produced no result.</task>',
+      })
+
+      expect((yield* sessions.messages({ sessionID: chat.id }).pipe(Effect.orDie)).length).toBe(0)
+
+      const msg = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "what changed?" }],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+      const texts = msg.parts.filter((p) => p.type === "text").map((p) => p.text)
+      expect(texts).toContain("what changed?")
+      expect(texts.some((t) => t.includes("The background task was cancelled"))).toBe(true)
+
+      yield* sessions.remove(chat.id)
+    }),
+  { config: cfg },
+)
+
+it.instance("deliverBackground wakes the session immediately when it was not cancelled", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.text("world")
+
+    yield* prompt.deliverBackground({
+      sessionID: chat.id,
+      agent: "build",
+      text: '<task id="ses_child" state="completed">background done</task>',
+    })
+
+    yield* llm.wait(1)
+    yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const msgs = yield* sessions.messages({ sessionID: chat.id }).pipe(Effect.orDie)
+        return msgs.some(
+          (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text.includes("world")),
+        )
+          ? (true as const)
+          : undefined
+      }),
+      "background delivery never woke the session",
+    )
+
+    const msgs = yield* sessions.messages({ sessionID: chat.id }).pipe(Effect.orDie)
+    const user = msgs.find((m) => m.info.role === "user")
+    expect(user?.parts.some((p) => p.type === "text" && p.text.includes("background done"))).toBe(true)
+
+    yield* sessions.remove(chat.id)
+  }),
+)

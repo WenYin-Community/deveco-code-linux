@@ -46,7 +46,7 @@ import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import { TaskTool, type TaskBackgroundDelivery, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -94,6 +94,7 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly deliverBackground: (input: TaskBackgroundDelivery) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -131,17 +132,55 @@ export const layer = Layer.effect(
     const agentMode = yield* SessionAgentMode.Service
     const database = yield* Database.Service
     const { db } = database
+    // A user-triggered cancel suspends background wakeups: settled task results
+    // accumulate here and ride along with the next admitted user prompt instead
+    // of immediately restarting the model.
+    const taskNotes = yield* InstanceState.make(
+      Effect.fnUntraced(function* () {
+        return { suspended: new Set<SessionID>(), pending: new Map<SessionID, string[]>() }
+      }),
+    )
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
+        deliverBackground: (input: TaskBackgroundDelivery) => deliverBackground(input),
       } satisfies TaskPromptOps
     })
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+      // Mark suspension before the cascade so cancelled tasks defer instead of waking the session.
+      const notes = yield* InstanceState.get(taskNotes)
+      notes.suspended.add(sessionID)
       yield* state.cancel(sessionID)
+    })
+
+    const deliverBackground = Effect.fn("SessionPrompt.deliverBackground")(function* (input: TaskBackgroundDelivery) {
+      const notes = yield* InstanceState.get(taskNotes)
+      if (notes.suspended.has(input.sessionID)) {
+        notes.pending.set(input.sessionID, [...(notes.pending.get(input.sessionID) ?? []), input.text])
+        return
+      }
+      yield* prompt({
+        sessionID: input.sessionID,
+        agent: input.agent,
+        variant: input.variant,
+        parts: [{ type: "text", synthetic: true, text: input.text }],
+      }).pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }))
+    })
+
+    const admitDeferredBackground = Effect.fnUntraced(function* (input: PromptInput) {
+      const notes = yield* InstanceState.get(taskNotes)
+      notes.suspended.delete(input.sessionID)
+      const pending = notes.pending.get(input.sessionID)
+      if (!pending?.length) return input
+      notes.pending.delete(input.sessionID)
+      return {
+        ...input,
+        parts: [...input.parts, ...pending.map((text) => ({ type: "text" as const, synthetic: true, text }))],
+      }
     })
 
     const canonicalPath = Effect.fn("SessionPrompt.canonicalPath")(function* (input: string) {
@@ -1199,7 +1238,8 @@ export const layer = Layer.effect(
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
     )(function* (input: PromptInput) {
-      const routed = yield* agentMode.routePrompt(input)
+      const admitted = yield* admitDeferredBackground(input)
+      const routed = yield* agentMode.routePrompt(admitted)
       if (routed.type === "semantic-exit") {
         yield* cancel(input.sessionID)
         const message = yield* promptImpl({ ...routed.input, agent: routed.info.mode, noReply: true })
@@ -1643,6 +1683,7 @@ export const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
+      deliverBackground,
     })
   }),
 )
