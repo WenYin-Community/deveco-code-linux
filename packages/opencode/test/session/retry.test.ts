@@ -147,6 +147,39 @@ describe("session.retry.delay", () => {
     }),
   )
 
+  it.live("policy retries queue errors past RETRY_MAX_RETRIES", () =>
+    Effect.gen(function* () {
+      const attempts: number[] = []
+      const error = Schema.decodeUnknownSync(SessionV1.QueueError.Schema)(
+        new SessionV1.QueueError({
+          position: 3,
+          message: "position 3 in queue",
+        }).toObject(),
+      )
+      const step = yield* Schedule.toStep(
+        SessionRetry.policy({
+          provider: "deveco",
+          parse: Schema.decodeUnknownSync(SessionV1.QueueError.Schema),
+          set: (info) =>
+            Effect.sync(() => {
+              attempts.push(info.attempt)
+            }),
+        }),
+      )
+
+      const total = SessionRetry.RETRY_MAX_RETRIES + 3
+      const results = yield* Effect.forEach(Array.from({ length: total }, (_, index) => index), (index) =>
+        step(index * SessionRetry.QUEUE_RETRY_DELAY, error),
+      )
+
+      expect(results.map((result) => result[0])).toStrictEqual(
+        Array.from({ length: total }, (_, index) => index + 1),
+      )
+      expect(results.every(([, wait]) => Duration.toMillis(wait) === SessionRetry.QUEUE_RETRY_DELAY)).toBe(true)
+      expect(attempts).toStrictEqual(Array.from({ length: total }, (_, index) => index + 1))
+    }),
+  )
+
   it.live("policy stops FreeUsageLimitError after 1 retry", () =>
     provideTmpdirInstance(() =>
       Effect.gen(function* () {

@@ -244,7 +244,8 @@ export function policy(opts: {
       const error = opts.parse(meta.input)
       const retry = retryable(error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
-      if (meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
+      const isQueue = SessionV1.QueueError.isInstance(error)
+      if (!isQueue && meta.attempt > RETRY_MAX_RETRIES) return Cause.done(meta.attempt)
 
       const category = getRetryCategory(error)
       if (category !== lastCategory) {
@@ -259,7 +260,6 @@ export function policy(opts: {
       }
 
       return Effect.gen(function* () {
-        const isQueue = SessionV1.QueueError.isInstance(error)
         const effectiveAttempt = retry.maxAttempts !== undefined ? categoryAttempt : meta.attempt
         const wait = retry.delays
           ? (retry.delays[effectiveAttempt - 1] ?? retry.delays[retry.delays.length - 1]!)
