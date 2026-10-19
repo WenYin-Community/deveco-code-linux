@@ -30,10 +30,30 @@ import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
 import { usePermission } from "./permission"
-import { batch, onMount } from "solid-js"
+import { batch, createSignal, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { getDevEcoExtensions } from "../deveco-extensions"
+
+// A refresh can leave the provider list unchanged while the account has changed.
+// Keep its revision separate from the reconciled provider data.
+const revisions = new WeakMap<object, ReturnType<typeof createSignal<number>>>()
+
+function revisionFor(data: object) {
+  const existing = revisions.get(data)
+  if (existing) return existing
+  const revision = createSignal(0)
+  revisions.set(data, revision)
+  return revision
+}
+
+export function providerRevision(data: object) {
+  return revisionFor(data)[0]()
+}
+
+export function bumpProviderRevision(data: object) {
+  revisionFor(data)[1]((revision) => revision + 1)
+}
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -80,7 +100,6 @@ export const {
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
       provider: Provider[]
-      provider_revision: number
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
       console_state: ConsoleState
@@ -144,7 +163,6 @@ export const {
       question: {},
       command: [],
       provider: [],
-      provider_revision: 0,
       provider_default: {},
       session: [],
       session_status: {},
@@ -577,7 +595,7 @@ export const {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
               setStore("provider_next", reconcile(slimProviderList(providerList)))
-              setStore("provider_revision", (revision) => revision + 1)
+              bumpProviderRevision(store)
               setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
@@ -641,7 +659,7 @@ export const {
         setStore("provider_default", reconcile(providers.data.default))
         setStore("provider_next", reconcile(slimProviderList(providerList.data)))
         setStore("provider_auth", reconcile(providerAuth.data))
-        setStore("provider_revision", (revision) => revision + 1)
+        bumpProviderRevision(store)
       })
     }
 

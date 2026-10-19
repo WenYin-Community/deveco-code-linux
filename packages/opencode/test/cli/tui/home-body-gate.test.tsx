@@ -13,7 +13,7 @@ import { TuiConfigProvider } from "@opencode-ai/tui/config"
 import { OpencodeKeymapProvider, registerOpencodeKeymap } from "@opencode-ai/tui/keymap"
 import { SDKProvider } from "@opencode-ai/tui/context/sdk"
 import { ProjectProvider } from "@opencode-ai/tui/context/project"
-import { SyncContext, useSync } from "@opencode-ai/tui/context/sync"
+import { SyncContext, useSync, bumpProviderRevision } from "@opencode-ai/tui/context/sync"
 import { KVProvider } from "@opencode-ai/tui/context/kv"
 import { I18nProvider } from "@opencode-ai/tui/i18n"
 import { ExitProvider } from "@opencode-ai/tui/context/exit"
@@ -137,15 +137,15 @@ function createAgreementFetcher(options: MountOptions) {
     },
   })
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const request = input instanceof Request ? input : new Request(input, init)
+    const request = agreementRequest(input, init)
     const path = new URL(request.url).pathname
-    if (path === "/global/product-agreement" && request.method === "GET") {
+    if (agreementRead(request)) {
       const data = details()
       server.onRead()
       await server.read
       return json(data)
     }
-    if (path === "/global/product-agreement" && request.method === "POST") {
+    if (path === "/global/product-agreement") {
       server.accepted = true
       return json(details())
     }
@@ -175,7 +175,6 @@ function createSyncData(options: MountOptions, tmpPath: string) {
       provider_auth: {},
       provider_default: {},
       provider_next: { all: [], connected: [], default: {} },
-      provider_revision: 0,
     },
   } as unknown as ReturnType<typeof useSync>
 }
@@ -188,11 +187,6 @@ function makeHarness(
   openHome: () => void,
   session: { mounted: number; disposed: number },
 ) {
-  function Session() {
-    session.mounted++
-    onCleanup(() => session.disposed++)
-    return <text>SESSION_READY</text>
-  }
   return function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
@@ -215,7 +209,7 @@ function makeHarness(
                                 <PromptRefProvider>
                                   <ExitProvider exit={() => {}}>
                                     <ProductAgreementGate home={home()} onConsentRequired={openHome}>
-                                      <Show when={home()} fallback={<Session />}>
+                                      <Show when={home()} fallback={<Session lifetime={session} />}>
                                         <DevEcoHomeBody sync={sync} bodySlotHeight={18} />
                                       </Show>
                                     </ProductAgreementGate>
@@ -281,7 +275,7 @@ async function mount(options: MountOptions) {
   await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
   const { fetcher, server } = createAgreementFetcher(options)
   const initial = createSyncData(options, tmp.path)
-  const [data, setData] = createStore(initial.data)
+  const [data] = createStore(initial.data)
   const sync = { ...initial, data }
   const [home, setHome] = createSignal(options.home ?? true)
   const session = { mounted: 0, disposed: 0 }
@@ -291,7 +285,7 @@ async function mount(options: MountOptions) {
     ...makePanelHelpers(setup, server, tmp),
     session,
     openSession: () => setHome(false),
-    refreshProviders: () => setData("provider_revision", (revision) => revision + 1),
+    refreshProviders: () => bumpProviderRevision(sync.data),
   }
 }
 
@@ -566,3 +560,17 @@ test("an old home check cannot overwrite a newer login decision", async () => {
   expect(await panel.settle()).not.toContain("PROMPT_READY")
   await panel.frame("Agreements updated")
 })
+
+function agreementRequest(input: RequestInfo | URL, init?: RequestInit) {
+  return input instanceof Request ? input : new Request(input, init)
+}
+
+function agreementRead(request: Request) {
+  return new URL(request.url).pathname === "/global/product-agreement" && request.method === "GET"
+}
+
+function Session(props: { lifetime: { mounted: number; disposed: number } }) {
+  props.lifetime.mounted++
+  onCleanup(() => props.lifetime.disposed++)
+  return <text>SESSION_READY</text>
+}

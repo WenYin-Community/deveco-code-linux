@@ -368,7 +368,7 @@ export function DevEcoOnboarding(props: {
   const checkAgreementStatus = async () => {
     try {
       const result = await sdk.client.global.productAgreement({ throwOnError: true });
-      if (result.data?.accepted && result.data.upload.state !== 'review_required') {
+      if (agreementAllowsEntry(result.data)) {
         props.onComplete();
         return;
       }
@@ -491,73 +491,19 @@ export function DevEcoOnboarding(props: {
     setAuthBusy(true);
     setAuthMessage(null);
     authAborted = false;
-    try {
-      const result = await devecoAuth.login();
-      if (authAborted) {
-        // Escape handler already reset authBusy/step, nothing more to do
-        return;
-      }
-      if (!result.success) {
-        if (result.cancelled) {
-          setStep(authReturnStep);
-          setAuthBusy(false);
-          return;
-        }
-        // Login failed (e.g. network error, port conflict) → surface the error on
-        // whichever page we return to and let the user retry
-        if (authReturnStep === 'realname') {
-          setRealnameRecheckError(result.error ?? t("account.login_failed"));
-        } else {
-            setAuthMessage(result.error ?? t("account.login_failed"));
-        }
-        setStep(authReturnStep);
-        setAuthBusy(false);
-        return;
-      }
-      const access = result.userInfo?.accessToken || '';
-      const refresh = result.userInfo?.refreshToken || '';
-      await saveAuthToDisk('deveco', {
-        type: 'oauth',
-        access,
-        refresh,
-        expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
-        isRealName: result.userInfo?.isRealName ?? false,
-      });
-      const { resetAgreementCheck, trySyncAgreement } = await import('@/cli/deveco-agreement-sync');
-      resetAgreementCheck();
-      await trySyncAgreement();
-      const { getDevecoProviderConfig, clearDevecoModelCache } = await import('@/plugin/deveco-models');
-      clearDevecoModelCache();
-      await getDevecoProviderConfig(access);
-      await sync.provider.refresh();
-      setAuthBusy(false);
-      // Check real-name verification status
-      if (result.userInfo && !result.userInfo.isRealName) {
-        if (authReturnStep === 'realname') {
-          toast.show({ variant: 'warning', message: t("account.realname_incomplete"), duration: 3000 });
-        }
-        logWarn("login succeeded but real-name verification not completed, blocking entry", { service: "deveco" });
-        setStep('realname');
-        return;
-      }
-      // If DEVECO_HOME is not configured, prompt for it before agreement
-      if (!(await hasConfiguredDevEcoHome())) {
-        setStep('deveco-home');
-        void runDevEcoHomeDetection();
-        return;
-      }
-      // Otherwise → jump to privacy step for agreement check
-      setStep('privacy');
-      void checkAgreementStatus();
-    } catch (error) {
-      if (authAborted) {
-        return;
-      }
-      const errorMessage = error instanceof Error ? error.message : t("account.login_failed");
-      setAuthMessage(errorMessage);
+    await browserLogin({
+      aborted: () => authAborted,
+      returnStep: () => authReturnStep,
+      setStep, setAuthBusy, setAuthMessage, setRealnameRecheckError,
+      t, toast, sync,
+      detectHome: runDevEcoHomeDetection,
+      checkAgreement: checkAgreementStatus,
+    }).catch((error: unknown) => {
+      if (authAborted) return;
+      setAuthMessage(error instanceof Error ? error.message : t("account.login_failed"));
       setStep('entry');
       setAuthBusy(false);
-    }
+    });
   };
 
   const apiKeyTitle = (providerId: string) => {
@@ -1184,4 +1130,100 @@ if (st === 'entry') {
       </Show>
     </box>
   );
+}
+
+type BrowserLoginResult = Awaited<ReturnType<typeof devecoAuth.login>>
+type BrowserLoginContext = {
+  aborted: () => boolean
+  returnStep: () => OnboardingStep
+  setStep: (step: OnboardingStep) => unknown
+  setAuthBusy: (busy: boolean) => unknown
+  setAuthMessage: (message: string | null) => unknown
+  setRealnameRecheckError: (message: string) => unknown
+  t: ReturnType<typeof useI18n>["t"]
+  toast: ReturnType<typeof useToast>
+  sync: ReturnType<typeof useSync>
+  detectHome: () => Promise<void>
+  checkAgreement: () => Promise<void>
+}
+
+function agreementAllowsEntry(product: Awaited<ReturnType<AuthSdk["client"]["global"]["productAgreement"]>>["data"]) {
+  if (!product?.accepted) return false
+  return product.upload.state !== "review_required"
+}
+
+async function browserLogin(context: BrowserLoginContext) {
+  const result = await devecoAuth.login()
+  if (context.aborted()) return
+  if (!result.success) return browserLoginFailure(result, context)
+  await prepareBrowserLogin(result, context.sync)
+  context.setAuthBusy(false)
+  await finishBrowserLogin(result, context)
+}
+
+function browserLoginFailure(result: BrowserLoginResult, context: BrowserLoginContext) {
+  if (result.cancelled) {
+    context.setStep(context.returnStep())
+    context.setAuthBusy(false)
+    return
+  }
+  const setError = context.returnStep() === "realname" ? context.setRealnameRecheckError : context.setAuthMessage
+  setError(result.error ?? context.t("account.login_failed"))
+  context.setStep(context.returnStep())
+  context.setAuthBusy(false)
+}
+
+function loginToken(value?: string) {
+  return value || ""
+}
+
+function loginCredentials(result: BrowserLoginResult) {
+  const info = result.userInfo
+  if (!info) return { access: "", refresh: "", isRealName: false }
+  return {
+    access: loginToken(info.accessToken),
+    refresh: loginToken(info.refreshToken),
+    isRealName: info.isRealName ?? false,
+  }
+}
+
+async function prepareBrowserLogin(result: BrowserLoginResult, sync: ReturnType<typeof useSync>) {
+  const credentials = loginCredentials(result)
+  await saveAuthToDisk("deveco", {
+    type: "oauth",
+    ...credentials,
+    expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
+  })
+  const { resetAgreementCheck, trySyncAgreement } = await import("@/cli/deveco-agreement-sync")
+  resetAgreementCheck()
+  await trySyncAgreement()
+  const { getDevecoProviderConfig, clearDevecoModelCache } = await import("@/plugin/deveco-models")
+  clearDevecoModelCache()
+  await getDevecoProviderConfig(credentials.access)
+  await sync.provider.refresh()
+}
+
+function needsRealName(result: BrowserLoginResult) {
+  return result.userInfo && !result.userInfo.isRealName
+}
+
+async function finishBrowserLogin(result: BrowserLoginResult, context: BrowserLoginContext) {
+  if (needsRealName(result)) {
+    showRealNameStep(context)
+    return
+  }
+  if (!(await hasConfiguredDevEcoHome())) {
+    context.setStep("deveco-home")
+    void context.detectHome()
+    return
+  }
+  context.setStep("privacy")
+  void context.checkAgreement()
+}
+
+function showRealNameStep(context: BrowserLoginContext) {
+  if (context.returnStep() === "realname")
+    context.toast.show({ variant: "warning", message: context.t("account.realname_incomplete"), duration: 3000 })
+  logWarn("login succeeded but real-name verification not completed, blocking entry", { service: "deveco" })
+  context.setStep("realname")
 }

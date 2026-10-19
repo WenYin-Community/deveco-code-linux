@@ -1,7 +1,7 @@
 import { useI18n } from "@opencode-ai/tui/i18n"
 import { createEffect, createMemo, createResource, createSignal, Show, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
-import { useSync } from "@opencode-ai/tui/context/sync"
+import { useSync, providerRevision } from "@opencode-ai/tui/context/sync"
 import { useSDK } from "@opencode-ai/tui/context/sdk"
 import { useTheme } from "@opencode-ai/tui/context/theme"
 import { useBindings } from "@opencode-ai/tui/keymap"
@@ -385,7 +385,7 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
   const { theme } = useTheme()
   const sdk = useSDK()
   const [agreement, { refetch }] = createResource(
-    () => (props.home ? undefined : (sync.data.provider_revision ?? 0)),
+    () => (props.home ? undefined : providerRevision(sync.data)),
     async () => {
       const result = await sdk.client.global.productAgreement({ throwOnError: true })
       if (!result.data?.upload) throw new Error(t("account.server_update"))
@@ -393,15 +393,13 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
     },
   )
   createEffect(() => {
-    if (props.home || agreement.loading || agreement.error) return
-    if (agreement() && (!agreement()?.accepted || agreement()?.upload.state === "review_required"))
-      props.onConsentRequired()
+    if (props.home) return
+    if (!agreementSettled(agreement)) return
+    if (consentRequired(agreement())) props.onConsentRequired()
   })
   return (
     <Show
-      when={
-        props.home || (!agreement.error && agreement()?.accepted && agreement()?.upload.state !== "review_required")
-      }
+      when={props.home || agreementAllowed(agreement)}
       fallback={
         <box flexGrow={1} alignItems="center" justifyContent="center">
           <text
@@ -427,4 +425,22 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
       </Show>
     </Show>
   )
+}
+
+type GateAgreement = Awaited<ReturnType<ReturnType<typeof useSDK>["client"]["global"]["productAgreement"]>>["data"]
+
+function agreementSettled(agreement: { loading: boolean; error: unknown }) {
+  return !agreement.loading && !agreement.error
+}
+
+function consentRequired(agreement: GateAgreement) {
+  if (!agreement) return false
+  return !agreement.accepted || agreement.upload.state === "review_required"
+}
+
+function agreementAllowed(agreement: { (): GateAgreement; error: unknown }) {
+  if (agreement.error) return false
+  const current = agreement()
+  if (!current?.accepted) return false
+  return current.upload.state !== "review_required"
 }

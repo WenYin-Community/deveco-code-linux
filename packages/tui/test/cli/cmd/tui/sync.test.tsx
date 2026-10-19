@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../../../fixture/fixture"
 import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
+import { providerRevision } from "../../../../src/context/sync"
 
 function branchEvent(branch: string, workspace?: string): GlobalEvent {
   return {
@@ -88,7 +89,7 @@ describe("tui sync", () => {
 
     try {
       refreshing = true
-      expect(sync.data.provider_revision).toBe(1)
+      expect(providerRevision(sync.data)).toBe(1)
       await sync.provider.refresh()
 
       expect(calls[0]).toBe("/provider/refresh")
@@ -96,12 +97,12 @@ describe("tui sync", () => {
       expect(sync.data.provider_next.connected).toEqual(["openai"])
       expect(sync.data.provider[0]?.id).toBe("openai")
       expect(sync.data.provider_auth.openai?.[0]?.type).toBe("api")
-      expect(sync.data.provider_revision).toBe(2)
+      expect(providerRevision(sync.data)).toBe(2)
 
       const providers = sync.data.provider
       await sync.provider.refresh()
       expect(sync.data.provider).toBe(providers)
-      expect(sync.data.provider_revision).toBe(3)
+      expect(providerRevision(sync.data)).toBe(3)
     } finally {
       app.renderer.destroy()
     }

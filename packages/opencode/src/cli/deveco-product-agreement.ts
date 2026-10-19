@@ -54,16 +54,24 @@ export async function requireProductAccess() {
   // source/internal builds) may bypass acceptance. Released binaries bake
   // `false`, and no runtime env channel exists: the product agreements are
   // mandatory for every feature of a distributed build.
-  if (typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT) return
-  if (!(await productAgreement()).accepted) {
-    throw new Error(
-      "Review the product agreements in DevEco Code or run `deveco auth consent` on the server before continuing.",
-    )
-  }
+  if (agreementBypassEnabled()) return
+  await requireLocalAcceptance()
   const { waitForAgreementSync, agreementUploadStatus } = await import("./deveco-agreement-sync")
   await waitForAgreementSync()
   if ((await agreementUploadStatus()).state === "review_required") {
     throw new Error(AGREEMENT_REVIEW_REQUIRED_MESSAGE)
+  }
+}
+
+function agreementBypassEnabled() {
+  return typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT
+}
+
+async function requireLocalAcceptance() {
+  if (!(await productAgreement()).accepted) {
+    throw new Error(
+      "Review the product agreements in DevEco Code or run `deveco auth consent` on the server before continuing.",
+    )
   }
 }
 

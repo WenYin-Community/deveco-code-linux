@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { Global } from "@opencode-ai/core/global"
 import { createHash } from "crypto"
 import { Effect } from "effect"
@@ -61,112 +61,76 @@ async function setup() {
   return tmp
 }
 
-describe("durable agreement upload", () => {
-  test("status reads join an already-started check without creating another one", async () => {
-    await using tmp = await setup()
-    await login()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    query.mockImplementationOnce(async () => {
-      entered.resolve()
-      await release.promise
-      return { status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null }
-    })
-    const checking = syncAgreement()
-    // Read immediately, before the check has resolved credentials or acquired its lock.
-    const details = productAgreementDetails()
-    await entered.promise
-    release.resolve()
-    await checking
-    expect((await details).upload.state).toBe("uploaded")
-    expect(query).toHaveBeenCalledTimes(1)
+test("status reads join an already-started check without creating another one", async () => {
+  await using tmp = await setup()
+  await login()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  query.mockImplementationOnce(async () => {
+    entered.resolve()
+    await release.promise
+    return { status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null }
   })
+  const checking = syncAgreement()
+  // Read immediately, before the check has resolved credentials or acquired its lock.
+  const details = productAgreementDetails()
+  await entered.promise
+  release.resolve()
+  await checking
+  expect((await details).upload.state).toBe("uploaded")
+  expect(query).toHaveBeenCalledTimes(1)
+})
 
-  test("admission stops further queries, including upload retries and status reads", async () => {
-    await using tmp = await setup()
-    await login()
-    query.mockResolvedValue({ status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    await uploadAgreement()
-    expect(await productAgreementDetails()).toMatchObject({ accepted: true, upload: { state: "uploaded" } })
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(sign).not.toHaveBeenCalled()
-  })
+test("admission stops further queries, including upload retries and status reads", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  await uploadAgreement()
+  expect(await productAgreementDetails()).toMatchObject({ accepted: true, upload: { state: "uploaded" } })
+  expect(query).toHaveBeenCalledTimes(1)
+  expect(sign).not.toHaveBeenCalled()
+})
 
-  test("access-token refresh preserves the current admission", async () => {
-    await using tmp = await setup()
-    await login()
-    await syncAgreement()
-    await saveAuthToDisk("deveco", { access: "refreshed-access", expires: Date.now() + 60_000 })
-    await uploadAgreement()
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-    expect(query).toHaveBeenCalledTimes(1)
-  })
+test("access-token refresh preserves the current admission", async () => {
+  await using tmp = await setup()
+  await login()
+  await syncAgreement()
+  await saveAuthToDisk("deveco", { access: "refreshed-access", expires: Date.now() + 60_000 })
+  await uploadAgreement()
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+  expect(query).toHaveBeenCalledTimes(1)
+})
 
-  test("a new process or login checks again despite the previous admission", async () => {
-    await using tmp = await setup()
-    await login()
-    await syncAgreement()
+test("a new process or login checks again despite the previous admission", async () => {
+  await using tmp = await setup()
+  await login()
+  await syncAgreement()
+  resetAgreementCheck()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  expect(query).toHaveBeenCalledTimes(2)
+  expect((await agreementUploadStatus()).state).toBe("review_required")
+})
+
+test.each(["startup", "login"] as const)("a compliant %s check clears an old review requirement", async (trigger) => {
+  await using tmp = await setup()
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  const previous = await productAgreementDetails()
+  expect(previous.upload.state).toBe("review_required")
+
+  query.mockResolvedValue({ status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null })
+  expect((await productAgreementDetails()).upload.state).toBe("review_required")
+  expect(query).toHaveBeenCalledTimes(1)
+  if (trigger === "startup") {
     resetAgreementCheck()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
     await syncAgreement()
-    expect(query).toHaveBeenCalledTimes(2)
-    expect((await agreementUploadStatus()).state).toBe("review_required")
-  })
-
-  test.each(["startup", "login"] as const)("a compliant %s check clears an old review requirement", async (trigger) => {
-    await using tmp = await setup()
-    await login()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    const previous = await productAgreementDetails()
-    expect(previous.upload.state).toBe("review_required")
-
-    query.mockResolvedValue({ status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null })
-    expect((await productAgreementDetails()).upload.state).toBe("review_required")
-    expect(query).toHaveBeenCalledTimes(1)
-    if (trigger === "startup") {
-      resetAgreementCheck()
-      await syncAgreement()
-    }
-    if (trigger === "login") {
-      await Effect.runPromise(
-        Auth.Service.use((auth) =>
-          auth.set("deveco", {
-            type: "oauth",
-            access: "login-access",
-            refresh: "refresh",
-            expires: Date.now() + 60_000,
-          }),
-        ).pipe(Effect.provide(Auth.defaultLayer)),
-      )
-      await waitForAgreementSync()
-    }
-
-    expect(await productAgreementDetails()).toMatchObject({
-      accepted: true,
-      acceptedAt: previous.acceptedAt,
-      upload: { state: "uploaded" },
-    })
-    const report = await Bun.file(
-      `${tmp.path}/agreement-reports/${createHash("sha256").update("account-a").digest("hex")}.json`,
-    ).json()
-    expect(report.requiredRevision).toBeUndefined()
-    expect(report.acceptedRevision).toBeUndefined()
-    expect(report.uploadedAt).toBeNumber()
-    await uploadAgreement()
-    await productAgreementDetails()
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(sign).not.toHaveBeenCalled()
-  })
-
-  test("explicit login resets admission even when the account and JWT stay the same", async () => {
-    await using tmp = await setup()
-    await login()
-    await syncAgreement()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  }
+  if (trigger === "login") {
     await Effect.runPromise(
       Auth.Service.use((auth) =>
         auth.set("deveco", {
@@ -177,200 +141,234 @@ describe("durable agreement upload", () => {
         }),
       ).pipe(Effect.provide(Auth.defaultLayer)),
     )
-    // Join the background upload started by the login before checking its result.
-    await syncAgreement()
-    expect(query).toHaveBeenCalledTimes(2)
-    expect((await agreementUploadStatus()).state).toBe("review_required")
-  })
+    await waitForAgreementSync()
+  }
 
-  test("another process's report cannot revoke admission in this process", async () => {
-    await using tmp = await setup()
-    await login()
-    await syncAgreement()
-    const file = `${tmp.path}/agreement-reports/${createHash("sha256").update("account-a").digest("hex")}.json`
-    const report = await Bun.file(file).json()
-    await Bun.write(file, JSON.stringify({ ...report, requiredRevision: "external-update", uploadedAt: undefined }))
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-    await uploadAgreement()
-    expect((await productAgreementDetails()).upload.state).toBe("uploaded")
-    expect(query).toHaveBeenCalledTimes(1)
-    expect((await Bun.file(file).json()).requiredRevision).toBe("external-update")
+  expect(await productAgreementDetails()).toMatchObject({
+    accepted: true,
+    acceptedAt: previous.acceptedAt,
+    upload: { state: "uploaded" },
   })
+  const report = await Bun.file(
+    `${tmp.path}/agreement-reports/${createHash("sha256").update("account-a").digest("hex")}.json`,
+  ).json()
+  expect(report.requiredRevision).toBeUndefined()
+  expect(report.acceptedRevision).toBeUndefined()
+  expect(report.uploadedAt).toBeNumber()
+  await uploadAgreement()
+  await productAgreementDetails()
+  expect(query).toHaveBeenCalledTimes(2)
+  expect(sign).not.toHaveBeenCalled()
+})
 
-  test("status reads never start a query, including after credentials appear", async () => {
-    await using tmp = await setup()
-    await productAgreementDetails()
-    expect(query).not.toHaveBeenCalled()
-    await login()
-    await productAgreementDetails()
-    expect(query).not.toHaveBeenCalled()
-    await syncAgreement()
-    expect(query).toHaveBeenCalledTimes(1)
+test("explicit login resets admission even when the account and JWT stay the same", async () => {
+  await using tmp = await setup()
+  await login()
+  await syncAgreement()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await Effect.runPromise(
+    Auth.Service.use((auth) =>
+      auth.set("deveco", {
+        type: "oauth",
+        access: "login-access",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+      }),
+    ).pipe(Effect.provide(Auth.defaultLayer)),
+  )
+  // Join the background upload started by the login before checking its result.
+  await syncAgreement()
+  expect(query).toHaveBeenCalledTimes(2)
+  expect((await agreementUploadStatus()).state).toBe("review_required")
+})
+
+test("another process's report cannot revoke admission in this process", async () => {
+  await using tmp = await setup()
+  await login()
+  await syncAgreement()
+  const file = `${tmp.path}/agreement-reports/${createHash("sha256").update("account-a").digest("hex")}.json`
+  const report = await Bun.file(file).json()
+  await Bun.write(file, JSON.stringify({ ...report, requiredRevision: "external-update", uploadedAt: undefined }))
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+  await uploadAgreement()
+  expect((await productAgreementDetails()).upload.state).toBe("uploaded")
+  expect(query).toHaveBeenCalledTimes(1)
+  expect((await Bun.file(file).json()).requiredRevision).toBe("external-update")
+})
+
+test("status reads never start a query, including after credentials appear", async () => {
+  await using tmp = await setup()
+  await productAgreementDetails()
+  expect(query).not.toHaveBeenCalled()
+  await login()
+  await productAgreementDetails()
+  expect(query).not.toHaveBeenCalled()
+  await syncAgreement()
+  expect(query).toHaveBeenCalledTimes(1)
+  await tokenStorage.clearToken()
+  expect((await productAgreementDetails()).upload.state).toBe("local")
+  await login()
+  await productAgreementDetails()
+  expect(query).toHaveBeenCalledTimes(1)
+  await syncAgreement()
+  expect(query).toHaveBeenCalledTimes(2)
+})
+
+test("keeps anonymous consent local and uploads it after login", async () => {
+  await using tmp = await setup()
+  expect((await agreementUploadStatus()).state).toBe("local")
+  expect(sign).not.toHaveBeenCalled()
+  await login()
+  await syncAgreement()
+  expect(sign).toHaveBeenCalledTimes(1)
+  await uploadAgreement()
+  expect(query).toHaveBeenCalledTimes(1)
+  expect(sign).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+})
+
+test("a failed upload remains pending even when the query successfully says unsigned", async () => {
+  await using tmp = await setup()
+  await login()
+  sign.mockResolvedValue({ success: false, isUpload: false, error: "offline" })
+  await syncAgreement()
+  expect(await agreementUploadStatus()).toMatchObject({ state: "pending", error: "offline" })
+  await syncAgreement()
+  expect(sign).toHaveBeenCalledTimes(1)
+  sign.mockResolvedValue({ success: true, isUpload: true })
+  await uploadAgreement()
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+  expect(sign).toHaveBeenCalledTimes(2)
+  expect(query).toHaveBeenCalledTimes(1)
+})
+
+test("query network errors do not prevent an upload attempt", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.NETWORK_ERROR, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  expect(sign).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+})
+
+test("does not reuse account A upload for account B", async () => {
+  await using tmp = await setup()
+  await login()
+  await syncAgreement()
+  await login("account-b")
+  expect((await agreementUploadStatus()).state).toBe("pending")
+  await syncAgreement()
+  expect(sign.mock.calls.map((call) => call[0])).toEqual(["account-a-access", "account-b-access"])
+})
+
+test("joins concurrent upload requests", async () => {
+  await using tmp = await setup()
+  await login()
+  await Promise.all([syncAgreement(), syncAgreement(), syncAgreement()])
+  expect(sign).toHaveBeenCalledTimes(1)
+})
+
+test("does not upload or mark success after logout during the query", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockImplementation(async () => {
     await tokenStorage.clearToken()
-    expect((await productAgreementDetails()).upload.state).toBe("local")
-    await login()
-    await productAgreementDetails()
-    expect(query).toHaveBeenCalledTimes(1)
-    await syncAgreement()
-    expect(query).toHaveBeenCalledTimes(2)
+    return { status: AgreementStatus.NEED_SIGN, signInfo: null, versionInfo: null }
   })
+  await syncAgreement()
+  expect(sign).not.toHaveBeenCalled()
+  expect((await agreementUploadStatus()).state).toBe("local")
+})
 
-  test("keeps anonymous consent local and uploads it after login", async () => {
-    await using tmp = await setup()
-    expect((await agreementUploadStatus()).state).toBe("local")
-    expect(sign).not.toHaveBeenCalled()
-    await login()
-    await syncAgreement()
-    expect(sign).toHaveBeenCalledTimes(1)
-    await uploadAgreement()
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(sign).toHaveBeenCalledTimes(1)
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
+test("a new login for the same account gets its own upload after an old attempt is discarded", async () => {
+  await using tmp = await setup()
+  await login()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  query.mockImplementationOnce(async () => {
+    entered.resolve()
+    await release.promise
+    return { status: AgreementStatus.NEED_SIGN, signInfo: null, versionInfo: null }
   })
+  const old = syncAgreement()
+  await entered.promise
+  await login("account-a", 1)
+  const current = syncAgreement()
+  release.resolve()
+  await Promise.all([old, current])
+  expect(sign).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+})
 
-  test("a failed upload remains pending even when the query successfully says unsigned", async () => {
-    await using tmp = await setup()
-    await login()
-    sign.mockResolvedValue({ success: false, isUpload: false, error: "offline" })
-    await syncAgreement()
-    expect(await agreementUploadStatus()).toMatchObject({ state: "pending", error: "offline" })
-    await syncAgreement()
-    expect(sign).toHaveBeenCalledTimes(1)
-    sign.mockResolvedValue({ success: true, isUpload: true })
-    await uploadAgreement()
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-    expect(sign).toHaveBeenCalledTimes(2)
-    expect(query).toHaveBeenCalledTimes(1)
+test("resetting the login discards an old in-flight query even with the same JWT", async () => {
+  await using tmp = await setup()
+  await login()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  query.mockImplementationOnce(async () => {
+    entered.resolve()
+    await release.promise
+    return { status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null }
   })
+  const old = syncAgreement()
+  await entered.promise
+  resetAgreementCheck()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  const current = syncAgreement()
+  release.resolve()
+  await Promise.all([old, current])
+  expect(query).toHaveBeenCalledTimes(2)
+  expect(sign).not.toHaveBeenCalled()
+  expect((await agreementUploadStatus()).state).toBe("review_required")
+})
 
-  test("query network errors do not prevent an upload attempt", async () => {
-    await using tmp = await setup()
-    await login()
-    query.mockResolvedValue({ status: AgreementStatus.NETWORK_ERROR, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    expect(sign).toHaveBeenCalledTimes(1)
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-  })
+test("requires explicit acceptance of a changed service revision", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  const status = await agreementUploadStatus()
+  expect(status.state).toBe("review_required")
+  expect(sign).not.toHaveBeenCalled()
+  await expect(acceptServiceRevision("stale")).rejects.toThrow("changed")
+  await acceptServiceRevision(status.revision!)
+  await uploadAgreement()
+  expect(sign).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+  expect(query).toHaveBeenCalledTimes(1)
+})
 
-  test("does not reuse account A upload for account B", async () => {
-    await using tmp = await setup()
-    await login()
-    await syncAgreement()
-    await login("account-b")
-    expect((await agreementUploadStatus()).state).toBe("pending")
-    await syncAgreement()
-    expect(sign.mock.calls.map((call) => call[0])).toEqual(["account-a-access", "account-b-access"])
+test("acceptance waits for an in-flight login check and uploads without another query", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  const revision = (await agreementUploadStatus()).revision!
+  resetAgreementCheck()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  query.mockImplementationOnce(async () => {
+    entered.resolve()
+    await release.promise
+    return { status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null }
   })
+  const checking = syncAgreement()
+  await entered.promise
+  const acceptance = acceptProductAgreement(PRODUCT_AGREEMENT_VERSION, revision)
+  release.resolve()
+  await Promise.all([checking, acceptance])
+  expect((await productAgreementDetails()).upload.state).toBe("uploaded")
+  expect(query).toHaveBeenCalledTimes(2)
+  expect(sign).toHaveBeenCalledTimes(1)
+})
 
-  test("joins concurrent upload requests", async () => {
-    await using tmp = await setup()
-    await login()
-    await Promise.all([syncAgreement(), syncAgreement(), syncAgreement()])
-    expect(sign).toHaveBeenCalledTimes(1)
-  })
-
-  test("does not upload or mark success after logout during the query", async () => {
-    await using tmp = await setup()
-    await login()
-    query.mockImplementation(async () => {
-      await tokenStorage.clearToken()
-      return { status: AgreementStatus.NEED_SIGN, signInfo: null, versionInfo: null }
-    })
-    await syncAgreement()
-    expect(sign).not.toHaveBeenCalled()
-    expect((await agreementUploadStatus()).state).toBe("local")
-  })
-
-  test("a new login for the same account gets its own upload after an old attempt is discarded", async () => {
-    await using tmp = await setup()
-    await login()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    query.mockImplementationOnce(async () => {
-      entered.resolve()
-      await release.promise
-      return { status: AgreementStatus.NEED_SIGN, signInfo: null, versionInfo: null }
-    })
-    const old = syncAgreement()
-    await entered.promise
-    await login("account-a", 1)
-    const current = syncAgreement()
-    release.resolve()
-    await Promise.all([old, current])
-    expect(sign).toHaveBeenCalledTimes(1)
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-  })
-
-  test("resetting the login discards an old in-flight query even with the same JWT", async () => {
-    await using tmp = await setup()
-    await login()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    query.mockImplementationOnce(async () => {
-      entered.resolve()
-      await release.promise
-      return { status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null }
-    })
-    const old = syncAgreement()
-    await entered.promise
-    resetAgreementCheck()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    const current = syncAgreement()
-    release.resolve()
-    await Promise.all([old, current])
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(sign).not.toHaveBeenCalled()
-    expect((await agreementUploadStatus()).state).toBe("review_required")
-  })
-
-  test("requires explicit acceptance of a changed service revision", async () => {
-    await using tmp = await setup()
-    await login()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    const status = await agreementUploadStatus()
-    expect(status.state).toBe("review_required")
-    expect(sign).not.toHaveBeenCalled()
-    await expect(acceptServiceRevision("stale")).rejects.toThrow("changed")
-    await acceptServiceRevision(status.revision!)
-    await uploadAgreement()
-    expect(sign).toHaveBeenCalledTimes(1)
-    expect((await agreementUploadStatus()).state).toBe("uploaded")
-    expect(query).toHaveBeenCalledTimes(1)
-  })
-
-  test("acceptance waits for an in-flight login check and uploads without another query", async () => {
-    await using tmp = await setup()
-    await login()
-    query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    await syncAgreement()
-    const revision = (await agreementUploadStatus()).revision!
-    resetAgreementCheck()
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    query.mockImplementationOnce(async () => {
-      entered.resolve()
-      await release.promise
-      return { status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null }
-    })
-    const checking = syncAgreement()
-    await entered.promise
-    const acceptance = acceptProductAgreement(PRODUCT_AGREEMENT_VERSION, revision)
-    release.resolve()
-    await Promise.all([checking, acceptance])
-    expect((await productAgreementDetails()).upload.state).toBe("uploaded")
-    expect(query).toHaveBeenCalledTimes(2)
-    expect(sign).toHaveBeenCalledTimes(1)
-  })
-
-  test("never uploads without local product consent", async () => {
-    await using tmp = await tmpdir()
-    Global.Path.state = tmp.path
-    Global.Path.data = tmp.path
-    await login()
-    await syncAgreement()
-    expect((await agreementUploadStatus()).state).toBe("not_signed")
-    expect(query).not.toHaveBeenCalled()
-    expect(sign).not.toHaveBeenCalled()
-  })
+test("never uploads without local product consent", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.state = tmp.path
+  Global.Path.data = tmp.path
+  await login()
+  await syncAgreement()
+  expect((await agreementUploadStatus()).state).toBe("not_signed")
+  expect(query).not.toHaveBeenCalled()
+  expect(sign).not.toHaveBeenCalled()
 })

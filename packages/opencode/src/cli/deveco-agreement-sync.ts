@@ -46,34 +46,53 @@ let checking: Promise<void> | undefined
 const attempts = new WeakMap<Account, Promise<void>>()
 
 async function account() {
-  const jwt = await tokenStorage.loadToken()
-  if (!jwt) {
+  const owner = await readAccount()
+  if (!owner) {
     entry = undefined
     return
   }
-  const userId = await devecoAuth.getUserId()
-  if (!userId || (await tokenStorage.loadToken()) !== jwt || !loadAccessTokenFromDisk()) {
-    entry = undefined
-    return
-  }
-  const state = Global.Path.state
-  const file = path.join(state, "agreement-reports", `${createHash("sha256").update(userId).digest("hex")}.json`)
-  const jwtHash = createHash("sha256").update(jwt).digest("hex")
-  if (entry?.owner.jwtHash === jwtHash && entry.owner.file === file) return entry.owner
-  const owner = { jwtHash, state, file }
+  const current = entry?.owner
+  if (matchesAccount(current, owner)) return current
   entry = { owner }
   return owner
 }
 
-async function isCurrent(owner: Account) {
-  if (entry?.owner !== owner || owner.state !== Global.Path.state) return false
+function matchesAccount(current: Account | undefined, owner: Account): current is Account {
+  if (!current) return false
+  return current.jwtHash === owner.jwtHash && current.file === owner.file
+}
+
+async function readAccount() {
   const jwt = await tokenStorage.loadToken()
-  return (
-    !!jwt &&
-    createHash("sha256").update(jwt).digest("hex") === owner.jwtHash &&
-    !!loadAccessTokenFromDisk() &&
-    entry?.owner === owner
-  )
+  if (!jwt) return
+  const userId = await devecoAuth.getUserId()
+  if (!userId) return
+  if (!(await hasCredentials(jwt))) return
+  const state = Global.Path.state
+  const file = path.join(state, "agreement-reports", `${createHash("sha256").update(userId).digest("hex")}.json`)
+  const jwtHash = createHash("sha256").update(jwt).digest("hex")
+  return { jwtHash, state, file }
+}
+
+async function hasCredentials(jwt: string) {
+  return (await tokenStorage.loadToken()) === jwt && !!loadAccessTokenFromDisk()
+}
+
+function ownsAccount(owner: Account) {
+  if (!entry) return false
+  return entry.owner === owner && owner.state === Global.Path.state
+}
+
+async function isCurrent(owner: Account) {
+  if (!ownsAccount(owner)) return false
+  if (!(await matchesToken(owner))) return false
+  return !!loadAccessTokenFromDisk() && ownsAccount(owner)
+}
+
+async function matchesToken(owner: Account) {
+  const jwt = await tokenStorage.loadToken()
+  if (!jwt) return false
+  return createHash("sha256").update(jwt).digest("hex") === owner.jwtHash
 }
 
 async function read(owner: Account): Promise<Report | undefined> {
@@ -102,11 +121,23 @@ export async function agreementUploadStatus(): Promise<typeof AgreementUpload.Ty
   if (!product.accepted) return { state: "not_signed" }
   const owner = await account()
   if (!owner) return { state: "local" }
-  if (entry?.owner === owner && entry.upload) return entry.upload
+  return cachedUpload(owner) ?? (await readUploadStatus(owner, product.version))
+}
+
+function cachedUpload(owner: Account) {
+  if (!entry) return
+  if (entry.owner === owner) return entry.upload
+}
+
+async function readUploadStatus(owner: Account, version: string): Promise<typeof AgreementUpload.Type> {
   const stored = await read(owner)
-  if (!stored || stored.version !== product.version || stored.manifest !== AGREEMENT_MANIFEST)
-    return { state: "pending" }
+  if (!matchesReport(stored, version)) return { state: "pending" }
   return uploadStatus(stored)
+}
+
+function matchesReport(report: Report | undefined, version: string): report is Report {
+  if (!report) return false
+  return report.version === version && report.manifest === AGREEMENT_MANIFEST
 }
 
 function uploadStatus(stored: Report): typeof AgreementUpload.Type {
@@ -145,7 +176,7 @@ export async function acceptServiceRevision(revision: string) {
   })
 }
 
-/** Online queries are owned exclusively by startup and explicit HUAWEI login. */
+/** Online queries are owned exclusively by startup and explicit account login. */
 export function syncAgreement() {
   const attempt = runAgreementSync(true).finally(() => {
     if (checking === attempt) checking = undefined
@@ -163,83 +194,114 @@ export async function uploadAgreement() {
 async function runAgreementSync(check: boolean) {
   const owner = await account()
   if (!owner || !(await productAgreement()).accepted) return
-  const active = attempts.get(owner)
-  if (active) return active
-  if (entry?.owner === owner && entry.upload && (check || entry.upload.state !== "pending")) return
-  const attempt = lock(owner, async () => {
-    if (!(await isCurrent(owner))) return
-    const product = await productAgreement()
-    if (!product.accepted) return
-    const saved = await read(owner)
-    const report: Report =
-      saved?.version === product.version && saved.manifest === AGREEMENT_MANIFEST
-        ? saved
-        : { version: product.version, manifest: AGREEMENT_MANIFEST, attempts: 0, nextAttemptAt: 0 }
-    if (
-      !check &&
-      (report.uploadedAt || (report.requiredRevision && report.requiredRevision !== report.acceptedRevision))
-    )
-      return
-    // Legacy reports retain nextAttemptAt for compatibility; there is no timer.
-    const pending = { ...report, lastAttemptAt: Date.now(), attempts: report.attempts + 1 }
-    await write(owner, pending)
-    const service = new AgreementService()
-    if (check) {
-      const query = await service.queryAgreement(loadAccessTokenFromDisk())
-      if (!(await isCurrent(owner))) return
-      const revision =
-        query.status === AgreementStatus.NEED_RE_SIGN
-          ? JSON.stringify(
-              (query.signInfos ?? (query.signInfo ? [query.signInfo] : []))
-                .map((info) => [String(info.agrType), info.newestVersion, info.newestSubVersion])
-                .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
-            )
-          : undefined
-      if (revision && revision !== report.acceptedRevision) {
-        await write(owner, { ...pending, requiredRevision: revision, uploadedAt: undefined })
-        return
-      }
-      if (query.status === AgreementStatus.SESSION_EXPIRED) {
-        await write(owner, { ...pending, error: "Sign in again to upload your agreement record.", nextAttemptAt: 0 })
-        return
-      }
-      // A server record is sufficient evidence of upload; a missing record never revokes local consent.
-      if (query.status === AgreementStatus.COMPLIANT) {
-        await write(owner, {
-          ...pending,
-          requiredRevision: undefined,
-          uploadedAt: Date.now(),
-          error: undefined,
-          attempts: 0,
-          nextAttemptAt: 0,
-        })
-        return
-      }
-    }
-    if (report.requiredRevision && report.requiredRevision !== report.acceptedRevision) return
-    const signed = await service.signAgreement(loadAccessTokenFromDisk(), false)
-    if (!(await isCurrent(owner))) return
-    if (!signed.isUpload) {
-      await write(owner, {
-        ...pending,
-        uploadedAt: undefined,
-        error: signed.error ?? "Agreement upload failed",
-        nextAttemptAt: 0,
-      })
-      return
-    }
-    await write(owner, {
-      ...pending,
-      uploadedAt: Date.now(),
-      error: undefined,
-      attempts: 0,
-      nextAttemptAt: 0,
-    })
-  })
+  return attempts.get(owner) ?? startAttempt(owner, check)
+}
+
+function startAttempt(owner: Account, check: boolean) {
+  if (skipAttempt(owner, check)) return
+  const attempt = lock(owner, () => syncReport(owner, check))
     .catch(logSyncFailure)
     .finally(() => attempts.delete(owner))
   attempts.set(owner, attempt)
   return attempt
+}
+
+function skipAttempt(owner: Account, check: boolean) {
+  const upload = cachedUpload(owner)
+  if (!upload) return false
+  if (check) return true
+  return upload.state !== "pending"
+}
+
+async function syncReport(owner: Account, check: boolean) {
+  const product = await currentProduct(owner)
+  if (!product) return
+  const report = await reportFor(owner, product.version)
+  if (skipUpload(report, check)) return
+  // Legacy reports retain nextAttemptAt for compatibility; there is no timer.
+  const pending = { ...report, lastAttemptAt: Date.now(), attempts: report.attempts + 1 }
+  await write(owner, pending)
+  const service = new AgreementService()
+  if (await checkReport(owner, pending, service, check)) return
+  await signReport(owner, pending, service)
+}
+
+async function currentProduct(owner: Account) {
+  if (!(await isCurrent(owner))) return
+  const product = await productAgreement()
+  if (product.accepted) return product
+}
+
+async function reportFor(owner: Account, version: string): Promise<Report> {
+  const saved = await read(owner)
+  if (matchesReport(saved, version)) return saved
+  return { version, manifest: AGREEMENT_MANIFEST, attempts: 0, nextAttemptAt: 0 }
+}
+
+function requiresReview(report: Report) {
+  return !!report.requiredRevision && report.requiredRevision !== report.acceptedRevision
+}
+
+function skipUpload(report: Report, check: boolean) {
+  if (check) return false
+  return !!report.uploadedAt || requiresReview(report)
+}
+
+async function checkReport(owner: Account, report: Report, service: AgreementService, check: boolean) {
+  if (!check) return false
+  const query = await service.queryAgreement(loadAccessTokenFromDisk())
+  if (!(await isCurrent(owner))) return true
+  return settleQuery(owner, report, query)
+}
+
+type AgreementQuery = Awaited<ReturnType<AgreementService["queryAgreement"]>>
+
+async function settleQuery(owner: Account, report: Report, query: AgreementQuery) {
+  const revision = serviceRevision(query)
+  if (requiresReview({ ...report, requiredRevision: revision })) {
+    await write(owner, { ...report, requiredRevision: revision, uploadedAt: undefined })
+    return true
+  }
+  if (query.status === AgreementStatus.SESSION_EXPIRED) {
+    await write(owner, { ...report, error: "Sign in again to upload your agreement record.", nextAttemptAt: 0 })
+    return true
+  }
+  // A server record proves upload; a missing record never revokes local consent.
+  if (query.status === AgreementStatus.COMPLIANT) {
+    await write(owner, uploadedReport({ ...report, requiredRevision: undefined }))
+    return true
+  }
+  return false
+}
+
+function serviceRevision(query: AgreementQuery) {
+  if (query.status !== AgreementStatus.NEED_RE_SIGN) return
+  return JSON.stringify(
+    (query.signInfos ?? (query.signInfo ? [query.signInfo] : []))
+      .map((info) => [String(info.agrType), info.newestVersion, info.newestSubVersion])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  )
+}
+
+async function signReport(owner: Account, report: Report, service: AgreementService) {
+  if (requiresReview(report)) return
+  const signed = await service.signAgreement(loadAccessTokenFromDisk(), false)
+  if (!(await isCurrent(owner))) return
+  if (!signed.isUpload) return writeUploadFailure(owner, report, signed.error)
+  await write(owner, uploadedReport(report))
+}
+
+function writeUploadFailure(owner: Account, report: Report, error?: string) {
+  return write(owner, {
+    ...report,
+    uploadedAt: undefined,
+    error: error ?? "Agreement upload failed",
+    nextAttemptAt: 0,
+  })
+}
+
+function uploadedReport(report: Report): Report {
+  return { ...report, uploadedAt: Date.now(), error: undefined, attempts: 0, nextAttemptAt: 0 }
 }
 
 function logSyncFailure(error: unknown) {
