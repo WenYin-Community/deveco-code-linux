@@ -2,7 +2,8 @@
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
 import { expect, mock, test } from "bun:test"
-import { onCleanup } from "solid-js"
+import { createSignal, onCleanup, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { json } from "../../fixture/tui-sdk"
@@ -22,6 +23,7 @@ import { RouteProvider } from "@opencode-ai/tui/context/route"
 import { DialogProvider } from "@opencode-ai/tui/ui/dialog"
 import { ToastProvider } from "@opencode-ai/tui/ui/toast"
 import { DevEcoHomeBody, resetDevecoHomeCheck } from "@/cli/deveco-ui/home-body"
+import { ProductAgreementGate } from "@/cli/deveco-ui/agreement-panel"
 
 /**
  * Gate wiring under test (home-body ↔ onboarding):
@@ -74,6 +76,7 @@ mock.module("@/plugin/deveco-models", () => ({
 
 mock.module("@/cli/deveco-agreement-sync", () => ({
   trySyncAgreement: async () => {},
+  resetAgreementCheck: () => {},
 }))
 
 mock.module("@/plugin/deveco/log", () => ({
@@ -100,6 +103,7 @@ mock.module("@opencode-ai/tui/plugin/runtime", () => ({
 type UploadState = "not_signed" | "local" | "pending" | "review_required" | "uploaded"
 
 type MountOptions = {
+  home?: boolean
   uploadState: UploadState
   revision?: string
   thirdParty?: boolean
@@ -110,18 +114,16 @@ type MountOptions = {
 // Server-side agreement state. `accepted` flips on POST, mirroring the local
 // acceptance the panel performs through the real endpoint.
 //
-// `uploadState`/`revision` model what a plain read reports. `retryState`/
-// `retryRevision` model what the gate's upload retry discovers — the retry is the
-// call that pushes a newly required revision into the local report, so it is
-// allowed to disagree with the last read and it updates it.
+// Reads expose the result of startup/login checks; navigation never discovers
+// another online revision or retries an upload.
 function createAgreementFetcher(options: MountOptions) {
   const server = {
     accepted: options.accepted ?? false,
     uploadState: options.uploadState,
     revision: options.revision,
-    retryState: options.uploadState,
-    retryRevision: options.revision,
     retries: 0,
+    read: undefined as Promise<void> | undefined,
+    onRead: () => {},
   }
   const details = () => ({
     version: "1",
@@ -137,16 +139,19 @@ function createAgreementFetcher(options: MountOptions) {
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init)
     const path = new URL(request.url).pathname
-    if (path === "/global/product-agreement" && request.method === "GET") return json(details())
+    if (path === "/global/product-agreement" && request.method === "GET") {
+      const data = details()
+      server.onRead()
+      await server.read
+      return json(data)
+    }
     if (path === "/global/product-agreement" && request.method === "POST") {
       server.accepted = true
       return json(details())
     }
     if (path === "/global/product-agreement/retry") {
       server.retries++
-      server.uploadState = server.retryState
-      server.revision = server.retryRevision
-      return json({ accepted: server.accepted, upload: { state: server.retryState, revision: server.retryRevision } })
+      return json(details())
     }
     return json({})
   }) as typeof fetch
@@ -170,11 +175,24 @@ function createSyncData(options: MountOptions, tmpPath: string) {
       provider_auth: {},
       provider_default: {},
       provider_next: { all: [], connected: [], default: {} },
+      provider_revision: 0,
     },
   } as unknown as ReturnType<typeof useSync>
 }
 
-function makeHarness(tmpPath: string, fetcher: typeof fetch, sync: ReturnType<typeof useSync>) {
+function makeHarness(
+  tmpPath: string,
+  fetcher: typeof fetch,
+  sync: ReturnType<typeof useSync>,
+  home: () => boolean,
+  openHome: () => void,
+  session: { mounted: number; disposed: number },
+) {
+  function Session() {
+    session.mounted++
+    onCleanup(() => session.disposed++)
+    return <text>SESSION_READY</text>
+  }
   return function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
@@ -196,7 +214,11 @@ function makeHarness(tmpPath: string, fetcher: typeof fetch, sync: ReturnType<ty
                               <ArgsProvider>
                                 <PromptRefProvider>
                                   <ExitProvider exit={() => {}}>
-                                    <DevEcoHomeBody sync={sync} bodySlotHeight={18} />
+                                    <ProductAgreementGate home={home()} onConsentRequired={openHome}>
+                                      <Show when={home()} fallback={<Session />}>
+                                        <DevEcoHomeBody sync={sync} bodySlotHeight={18} />
+                                      </Show>
+                                    </ProductAgreementGate>
                                   </ExitProvider>
                                 </PromptRefProvider>
                               </ArgsProvider>
@@ -258,11 +280,83 @@ async function mount(options: MountOptions) {
   const tmp = await tmpdir()
   await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language: "en" }))
   const { fetcher, server } = createAgreementFetcher(options)
-  const sync = createSyncData(options, tmp.path)
-  const Harness = makeHarness(tmp.path, fetcher, sync)
+  const initial = createSyncData(options, tmp.path)
+  const [data, setData] = createStore(initial.data)
+  const sync = { ...initial, data }
+  const [home, setHome] = createSignal(options.home ?? true)
+  const session = { mounted: 0, disposed: 0 }
+  const Harness = makeHarness(tmp.path, fetcher, sync, home, () => setHome(true), session)
   const setup = await testRender(() => <Harness />, { width: 100, height: 40, kittyKeyboard: true })
-  return makePanelHelpers(setup, server, tmp)
+  return {
+    ...makePanelHelpers(setup, server, tmp),
+    session,
+    openSession: () => setHome(false),
+    refreshProviders: () => setData("provider_revision", (revision) => revision + 1),
+  }
 }
+
+test("logged-in mixed-provider users review online agreements before entry", async () => {
+  await using panel = await mount({ accepted: true, thirdParty: true, uploadState: "review_required", revision: "2" })
+  expect(await panel.frame("Agreements updated")).not.toContain("PROMPT_READY")
+})
+
+test("restoring a session reviews online agreements before exposing it", async () => {
+  await using panel = await mount({
+    home: false,
+    accepted: true,
+    uploadState: "review_required",
+    revision: "2",
+    env: { studioConfigured: true },
+  })
+  expect(await panel.frame("Agreements updated")).not.toContain("SESSION_READY")
+})
+
+test("accepting an online update on restored startup clears the old gate decision", async () => {
+  await using panel = await mount({
+    home: false,
+    accepted: true,
+    uploadState: "review_required",
+    revision: "2",
+    env: { studioConfigured: true },
+  })
+  await panel.frame("I have read and agree")
+  panel.server.uploadState = "uploaded"
+  await panel.setup.mockInput.typeText(" ")
+  await panel.frame("[✓]")
+  panel.setup.mockInput.pressEnter()
+  await panel.frame("PROMPT_READY")
+  panel.openSession()
+  expect(await panel.frame("SESSION_READY")).not.toContain("PROMPT_READY")
+})
+
+test("login during a session re-reads backend consent even when the provider list is unchanged", async () => {
+  await using panel = await mount({
+    home: false,
+    accepted: true,
+    thirdParty: true,
+    uploadState: "local",
+    env: { studioConfigured: true },
+  })
+  await panel.frame("SESSION_READY")
+  panel.server.uploadState = "review_required"
+  panel.server.revision = "2"
+  panel.refreshProviders()
+  expect(await panel.frame("Agreements updated")).not.toContain("SESSION_READY")
+})
+
+test("login on the home screen re-reads backend consent even when the provider list is unchanged", async () => {
+  await using panel = await mount({
+    accepted: true,
+    thirdParty: true,
+    uploadState: "local",
+    env: { studioConfigured: true },
+  })
+  await panel.frame("PROMPT_READY")
+  panel.server.uploadState = "review_required"
+  panel.server.revision = "2"
+  panel.refreshProviders()
+  expect(await panel.frame("Agreements updated")).not.toContain("PROMPT_READY")
+})
 
 test("accepting the product agreement advances to the DevEco Studio step instead of looping on the panel", async () => {
   await using panel = await mount({ uploadState: "local" })
@@ -307,12 +401,7 @@ test("accepting a revision the server has not cleared keeps the consent screen u
   expect(next).not.toContain("Continue")
 })
 
-test("a revision published while the panel is on screen still reaches it", async () => {
-  // The panel is mounted and offering Continue, because its snapshot was taken when
-  // revision 2 was accepted. The gate's own upload retry then discovers revision 3 and
-  // re-decides `privacy` — the same step as before. Without the gate's consent revision
-  // in the remount key the key is unchanged, nothing remounts, and the Continue click
-  // leaves the panel showing exactly what it showed before.
+test("a newer login check resets consent while the panel is on screen", async () => {
   await using panel = await mount({
     uploadState: "review_required",
     revision: "2",
@@ -325,15 +414,10 @@ test("a revision published while the panel is on screen still reaches it", async
   // The gate's verdict reaches the panel: it renders as a re-review, not a first signing.
   expect(first).toContain("Agreements updated")
 
-  // Revision 2 is accepted locally, so a plain read no longer asks for consent. The
-  // next upload retry is what discovers revision 3.
-  panel.server.uploadState = "pending"
-  panel.server.retryState = "review_required"
-  panel.server.retryRevision = "3"
-
   await panel.setup.mockInput.typeText(" ")
   await panel.frame("[✓]")
-  panel.setup.mockInput.pressEnter()
+  panel.server.revision = "3"
+  panel.refreshProviders()
 
   // A remounted panel starts unchecked, so "[ ]" can only come from a fresh instance.
   const next = await panel.frame("[ ]")
@@ -397,11 +481,6 @@ test("third-party provider users configure DevEco Studio before entering", async
 })
 
 test("an all-clear first gate run for a deveco-only user lands on ready instead of hanging on the setup check", async () => {
-  // Unlike the third-party cases above — which return from the product-agreement
-  // branch — a deveco-only user with everything in order reaches the final
-  // upload retry, and only the fall-through after it can flip the gate to
-  // ready. A `return` that escapes the `review_required` branch swallows that
-  // transition and the UI stays on "Checking setup..." forever.
   await using panel = await mount({
     uploadState: "uploaded",
     accepted: true,
@@ -412,8 +491,7 @@ test("an all-clear first gate run for a deveco-only user lands on ready instead 
   expect(frame).not.toContain("Checking setup")
   expect(frame).not.toContain("Agreements and privacy")
   expect(frame).not.toContain("Configure DevEco Studio Path")
-  // Ready must come *after* the upload retry ran, not from an earlier exit.
-  expect(panel.retries()).toBe(1)
+  expect(panel.retries()).toBe(0)
 })
 
 test("a later gate decision is not shadowed by the real-name flag of an earlier one", async () => {
@@ -440,7 +518,51 @@ test("a later gate decision is not shadowed by the real-name flag of an earlier 
   const next = await panel.frame("Get started with DevEco Code")
   expect(next).not.toContain("Real-name authentication required")
   expect(next).not.toContain("Agreements and privacy")
-  // The entry screen is only reachable after the re-login flow ran the
-  // agreement check, so a login that failed early cannot pass this test.
-  expect(panel.retries()).toBeGreaterThan(0)
+  expect(panel.retries()).toBe(0)
+})
+
+test("refreshing agreement status keeps the active session mounted", async () => {
+  await using panel = await mount({ home: false, accepted: true, uploadState: "uploaded" })
+  await panel.frame("SESSION_READY")
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  panel.server.read = release.promise
+  panel.server.onRead = entered.resolve
+  try {
+    panel.refreshProviders()
+    await entered.promise
+    expect(await panel.frame("SESSION_READY")).not.toContain("Checking setup")
+    expect(panel.session).toEqual({ mounted: 1, disposed: 0 })
+  } finally {
+    release.resolve()
+    await panel.settle()
+  }
+  expect(panel.session).toEqual({ mounted: 1, disposed: 0 })
+})
+
+test("an old home check cannot overwrite a newer login decision", async () => {
+  await using panel = await mount({
+    accepted: true,
+    thirdParty: true,
+    uploadState: "local",
+    env: { studioConfigured: true },
+  })
+  await panel.frame("PROMPT_READY")
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  panel.server.read = release.promise
+  panel.server.onRead = entered.resolve
+  panel.refreshProviders()
+  await entered.promise
+  panel.server.read = undefined
+  panel.server.uploadState = "review_required"
+  panel.server.revision = "2"
+  try {
+    panel.refreshProviders()
+    await panel.frame("Agreements updated")
+  } finally {
+    release.resolve()
+  }
+  expect(await panel.settle()).not.toContain("PROMPT_READY")
+  await panel.frame("Agreements updated")
 })

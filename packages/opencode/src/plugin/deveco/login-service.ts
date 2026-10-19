@@ -131,8 +131,8 @@ export class LoginService {
 
   public async logout(): Promise<void> {
     this.cancel()
-    const { stopAgreementSync } = await import("@/cli/deveco-agreement-sync")
-    stopAgreementSync()
+    const { resetAgreementCheck } = await import("@/cli/deveco-agreement-sync")
+    resetAgreementCheck()
     this.userInfo = null
     // Independent cleanup must finish even if one credential file cannot be written.
     const results = await Promise.allSettled([

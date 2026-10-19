@@ -11,6 +11,9 @@ export class ProductAgreementVersionError extends Error {}
 
 export const PRODUCT_AGREEMENT_VERSION = "1"
 
+export const AGREEMENT_REVIEW_REQUIRED_MESSAGE =
+  "The DevEco Code service agreements changed. Review and accept them before retrying your request."
+
 export async function productAgreement() {
   const stored: unknown = await Bun.file(path.join(Global.Path.state, "product-agreement.json"))
     .json()
@@ -34,13 +37,13 @@ export async function productAgreement() {
 export async function acceptProductAgreement(version: string, serviceRevision?: string) {
   if (version !== PRODUCT_AGREEMENT_VERSION)
     throw new ProductAgreementVersionError("The product agreements changed. Review them again before accepting.")
-  const { acceptServiceRevision, trySyncAgreement } = await import("./deveco-agreement-sync")
+  const { acceptServiceRevision, uploadAgreement } = await import("./deveco-agreement-sync")
   if (serviceRevision) await acceptServiceRevision(serviceRevision)
   const file = path.join(Global.Path.state, "product-agreement.json")
   const temporary = `${file}.${randomUUID()}.tmp`
   await Bun.write(temporary, JSON.stringify({ version, acceptedAt: Date.now() }), { mode: 0o600 })
   await rename(temporary, file)
-  await trySyncAgreement()
+  await uploadAgreement()
   return productAgreement()
 }
 
@@ -57,9 +60,15 @@ export async function requireProductAccess() {
       "Review the product agreements in DevEco Code or run `deveco auth consent` on the server before continuing.",
     )
   }
+  const { waitForAgreementSync, agreementUploadStatus } = await import("./deveco-agreement-sync")
+  await waitForAgreementSync()
+  if ((await agreementUploadStatus()).state === "review_required") {
+    throw new Error(AGREEMENT_REVIEW_REQUIRED_MESSAGE)
+  }
 }
 
 export async function productAgreementDetails() {
-  const { agreementUploadStatus } = await import("./deveco-agreement-sync")
+  const { waitForAgreementSync, agreementUploadStatus } = await import("./deveco-agreement-sync")
+  await waitForAgreementSync()
   return { ...(await productAgreement()), upload: await agreementUploadStatus() }
 }

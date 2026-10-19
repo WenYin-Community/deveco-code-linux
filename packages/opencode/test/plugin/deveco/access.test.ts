@@ -4,8 +4,13 @@ import { requireDevEcoAccess, clearDevEcoAccess } from "@/plugin/deveco/access"
 import { saveAuthToDisk, loadAccessTokenFromDisk } from "@/plugin/deveco/storage"
 import { tokenStorage } from "@/plugin/deveco/token-storage"
 import { AgreementService, AgreementStatus } from "@/cli/deveco-agreement"
-import { acceptProductAgreement, PRODUCT_AGREEMENT_VERSION } from "@/cli/deveco-product-agreement"
-import { syncAgreement, stopAgreementSync } from "@/cli/deveco-agreement-sync"
+import {
+  acceptProductAgreement,
+  AGREEMENT_REVIEW_REQUIRED_MESSAGE,
+  PRODUCT_AGREEMENT_VERSION,
+  requireProductAccess,
+} from "@/cli/deveco-product-agreement"
+import { syncAgreement, resetAgreementCheck } from "@/cli/deveco-agreement-sync"
 import { regionPolicy } from "@/plugin/deveco/region-policy"
 import { tmpdir } from "../../fixture/fixture"
 
@@ -28,7 +33,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  stopAgreementSync()
+  resetAgreementCheck()
   Global.Path.data = data
   Global.Path.state = state
   await tokenStorage.clearToken()
@@ -57,6 +62,17 @@ async function signIn(verified = true) {
 }
 
 describe("built-in provider access", () => {
+  test("ordinary admission never starts an online agreement check", async () => {
+    await using tmp = await tmpdir()
+    Global.Path.data = tmp.path
+    Global.Path.state = tmp.path
+    await signIn()
+    await requireProductAccess()
+    expect(await requireDevEcoAccess()).toBe("test-access")
+    expect(agreement).not.toHaveBeenCalled()
+    expect(sign).not.toHaveBeenCalled()
+  })
+
   test("requires an account without contacting the agreement service", async () => {
     await using tmp = await tmpdir()
     Global.Path.data = tmp.path
@@ -72,7 +88,7 @@ describe("built-in provider access", () => {
     expect(agreement).not.toHaveBeenCalled()
   })
 
-  test("rechecks a previously unverified account and uses the rotated token for agreements", async () => {
+  test("rechecks a previously unverified account without querying agreements", async () => {
     await using tmp = await tmpdir()
     Global.Path.data = tmp.path
     Global.Path.state = tmp.path
@@ -88,7 +104,7 @@ describe("built-in provider access", () => {
       return true
     })
     expect(await requireDevEcoAccess()).toBe("verified-access")
-    expect(agreement.mock.calls[0]?.[0]).toBe("verified-access")
+    expect(agreement).not.toHaveBeenCalled()
     expect(await requireDevEcoAccess()).toBe("verified-access")
     expect(realName).toHaveBeenCalledTimes(1)
   })
@@ -174,7 +190,9 @@ describe("built-in provider access", () => {
     Global.Path.state = tmp.path
     await signIn()
     agreement.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
-    await expect(requireDevEcoAccess()).rejects.toThrow("agreements")
+    await syncAgreement()
+    await expect(requireProductAccess()).rejects.toThrow(AGREEMENT_REVIEW_REQUIRED_MESSAGE)
+    await expect(requireDevEcoAccess()).rejects.toThrow(AGREEMENT_REVIEW_REQUIRED_MESSAGE)
   })
 
   test("allows a locally accepted account when TMS upload fails", async () => {
@@ -184,6 +202,7 @@ describe("built-in provider access", () => {
     await signIn()
     agreement.mockResolvedValue({ status: AgreementStatus.NEED_SIGN, signInfo: null, versionInfo: null })
     sign.mockResolvedValue({ success: false, isUpload: false, error: "offline" })
+    await syncAgreement()
     expect(await requireDevEcoAccess()).toBe("test-access")
     expect(sign).toHaveBeenCalledTimes(1)
   })
@@ -197,6 +216,7 @@ describe("built-in provider access", () => {
       await saveAuthToDisk("deveco", { isRealName: false })
       return { status: AgreementStatus.COMPLIANT, signInfo: null, versionInfo: null }
     })
+    await syncAgreement()
     await expect(requireDevEcoAccess()).rejects.toThrow("real-name")
   })
 
@@ -205,6 +225,7 @@ describe("built-in provider access", () => {
     Global.Path.data = tmp.path
     Global.Path.state = tmp.path
     await signIn()
+    await syncAgreement()
     expect(await requireDevEcoAccess()).toBe("test-access")
     expect(await requireDevEcoAccess()).toBe("test-access")
     expect(agreement).toHaveBeenCalledTimes(1)

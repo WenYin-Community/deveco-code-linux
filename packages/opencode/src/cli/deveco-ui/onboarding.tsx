@@ -367,7 +367,7 @@ export function DevEcoOnboarding(props: {
 
   const checkAgreementStatus = async () => {
     try {
-      const result = await sdk.client.global.retryAgreementUpload({ force: false }, { throwOnError: true });
+      const result = await sdk.client.global.productAgreement({ throwOnError: true });
       if (result.data?.accepted && result.data.upload.state !== 'review_required') {
         props.onComplete();
         return;
@@ -523,7 +523,8 @@ export function DevEcoOnboarding(props: {
         expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
         isRealName: result.userInfo?.isRealName ?? false,
       });
-      const { trySyncAgreement } = await import('@/cli/deveco-agreement-sync');
+      const { resetAgreementCheck, trySyncAgreement } = await import('@/cli/deveco-agreement-sync');
+      resetAgreementCheck();
       await trySyncAgreement();
       const { getDevecoProviderConfig, clearDevecoModelCache } = await import('@/plugin/deveco-models');
       clearDevecoModelCache();

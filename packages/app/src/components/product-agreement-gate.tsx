@@ -1,4 +1,4 @@
-import { createEffect, createResource, on, Show, type ParentProps } from "solid-js"
+import { createEffect, createResource, on, onCleanup, Show, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Button } from "@opencode-ai/ui/button"
 import { useServerSDK } from "@/context/server-sdk"
@@ -11,19 +11,19 @@ export function ProductAgreementGate(props: ParentProps) {
     saving: false,
     error: "",
   })
-  const [agreement, { refetch, mutate }] = createResource(sdk, async (server) => {
+  const [agreement, { refetch }] = createResource(sdk, async (server) => {
     setState({ checked: false, error: "" })
     const result = await server.client.global.productAgreement()
     if (result.error || !result.data?.upload) throw new Error("Unable to load product agreements")
-    if (result.data.accepted) {
-      void server.client.global
-        .retryAgreementUpload({ force: false })
-        .then((next) => {
-          if (sdk() === server && next.data) mutate(next.data)
-        })
-        .catch(() => {})
-    }
     return result.data
+  })
+
+  createEffect(() => {
+    const unsubscribe = sdk().event.on("global", (event) => {
+      if (event.type === "global.disposed" || event.type === "server.connected")
+        void Promise.resolve(refetch()).catch(() => {})
+    })
+    onCleanup(unsubscribe)
   })
 
   createEffect(
@@ -53,7 +53,7 @@ export function ProductAgreementGate(props: ParentProps) {
 
   return (
     <Show
-      when={!agreement.error && !agreement.loading && agreement()?.accepted}
+      when={!agreement.error && agreement()?.accepted}
       fallback={
         <div class="flex size-full items-center justify-center p-6">
           <div class="flex max-w-lg flex-col gap-4 text-text-strong">

@@ -8,13 +8,8 @@ declare const DEVECO_SKIP_AGREEMENT: boolean | undefined
 
 let realNameAttempt: { key: string; expires: number; message: string; pending?: Promise<boolean | null> } | undefined
 
-let checked: { key: string; expires: number } | undefined
-
-export const AGREEMENT_REVIEW_REQUIRED_MESSAGE =
-  "The DevEco Code service agreements changed. Review and accept them before retrying your request."
-
-/** Only the built-in provider uses account, real-name and online service terms. */
-export async function requireDevEcoAccess(config?: AgreementConfig) {
+/** Built-in models additionally require HUAWEI authentication and real-name verification. */
+export async function requireDevEcoAccess(_config?: AgreementConfig) {
   const region = await regionPolicy.checkAccess()
   if (!region.allowed) throw new Error(MAINLAND_CHINA_ONLY_MESSAGE)
 
@@ -51,18 +46,9 @@ export async function requireDevEcoAccess(config?: AgreementConfig) {
   const access = loadAccessTokenFromDisk()
   if (!access || (await devecoAuth.getUserId()) !== userId)
     throw new Error("HUAWEI account changed. Sign in again to use built-in models.")
-  const key = JSON.stringify([userId, access, config])
-  if (checked?.key !== key || checked.expires <= Date.now()) {
-    if (!(typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT)) {
-      const { requireProductAccess } = await import("@/cli/deveco-product-agreement")
-      const { trySyncAgreement, agreementUploadStatus } = await import("@/cli/deveco-agreement-sync")
-      await requireProductAccess()
-      // Built-in agreements use the bundled identity, never project-configurable TMS endpoints.
-      await trySyncAgreement()
-      if ((await agreementUploadStatus()).state === "review_required")
-        throw new Error(AGREEMENT_REVIEW_REQUIRED_MESSAGE)
-    }
-    checked = { key, expires: Date.now() + 30_000 }
+  if (!(typeof DEVECO_SKIP_AGREEMENT !== "undefined" && DEVECO_SKIP_AGREEMENT)) {
+    const { requireProductAccess } = await import("@/cli/deveco-product-agreement")
+    await requireProductAccess()
   }
 
   // A concurrent logout must not release a credential captured before the check.
@@ -75,6 +61,5 @@ export async function requireDevEcoAccess(config?: AgreementConfig) {
 }
 
 export function clearDevEcoAccess() {
-  checked = undefined
   realNameAttempt = undefined
 }

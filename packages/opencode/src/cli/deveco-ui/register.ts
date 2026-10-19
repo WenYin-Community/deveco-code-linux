@@ -20,7 +20,7 @@ import { Auth } from "@/auth"
 import { LOCAL_CREDENTIALS_CORRUPTED_MESSAGE } from "@/auth/messages"
 import { Effect } from "effect"
 import { detectCrashedFlag } from "@/cli/crash-detect"
-import { AGREEMENT_REVIEW_REQUIRED_MESSAGE } from "@/plugin/deveco/access"
+import { AGREEMENT_REVIEW_REQUIRED_MESSAGE } from "@/cli/deveco-product-agreement"
 
 async function readLocalAuthError(): Promise<string | undefined> {
   try {

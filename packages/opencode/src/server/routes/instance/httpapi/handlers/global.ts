@@ -158,10 +158,10 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           ? new HttpApiError.BadRequest()
           : new UnknownError({ message: "Unable to save product agreement acceptance." }),
       }))
-      .handle("retryAgreementUpload", (ctx) => Effect.tryPromise({
+      .handle("retryAgreementUpload", () => Effect.tryPromise({
         try: async () => {
-          const { syncAgreement } = await import("@/cli/deveco-agreement-sync")
-          await syncAgreement(ctx.payload.force ?? true)
+          const { uploadAgreement } = await import("@/cli/deveco-agreement-sync")
+          await uploadAgreement()
           return productAgreementDetails()
         },
         catch: () => new UnknownError({ message: "Unable to retry agreement upload. Your local acceptance is preserved." }),

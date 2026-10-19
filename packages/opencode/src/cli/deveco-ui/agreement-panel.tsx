@@ -385,20 +385,23 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
   const { theme } = useTheme()
   const sdk = useSDK()
   const [agreement, { refetch }] = createResource(
-    () => (props.home ? undefined : true),
+    () => (props.home ? undefined : (sync.data.provider_revision ?? 0)),
     async () => {
       const result = await sdk.client.global.productAgreement({ throwOnError: true })
       if (!result.data?.upload) throw new Error(t("account.server_update"))
-      if (result.data.accepted) void sdk.client.global.retryAgreementUpload({ force: false }).catch(() => {})
       return result.data
     },
   )
   createEffect(() => {
-    if (!props.home && agreement() && !agreement()?.accepted) props.onConsentRequired()
+    if (props.home || agreement.loading || agreement.error) return
+    if (agreement() && (!agreement()?.accepted || agreement()?.upload.state === "review_required"))
+      props.onConsentRequired()
   })
   return (
     <Show
-      when={props.home || (!agreement.error && agreement()?.accepted)}
+      when={
+        props.home || (!agreement.error && agreement()?.accepted && agreement()?.upload.state !== "review_required")
+      }
       fallback={
         <box flexGrow={1} alignItems="center" justifyContent="center">
           <text

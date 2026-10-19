@@ -80,6 +80,7 @@ export const {
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
       provider: Provider[]
+      provider_revision: number
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
       console_state: ConsoleState
@@ -143,6 +144,7 @@ export const {
       question: {},
       command: [],
       provider: [],
+      provider_revision: 0,
       provider_default: {},
       session: [],
       session_status: {},
@@ -575,6 +577,7 @@ export const {
               setStore("provider", reconcile(providers.providers))
               setStore("provider_default", reconcile(providers.default))
               setStore("provider_next", reconcile(slimProviderList(providerList)))
+              setStore("provider_revision", (revision) => revision + 1)
               setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
               setStore("console_state", reconcile(consoleState))
               setStore("agent", reconcile(agents))
@@ -638,6 +641,7 @@ export const {
         setStore("provider_default", reconcile(providers.data.default))
         setStore("provider_next", reconcile(slimProviderList(providerList.data)))
         setStore("provider_auth", reconcile(providerAuth.data))
+        setStore("provider_revision", (revision) => revision + 1)
       })
     }
 

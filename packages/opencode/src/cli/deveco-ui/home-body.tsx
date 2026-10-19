@@ -94,13 +94,14 @@ export function DevEcoHomeBody(props: {
   const [authCanEnter, setAuthCanEnter] = createSignal(false)
   const [authCheckDone, setAuthCheckDone] = createSignal(false)
   let devecoChecked = false
+  let devecoCheckRevision = 0
   const [devecoRealName, setDevecoRealName] = createSignal(false)
   const [devecoInitialAuthError, setDevecoInitialAuthError] = createSignal<string | undefined>(undefined)
   // Required service-agreement revision the latest gate run observed, or
   // `undefined` when no review is outstanding. `step === "privacy"` already
   // implies a review is required, so the revision is what actually differs
-  // between two consecutive privacy decisions — e.g. when the background
-  // agreement sync pushes a newer required revision while the panel is already
+  // between two consecutive privacy decisions — e.g. when a new login
+  // check finds a newer required revision while the panel is already
   // on screen. That difference is what has to force a remount.
   const [devecoReviewRevision, setDevecoReviewRevision] = createSignal<string | undefined>(undefined)
 
@@ -160,10 +161,19 @@ export function DevEcoHomeBody(props: {
     if (sync.status === "loading" || sync.data.local_auth_error) return
     if (devecoChecked) return
     devecoChecked = true
+    const revision = ++devecoCheckRevision
+    const apply = (destination: GateDestination) => {
+      if (revision === devecoCheckRevision) applyGate(destination)
+    }
 
     try {
 
     const product = await sdk.client.global.productAgreement({ throwOnError: true })
+    // The backend checks the active HUAWEI login once, independently of model selection.
+    if (product.data?.accepted && product.data.upload.state === "review_required") {
+      apply({ step: "privacy", reviewRevision: product.data.upload.revision })
+      return
+    }
     const hasThirdParty = sync.data.provider.some((provider) =>
       provider.id !== "deveco" &&
       (provider.id !== "opencode" || Object.values(provider.models).some((model) => model.cost?.input)) &&
@@ -171,27 +181,27 @@ export function DevEcoHomeBody(props: {
     )
     if (hasThirdParty) {
       if (!product.data?.accepted) {
-        applyGate({ step: "product-privacy" })
+        apply({ step: "product-privacy" })
         return
       }
       if (!devecoHomeChecked) {
         devecoHomeChecked = true
         if (!(await hasConfiguredDevEcoHome())) {
-          applyGate({ step: "deveco-home" })
+          apply({ step: "deveco-home" })
           return
         }
       }
-      applyGate({ step: "ready" })
+      apply({ step: "ready" })
       return
     }
 
     if (hasDevecoOAuthEntry() && !product.data?.accepted) {
-      applyGate({ step: "product-privacy" })
+      apply({ step: "product-privacy" })
       return
     }
 
     if (!hasDevecoOAuthEntry()) {
-      applyGate({ step: "entry" })
+      apply({ step: "entry" })
       return
     }
 
@@ -203,7 +213,7 @@ export function DevEcoHomeBody(props: {
       // below does instead of showing the generic sign-in prompt. The earlier
       // `!hasDevecoOAuthEntry()` exit deliberately does not do this: with no entry
       // there is no session that could have expired.
-      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      apply({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
       return
     }
 
@@ -214,7 +224,7 @@ export function DevEcoHomeBody(props: {
     if (validToken) {
       accessToken = validToken
     } else if (!accessToken) {
-      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      apply({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
       return
     } else {
       // ensureValidToken() returned null but we have a cached access token.
@@ -222,7 +232,7 @@ export function DevEcoHomeBody(props: {
       // Regardless of local exp, treat as session expired — the server no longer
       // trusts this token. Continuing would fall through to the real-name check
       // which also uses the same invalid jwtToken, creating a dead-end loop.
-      applyGate({
+      apply({
         step: "entry",
         sessionExpired: await devecoAuth.isJwtExpired() === true,
         authError: t("account.refresh_session_failed"),
@@ -237,35 +247,25 @@ export function DevEcoHomeBody(props: {
     }
     if (!isRealName) {
       logWarn("real-name verification failed, blocking entry", { service: "deveco" })
-      applyGate({ step: "realname" })
+      apply({ step: "realname" })
       return
     }
-
-    const userId = session.userId || (await devecoAuth.getUserId()) || ""
 
     // Check if DEVECO_HOME is configured — only on initial startup, skip on /new
     if (!devecoHomeChecked) {
       devecoHomeChecked = true
       if (!(await hasConfiguredDevEcoHome())) {
-        applyGate({ step: "deveco-home" })
+        apply({ step: "deveco-home" })
         return
       }
     }
 
-    const result = await sdk.client.global.retryAgreementUpload({ force: false })
-    if (result.data?.upload.state === "review_required") {
-      applyGate({ step: "privacy", reviewRevision: result.data.upload.revision })
-      return
-    }
-    if (result.error) {
-      logWarn("agreement upload remains pending; continuing with local acceptance", { service: "deveco" })
-    }
-    applyGate({ step: "ready" })
+    apply({ step: "ready" })
 
     } catch (err) {
       if (err instanceof UnsupportedRegionError) {
         logError("runDevecoCheck blocked: unsupported account region", { service: "deveco" })
-        applyGate({ step: "entry", authError: CHINA_ACCOUNT_ONLY_MESSAGE })
+        apply({ step: "entry", authError: CHINA_ACCOUNT_ONLY_MESSAGE })
         return
       }
       // Any unhandled error must not
@@ -274,7 +274,7 @@ export function DevEcoHomeBody(props: {
       logError("runDevecoCheck failed", { service: "deveco", error: err instanceof Error ? err.message : String(err) })
       // Even if an error occurred, check if JWT is expired so we can show the
       // appropriate "session expired" message instead of the generic login prompt.
-      applyGate({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
+      apply({ step: "entry", sessionExpired: await devecoAuth.isJwtExpired() === true })
     }
   }
 
@@ -288,6 +288,17 @@ export function DevEcoHomeBody(props: {
       setDevecoReady(true)
     }
   })
+
+  createEffect(
+    on(
+      () => sync.data.provider_revision,
+      () => {
+        devecoChecked = false
+        void runDevecoCheck()
+      },
+      { defer: true },
+    ),
+  )
 
   /**
    * Improvement consent fallback (design §6.3): the only ask surface for paths

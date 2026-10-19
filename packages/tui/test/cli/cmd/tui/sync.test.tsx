@@ -88,6 +88,7 @@ describe("tui sync", () => {
 
     try {
       refreshing = true
+      expect(sync.data.provider_revision).toBe(1)
       await sync.provider.refresh()
 
       expect(calls[0]).toBe("/provider/refresh")
@@ -95,6 +96,12 @@ describe("tui sync", () => {
       expect(sync.data.provider_next.connected).toEqual(["openai"])
       expect(sync.data.provider[0]?.id).toBe("openai")
       expect(sync.data.provider_auth.openai?.[0]?.type).toBe("api")
+      expect(sync.data.provider_revision).toBe(2)
+
+      const providers = sync.data.provider
+      await sync.provider.refresh()
+      expect(sync.data.provider).toBe(providers)
+      expect(sync.data.provider_revision).toBe(3)
     } finally {
       app.renderer.destroy()
     }

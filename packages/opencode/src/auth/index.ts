@@ -95,7 +95,10 @@ export const layer = Layer.effect(
         const { saveAuthToDisk } = yield* Effect.promise(() => import("@/plugin/deveco/storage"))
         yield* Effect.tryPromise({ try: () => saveAuthToDisk(norm, { ...info }), catch: fail("Failed to write auth data") })
         if (info.type === "oauth") {
-          const { startAgreementSync } = yield* Effect.promise(() => import("@/cli/deveco-agreement-sync"))
+          const { resetAgreementCheck, startAgreementSync } = yield* Effect.promise(
+            () => import("@/cli/deveco-agreement-sync"),
+          )
+          resetAgreementCheck()
           startAgreementSync()
         }
         return
