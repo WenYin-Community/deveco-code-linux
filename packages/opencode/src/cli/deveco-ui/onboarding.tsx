@@ -303,6 +303,14 @@ export function DevEcoOnboarding(props: {
 
   const chooseEntry = async () => {
     productReturnStep = entryIndex() === 0 ? 'auth' : 'providers';
+    // Signing in first keeps this to a single panel: the account is what lets
+    // the service say which version it expects, so the panel shown after login
+    // can collect one explicit consent for both. The key path has no account,
+    // so it still asks before the provider list.
+    if (entryIndex() === 0) {
+      continueSetup();
+      return;
+    }
     try {
       const result = await sdk.client.global.productAgreement({ throwOnError: true });
       if (!result.data) throw new Error(t("account.agreement_load_failed"));
@@ -1194,9 +1202,14 @@ async function prepareBrowserLogin(result: BrowserLoginResult, sync: ReturnType<
     ...credentials,
     expires: Date.now() + ACCESS_TOKEN_EXPIRES_MS,
   })
-  const { resetAgreementCheck, trySyncAgreement } = await import("@/cli/deveco-agreement-sync")
+  const { observeAgreementRevision, resetAgreementCheck, trySyncAgreement } = await import("@/cli/deveco-agreement-sync")
   resetAgreementCheck()
   await trySyncAgreement()
+  // Consent does not exist yet, so the sync above returned without asking the
+  // service. Record the revision it expects now: the panel that follows
+  // collects the one acceptance, and that acceptance carries the revision the
+  // service actually still wants, so a single Enter settles it.
+  await observeAgreementRevision()
   const { getDevecoProviderConfig, clearDevecoModelCache } = await import("@/plugin/deveco-models")
   clearDevecoModelCache()
   await getDevecoProviderConfig(credentials.access)

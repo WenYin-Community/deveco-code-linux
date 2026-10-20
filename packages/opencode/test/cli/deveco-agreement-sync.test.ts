@@ -10,6 +10,7 @@ import {
   resetAgreementCheck,
   acceptServiceRevision,
   uploadAgreement,
+  observeAgreementRevision,
   waitForAgreementSync,
 } from "@/cli/deveco-agreement-sync"
 import {
@@ -360,6 +361,39 @@ test("acceptance waits for an in-flight login check and uploads without another 
   expect((await productAgreementDetails()).upload.state).toBe("uploaded")
   expect(query).toHaveBeenCalledTimes(2)
   expect(sign).toHaveBeenCalledTimes(1)
+})
+
+test("status names the expected revision before consent so one acceptance settles it", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.state = tmp.path
+  Global.Path.data = tmp.path
+  await login()
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  // A login cannot ask the service when no consent exists, so the panel would
+  // otherwise accept with an empty revision and have to ask a second time.
+  expect((await agreementUploadStatus()).state).toBe("not_signed")
+  await observeAgreementRevision()
+  const status = await agreementUploadStatus()
+  expect(status.state).toBe("not_signed")
+  expect(status.revision).toBeTruthy()
+  expect(sign).not.toHaveBeenCalled()
+  // The one acceptance the panel collects carries exactly what the service asks,
+  // so it settles the requirement instead of starting a second round.
+  await acceptProductAgreement(PRODUCT_AGREEMENT_VERSION, status.revision)
+  await waitForAgreementSync()
+  expect(sign).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("uploaded")
+})
+
+test("the login observation leaves an accepted account alone", async () => {
+  await using tmp = await setup()
+  await login()
+  query.mockClear()
+  await observeAgreementRevision()
+  // Consent already exists, so the login has nothing to observe and no query of
+  // its own is issued; the regular sync stays the only one that may ask.
+  expect(query).not.toHaveBeenCalled()
+  expect((await productAgreementDetails()).accepted).toBe(true)
 })
 
 test("never uploads without local product consent", async () => {

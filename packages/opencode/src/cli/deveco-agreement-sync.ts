@@ -118,10 +118,19 @@ function lock<T>(owner: Account, run: () => Promise<T>) {
 
 export async function agreementUploadStatus(): Promise<typeof AgreementUpload.Type> {
   const product = await productAgreement()
-  if (!product.accepted) return { state: "not_signed" }
   const owner = await account()
+  const stored = owner ? await read(owner) : undefined
+  // The panel is the only place that collects consent, so it must see the
+  // revision the service still expects before consent exists. Without it the
+  // acceptance would carry nothing and the panel would have to ask again.
+  if (!product.accepted) return unacceptedStatus(stored, product.version)
   if (!owner) return { state: "local" }
-  return cachedUpload(owner) ?? (await readUploadStatus(owner, product.version))
+  return cachedUpload(owner) ?? statusFrom(stored, product.version)
+}
+
+function unacceptedStatus(stored: Report | undefined, version: string): typeof AgreementUpload.Type {
+  if (!matchesReport(stored, version)) return { state: "not_signed" }
+  return { state: "not_signed", revision: stored.requiredRevision, lastAttemptAt: stored.lastAttemptAt }
 }
 
 function cachedUpload(owner: Account) {
@@ -129,8 +138,7 @@ function cachedUpload(owner: Account) {
   if (entry.owner === owner) return entry.upload
 }
 
-async function readUploadStatus(owner: Account, version: string): Promise<typeof AgreementUpload.Type> {
-  const stored = await read(owner)
+function statusFrom(stored: Report | undefined, version: string): typeof AgreementUpload.Type {
   if (!matchesReport(stored, version)) return { state: "pending" }
   return uploadStatus(stored)
 }
@@ -174,6 +182,34 @@ export async function acceptServiceRevision(revision: string) {
       throw new ProductAgreementVersionError("The service agreements or account changed. Review them again.")
     await write(owner, { ...stored, acceptedRevision: revision, uploadedAt: undefined, nextAttemptAt: 0, attempts: 0 })
   })
+}
+
+/**
+ * Records what the service still expects while local consent is missing.
+ *
+ * Consent is collected by the single agreement panel, and its acceptance
+ * carries the revision it is answered with. The regular sync never queries
+ * before consent (see runAgreementSync), so without this observation the panel
+ * could only submit an empty revision and would have to ask a second time.
+ * Nothing is signed and nothing is marked uploaded: only requiredRevision is
+ * stored, so acceptance stays explicit.
+ */
+export async function observeAgreementRevision() {
+  const owner = await account()
+  if (!owner) return
+  if ((await productAgreement()).accepted) return
+  await waitForAgreementSync()
+  await lock(owner, async () => {
+    if (!(await isCurrent(owner))) return
+    const product = await productAgreement()
+    if (product.accepted) return
+    const report = await reportFor(owner, product.version)
+    const query = await new AgreementService().queryAgreement(loadAccessTokenFromDisk())
+    if (!(await isCurrent(owner))) return
+    const revision = serviceRevision(query)
+    if (!revision || revision === report.acceptedRevision || revision === report.requiredRevision) return
+    await write(owner, { ...report, requiredRevision: revision, uploadedAt: undefined })
+  }).catch(logSyncFailure)
 }
 
 /** Online queries are owned exclusively by startup and explicit account login. */

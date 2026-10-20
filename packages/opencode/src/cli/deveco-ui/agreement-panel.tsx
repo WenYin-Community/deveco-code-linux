@@ -292,8 +292,10 @@ export function AgreementReviewDialog(props: { onComplete: () => void }) {
     return result.data
   })
   const accept = async () => {
+    // Reading a failed resource rethrows; the retry option below owns that state.
+    if (state.busy || agreement.error) return
     const current = agreement()
-    if (!current || state.busy) return
+    if (!current) return
     setState("checked", true)
     setState({ busy: true, error: "" })
     try {
@@ -310,12 +312,23 @@ export function AgreementReviewDialog(props: { onComplete: () => void }) {
     }
   }
   const options = createMemo(() => {
+    // Same reason as accept(): a failed read must render the retry option, and
+    // reading the resource here would throw before that option exists.
+    if (agreement.error) {
+      return [
+        {
+          title: t("account.load_failed"),
+          description: t("account.retry_description"),
+          value: "retry",
+          onSelect: (): void => void Promise.resolve(refetch()).catch(() => {}),
+        },
+      ]
+    }
     const current = agreement()
     if (!current) {
       return [
         {
-          title: agreement.error ? t("account.load_failed") : t("account.loading_agreements"),
-          description: agreement.error ? t("account.retry_description") : undefined,
+          title: t("account.loading_agreements"),
           value: "retry",
           onSelect: (): void => void Promise.resolve(refetch()).catch(() => {}),
         },
