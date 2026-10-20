@@ -8,7 +8,9 @@ import {
   renderCommandFile,
   createCommandFiles,
   cleanupRetiredCommandFiles,
+  getGlobalConfigPaths,
 } from "../../../src/plugin/memory/slashCommands/commandFiles"
+import { Global } from "@opencode-ai/core/global"
 
 describe("memory plugin command files", () => {
   let dir: string
@@ -58,5 +60,11 @@ describe("memory plugin command files", () => {
     const builtinNames = BUILTIN_COMMANDS.map((c) => c.name)
     const retiredNames = RETIRED_COMMANDS.map((c) => c.name)
     expect(builtinNames.filter((n) => retiredNames.includes(n))).toEqual([])
+  })
+
+  it("targets the app's global config commands dir", () => {
+    // The app globs {command,commands}/**/*.md under Global.Path.config
+    // (ConfigPaths.directories); the plugin must write the same location.
+    expect(getGlobalConfigPaths()).toEqual([path.join(Global.Path.config, "commands")])
   })
 })

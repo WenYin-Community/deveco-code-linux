@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
+import { Global } from '@opencode-ai/core/global'
 
 // Commands that remain visible in the palette. Everything else is retired
 // from the palette but stays executable via the plugin's internal dispatch.
@@ -74,29 +74,14 @@ function cleanupRetiredCommandFiles(commandsDir: string): void {
   }
 }
 
+// The app discovers commands by globbing {command,commands}/**/*.md under
+// Global.Path.config (ConfigPaths.directories always lists it first), so
+// writes and cleanup must target the same directory. Going through Global
+// also follows DEVECO_STORAGE_ROOT instead of hardcoding
+// XDG_CONFIG_HOME || ~/.config (and drops the Windows APPDATA branch that
+// never matched xdg-basedir).
 function getGlobalConfigPaths(): string[] {
-  const home = os.homedir();
-  const paths: string[] = [];
-
-  // Only manage deveco CLI paths; opencode CLI is out of scope.
-  const cliName = 'deveco';
-
-  // Windows: use APPDATA (matches xdg-basedir behavior)
-  // Linux/Mac: use XDG_CONFIG_HOME or ~/.config
-  if (process.platform === 'win32') {
-    const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
-    paths.push(path.join(appdata, cliName, 'commands'));
-  } else {
-    const xdgConfig = process.env.XDG_CONFIG_HOME || path.join(home, '.config');
-    paths.push(path.join(xdgConfig, cliName, 'commands'));
-  }
-
-  // Also clean legacy ~/.config/<cli> for backward compatibility on Windows
-  if (process.platform === 'win32') {
-    paths.push(path.join(home, '.config', cliName, 'commands'));
-  }
-
-  return paths;
+  return [path.join(Global.Path.config, 'commands')]
 }
 
 export {
