@@ -18,7 +18,7 @@ const it = testEffect(
 )
 
 describe("CommandPlugin.Plugin", () => {
-  it.effect("registers built-in init and review commands", () =>
+  it.effect("registers built-in init, review and analyze commands", () =>
     Effect.gen(function* () {
       const command = yield* CommandV2.Service
       yield* CommandPlugin.Plugin.effect.pipe(
@@ -39,6 +39,13 @@ describe("CommandPlugin.Plugin", () => {
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         subtask: true,
       })
+      expect(yield* command.get("analyze")).toMatchObject({
+        name: "analyze",
+        description: "analyze and locate HarmonyOS app freeze and CPP/ArkTS crash FaultLogs",
+        agent: "dfx",
+        subtask: true,
+      })
+      expect((yield* command.get("analyze"))?.template).toContain("$ARGUMENTS")
     }),
   )
 })

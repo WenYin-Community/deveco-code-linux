@@ -1,0 +1,7 @@
+这是一次由显式 /analyze 启动的隔离子会话单次执行。本轮完成后子会话结束，不保留 DFX 模式。
+
+以下区块是用户传给 /analyze 的原始参数：
+
+<DFX_USER_ARGUMENTS>
+$ARGUMENTS
+</DFX_USER_ARGUMENTS>
