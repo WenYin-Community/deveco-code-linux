@@ -86,12 +86,14 @@ Every task MUST strictly follow this format:
     - **MUST include**: at minimum, a build task and a deploy task to validate compilation and deployability.
         - Example: `- [ ] TXXX Build project and fix any compilation errors`
         - Example: `- [ ] TXXX Deploy application to device/emulator via devecocli run --skip-build`
-    - **Conditionally include** (only if the parent SDD workflow's verification choice is `Run verification + UI verification`): an additional UI verification task.
+    - **Conditionally include** an additional UI verification task based on the exact parent choice:
+        - `Run verification + UI verification (UI verification takes significantly longer)` → normal UI verification task and `build+ui` marker.
         - Example: `- [ ] TXXX Run UI verification against deployed application`
+        - `Run verification + Simplify UI verification (skip unrelated prerequisite steps using temporary DeepLink routes)` → simplified UI verification task and `build+ui-simplified` marker.
+        - Example simplified task: `- [ ] TXXX Simplify and run UI verification by skipping unrelated prerequisites with temporary DeepLink routes`
     - **If the parent SDD workflow selected `Run verification` (build-only)**: DO NOT include any UI verification task in this phase.
     - **Verification scope hint**: At the top of the Verification phase section, add an HTML comment indicating the chosen scope so downstream agents can read it deterministically:
-        - `<!-- verification_scope: build-only -->` OR
-        - `<!-- verification_scope: build+ui -->`
+        - `<!-- verification_scope: build-only -->`, `<!-- verification_scope: build+ui -->`, or `<!-- verification_scope: build+ui-simplified -->`
     - Tasks in this phase do NOT carry `[USx]` labels.
 
 ## Final Self-Validation Step

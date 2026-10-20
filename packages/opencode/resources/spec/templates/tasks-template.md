@@ -161,8 +161,9 @@ Examples of foundational tasks (adjust based on your project):
   parent SDD workflow's Verification Choice Gate:
     - "Run verification"                                                 → build-only
     - "Run verification + UI verification (UI verification takes ...)"   → build+ui
+    - "Run verification + Simplify UI verification (...)"                 → build+ui-simplified
   When scope is build-only, OMIT the UI verification task below.
-  When scope is build+ui, INCLUDE the UI verification task below.
+  When scope is build+ui or build+ui-simplified, INCLUDE the UI verification task below.
 -->
 
 **Purpose**: Build, deploy, and (optionally) UI-verify the implemented feature
@@ -170,6 +171,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Build project and fix any compilation errors (invoke `devecocli build`; iterate fix → build until success)
 - [ ] TXXX Deploy application to device/emulator (invoke `devecocli run --skip-build`)
 - [ ] TXXX Run UI verification against deployed application (invoke verify_ui)  <!-- include ONLY when verification_scope == build+ui -->
+- [ ] TXXX Simplify and run UI verification by skipping unrelated prerequisites with temporary DeepLink routes  <!-- include ONLY when verification_scope == build+ui-simplified -->
 
 ---
 

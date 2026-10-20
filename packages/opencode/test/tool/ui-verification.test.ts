@@ -107,6 +107,13 @@ test("rebuilds an expired Huawei binding using current third-party environment s
   expect(connect).toHaveBeenCalledTimes(2)
 })
 
+test("passes the session abort signal to ui-verification", async () => {
+  await using tmp = await tmpdir()
+  setSessionCwd(ctx.sessionID, tmp.path)
+  await verify()
+  expect(call.mock.calls.at(-1)?.[2]).toMatchObject({ signal: ctx.abort })
+})
+
 test("rebinds to the newly resolved agent model after Huawei access is lost", async () => {
   await using tmp = await tmpdir()
   setSessionCwd(ctx.sessionID, tmp.path)

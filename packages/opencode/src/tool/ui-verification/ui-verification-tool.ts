@@ -92,7 +92,7 @@ export const VerifyUiTool: ReturnType<
     const sessions = yield* Session.Service
     return {
       description:
-        "在提供自然语言描述的功能步骤之后，本工具可以在HarmonyOS设备上运行应用，根据截图进行判断，执行UI操作，验证功能是否可以正确完成。\n注意：当前支持点击、双击、滑动、长按、按键等触控操作，以及鼠标和键盘操作。\n返回的successPart、failPart字段描述了本次验证过程的主要步骤，id字段是本次校验的唯一标识符，可用于后续的日志查询。\n使用场景：\n开发时验证：通过自然语言描述测试用例，自动执行UI操作，验证应用功能。\n获取运行时日志：配合getLog工具使用，在执行UI操作的同时，收集设备日志，帮助定位问题。\n保存截图：配合saveScreenshot工具使用，在执行UI操作的同时，保存截图，帮助定位问题。",
+        "在提供自然语言描述的功能步骤之后，本工具可以在HarmonyOS设备上运行应用，根据截图进行判断，执行UI操作，验证功能是否可以正确完成。\n注意：当前支持点击、双击、滑动、长按、按键等触控操作，以及鼠标和键盘操作。支持在步骤中通过 URI 直接跳转到指定页面；使用 URI 跳转时，必须在测试步骤中提供完整、明确且可直接执行的 URI，不能只描述目标页面或省略 URI 内容。\n返回的successPart、failPart字段描述了本次验证过程的主要步骤，id字段是本次校验的唯一标识符，可用于后续的日志查询。\n使用场景：\n1. 开发时验证：通过自然语言描述测试用例，自动执行UI操作，验证应用功能。\n2. 获取运行时日志：配合getLog工具使用，在执行UI操作的同时，收集设备日志，帮助定位问题。\n3. 保存截图：配合saveScreenshot工具使用，在执行UI操作的同时，保存截图，帮助定位问题。",
       parameters: VerifyUiParameters,
       execute: (args, ctx): Effect.Effect<ExecuteResult<UiVerifyMetadata>> =>
         Effect.gen(function* () {
@@ -120,7 +120,7 @@ export const VerifyUiTool: ReturnType<
             freshStart: args.freshStart ?? false,
             sessionId: ctx.sessionID,
           }
-          const result = yield* Effect.promise(() => callUiVerificationTool(worktree, "verify_ui", payload))
+          const result = yield* Effect.promise(() => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort))
           return {
             title: "UI verification",
             output: textFromCallResult(result),
@@ -149,11 +149,16 @@ export const GetUiVerificationLogTool: ReturnType<
           yield* ctx.ask({ permission: "get_ui_verification_log", metadata: {}, patterns: ["*"], always: ["*"] })
           const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
           const result = yield* Effect.promise(() =>
-            callUiVerificationTool(worktree, "get_ui_verification_log", {
-              id: args.id,
-              ...(args.maxLogSize === undefined ? {} : { maxLogSize: args.maxLogSize }),
-              ...(args.searchKeywords === undefined ? {} : { searchKeywords: args.searchKeywords }),
-            }),
+            callUiVerificationTool(
+              worktree,
+              "get_ui_verification_log",
+              {
+                id: args.id,
+                ...(args.maxLogSize === undefined ? {} : { maxLogSize: args.maxLogSize }),
+                ...(args.searchKeywords === undefined ? {} : { searchKeywords: args.searchKeywords }),
+              },
+              ctx.abort,
+            ),
           )
           return { title: "UI verification log", output: textFromCallResult(result), metadata: {} }
         }).pipe(Effect.orDie),
@@ -175,10 +180,15 @@ export const SaveUiScreenshotTool: ReturnType<
           yield* ctx.ask({ permission: "save_ui_screenshot", metadata: {}, patterns: ["*"], always: ["*"] })
           const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
           const result = yield* Effect.promise(() =>
-            callUiVerificationTool(worktree, "save_ui_screenshot", {
-              id: args.id,
-              dirname: sanitizeFilePath(args.dirname, worktree),
-            }),
+            callUiVerificationTool(
+              worktree,
+              "save_ui_screenshot",
+              {
+                id: args.id,
+                dirname: sanitizeFilePath(args.dirname, worktree),
+              },
+              ctx.abort,
+            ),
           )
           return { title: "UI screenshots", output: textFromCallResult(result), metadata: {} };
         }).pipe(Effect.orDie),
@@ -378,7 +388,12 @@ function processEnv(omit: string[] = []): Record<string, string> {
   );
 }
 
-async function callUiVerificationTool(worktree: string, toolName: ToolName, args: Record<string, unknown>): Promise<unknown> {
+async function callUiVerificationTool(
+  worktree: string,
+  toolName: ToolName,
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<unknown> {
   await ensureInitialized(worktree)
   if (!runtime) {
     throw new Error('ui-verification-mcp is not initialized');
@@ -392,6 +407,7 @@ async function callUiVerificationTool(worktree: string, toolName: ToolName, args
     CallToolResultSchema,
     {
       resetTimeoutOnProgress: true,
+      signal,
       timeout: 30 * 60 * 1000,
     },
   );
