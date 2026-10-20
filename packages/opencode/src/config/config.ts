@@ -404,7 +404,7 @@ export const layer = Layer.effect(
 
         // Surface invalid memory-config.json at startup; the memory plugin's loader
         // would otherwise swallow parse errors and silently fall back to defaults.
-        const memoryConfigPath = path.join(Global.Path.home, ".deveco", "memory-config.json")
+        const memoryConfigPath = path.join(Global.Path.config, "memory-config.json")
         const memoryConfigText = yield* readConfigFile(memoryConfigPath)
         if (memoryConfigText) ConfigParse.jsonc(memoryConfigText, memoryConfigPath)
 

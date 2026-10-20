@@ -2464,6 +2464,7 @@ export type Path = {
   home: string
   state: string
   config: string
+  data: string
   projectConfig: string
   worktree: string
   directory: string
@@ -8701,7 +8702,6 @@ export type ProviderOauthCancelResponses = {
 }
 
 export type ProviderOauthCancelResponse = ProviderOauthCancelResponses[keyof ProviderOauthCancelResponses]
-
 export type ProviderDeleteModelData = {
   body?: never
   path: {

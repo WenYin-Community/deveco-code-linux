@@ -21,6 +21,8 @@ export function TestTuiContexts(
         cwd: props.cwd ?? props.directory ?? "/tmp/opencode/packages/tui",
         home: "/tmp/opencode/home",
         state: `/tmp/opencode/state/${randomUUID()}`,
+        config: "/tmp/opencode/config",
+        data: "/tmp/opencode/data",
         worktree: "/tmp/opencode",
         ...props.paths,
       }}

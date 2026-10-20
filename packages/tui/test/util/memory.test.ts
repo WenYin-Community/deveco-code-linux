@@ -11,7 +11,15 @@ const SKILLS = Memory.SETTINGS.find((item) => item.key === "skills.enabled") as 
 
 async function scope() {
   const root = await mkdtemp(path.join(os.tmpdir(), "deveco-memory-"))
-  return { home: path.join(root, "home"), directory: path.join(root, "project") }
+  return {
+    data: path.join(root, "data"),
+    config: path.join(root, "config"),
+    directory: path.join(root, "project"),
+  }
+}
+
+function userConfigFile(value: Awaited<ReturnType<typeof scope>>) {
+  return path.join(value.config, "memory-config.json")
 }
 
 describe("memory config", () => {
@@ -25,10 +33,10 @@ describe("memory config", () => {
 
   test("reads only the user file and toggles write back to it", async () => {
     const value = await scope()
-    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
+    await mkdir(value.config, { recursive: true })
     await mkdir(path.join(value.directory, ".deveco"), { recursive: true })
     await writeFile(
-      path.join(value.home, ".deveco", "memory-config.json"),
+      userConfigFile(value),
       JSON.stringify({ skills: { enabled: true }, autoMemory: { expiry: { ttl: 1 } } }),
     )
     await writeFile(
@@ -43,15 +51,15 @@ describe("memory config", () => {
     expect(await Bun.file(path.join(value.directory, ".deveco", "memory-config.json")).json()).toEqual({
       skills: { enabled: false },
     })
-    const user = await Bun.file(path.join(value.home, ".deveco", "memory-config.json")).json()
+    const user = await Bun.file(userConfigFile(value)).json()
     expect(user).toEqual({ skills: { enabled: false }, autoMemory: { expiry: { ttl: 1 } } })
     expect(Memory.isEnabled(await Memory.readConfig(value), SKILLS)).toBe(false)
   })
 
   test("preserves comments and formatting when patching an existing file", async () => {
     const value = await scope()
-    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
-    const file = path.join(value.home, ".deveco", "memory-config.json")
+    await mkdir(value.config, { recursive: true })
+    const file = userConfigFile(value)
     const original = [
       "{",
       "  // auto memory settings",
@@ -81,8 +89,7 @@ describe("memory config", () => {
 
   test("creates a new file when none exists", async () => {
     const value = await scope()
-    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
-    const file = path.join(value.home, ".deveco", "memory-config.json")
+    const file = userConfigFile(value)
     expect(await Bun.file(file).exists()).toBe(false)
 
     await Memory.writeSetting(value, SKILLS, true)
@@ -93,8 +100,8 @@ describe("memory config", () => {
 
   test("throws and does not write when the file is invalid JSON", async () => {
     const value = await scope()
-    await mkdir(path.join(value.home, ".deveco"), { recursive: true })
-    const file = path.join(value.home, ".deveco", "memory-config.json")
+    await mkdir(value.config, { recursive: true })
+    const file = userConfigFile(value)
     const broken = "{ invalid json }"
     await writeFile(file, broken)
 
@@ -118,7 +125,7 @@ describe("memory files", () => {
   test("lists parsed entries newest first and skips files the plugin ignores", async () => {
     const value = await scope()
     const dir = Memory.memoryDir({}, value)
-    expect(dir).toBe(path.join(value.home, ".deveco", "memory", slugifyProjectID(path.resolve(value.directory))))
+    expect(dir).toBe(path.join(value.data, "memory", slugifyProjectID(path.resolve(value.directory))))
     expect(Memory.memoryDir({ customMemoryDir: "/tmp/mem" }, value)).toBe("/tmp/mem")
     expect(Memory.memoryDir({ storageMode: "project" }, value)).toBe(path.join(value.directory, ".deveco", "memory"))
 

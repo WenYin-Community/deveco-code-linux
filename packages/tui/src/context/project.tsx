@@ -12,7 +12,7 @@ type WorkspaceStatus = "connected" | "connecting" | "disconnected" | "error"
  * server value replaces this object once the first request completes.
  */
 function placeholderPath(directory: string): Path {
-  return { home: "", state: "", config: "", projectConfig: "", worktree: "", directory }
+  return { home: "", state: "", config: "", data: "", projectConfig: "", worktree: "", directory }
 }
 
 export const { use: useProject, provider: ProjectProvider } = createSimpleContext({
@@ -20,7 +20,7 @@ export const { use: useProject, provider: ProjectProvider } = createSimpleContex
   init: () => {
     const sdk = useSDK()
 
-    const defaultPath = placeholderPath(sdk.directory ?? "")
+const defaultPath = placeholderPath(sdk.directory ?? "")
 
     const [store, setStore] = createStore({
       project: {

@@ -23,7 +23,6 @@ import {
   getMemoryPath,
   getEntrypointPath,
   ensureMemoryDir,
-  migrateLegacyMemoryDir,
   memoryNameToFilename,
   parseFrontmatter,
   createMemoryContent,
@@ -38,21 +37,18 @@ import { logger } from "../util/logger"
 export class MemoryStorage {
   private memoryPath: string
   private config: MemoryConfig
-  private rawDirectory: string
 
   constructor(
     private projectID: string,
     rawDirectory: string,
     config: Partial<MemoryConfig> = {},
   ) {
-    this.rawDirectory = rawDirectory
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config }
     this.memoryPath = getMemoryPath(projectID, rawDirectory, this.config.storageMode, this.config.customMemoryDir)
   }
 
   async init(): Promise<void> {
     await ensureMemoryDir(this.memoryPath)
-    await migrateLegacyMemoryDir(this.memoryPath, this.rawDirectory)
     await this.ensureEntrypoint()
   }
 

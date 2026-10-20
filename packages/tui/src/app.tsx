@@ -248,6 +248,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                       cwd: process.cwd(),
                       home: global.home,
                       state: global.state,
+                      config: global.config,
+                      data: global.data,
                       worktree: global.data + "/worktree",
                     }}
                   >

@@ -41,7 +41,7 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
 
-  const dir = Memory.memoryDir({}, { home: root, directory: root })
+  const dir = Memory.memoryDir({}, { data: root, config: path.join(root, "config"), directory: root })
   await mkdir(dir, { recursive: true })
   await writeFile(
     path.join(dir, "cache.md"),
@@ -110,7 +110,7 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
     onCleanup(off)
 
     return (
-      <TestTuiContexts directory={root} paths={{ home: root, state, worktree: root }}>
+      <TestTuiContexts directory={root} paths={{ home: root, data: root, config: path.join(root, "config"), state, worktree: root }}>
         <OpencodeKeymapProvider keymap={keymap}>
           <TuiConfigProvider config={resolvedConfig}>
             <KVProvider>
@@ -150,7 +150,7 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
   return {
     app,
     frame: () => app.captureCharFrame(),
-    config: path.join(root, ".deveco", "memory-config.json"),
+    config: path.join(root, "config", "memory-config.json"),
     dir,
   }
 }
@@ -323,7 +323,7 @@ async function many(dir: string, count: number) {
 
 test("hovering the memory list does not slide it around", async () => {
   await using tmp = await tmpdir()
-  await many(Memory.memoryDir({}, { home: tmp.path, directory: tmp.path }), 8)
+  await many(Memory.memoryDir({}, { data: tmp.path, config: path.join(tmp.path, "config"), directory: tmp.path }), 8)
   const { app, frame } = await mountMemory(tmp.path, 40, 120)
   const header = () =>
     frame()

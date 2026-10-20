@@ -630,7 +630,9 @@ it.instance("throws error for invalid JSON", () =>
 
 it.instance("throws error for invalid memory-config.json", () =>
   Effect.gen(function* () {
-    const memoryConfigPath = path.join(Global.Path.home, ".deveco", "memory-config.json")
+    // The plugin reads the XDG config location; startup surfaces parse errors
+    // the plugin's own loader would swallow.
+    const memoryConfigPath = path.join(Global.Path.config, "memory-config.json")
     yield* FSUtil.use.writeWithDirs(memoryConfigPath, "{ invalid json }")
     try {
       const exit = yield* Config.use.get().pipe(Effect.exit)

@@ -21,7 +21,7 @@ test("provides focused immutable runtime inputs", async () => {
 
   const app = await testRender(
     () => (
-      <TuiPathsProvider value={{ cwd: "/work", home: "/home/test", state: "/state", worktree: "/worktree" }}>
+      <TuiPathsProvider value={{ cwd: "/work", home: "/home/test", state: "/state", config: "/config", data: "/data", worktree: "/worktree" }}>
         <Runtime />
       </TuiPathsProvider>
     ),

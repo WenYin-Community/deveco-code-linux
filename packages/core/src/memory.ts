@@ -1,9 +1,9 @@
 export * as Memory from "./memory"
 
 import path from "path"
-import os from "os"
 import fs from "fs/promises"
 import { Hash } from "./util/hash"
+import { Path } from "./global"
 
 export type MemoryType = "user" | "feedback" | "project" | "reference"
 
@@ -40,8 +40,10 @@ export const ENTRYPOINT_NAME = "MEMORY.md"
 export const MEMORY_DIR_NAME = "memory"
 export const FRONTMATTER_MAX_LINES = 30
 
+// XDG data dir ($XDG_DATA_HOME/deveco, default ~/.local/share/deveco). Reads through
+// global.ts so XDG_DATA_HOME, Runtime.storageRoot, and test preloads all apply.
 export function getGlobalDataDir(): string {
-  return path.join(os.homedir(), ".deveco")
+  return Path.data
 }
 
 export function normalizeProjectPath(raw: string): string {

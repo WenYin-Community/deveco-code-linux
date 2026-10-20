@@ -1,6 +1,5 @@
 import { expect, describe, it } from "bun:test"
 import path from "path"
-import os from "os"
 import {
   slugifyProjectID,
   computeLegacyHash,
@@ -20,6 +19,7 @@ import {
   MEMORY_DIR_NAME,
   type MemoryFrontmatter,
 } from "@opencode-ai/core/memory"
+import { Path } from "@opencode-ai/core/global"
 
 describe("slugifyProjectID", () => {
   it("produces consistent output", () => {
@@ -53,8 +53,8 @@ describe("normalizeProjectPath", () => {
 })
 
 describe("getGlobalDataDir", () => {
-  it("returns ~/.deveco", () => {
-    expect(getGlobalDataDir()).toBe(path.join(os.homedir(), ".deveco"))
+  it("returns the XDG data dir (Global.Path.data)", () => {
+    expect(getGlobalDataDir()).toBe(Path.data)
   })
 })
 

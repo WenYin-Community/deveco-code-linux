@@ -20,6 +20,7 @@ const PathInfo = Schema.Struct({
   home: Schema.String,
   state: Schema.String,
   config: Schema.String,
+  data: Schema.String,
   projectConfig: Schema.String,
   worktree: Schema.String,
   directory: Schema.String,

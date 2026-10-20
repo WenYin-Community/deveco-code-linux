@@ -1,8 +1,10 @@
 import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext } from "@opencode-ai/plugin"
 import type { OpencodeClient } from "@opencode-ai/sdk"
+import path from 'path'
+import { Global } from '@opencode-ai/core/global'
 import { initLogger, logger, setLogDir, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
-import { normalizeProjectPath, getGlobalDataDir } from './util/path';
+import { normalizeProjectPath } from './util/path';
 import { MemoryInjection } from './memory/injection';
 import { SessionInjectionSnapshotCache, computeInjectionBlocks } from './memory/injectionSnapshot';
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
@@ -366,7 +368,7 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
         const { autoMemory: fullConfig, memoryRecall: memoryRecallConfig, semanticSelection: semanticSelectionConfig } = configs;
         const storage = new MemoryStorage(projectID, directory, fullConfig);
         await storage.init();
-        if (logLevel !== 'off') await setLogDir(storage.getMemoryPath() + '/logs');
+        if (logLevel !== 'off') await setLogDir(path.join(storage.getMemoryPath(), 'logs'));
         logger.info('[PluginInit]', 'projectID:', projectID, 'memoryPath:', storage.getMemoryPath());
         const skillStorage = new SkillStorage();
         await skillStorage.init();
@@ -914,7 +916,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
     const projectID = normalizeProjectPath(rawDirectory);
     const directory = input.directory || rawDirectory;
     const client = input.client;
-    const fileConfig = await loadMemoryConfigFile(`${getGlobalDataDir()}/${MEMORY_CONFIG_FILENAME}`)
+    const fileConfig = await loadMemoryConfigFile(path.join(Global.Path.config, MEMORY_CONFIG_FILENAME))
     const mergedOptions = { ...fileConfig, ...options } as PluginConfig
     logger.info('[PluginInit]', 'rawDirectory:', rawDirectory, 'projectID:', projectID, 'normalized:', projectID !== rawDirectory);
     const slashCommandsEnabled = (mergedOptions.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;

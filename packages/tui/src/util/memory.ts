@@ -25,8 +25,9 @@ export const ENTRYPOINT_NAME = "MEMORY.md"
 export type Config = Record<string, unknown>
 
 export type Scope = {
-  // OS home dir reported by the server instance, matching the plugin's os.homedir().
-  home: string
+  // XDG paths reported by the server instance, matching the plugin's Global.Path.*.
+  data: string
+  config: string
   directory: string
 }
 
@@ -73,7 +74,7 @@ export async function readPendingExpiryNames(dir: string): Promise<Set<string>> 
 }
 
 function userConfigFile(scope: Scope) {
-  return path.join(scope.home, DATA_DIR_NAME, CONFIG_FILENAME)
+  return path.join(scope.config, CONFIG_FILENAME)
 }
 
 function isRecord(value: unknown): value is Config {
@@ -152,8 +153,7 @@ export function memoryDir(config: Config, scope: Scope) {
   const mode = read(config, "storageMode") ?? read(config, "autoMemory.storageMode")
   if (mode === "project") return path.join(scope.directory, DATA_DIR_NAME, MEMORY_DIR_NAME)
   return path.join(
-    scope.home,
-    DATA_DIR_NAME,
+    scope.data,
     MEMORY_DIR_NAME,
     slugifyProjectID(normalizeProjectPath(scope.directory)),
   )

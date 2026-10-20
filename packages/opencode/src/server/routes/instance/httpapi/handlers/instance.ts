@@ -35,6 +35,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
         home: Global.Path.home,
         state: Global.Path.state,
         config: Global.Path.config,
+        data: Global.Path.data,
         projectConfig:
           Runtime.current.mode === "deveco-studio"
             ? Global.projectConfig(ctx.project.id)

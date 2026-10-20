@@ -43,12 +43,13 @@ export function showMemory(dialog: DialogContext, current?: string) {
   dialog.replace(() => <DialogMemory current={current} />)
 }
 
-/** The same home/directory pair the plugin's config files resolve against. */
+/** The same data/config/directory the plugin's paths resolve against. */
 function useMemoryScope() {
   const project = useProject()
   const paths = useTuiPaths()
   return createMemo(() => ({
-    home: project.instance.path().home || paths.home,
+    data: project.instance.path().data || paths.data,
+    config: project.instance.path().config || paths.config,
     directory: project.instance.path().directory || paths.cwd,
   }))
 }
