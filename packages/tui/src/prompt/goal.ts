@@ -142,10 +142,34 @@ export function formatGoalTokenCount(value: number) {
   return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1).replace(/\.0$/, "")}${suffix}`
 }
 
-export function formatGoalStatus(goal: GoalInfo, usedTokens: number, duration: string) {
-  const usage = `${formatGoalTokenCount(usedTokens)} tokens`
-  if (goal.status === "complete") return `Goal · ${goal.status} · ${usage}`
-  return `Goal · ${goal.status} · ${duration} · ${usage}`
+export function formatGoalBudget(value: number | null) {
+  return value === null ? "Unlimited" : `${formatGoalTokenCount(value)} tokens`
+}
+
+export function formatGoalHelp(input: {
+  budget: number | null
+  goal: GoalInfo | null
+  duration: string
+  usedTokens: number
+}) {
+  const overview = `${GOAL_HELP}\n\nCurrent budget: ${formatGoalBudget(input.budget)}`
+  if (!input.goal) return `${overview}\n\nCurrent goal\nNo goal exists for this session.`
+  return [
+    overview,
+    "",
+    "Current goal",
+    `Task: ${input.goal.objective}`,
+    `Budget: ${formatGoalBudget(input.goal.tokenBudget)}`,
+    `Used: ${formatGoalTokenCount(input.usedTokens)} tokens`,
+    `Status: ${input.goal.status}`,
+    `Elapsed: ${input.duration}`,
+    ...(input.goal.reason ? [`Reason: ${input.goal.reason}`] : []),
+  ].join("\n")
+}
+
+export function formatGoalStatus(goal: GoalInfo, duration: string) {
+  const status = goal.status === "paused" && goal.budgetExhaustedAt !== null ? "budget exceeded" : goal.status
+  return `Goal · ${status} · ${duration}`
 }
 
 export function goalElapsedSeconds(goal: GoalInfo, now = Date.now()) {

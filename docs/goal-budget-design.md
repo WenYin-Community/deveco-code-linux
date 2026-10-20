@@ -52,6 +52,8 @@ input + output + reasoning + cache.read + cache.write
 
 模型返回后才能获得本轮真实 token，因此最终用量可能超出 budget 一轮。后端必须在创建下一条自动 continuation message 前检查 budget，避免继续调用模型。
 
+`update_goal` 工具可能在本轮 token 用量返回前将 Goal 设为完成或暂停。流处理结束时，后端按该轮开始前的 Goal 统计窗口补齐用量，并检查 Goal 代次和消息上界，避免重复累计、污染替换后的 Goal，或计入暂停后的其它对话。`/goal` 弹窗保持打开时随消息和 Goal 元数据更新用量；首轮尚未返回实际用量时仍显示 `0`。
+
 ## 3. 用户交互
 
 ### 3.1 命令
@@ -136,11 +138,17 @@ Examples: 10000, 100k, 100K, 1.5m, 1.5M
 `/goal` 帮助显示：
 
 ```text
-Current budget: 100k tokens
+Current budget: Unlimited
+
+Current goal
+Task: finish the feature
+Budget: 20k tokens
 Used: 32.4k tokens
 ```
 
-没有活跃 Goal 时不显示 Used。
+- `Current budget` 始终显示最新保存的默认预算，与 `/goal budget` 弹窗一致。
+- `Current goal` 下的 `Budget` 显示该 Goal 启动时的执行预算快照，不受默认值修改影响。
+- 没有 Goal 时不显示 `Budget` 和 `Used`。
 
 ### 3.5 状态栏
 
@@ -213,7 +221,7 @@ type GoalInfo = {
 
 - `tokenBudget` 是 Goal 启动时的 budget 快照。
 - `budgetExhaustedAt` 用于标识预算耗尽，前端不依赖 `reason` 文本判断。
-- 不持久化 `usedTokens`，避免与消息 token 数据形成双份状态。
+- `usedTokens` 持久化已结算统计窗口的累计值；活跃窗口从消息实际用量计算，停止轮次的迟到用量在流处理结束后补齐。
 
 ## 6. API
 
@@ -359,4 +367,3 @@ TUI：
 - 显示 `used / budget tokens`，不显示百分比。
 - 无上限时显示 `unlimited`。
 - 预算耗尽时显示 `budget exhausted`，不显示 paused。
-

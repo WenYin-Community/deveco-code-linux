@@ -214,6 +214,60 @@ describe("session goal", () => {
     }),
   )
 
+  it.instance("settles late provider usage once for stopped goals and excludes later work", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
+      for (const status of ["complete", "paused"] as const) {
+        const session = yield* sessions.create({})
+        const started = yield* goals.start(session.id, "late provider usage")
+        const sourceMessageID = MessageID.ascending()
+        const bound = yield* goals.bindPrompt({
+          sessionID: session.id,
+          createdAt: started.goal.createdAt,
+          messageID: sourceMessageID,
+        })
+        const message = {
+          id: MessageID.ascending(),
+          sessionID: session.id,
+          parentID: sourceMessageID,
+          role: "assistant",
+          mode: "build",
+          agent: "build",
+          path: { cwd: ".", root: "." },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ModelV2.ID.make("test-model"),
+          providerID: ProviderV2.ID.make("test"),
+          time: { created: Date.now() },
+        } satisfies SessionV1.Assistant
+        yield* sessions.updateMessage(message)
+        if (status === "complete") yield* goals.complete(session.id)
+        if (status === "paused") yield* goals.pause(session.id)
+        expect((yield* goals.get(session.id))?.usedTokens).toBe(0)
+
+        yield* sessions.updateMessage({
+          ...message,
+          tokens: { input: 700, output: 100, reasoning: 10, cache: { read: 80, write: 10 } },
+        })
+        yield* sessions.updateMessage({
+          ...message,
+          id: MessageID.ascending(),
+          tokens: { ...message.tokens, input: 500 },
+        })
+        yield* goals.settleUsage({ sessionID: session.id, goal: bound, messageID: message.id })
+        expect(yield* goals.get(session.id)).toMatchObject({ status, usedTokens: 900 })
+        yield* goals.settleUsage({ sessionID: session.id, goal: bound, messageID: message.id })
+        expect(yield* goals.tokenUsage(session.id)).toBe(900)
+
+        yield* goals.start(session.id, "replacement goal")
+        yield* goals.complete(session.id)
+        yield* goals.settleUsage({ sessionID: session.id, goal: bound, messageID: message.id })
+        expect((yield* goals.get(session.id))?.usedTokens).toBe(0)
+      }
+    }),
+  )
+
   it.instance("does not count tokens from a paused session", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

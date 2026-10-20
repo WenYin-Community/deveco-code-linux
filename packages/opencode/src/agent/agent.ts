@@ -254,7 +254,6 @@ export const layer = Layer.effect(
                 task: {
                   general: "deny",
                 },
-                bash: "deny",
                 switch_cwd: "deny",
                 external_directory: {
                   [path.join(Global.Path.data, "plans", "*")]: "allow",

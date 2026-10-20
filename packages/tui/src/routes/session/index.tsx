@@ -60,7 +60,6 @@ import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { useSessionDirectoryMissingRecovery } from "../../component/session-directory-missing-recovery"
 import { Sidebar } from "./sidebar"
-import { GoalStatus } from "./goal-status"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { SlowResponseTip } from "./slow-response-tip"
 import { BtwPanel } from "../../component/btw-overlay"
@@ -1419,7 +1418,6 @@ export function Session() {
                 <Show when={session()?.parentID}>
                   <SubagentFooter />
                 </Show>
-                <GoalStatus sessionID={route.sessionID} />
                 <Show when={visible() && !btw.state().open}>
                   <pluginRuntime.Slot
                     name="session_prompt"

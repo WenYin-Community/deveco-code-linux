@@ -10,6 +10,7 @@ import {
   matchesSelectedGoalCommand,
   parseGoalBudget,
   parseGoalCommand,
+  formatGoalHelp,
   formatGoalStatus,
   formatGoalTokenCount,
   isGoalCommandAgent,
@@ -96,7 +97,7 @@ describe("goal token budget", () => {
     expect(formatGoalTokenCount(1_500_000)).toBe("1.5m")
   })
 
-  test("formats status with token usage but without budget", () => {
+  test("formats status with elapsed time and without token usage or budget", () => {
     const goal = {
       objective: "test",
       status: "active" as const,
@@ -110,10 +111,77 @@ describe("goal token budget", () => {
       budgetExhaustedAt: null,
       usedTokens: 0,
     }
-    expect(formatGoalStatus(goal, 32_400, "12m")).toBe("Goal · active · 12m · 32.4k tokens")
-    expect(formatGoalStatus({ ...goal, tokenBudget: null }, 32_400, "12m")).toBe("Goal · active · 12m · 32.4k tokens")
-    expect(formatGoalStatus({ ...goal, status: "paused" }, 32_400, "12m")).toBe("Goal · paused · 12m · 32.4k tokens")
-    expect(formatGoalStatus({ ...goal, status: "complete" }, 1_100_000, "17m 10s")).toBe("Goal · complete · 1.1m tokens")
+    expect(formatGoalStatus(goal, "12m")).toBe("Goal · active · 12m")
+    expect(formatGoalStatus({ ...goal, tokenBudget: null }, "12m")).toBe("Goal · active · 12m")
+    expect(formatGoalStatus({ ...goal, status: "paused" }, "12m")).toBe("Goal · paused · 12m")
+    expect(formatGoalStatus({ ...goal, status: "complete" }, "17m 10s")).toBe("Goal · complete · 17m 10s")
+    expect(formatGoalStatus({ ...goal, status: "paused", budgetExhaustedAt: 0 }, "12m")).toBe(
+      "Goal · budget exceeded · 12m",
+    )
+    expect(formatGoalStatus({ ...goal, status: "paused", reason: "token budget exhausted" }, "12m")).toBe(
+      "Goal · paused · 12m",
+    )
+    expect(formatGoalStatus({ ...goal, budgetExhaustedAt: 1 }, "12m")).toBe("Goal · active · 12m")
+    expect(formatGoalStatus({ ...goal, status: "complete", budgetExhaustedAt: 1 }, "17m 10s")).toBe(
+      "Goal · complete · 17m 10s",
+    )
+  })
+})
+
+describe("goal help", () => {
+  const goal = {
+    objective: "finish goal mode",
+    status: "active" as const,
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    activeSince: 2_000,
+    elapsedMilliseconds: 3_000,
+    sourceMessageID: "msg_test",
+    reason: null,
+    tokenBudget: 20_000,
+    budgetExhaustedAt: null,
+    usedTokens: 0,
+  }
+
+  test.each(["active", "paused", "complete"] as const)(
+    "shows Unlimited after clearing the default budget with an existing %s goal",
+    (status) => {
+      const message = formatGoalHelp({
+        budget: null,
+        goal: { ...goal, status },
+        duration: "12m",
+        usedTokens: 3_000,
+      })
+      expect(message).toContain("Current budget: Unlimited")
+      expect(message).toContain("Current goal\nTask: finish goal mode\nBudget: 20k tokens\nUsed: 3k tokens")
+      expect(message).toContain(`Status: ${status}\nElapsed: 12m`)
+    },
+  )
+
+  test("shows the updated numeric default separately from the goal budget", () => {
+    const message = formatGoalHelp({ budget: 100_000, goal, duration: "12m", usedTokens: 3_000 })
+    expect(message).toContain("Current budget: 100k tokens")
+    expect(message).toContain("Current goal\nTask: finish goal mode\nBudget: 20k tokens\nUsed: 3k tokens")
+  })
+
+  test("keeps an existing unlimited goal distinct from a new numeric default", () => {
+    const message = formatGoalHelp({
+      budget: 20_000,
+      goal: { ...goal, tokenBudget: null },
+      duration: "12m",
+      usedTokens: 3_000,
+    })
+    expect(message).toContain("Current budget: 20k tokens")
+    expect(message).toContain("Current goal\nTask: finish goal mode\nBudget: Unlimited\nUsed: 3k tokens")
+  })
+
+  test("shows the configured budget without usage when no goal exists", () => {
+    for (const budget of [null, 20_000]) {
+      const message = formatGoalHelp({ budget, goal: null, duration: "0s", usedTokens: 0 })
+      expect(message).toContain(`Current budget: ${budget === null ? "Unlimited" : "20k tokens"}`)
+      expect(message).toContain("No goal exists for this session.")
+      expect(message).not.toContain("Used:")
+    }
   })
 })
 
@@ -168,10 +236,9 @@ describe("goal sidebar state", () => {
       ]),
     ).toBe(50)
     expect(
-      goalTokenUsage(
-        { ...current, status: "paused", usedTokens: 50, sourceMessageID: null },
-        [{ role: "assistant", parentID: "msg_004", tokens: tokens(200) }],
-      ),
+      goalTokenUsage({ ...current, status: "paused", usedTokens: 50, sourceMessageID: null }, [
+        { role: "assistant", parentID: "msg_004", tokens: tokens(200) },
+      ]),
     ).toBe(50)
   })
 })

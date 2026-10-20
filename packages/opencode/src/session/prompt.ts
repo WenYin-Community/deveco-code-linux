@@ -1507,7 +1507,7 @@ export const layer = Layer.effect(
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
-            })
+            }).pipe(Effect.ensuring(goals.settleUsage({ sessionID, goal, messageID: handle.message.id })))
 
             const outcome = yield* TurnRecovery.settle({
               ...turn,
@@ -1515,14 +1515,13 @@ export const layer = Layer.effect(
               structured,
               structuredFormat: format.type === "json_schema",
             })
-            if (outcome !== "break") return outcome
+            if (outcome !== "break" || result !== "stop") return outcome
             if (handle.message.error) {
               yield* goals.pause(sessionID, "model execution failed").pipe(Effect.ignore)
               return outcome
             }
-            if (result !== "stop") return outcome
             const currentGoal = yield* goals.get(sessionID)
-            return currentGoal?.status === "active" ? "continue" as const : outcome
+            return currentGoal?.status === "active" ? ("continue" as const) : outcome
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),

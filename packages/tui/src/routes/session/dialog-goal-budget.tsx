@@ -3,7 +3,7 @@ import { createSignal, onMount, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useDialog, type DialogContext } from "../../ui/dialog"
 import { useBindings } from "../../keymap"
-import { formatGoalTokenCount, parseGoalBudget } from "../../prompt/goal"
+import { formatGoalBudget, parseGoalBudget } from "../../prompt/goal"
 
 type Props = {
   current: number | null
@@ -56,22 +56,21 @@ function DialogGoalBudgetView(props: Props) {
           esc
         </text>
       </box>
-      <text fg={theme.textMuted}>
-        Current: {props.current === null ? "Unlimited" : `${formatGoalTokenCount(props.current)} tokens`}
-      </text>
+      <text fg={theme.textMuted}>Current: {formatGoalBudget(props.current)}</text>
       <textarea
         height={1}
         ref={(value: TextareaRenderable) => {
           input = value
           setTarget(value)
         }}
-        placeholder="Budget"
+        placeholder="Enter the new Budget"
         placeholderColor={theme.textMuted}
         textColor={theme.text}
         focusedTextColor={theme.text}
         cursorColor={theme.text}
       />
       <text fg={theme.textMuted}>Examples: 10000, 100k, 100K, 1.5m, 1.5M</text>
+      <text fg={theme.textMuted}>Leave blank for Unlimited. Applies to new goals or budget-exhausted resumes.</text>
       <Show when={error()}>{(message) => <text fg={theme.error}>{message()}</text>}</Show>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1} gap={1}>
         <box

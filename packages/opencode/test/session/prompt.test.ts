@@ -538,13 +538,17 @@ it.instance(
       })
       yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: user.info.id })
 
+      yield* llm.push(reply().reason("initial reasoning reached the output limit").length())
       yield* llm.text("partial progress")
-      yield* llm.tool("update_goal", { status: "complete", reason: "verified" })
+      yield* llm.push(
+        reply().tool("update_goal", { status: "complete", reason: "verified" }).usage({ input: 700, output: 100 }),
+      )
       yield* llm.text("goal finished")
 
       const result = yield* prompt.loop({ sessionID: session.id })
-      expect(yield* llm.calls).toBe(3)
-      expect((yield* goals.get(session.id))?.status).toBe("complete")
+      expect(yield* llm.calls).toBe(4)
+      expect(yield* goals.get(session.id)).toMatchObject({ status: "complete", usedTokens: 800 })
+      expect(JSON.stringify((yield* llm.inputs)[1])).toContain("previous response reached the output token limit")
       expect(result.parts.some((part) => part.type === "text" && part.text === "goal finished")).toBe(true)
 
       const messages = yield* MessageV2.filterCompactedEffect(session.id)
@@ -555,6 +559,32 @@ it.instance(
           ),
         ),
       ).toBe(true)
+    }),
+  30_000,
+)
+
+it.instance(
+  "active goal pauses when output length recovery is exhausted",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const goals = yield* SessionGoal.Service
+      const session = yield* sessions.create({ title: "Goal recovery limit" })
+      const started = yield* goals.start(session.id, "finish within the recovery limit")
+      const user = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: started.goal.objective }],
+      })
+      yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: user.info.id })
+      yield* llm.push(reply().reason("partial reasoning").length(), reply().reason("still truncated").length())
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(yield* llm.calls).toBe(2)
+      expect(result.info).toMatchObject({ role: "assistant", error: { name: "MessageOutputLengthError" } })
+      expect((yield* goals.get(session.id))?.status).toBe("paused")
     }),
   30_000,
 )

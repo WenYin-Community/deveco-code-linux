@@ -65,11 +65,12 @@ import { readLocalAttachment } from "./local-attachment"
 import { shouldKeepMessagesOnInterrupt } from "./interrupt"
 import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogGoalBudget } from "../../routes/session/dialog-goal-budget"
+import { GoalStatus } from "../../routes/session/goal-status"
 import {
   GOAL_AGENT,
   GOAL_BUDGET_KV_KEY,
-  GOAL_HELP,
-  formatGoalTokenCount,
+  formatGoalBudget,
+  formatGoalHelp,
   goalElapsedSeconds,
   goalFromMetadata,
   goalTokenUsage,
@@ -387,31 +388,14 @@ export function Prompt(props: PromptProps) {
     return parsed.valid ? parsed.value : null
   }
 
-  function goalBudgetLabel(value: number | null) {
-    return value === null ? "Unlimited" : `${formatGoalTokenCount(value)} tokens`
-  }
-
   function goalHelpMessage() {
-    const configured = defaultGoalBudget()
-    if (!props.sessionID)
-      return `${GOAL_HELP}\n\nCurrent budget: ${goalBudgetLabel(configured)}\n\nCurrent goal\nNo goal exists for this session.`
-    const current = goalFromMetadata(sync.session.get(props.sessionID)?.metadata)
-    if (!current)
-      return `${GOAL_HELP}\n\nCurrent budget: ${goalBudgetLabel(configured)}\n\nCurrent goal\nNo goal exists for this session.`
-    const duration = formatDuration(goalElapsedSeconds(current)) || "0s"
-    const tokens = goalTokenUsage(current, sync.data.message[props.sessionID] ?? [])
-    return [
-      GOAL_HELP,
-      "",
-      `Current budget: ${goalBudgetLabel(current.tokenBudget)}`,
-      `Used: ${formatGoalTokenCount(tokens)} tokens`,
-      "",
-      "Current goal",
-      `Task: ${current.objective}`,
-      `Status: ${current.status}`,
-      `Elapsed: ${duration}`,
-      ...(current.reason ? [`Reason: ${current.reason}`] : []),
-    ].join("\n")
+    const current = props.sessionID ? goalFromMetadata(sync.session.get(props.sessionID)?.metadata) : null
+    return formatGoalHelp({
+      budget: defaultGoalBudget(),
+      goal: current,
+      duration: current ? formatDuration(goalElapsedSeconds(current)) || "0s" : "0s",
+      usedTokens: current && props.sessionID ? goalTokenUsage(current, sync.data.message[props.sessionID] ?? []) : 0,
+    })
   }
 
   const [store, setStore] = createStore<{
@@ -1268,7 +1252,7 @@ export function Prompt(props: PromptProps) {
       kv.set(GOAL_BUDGET_KV_KEY, budget)
       toast.show({
         variant: "success",
-        message: budget === null ? "Goal budget set to Unlimited." : `Goal budget set to ${goalBudgetLabel(budget)}.`,
+        message: `Default Goal budget set to ${formatGoalBudget(budget)}.`,
       })
       return true
     }
@@ -1291,7 +1275,7 @@ export function Prompt(props: PromptProps) {
     }
     if (initialGoalCommand?.action === "help") {
       clearSubmittedPrompt(store.mode)
-      void DialogAlert.show(dialog, "Goal mode", goalHelpMessage())
+      void DialogAlert.show(dialog, "Goal mode", goalHelpMessage)
       return true
     }
     if (
@@ -1477,7 +1461,7 @@ export function Prompt(props: PromptProps) {
       clearSubmittedPrompt(currentMode)
       if (goalCommand.action === "open_budget") return true
       if (goalCommand.action === "help") {
-        void DialogAlert.show(dialog, "Goal mode", goalHelpMessage())
+        void DialogAlert.show(dialog, "Goal mode", goalHelpMessage)
         return true
       }
 
@@ -1826,6 +1810,7 @@ export function Prompt(props: PromptProps) {
       <box gap={2} flexDirection="row">
         <Switch>
           <Match when={store.mode === "normal"}>
+            <Show when={props.sessionID}>{(sessionID) => <GoalStatus sessionID={sessionID()} />}</Show>
             <Switch>
               <Match when={usage()}>
                 {(item) => (

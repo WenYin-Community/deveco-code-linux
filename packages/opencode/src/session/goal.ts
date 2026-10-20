@@ -94,6 +94,11 @@ export interface Interface {
   readonly clear: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly canUpdateFrom: (sessionID: SessionID, messageID: MessageID) => Effect.Effect<boolean>
   readonly tokenUsage: (sessionID: SessionID) => Effect.Effect<number>
+  readonly settleUsage: (input: {
+    sessionID: SessionID
+    goal: Info | null
+    messageID: MessageID
+  }) => Effect.Effect<void>
   readonly checkBudget: (
     sessionID: SessionID,
   ) => Effect.Effect<{ goal: Info | null; usedTokens: number; exhausted: boolean }>
@@ -184,6 +189,27 @@ export const layer = Layer.effect(
       return goal.usedTokens + windowUsage(goal, messages)
     })
 
+    const settleUsage = Effect.fn("SessionGoal.settleUsage")(function* (input: {
+      sessionID: SessionID
+      goal: Info | null
+      messageID: MessageID
+    }) {
+      if (input.goal?.status !== "active" || !input.goal.sourceMessageID) return
+      const current = yield* get(input.sessionID)
+      if (!current || current.createdAt !== input.goal.createdAt || current.status === "active") return
+      // update_goal can stop the goal before the provider reports this turn's
+      // usage. Settle that captured window after streaming, excluding later work.
+      const messages = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+      const usedTokens =
+        input.goal.usedTokens +
+        windowUsage(
+          input.goal,
+          messages.filter((message) => message.info.id <= input.messageID),
+        )
+      if (usedTokens <= current.usedTokens) return
+      yield* write(input.sessionID, { ...current, usedTokens })
+    })
+
     const stop = Effect.fnUntraced(function* (sessionID: SessionID, status: "paused" | "complete", reason?: string) {
       const current = yield* get(sessionID)
       if (!current) return null
@@ -271,7 +297,19 @@ export const layer = Layer.effect(
       return { goal: exhausted, usedTokens, exhausted: true }
     })
 
-    return Service.of({ get, start, bindPrompt, pause, complete, resume, clear, canUpdateFrom, tokenUsage, checkBudget })
+    return Service.of({
+      get,
+      start,
+      bindPrompt,
+      pause,
+      complete,
+      resume,
+      clear,
+      canUpdateFrom,
+      tokenUsage,
+      settleUsage,
+      checkBudget,
+    })
   }),
 )
 
