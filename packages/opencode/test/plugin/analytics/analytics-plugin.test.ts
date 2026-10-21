@@ -1051,7 +1051,7 @@ test("marks the design-to-arkts workflow when the entry skill is invoked", async
 
   await hooks["tool.execute.before"]!({ tool: "skill", sessionID: "session-1", callID: "skill-1" }, { args: {} })
   await hooks["tool.execute.after"]!(
-    { tool: "skill", sessionID: "session-1", callID: "skill-1", args: { name: "hmos-d2a-design-to-arkts-entry" } },
+    { tool: "skill", sessionID: "session-1", callID: "skill-1", args: { name: "hmos-design-to-arkts" } },
     { title: "skill", output: "skill loaded", metadata: {} },
   )
 

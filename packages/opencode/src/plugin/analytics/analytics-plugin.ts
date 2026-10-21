@@ -345,7 +345,7 @@ class AnalyticsRuntime {
       input.source,
       input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
     )
-    if (input.tool === "skill" && input.args?.name === "hmos-d2a-design-to-arkts-entry") {
+    if (input.tool === "skill" && input.args?.name === "hmos-design-to-arkts") {
       // Same ownership guard as recordTokenUsage: ignore other sessions' tool results.
       if (this.dependencies.collector.getSessionID() === input.sessionID) {
         this.dependencies.collector.markWorkflow("design-to-arkts")
