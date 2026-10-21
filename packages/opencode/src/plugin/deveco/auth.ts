@@ -1,4 +1,5 @@
-import { logWarn } from "./log"
+import { logInfo, logWarn } from "./log"
+import { countryRegionFileIsUsable, saveCountryRegion } from "./country-region"
 import { loginService } from "./login-service"
 import { tokenStorage } from "./token-storage"
 import { loadAccessTokenFromDisk, loadIsRealNameFromDisk, saveAuthToDisk } from "./storage"
@@ -66,6 +67,81 @@ export class DevEcoAuth {
       }
     }
     return loginService.login()
+  }
+
+  /**
+   * Restore a missing country/region file from the auth server.
+   *
+   * `login()` writes the file, so users who signed in before the file existed — or who
+   * deleted it — would never get it back: `getSession()` rebuilds the session from the JWT,
+   * and the JWT carries no country information. One token check yields the code without
+   * forcing a re-login.
+   *
+   * Best effort: the first call owns the attempt (both the file probe and the request are
+   * skipped when a file already exists or no token is stored), every failure is logged and
+   * swallowed, and the returned promise never rejects
+   */
+  async syncCountryRegion(): Promise<void> {
+    if (this.countryRegionSync) return this.countryRegionSync
+    this.countryRegionSync = this.backfillCountryRegion()
+    return this.countryRegionSync
+  }
+
+  private countryRegionSync: Promise<void> | null = null
+
+  private async backfillCountryRegion(): Promise<void> {
+    try {
+      await this.restoreCountryRegion()
+    } catch (err) {
+      logWarn("failed to restore country region file", {
+        service: "deveco",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  private async restoreCountryRegion(): Promise<void> {
+    if (await countryRegionFileIsUsable()) return
+
+    const jwtToken = await tokenStorage.loadToken()
+    if (!jwtToken) return
+
+    if (this.isCountryRegionTokenExpired(jwtToken)) {
+      logWarn("country region backfill skipped: JWT token has expired, user needs to re-login", {
+        service: "deveco",
+      })
+      return
+    }
+
+    const code = await loginService.fetchNationalCode(jwtToken)
+    if (!code) {
+      logWarn("auth server reported no country code; country region file not restored", { service: "deveco" })
+      return
+    }
+
+    // The probe and the request take long enough for a logout or an account switch to land
+    // in between; writing now would overwrite the value the newer session just stored.
+    if ((await tokenStorage.loadToken()) !== jwtToken) return
+
+    if (await saveCountryRegion(code)) {
+      logInfo("restored missing country region file", { service: "deveco", countryCode: code })
+    }
+  }
+
+  /**
+   * An expired token cannot pass the check, and the check reports that as an error, which
+   * every startup would repeat. refreshToken() skips the same case for the same reason;
+   * an unparsable token is still sent so the server decides.
+   */
+  private isCountryRegionTokenExpired(jwtToken: string): boolean {
+    try {
+      const expiresAt = loginService.parseJwt(jwtToken).exp
+      if (!expiresAt) return false
+      return Date.now() >= expiresAt * 1000
+    } catch {
+      // JWT parse failure — let the server decide if it is still valid
+      return false
+    }
   }
 
   cancel(): void {

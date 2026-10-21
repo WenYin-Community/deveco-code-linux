@@ -21,13 +21,17 @@ let mockLoginServiceMethods: {
   logout: () => Promise<void>
   parseJwt: (token: string) => JwtPayload
   refreshToken: (jwtToken: string) => Promise<{ accessToken: string; refreshToken: string; isRealName: boolean } | null>
+  fetchNationalCode: (jwtToken: string) => Promise<string | null>
   setUserInfoFromTokens: (tokens: { accessToken: string; refreshToken: string; isRealName: boolean }, jwtToken: string) => void
 }
 
 let mockTokenStorageLoadToken: Mock<() => Promise<string | null>>
 let mockLoadAccessTokenFromDisk: Mock<() => string>
+let mockCountryRegionFileIsUsable: Mock<() => Promise<boolean>>
+let mockSaveCountryRegion: Mock<(countryCode: string) => Promise<boolean>>
 
 const storage = await import("@/plugin/deveco/storage")
+const countryRegion = await import("@/plugin/deveco/country-region")
 
 const { DevEcoAuth } = await import("@/plugin/deveco/auth")
 
@@ -58,10 +62,13 @@ function resetMocks() {
     logout: mock(() => Promise.resolve()),
     parseJwt: mock(defaultParseJwt),
     refreshToken: mock(() => Promise.resolve(null)),
+    fetchNationalCode: mock(() => Promise.resolve(null as string | null)),
     setUserInfoFromTokens: mock(() => {}),
   }
   mockTokenStorageLoadToken = mock(() => Promise.resolve(null as string | null))
   mockLoadAccessTokenFromDisk = mock(() => "")
+  mockCountryRegionFileIsUsable = mock(() => Promise.resolve(true))
+  mockSaveCountryRegion = mock(() => Promise.resolve(true))
   spyOn(loginService, "isLoggedIn").mockImplementation(() => mockLoginServiceMethods.isLoggedIn())
   spyOn(loginService, "getUserInfo").mockImplementation(() => mockLoginServiceMethods.getUserInfo())
   spyOn(loginService, "login").mockImplementation(() => mockLoginServiceMethods.login())
@@ -74,6 +81,13 @@ function resetMocks() {
   spyOn(loginService, "setUserInfoFromTokens").mockImplementation((tokens, jwtToken) =>
     mockLoginServiceMethods.setUserInfoFromTokens(tokens, jwtToken),
   )
+  spyOn(loginService, "fetchNationalCode").mockImplementation((jwtToken: string) =>
+    mockLoginServiceMethods.fetchNationalCode(jwtToken),
+  )
+  spyOn(countryRegion, "countryRegionFileIsUsable").mockImplementation(() => mockCountryRegionFileIsUsable())
+  spyOn(countryRegion, "saveCountryRegion").mockImplementation((countryCode: string) =>
+    mockSaveCountryRegion(countryCode),
+  )
   spyOn(tokenStorage, "loadToken").mockImplementation(() => mockTokenStorageLoadToken())
   spyOn(tokenStorage, "saveToken").mockImplementation(async () => {})
   spyOn(tokenStorage, "clearToken").mockImplementation(async () => {})
@@ -84,6 +98,123 @@ function resetMocks() {
 beforeEach(resetMocks)
 afterEach(() => {
   mock.restore()
+})
+
+describe("DevEcoAuth.syncCountryRegion", () => {
+  test("restores the file from the auth server when it is missing", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve("CN"))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).toHaveBeenCalledWith("some.jwt.token")
+    expect(mockSaveCountryRegion).toHaveBeenCalledWith("CN")
+  })
+
+  test("restores whatever region the auth server reports", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+
+    for (const code of ["JP", "UK", "HK", "MO"]) {
+      mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve(code))
+      await new DevEcoAuth().syncCountryRegion()
+      expect(mockSaveCountryRegion).toHaveBeenCalledWith(code)
+    }
+  })
+
+  test("costs no request when the file already exists", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(true))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).not.toHaveBeenCalled()
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
+
+  test("costs no request when no token is stored", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).not.toHaveBeenCalled()
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
+
+  test("attempts once per instance", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve("CN"))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).toHaveBeenCalledTimes(1)
+  })
+
+  test("never rejects when the auth server is unreachable", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.reject(new Error("offline")))
+    const auth = new DevEcoAuth()
+
+    // Awaiting is the assertion: a rejection would fail this test.
+    await auth.syncCountryRegion()
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
+
+  test("writes nothing when the token changed while the request was in flight", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    let calls = 0
+    mockTokenStorageLoadToken = mock(() => Promise.resolve(calls++ === 0 ? "old.token.value" : "new.token.value"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve("CN"))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).toHaveBeenCalledTimes(1)
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
+
+  test("costs no request when the stored token has expired", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    const expired = createJwt({ userId: "user-123", exp: 1 })
+    mockTokenStorageLoadToken = mock(() => Promise.resolve(expired))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockLoginServiceMethods.fetchNationalCode).not.toHaveBeenCalled()
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
+
+  test("never rejects when the file cannot be written", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve("CN"))
+    mockSaveCountryRegion = mock(() => Promise.reject(new Error("EACCES")))
+    const auth = new DevEcoAuth()
+
+    // Awaiting is the assertion: a rejection would fail this test.
+    await auth.syncCountryRegion()
+    expect(mockLoginServiceMethods.fetchNationalCode).toHaveBeenCalledTimes(1)
+  })
+
+  test("writes nothing when the server reports no code", async () => {
+    mockCountryRegionFileIsUsable = mock(() => Promise.resolve(false))
+    mockTokenStorageLoadToken = mock(() => Promise.resolve("some.jwt.token"))
+    mockLoginServiceMethods.fetchNationalCode = mock(() => Promise.resolve(null))
+    const auth = new DevEcoAuth()
+
+    await auth.syncCountryRegion()
+
+    expect(mockSaveCountryRegion).not.toHaveBeenCalled()
+  })
 })
 
 describe("DevEcoAuth.getSession", () => {

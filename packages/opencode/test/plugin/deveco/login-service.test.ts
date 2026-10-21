@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { AppRuntime } from "@/effect/app-runtime"
 import { LoginCancelledError, UnsupportedRegionError } from "@/plugin/deveco/errors"
 import type { CallbackData, HttpResponse, TokenCheckResponse } from "@/plugin/deveco/types"
@@ -22,6 +25,9 @@ const localAuthServerStopSpy = spyOn(localAuthServer.LocalAuthServer.prototype, 
 const localAuthServerCancelSpy = spyOn(localAuthServer.LocalAuthServer.prototype, "cancel")
 const localAuthServerGetPortSpy = spyOn(localAuthServer.LocalAuthServer.prototype, "getPort")
 const saveAuthToDiskSpy = spyOn(storage, "saveAuthToDisk")
+const countryRegion = await import("@/plugin/deveco/country-region")
+const realSaveCountryRegion = countryRegion.saveCountryRegion
+const saveCountryRegionSpy = spyOn(countryRegion, "saveCountryRegion")
 const appRuntimeRunPromiseSpy = spyOn(AppRuntime, "runPromise")
 const { LoginService } = await import("@/plugin/deveco/login-service")
 type OpenLoginPage = (port: number, loginState: string) => Promise<void>
@@ -102,6 +108,7 @@ beforeEach(() => {
   saveAuthToDiskSpy
     .mockReset()
     .mockImplementation((key: string, info: Record<string, unknown> | null) => mockSaveAuthToDisk(key, info))
+  saveCountryRegionSpy.mockReset().mockImplementation(realSaveCountryRegion)
   appRuntimeRunPromiseSpy.mockReset().mockResolvedValue(undefined)
   openLoginPageSpy.mockReset().mockImplementation(() => {
     if (mockOpenLoginPageShouldFail) return Promise.reject(new Error("Failed to open login page"))
@@ -124,6 +131,7 @@ afterAll(() => {
   localAuthServerCancelSpy.mockRestore()
   localAuthServerGetPortSpy.mockRestore()
   saveAuthToDiskSpy.mockRestore()
+  saveCountryRegionSpy.mockRestore()
   appRuntimeRunPromiseSpy.mockRestore()
   openLoginPageSpy.mockRestore()
 })
@@ -298,6 +306,102 @@ describe("LoginService.login", () => {
     tokenStorage.loadToken = mock(() => Promise.resolve("stored-jwt-token"))
     expect(await service.isLoggedIn()).toBe(true)
     expect(service.getUserInfo()!.userId).toBe("user-123")
+  })
+
+  // The login guard still admits CN accounts only, so CN is the code this path can produce;
+  // the writer itself accepts every supported region, which country-region.test.ts covers.
+  test("writes the country region file with the reported country code", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "deveco-home-"))
+    const previousHome = process.env.DEVECO_TEST_HOME
+    process.env.DEVECO_TEST_HOME = home
+    try {
+      mockServerInstance = makeServer({
+        waitForCallback: mock(() => Promise.resolve({ tempToken: "test-temp-token&siteId=1", siteId: "1" })),
+      })
+      mockHttpClientForLogin()
+      tokenStorage.saveToken = mock(() => Promise.resolve())
+
+      const result = await new LoginService().login()
+
+      expect(result.success).toBe(true)
+      const file = path.join(home, ".config", "deveco", "country.region.xml")
+      const document = [
+        "<application>",
+        '  <component name="CountryRegionSetting">',
+        '    <countryregion name="CN"/>',
+        "  </component>",
+        "</application>",
+        "",
+      ].join("\n")
+      expect(await Bun.file(file).text()).toBe(document)
+      expect(saveCountryRegionSpy).toHaveBeenCalledTimes(1)
+      expect(saveCountryRegionSpy.mock.calls[0][0]).toBe("CN")
+    } finally {
+      if (previousHome === undefined) delete process.env.DEVECO_TEST_HOME
+      else process.env.DEVECO_TEST_HOME = previousHome
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test("does not write the country region file when the region is rejected", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "deveco-home-"))
+    const previousHome = process.env.DEVECO_TEST_HOME
+    process.env.DEVECO_TEST_HOME = home
+    try {
+      mockServerInstance = makeServer()
+      mockHttpClientForLogin(defaultJwt, {
+        ...defaultTokenCheck,
+        userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "DE" },
+      })
+      tokenStorage.saveToken = mock(() => Promise.resolve())
+
+      const result = await new LoginService().login()
+
+      expect(result.success).toBe(false)
+      expect(result.unsupportedRegion).toBe(true)
+      expect(saveCountryRegionSpy).not.toHaveBeenCalled()
+      expect(await fs.readdir(path.join(home, ".config", "deveco")).catch(() => [])).toEqual([])
+    } finally {
+      if (previousHome === undefined) delete process.env.DEVECO_TEST_HOME
+      else process.env.DEVECO_TEST_HOME = previousHome
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps the login successful when the country region file cannot be written", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "deveco-home-"))
+    const previousHome = process.env.DEVECO_TEST_HOME
+    process.env.DEVECO_TEST_HOME = home
+    await fs.writeFile(path.join(home, ".config"), "not a directory")
+    try {
+      mockServerInstance = makeServer({
+        waitForCallback: mock(() => Promise.resolve({ tempToken: "test-temp-token&siteId=1", siteId: "1" })),
+      })
+      mockHttpClientForLogin()
+      tokenStorage.saveToken = mock(() => Promise.resolve())
+
+      const result = await new LoginService().login()
+
+      expect(result.success).toBe(true)
+      expect(result.userInfo!.countryCode).toBe("CN")
+      expect(saveCountryRegionSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (previousHome === undefined) delete process.env.DEVECO_TEST_HOME
+      else process.env.DEVECO_TEST_HOME = previousHome
+      await fs.rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test("does not write the country region file when the login is cancelled", async () => {
+    mockServerInstance = makeServer({
+      waitForCallback: mock(() => Promise.reject(new LoginCancelledError("user cancelled"))),
+    })
+
+    const result = await new LoginService().login()
+
+    expect(result.success).toBe(false)
+    expect(result.cancelled).toBe(true)
+    expect(saveCountryRegionSpy).not.toHaveBeenCalled()
   })
 
   test("should reject a non-China account country", async () => {
@@ -515,6 +619,54 @@ describe("LoginService.checkAccountRegion", () => {
   test("returns unverified when the token check fails", async () => {
     httpClient.get = mock(() => Promise.reject(new Error("offline")))
     expect(await new LoginService().checkAccountRegion(defaultJwt)).toBe("unverified")
+  })
+})
+
+describe("LoginService.fetchNationalCode", () => {
+  test("returns the normalised code reported by the auth server", async () => {
+    const reported: Array<[string, string]> = [
+      [" cn ", "CN"],
+      ["jp", "JP"],
+      ["uk", "UK"],
+      [" hk ", "HK"],
+      ["mo", "MO"],
+    ]
+    for (const [nationalCode, expected] of reported) {
+      mockHttpClientForLogin(defaultJwt, {
+        ...defaultTokenCheck,
+        userInfo: { ...defaultTokenCheck.userInfo!, nationalCode },
+      })
+      expect(await new LoginService().fetchNationalCode(defaultJwt)).toBe(expected)
+    }
+  })
+
+  test("returns null when the server reports no code", async () => {
+    mockHttpClientForLogin(defaultJwt, {
+      ...defaultTokenCheck,
+      userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "" },
+    })
+    expect(await new LoginService().fetchNationalCode(defaultJwt)).toBeNull()
+  })
+
+  test("returns null when the server rejects the token", async () => {
+    // A 200 with status false means the payload must not be trusted, matching getUserInfoFromJwt.
+    mockHttpClientForLogin(defaultJwt, {
+      ...defaultTokenCheck,
+      status: false,
+      userInfo: { ...defaultTokenCheck.userInfo!, nationalCode: "JP" },
+    })
+    expect(await new LoginService().fetchNationalCode(defaultJwt)).toBeNull()
+  })
+
+  test("rejects when the token check fails so the caller can decide", async () => {
+    mockHttpClientForLogin(defaultJwt, defaultTokenCheck, 200, 500)
+    let failure: unknown
+    try {
+      await new LoginService().fetchNationalCode(defaultJwt)
+    } catch (err) {
+      failure = err
+    }
+    expect(failure instanceof Error ? failure.message : "").toContain("Failed to check jwtToken")
   })
 })
 

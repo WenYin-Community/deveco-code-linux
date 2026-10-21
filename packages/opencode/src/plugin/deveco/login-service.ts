@@ -8,6 +8,7 @@ import { describeNetworkError } from "./network-error"
 import { LocalAuthServer } from "./local-auth-server"
 import { tokenStorage } from "./token-storage"
 import { saveAuthToDisk } from "./storage"
+import { saveCountryRegion } from "./country-region"
 import type {
   AccountRegionStatus,
   HttpRequestConfig,
@@ -76,6 +77,8 @@ export class LoginService {
 
       this.userInfo = userInfo
 
+      await this.persistCountryRegion(userInfo.countryCode)
+
       logInfo("login succeeded", { service: "deveco" })
 
       return {
@@ -110,6 +113,26 @@ export class LoginService {
         await this.server.stop()
         this.server = null
       }
+    }
+  }
+
+  /**
+   * Write the country/region file shared with DevEco Studio.
+   *
+   * This is a convenience side effect of a successful login: by this point the token is
+   * saved and userInfo is set, so a failure here is logged and never turns a successful
+   * login into a failed one. The value written is the region reported by the auth server;
+   * today that is always "CN" because requireChinaAccount() admits CN accounts only, while the
+   * writer itself accepts any two-letter code.
+   */
+  private async persistCountryRegion(countryCode: string): Promise<void> {
+    try {
+      await saveCountryRegion(countryCode)
+    } catch (err) {
+      logWarn("failed to write country region file", {
+        service: "deveco",
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 
@@ -307,6 +330,22 @@ export class LoginService {
         `Invalid response from auth server during token check: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
+  }
+
+  /**
+   * Country/region code reported by the auth server for an existing token.
+   *
+   * `checkAccountRegion` only answers supported/unsupported; the backfill needs the code
+   * itself. Returns null when the server reported no code, and throws when the request fails
+   * so the caller decides whether that is worth logging.
+   */
+  public async fetchNationalCode(jwtToken: string): Promise<string | null> {
+    const tokenInfo = await this.checkJwtToken(jwtToken)
+    // A 200 with status false means the token was rejected, so the payload must not be used;
+    // the other callers of checkJwtToken guard on the same flag.
+    if (!tokenInfo.status) return null
+    const code = tokenInfo.userInfo?.nationalCode?.trim().toUpperCase()
+    return code ? code : null
   }
 
   public async checkAccountRegion(jwtToken: string): Promise<AccountRegionStatus> {

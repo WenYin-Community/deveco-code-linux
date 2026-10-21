@@ -119,6 +119,29 @@ async function getAuthorizeCallback(): Promise<() => Promise<AuthCallbackResult>
   return authorizeResult.callback as () => Promise<AuthCallbackResult>
 }
 
+describe("DevEcoAuthPlugin config hook", () => {
+  test("starts the country region backfill without waiting for it", async () => {
+    // The hook is the only production entry point of the backfill, so a dropped call here
+    // would leave the feature dead while every other test stays green.
+    let settled = false
+    const syncSpy = spyOn(devecoAuth, "syncCountryRegion").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settled = true
+          resolve()
+        }),
+    )
+    try {
+      const hooks: Hooks = await DevEcoAuthPlugin(minimalPluginInput)
+      await hooks.config!({})
+      expect(syncSpy).toHaveBeenCalledTimes(1)
+      expect(settled).toBe(true)
+    } finally {
+      syncSpy.mockRestore()
+    }
+  })
+})
+
 const validOauthAuth: Record<string, unknown> = {
   type: "oauth",
   access: "valid-access-token",

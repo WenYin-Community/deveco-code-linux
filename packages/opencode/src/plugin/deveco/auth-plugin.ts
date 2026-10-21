@@ -33,6 +33,9 @@ export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
   return {
     async config(config) {
       agreement = (config as { agreement?: AgreementConfig }).agreement
+      // Best effort and fire-and-forget: a missing country/region file must never delay or
+      // fail startup, and the promise never rejects.
+      void devecoAuth.syncCountryRegion()
     },
     auth: {
       provider: PROVIDER_ID,
