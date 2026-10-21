@@ -443,6 +443,7 @@ export function Autocomplete(props: {
   const commands = createMemo((): AutocompleteOption[] => {
     const commandDescOverrides: Record<string, string> = {
       debug: t("command.cmd_debug_desc"),
+      analyze: t("command.cmd_analyze_desc"),
       init: t("command.cmd_init_desc"),
       review: t("command.cmd_review_desc"),
     }

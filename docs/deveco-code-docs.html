@@ -8659,6 +8659,11 @@ Read the following file immediately as it&#x27;s relevant to all workflows: @rul
 <p><em>模式</em>：<code>subagent</code></p>
 <p>一个用于探索代码库的快速只读代理。无法修改文件。当您需要按模式快速查找文件、搜索代码中的关键字或回答有关代码库的问题时，请使用此代理。</p>
 <hr />
+<hr />
+<h3 id="agents-dfx">使用 Dfx</h3>
+<p><em>模式</em>：<code>subagent</code></p>
+<p>隐藏的系统代理，一个用于辅助分析和定位 HarmonyOS 应用故障的代理。支持 AppFreeze、CppCrash、JsCrash 三类故障类型日志的根因分析，它能够读取用户指定的故障日志、解析堆栈、交叉验证源码、追溯调用链路，并输出包含完整证据链的分析报告与修复建议。</p>
+<hr />
 <h3 id="agents-compaction">使用 Compaction</h3>
 <p><em>模式</em>：<code>primary</code></p>
 <p>隐藏的系统代理，将长上下文压缩为较小的摘要。它会在需要时自动运行，且无法在 UI 中选择。</p>
@@ -8684,10 +8689,10 @@ Read the following file immediately as it&#x27;s relevant to all workflows: @rul
 <li>对于主代理，在会话期间使用 <strong>Tab</strong> 键循环切换。您也可以使用配置的 <code>switch_agent</code> 快捷键。</li>
 <li>子代理可以通过以下方式调用：</li>
 <li>由主代理根据其描述<strong>自动</strong>调用以执行专门任务。</li>
-<li>通过在消息中 <strong>@ 提及</strong>子代理来手动调用。例如：</li>
+<li>通过在消息中 <strong>@ 提及</strong>子代理来手动调用。例如：
+  <pre><span class="code-lang-label">txt</span><code class="language-txt">@general help me search for this function</code></pre>
+</li>
 </ol>
-<pre><span class="code-lang-label">txt</span><code class="language-txt">@general help me search for this function</code></pre>
-
 <ol>
 <li><strong>会话间导航</strong>：当子代理创建自己的子会话时，您可以使用以下方式在父会话和所有子会话之间导航：</li>
 <li><strong>&lt;Leader&gt;+Right</strong>（或配置的 <code>session_child_cycle</code> 快捷键）向前循环：父会话 → 子会话1 → 子会话2 → ... → 父会话</li>

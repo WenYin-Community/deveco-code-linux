@@ -10,6 +10,7 @@ import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
 import { AgentPromptProfile } from "./prompt/profile"
+import PROMPT_DFX from "./prompt/dfx.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -135,6 +136,12 @@ export const layer = Layer.effect(
             "*.env": "ask",
             "*.env.*": "ask",
             "*.env.example": "allow",
+          },
+          // SR1 v1.6: DFX analysis always runs in the dfx subagent sub-session.
+          // Main agents cannot load the hmos-dfx-analyzer skill directly (they must
+          // delegate via the task tool); the dfx agent re-allows it below.
+          skill: {
+            "hmos-dfx-analyzer": "deny",
           },
         })
 
@@ -299,6 +306,59 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          dfx: {
+            name: "dfx",
+            description: `HarmonyOS DFX fault diagnosis specialist running in an isolated sub-session. Delegate to this agent whenever the user reports HarmonyOS application faults — freezes (AppFreeze / ANR / 冻屏 / 卡死 / 无响应), native C/C++ crashes (CppCrash), or ArkTS/TypeScript runtime crashes (JSCrash / 闪退 / 崩溃 / 白屏退出) — together with FaultLog files, directories, or pasted log content. This agent is also the executor of the explicit /analyze command. When delegating, pass the user's original request text verbatim plus any log file paths; do not paraphrase or trim fault descriptions. It returns a concise diagnosis summary and writes the full analysis report (with code highlighting and source diffs) to dfx-reports/ under the project directory; when relaying its returned summary to the user, output it verbatim — do not add, drop or reformat its lines, and never rewrite its absolute report path as a relative path. Do NOT delegate compile errors, general feature development, static-check issues, raw HiLog streams, or performance problems (memory leaks / OOM).`,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                grep: "allow",
+                glob: "allow",
+                read: "allow",
+                skill: {
+                  // FR-16: only the DFX main skill is exposed to the dfx agent;
+                  // everything else routes through its internal analyzers.
+                  "*": "deny",
+                  "hmos-dfx-analyzer": "allow",
+                },
+                arkts_knowledge_search: "allow",
+                question: "allow", // 当期仅交互模式取 allow；非交互模式（后续支持时）此键需取 deny 而非 ask，否则 ask 在无应答者时会无限阻塞（V2 缺陷根源）
+                webfetch: "allow",
+                websearch: "allow",
+                edit: "deny",
+                bash: "allow",
+                arkts_check: "deny",
+                build_project: "deny",
+                task: "deny",
+                patch: "deny",
+                switch_cwd: "deny",
+                hdc_log: "deny",
+                start_app: "deny",
+                verify_ui: "deny",
+                save_ui_screenshot: "deny",
+                get_ui_verification_log: "deny",
+                perform_ui_action: "deny",
+                get_app_ui_tree: "deny",
+                plan_enter: "deny",
+                plan_exit: "deny",
+                plan_write: "deny",
+                spec_write: "deny",
+                repo_clone: "deny",
+                repo_overview: "deny",
+                todowrite: "deny",
+              }),
+              user,
+            ),
+            options: {},
+            mode: "subagent",
+            native: true,
+            // SR1 v1.6: dfx always runs in a sub-session — via the /analyze
+            // command (subtask: true) or natural-language Task delegation from
+            // the main agent. Hidden from agent pickers and @-mention
+            // autocomplete; delegation is model-initiated via the task tool.
+            hidden: true,
+            prompt: PROMPT_DFX,
           },
           compaction: {
             name: "compaction",

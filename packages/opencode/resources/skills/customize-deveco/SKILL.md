@@ -314,10 +314,10 @@ file, `disable: true` in frontmatter.
 
 ### Built-in agents
 
-DevEco Code ships with 5 user-facing agents and 6 hidden internal agents. To override a built-in's fields, define the same key in `agent: { <name>: { ... } }`.
+DevEco Code ships with 5 user-facing agents and 7 hidden internal agents. To override a built-in's fields, define the same key in `agent: { <name>: { ... } }`.
 
 | Agent ID             | Mode       | Hidden | Description                                                      |
-| -------------------- | ---------- | ------ | ---------------------------------------------------------------- |
+| -------------------- | ---------- | ------ |------------------------------------------------------------------|
 | `build`              | `primary`  | No     | Default agent. Executes tools based on configured permissions.   |
 | `goal`               | `primary`  | No     | Multi-turn goal-driven agent with verifiable termination.        |
 | `plan`               | `primary`  | No     | Plan mode. Disallows all edit tools.                             |
@@ -326,6 +326,7 @@ DevEco Code ships with 5 user-facing agents and 6 hidden internal agents. To ove
 | `debug`              | `primary`  | Yes    | Sticky ArkTS debugging mode triggered by `/debug`.               |
 | `spec-implementation`| `subagent` | Yes    | Execute implementation tasks from an approved spec.              |
 | `spec-verify`        | `subagent` | Yes    | Build, deploy, and UI-verify Harmony features against spec.      |
+| `dfx`                | `subagent` | Yes    | Root-cause analyzer for HarmonyOS AppFreeze/CppCrash/JsCrash.    |
 | `compaction`         | `primary`  | Yes    | Context summarization assistant.                                 |
 | `title`              | `primary`  | Yes    | Thread title generator (≤50 chars).                              |
 | `summary`            | `primary`  | Yes    | PR-description-style conversation summarizer.                    |
@@ -338,6 +339,8 @@ Key permission differences:
 - **`general`**: Same as build but `todowrite: deny`.
 - **`explore`**: Read-only — `glob/grep/read/webfetch/websearch: allow`, all others denied.
 - **`debug`**: `question/todowrite/arkts_knowledge_search/bash/debug_exit: allow`; build, run, and logs use `devecocli` through bash.
+- **`dfx`**: Read-only — `grep/glob/read/bash/webfetch/websearch/question: allow`; `skill` allows only `hmos-dfx-analyzer`, everything else denied. All `edit`/`patch`/`task`/`build_project`/`arkts_check`/`start_app`/`hdc_log`/UI/plan tools are denied. Started only by `/analyze`; `task` cannot spawn it.
+
 
 All agents share base permissions: `external_directory: ask *`, `read: allow *` (except `*.env*` which requires `ask`).
 

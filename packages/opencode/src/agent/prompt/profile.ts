@@ -37,6 +37,7 @@ const defaultAgents = [
   "compaction",
   "title",
   "summary",
+  "dfx",
 ] as const
 
 const studioAgents = [
@@ -51,6 +52,7 @@ const studioAgents = [
   "compaction",
   "title",
   "summary",
+  "dfx",
 ] as const
 
 export type WorkflowOverride = {

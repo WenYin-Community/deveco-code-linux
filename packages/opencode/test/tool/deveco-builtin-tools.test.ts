@@ -40,6 +40,9 @@ describe("deveco builtin tools", () => {
         expect(ids).toContain("switch_cwd")
         for (const name of REMOVED_DEVECO_TOOL_NAMES) expect(ids).not.toContain(name)
         expect(ids).toContain("skill")
+        // identify_fault_log moved into the hmos-dfx-analyzer skill scripts; it must
+        // no longer be registered as a builtin tool.
+        expect(ids).not.toContain("identify_fault_log")
       }),
     30_000,
   )

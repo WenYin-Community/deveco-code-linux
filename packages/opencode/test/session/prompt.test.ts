@@ -2429,6 +2429,41 @@ it.instance("does not loop empty assistant turns for a simple reply", () =>
   }),
 )
 
+it.instance("explicit /analyze runs the dfx agent in an isolated sub-session (SR1 v1.6)", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const commands = yield* Command.Service
+    const { prompt, sessions, chat } = yield* boot()
+    const command = yield* commands.get(Command.Default.ANALYZE)
+
+    expect(command?.agent).toBe("dfx")
+    expect(command?.subtask).toBe(true)
+
+    yield* llm.text("dfx-summary")
+    yield* prompt.command({
+      sessionID: chat.id,
+      command: Command.Default.ANALYZE,
+      arguments: "analyze crash.log",
+      agent: "build",
+    })
+
+    // The command creates a subtask part in the parent session...
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+    expect(messages.some((message) => message.parts.some((part) => part.type === "subtask"))).toBe(true)
+    // ...and runs the dfx agent in a child session (analysis process isolated
+    // from the root session; only the final summary returns).
+    const children = yield* sessions.children(chat.id)
+    expect(children).toHaveLength(1)
+    expect(children[0]?.agent).toBe("dfx")
+    // The /analyze template carries the DFX_USER_ARGUMENTS block verbatim.
+    const rendered = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
+    expect(rendered).toContain("由显式 /analyze 启动的隔离子会话单次执行")
+    expect(rendered).toContain("DFX_USER_ARGUMENTS")
+    expect(rendered).toContain("analyze crash.log")
+    expect(rendered).toContain("dfx-summary")
+  }),
+)
+
 it.instance(
   "records aborted errors when prompt is cancelled mid-stream",
   () =>

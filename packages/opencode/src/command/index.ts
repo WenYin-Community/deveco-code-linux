@@ -11,6 +11,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import PROMPT_DEBUG from "./template/debug.txt"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_DFX from "./template/dfx.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -56,6 +57,7 @@ export const Default = {
   DEBUG: "debug",
   INIT: "init",
   REVIEW: "review",
+  ANALYZE: "analyze",
 } as const
 
 export interface Interface {
@@ -106,6 +108,21 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.ANALYZE] = {
+        name: Default.ANALYZE,
+        description: "analyze and locate HarmonyOS app freeze and CPP/ArkTS crash FaultLogs",
+        agent: "dfx",
+        source: "command",
+        get template() {
+          return PROMPT_DFX
+        },
+        // SR1 v1.6: /analyze runs the dfx agent in an isolated sub-session
+        // (analysis process and full report stay out of the root session).
+        // Natural-language fault analysis delegates to the same agent via the
+        // task tool; the concise summary and report path return to the parent.
+        subtask: true,
+        hints: hints(PROMPT_DFX),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

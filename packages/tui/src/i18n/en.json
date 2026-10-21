@@ -262,6 +262,7 @@
     "warped_to": "Warped to {{name}}",
     "new_working_copy": "new working copy",
     "cmd_debug_desc": "debug ArkTS issues with runtime evidence",
+    "cmd_analyze_desc": "analyze and locate HarmonyOS app freeze and CPP/ArkTS crash FaultLogs",
     "cmd_init_desc": "guided AGENTS.md setup",
     "cmd_review_desc": "review changes [commit|branch|pr], defaults to uncommitted",
     "show_tips": "Show tips",

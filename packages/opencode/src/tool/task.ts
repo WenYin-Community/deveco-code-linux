@@ -125,7 +125,9 @@ export const TaskTool = Tool.define(
         return yield* Effect.fail(new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`))
       }
       if (next.name === "debug" && !ctx.extra?.bypassAgentCheck) {
-        return yield* Effect.fail(new Error(`Agent type "${params.subagent_type}" can only be started by a command`))
+        return yield* Effect.fail(
+          new Error(`Agent type "${params.subagent_type}" can only be started by a command.`),
+        )
       }
 
       if (!ctx.extra?.bypassAgentCheck) {

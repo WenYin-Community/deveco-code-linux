@@ -262,6 +262,7 @@
     "warped_to": "已传送到 {{name}}",
     "new_working_copy": "新工作副本",
     "cmd_debug_desc": "用日志排查 ArkTS 问题",
+    "cmd_analyze_desc": "分析并定位 HarmonyOS 应用卡死及 CPP/ArkTS 崩溃 FaultLog",
     "cmd_init_desc": "初始化 AGENTS.md",
     "cmd_review_desc": "审查变更 [commit|branch|pr]，默认审查未提交的变更",
     "show_tips": "显示提示",

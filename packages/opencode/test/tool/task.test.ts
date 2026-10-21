@@ -1,7 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Deferred, Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -486,6 +486,76 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("starts dfx as a subtask sub-session (SR1 v1.6 natural-language delegation)", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      // Natural-language fault analysis delegates to the dfx agent, which runs
+      // in an isolated child session and returns a concise summary.
+      const result = yield* def.execute(
+        {
+          description: "diagnose freeze",
+          prompt: '用户原话："帮我分析 /tmp/faultlog 这份冻屏日志"',
+          subagent_type: "dfx",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps() },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.title).toBe("diagnose freeze")
+      const sessions = yield* Session.Service
+      const children = yield* sessions.children(chat.id)
+      expect(children).toHaveLength(1)
+      expect(children[0]?.id).toBe(result.metadata.sessionId)
+      expect(children[0]?.agent).toBe("dfx")
+    }),
+  )
+
+  it.instance("starts dfx even for @-mention delegation (bypassAgentCheck, SR1 v1.6)", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      // @dfx mentions set bypassAgentCheck=true; delegation runs in the same
+      // isolated child-session form as natural-language delegation.
+      const result = yield* def.execute(
+        {
+          description: "user @-mentioned dfx with a pasted faultlog",
+          prompt: "analyze this faultlog: <50KB pasted log>",
+          subagent_type: "dfx",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: stubOps(), bypassAgentCheck: true },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.title).toBe("user @-mentioned dfx with a pasted faultlog")
+      const sessions = yield* Session.Service
+      const children = yield* sessions.children(chat.id)
+      expect(children).toHaveLength(1)
+      expect(children[0]?.id).toBe(result.metadata.sessionId)
+      expect(children[0]?.agent).toBe("dfx")
     }),
   )
 

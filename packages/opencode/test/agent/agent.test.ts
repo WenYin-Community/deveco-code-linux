@@ -196,6 +196,112 @@ it.instance("explore agent asks for external directories and allows whitelisted 
   }),
 )
 
+it.instance("dfx agent allows analysis scripts but denies code modification", () =>
+  Effect.gen(function* () {
+    const dfx = yield* load((svc) => svc.get("dfx"))
+    expect(dfx).toBeDefined()
+    expect(dfx?.mode).toBe("subagent")
+    expect(dfx?.native).toBe(true)
+    // SR1 v1.6: hidden from pickers and @-mention autocomplete; natural
+    // language analysis is delegated by the main agent via the task tool,
+    // which surfaces the description regardless of hidden.
+    expect(dfx?.hidden).toBe(true)
+    expect(dfx?.description).toContain("running in an isolated sub-session")
+    expect(dfx?.description).toContain("Delegate to this agent")
+    expect(dfx?.description).toContain("executor of the explicit /analyze command")
+    expect(dfx?.description).toContain("dfx-reports/")
+    expect(dfx?.description).toContain("CppCrash")
+    expect(dfx?.description).toContain("ArkTS/TypeScript")
+    expect(dfx?.description).toContain("pass the user's original request text verbatim")
+    expect(dfx?.description).toContain("when relaying its returned summary to the user, output it verbatim")
+    expect(dfx?.description).toContain("never rewrite its absolute report path as a relative path")
+    expect(dfx?.description).toContain("Do NOT delegate compile errors")
+    expect(dfx?.description).toContain("raw HiLog streams")
+    expect(dfx?.description).not.toContain("started exclusively via the /analyze command")
+    expect(dfx?.description).not.toContain("load the hmos-dfx-analyzer skill instead")
+
+    for (const permission of [
+      "grep",
+      "glob",
+      "read",
+      "arkts_knowledge_search",
+      "question",
+      "webfetch",
+      "websearch",
+      "bash",
+    ]) {
+      expect(evalPerm(dfx, permission)).toBe("allow")
+    }
+
+    for (const permission of [
+      "edit",
+      "arkts_check",
+      "build_project",
+      "task",
+      "patch",
+      "switch_cwd",
+      "hdc_log",
+      "start_app",
+      "verify_ui",
+      "save_ui_screenshot",
+      "get_ui_verification_log",
+      "perform_ui_action",
+      "get_app_ui_tree",
+      "plan_enter",
+      "plan_exit",
+      "plan_write",
+      "spec_write",
+      "repo_clone",
+      "repo_overview",
+      "todowrite",
+    ]) {
+      expect(evalPerm(dfx, permission)).toBe("deny")
+    }
+
+    expect(evalPerm(dfx, "doom_loop")).toBe("ask")
+    // SR1 v1.6: only the dfx agent may load the DFX main skill. Main agents
+    // cannot self-load hmos-dfx-analyzer (they delegate via the task tool instead),
+    // which keeps DFX analysis inside the isolated sub-session.
+    expect(Permission.evaluate("skill", "hmos-dfx-analyzer", dfx!.permission).action).toBe("allow")
+    expect(Permission.evaluate("skill", "arkts-error-fixes", dfx!.permission).action).toBe("deny")
+    const build = yield* load((svc) => svc.get("build"))
+    expect(Permission.evaluate("skill", "hmos-dfx-analyzer", build!.permission).action).toBe("deny")
+    expect(Permission.disabled(["edit", "write", "apply_patch"], dfx!.permission)).toEqual(
+      new Set(["edit", "write", "apply_patch"]),
+    )
+    expect(Permission.evaluate("external_directory", "/some/other/path", dfx!.permission).action).toBe("ask")
+    // Thin system prompt: identity, entry constraint, agent-level boundary and
+    // session facts only. Triage/routing/delivery flow must live in the skill.
+    expect(dfx?.prompt).toContain("hmos-dfx-analyzer")
+    expect(dfx?.prompt).toContain("真值源")
+    expect(dfx?.prompt).toContain("本提示词不重复其内容")
+    expect(dfx?.prompt).toContain("AppFreeze")
+    expect(dfx?.prompt).toContain("CppCrash")
+    expect(dfx?.prompt).toContain("JSCrash")
+    expect(dfx?.prompt).toContain("不主动修改用户业务源码")
+    expect(dfx?.prompt).toContain("不等同于")
+    expect(dfx?.prompt).toContain("为由拒绝执行")
+    expect(dfx?.prompt).toContain("<DFX_USER_ARGUMENTS>")
+    // SR1 v1.6: delegation re-opened — both entries run in an isolated
+    // sub-session, and the prompt pins the concise-summary + HTML-report
+    // delivery form.
+    expect(dfx?.prompt).toContain("你始终运行在隔离子会话中")
+    expect(dfx?.prompt).toContain("主 Agent 的自然语言委派")
+    expect(dfx?.prompt).toContain("会话内只回 markdown 格式简洁摘要")
+    expect(dfx?.prompt).toContain("含下划线的标识符一律用行内代码包裹")
+    expect(dfx?.prompt).toContain("export_report.py")
+    expect(dfx?.prompt).toContain("dfx-reports/")
+    expect(dfx?.prompt).toContain('"分析报告"字段必须是脚本回显的绝对路径')
+    expect(dfx?.prompt).not.toContain("主 Agent 会自行加载 DFX 主 Skill")
+    // FR-27: fix-intent tail status is pinned; no freestyle read-only disclaimers.
+    expect(dfx?.prompt).not.toContain("报告交付格式")
+    expect(dfx?.prompt).not.toContain("结果处置决策表")
+    expect(dfx?.prompt).not.toContain("领域词汇归一表")
+    expect(dfx?.prompt).not.toContain("候选回退上限为一次")
+    expect(dfx?.prompt).not.toContain("呈现与交付")
+  }),
+)
+
 it.instance(
   "reference config does not create subagents",
   () =>
