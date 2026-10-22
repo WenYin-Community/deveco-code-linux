@@ -11,7 +11,7 @@ import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
 import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType, type Memory } from './memory/types';
 // Auto Dream imports
 import { initAutoDream, executeAutoDream, handleChatMessageTrigger, checkAllGates, isConsolidationInProgress, markDreamDone } from './autoDream/autoDream';
-import { isForkedSession, unregisterForkSession, getForkSessionAgent, LOCK_FILE_NAMES } from './util/forkManager';
+import { isForkedSession, unregisterForkSession, getForkSessionAgent } from './util/forkManager';
 import { isSubagentSession, detectAndRegisterSubagent } from './util/subagentManager';
 
 
@@ -419,54 +419,6 @@ async function loadMemoryConfigFile(configPath: string): Promise<PluginConfig> {
 
 interface MessagesTransformOutput {
     messages: Array<{ info?: { sessionID?: string; role?: string; id?: string }; parts: Array<Record<string, unknown>> }>
-}
-
-function handleForkedSessionPermission(
-    permission: string,
-    pattern: string,
-    output: { status: string },
-    skillEnabled: boolean,
-): void {
-    const alwaysSafe = [
-        'read', 'grep', 'glob',
-        'memory-read', 'memory-write', 'memory-search', 'memory-delete',
-        'skill-list', 'skill-view',
-        ...(skillEnabled ? ['skill-manage'] : []),
-        'external_directory',
-    ];
-    if (alwaysSafe.includes(permission)) {
-        output.status = 'allow';
-        logger.info('[PermissionAsk]', 'Auto-allowed (forked session):', permission);
-        return;
-    }
-    if (permission === 'edit') {
-        const baseName = pattern.split(/[/\\]/).pop() || '';
-        const isLockFile = LOCK_FILE_NAMES.includes(baseName as typeof LOCK_FILE_NAMES[number]);
-        output.status = isLockFile ? 'allow' : 'deny';
-        logger.info('[PermissionAsk]', isLockFile ? 'Auto-allowed edit (lock file):' : 'Denied edit (non-lock file):', pattern);
-        return;
-    }
-    output.status = 'deny';
-    logger.info('[PermissionAsk]', 'Denied (forked session):', permission);
-}
-
-function handlePermissionAsk(input: Record<string, unknown>, output: { status: string }, state: PluginState): void {
-    const sessionID = (input.sessionID as string) || '';
-    const permission = (input as unknown as Record<string, string>).permission || '';
-    const pattern = Array.isArray(input.pattern) ? (input.pattern as string[])[0] || '' : ((input.pattern as string) || '');
-    logger.info('[PermissionAsk]', 'sessionID:', sessionID, 'permission:', permission, 'pattern:', pattern);
-    if (isForkedSession(sessionID)) {
-        handleForkedSessionPermission(permission, pattern, output, state.skillConfig.enabled);
-        return;
-    }
-    if (permission === 'external_directory') {
-        const memoryRoot = state.storage.getMemoryPath().replace(/\\/g, '/');
-        const normalizedPattern = pattern.replace(/\\/g, '/');
-        if (normalizedPattern.startsWith(memoryRoot) || normalizedPattern.includes(memoryRoot)) {
-            output.status = 'allow';
-            logger.info('[PermissionAsk]', 'Auto-allowed external_directory (fallback):', pattern, 'memoryRoot:', memoryRoot);
-        }
-    }
 }
 
 async function handleExtractionCleanup(sid: string, memRoot: string, state: PluginState): Promise<void> {
@@ -926,7 +878,6 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
         dispose: async () => {
             stateMap.delete(projectID);
         },
-        'permission.ask': async (input, output) => handlePermissionAsk(input as unknown as Record<string, unknown>, output as unknown as { status: string }, state),
         'event': async ({ event }) => handleSessionEvent(event as unknown as { type: string; properties?: Record<string, string> }, state, client, projectID, directory),
         'experimental.chat.system.transform': async (_input, output) => handleSystemTransform(_input.sessionID || '', state, client, output as unknown as { system: string[] }, projectID),
         'experimental.session.compacting': async (_input, output) => {

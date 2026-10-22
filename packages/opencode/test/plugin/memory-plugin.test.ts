@@ -75,7 +75,6 @@ describe("memory plugin integration", () => {
         expect(memoryHook!["experimental.chat.messages.transform"]).toBeDefined()
         expect(memoryHook!["experimental.session.compacting"]).toBeDefined()
         expect(memoryHook!["experimental.text.complete"]).toBeDefined()
-        expect(memoryHook!["permission.ask"]).toBeDefined()
         expect(memoryHook!["tool.execute.after"]).toBeDefined()
       }),
   )

@@ -19,7 +19,7 @@ import { sleep } from './async'
 
 /**
  * Lock/state file names used by the memory plugin.
- * Shared between forkManager (permission rules) and index.ts (permission.ask handler).
+ * Shared between forkManager (permission rules) and tests.
  */
 export const LOCK_FILE_NAMES = [
   '.extraction-lock',
