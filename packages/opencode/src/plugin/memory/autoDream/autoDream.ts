@@ -97,6 +97,20 @@ export function isConsolidationInProgress(memoryRoot: string): boolean {
 }
 
 /**
+ * Atomically claim the in-process consolidation slot. Must stay synchronous:
+ * with no await between check and set, two interleaved triggers cannot both
+ * claim. The PID file lock is reentrant for the same pid, so this Map is the
+ * only intra-process exclusion. Every failure path after a successful claim
+ * must delete the entry, otherwise dream scheduling deadlocks for the process
+ * lifetime.
+ */
+function tryClaimConsolidation(memoryRoot: string): boolean {
+  if (consolidationInProgress.get(memoryRoot) === true) return false
+  consolidationInProgress.set(memoryRoot, true)
+  return true
+}
+
+/**
  * Mark dream consolidation as done — release the consolidation lock (in case the
  * forked dream agent didn't) and reset the in-progress flag. Called when the
  * dream child session goes idle.
@@ -166,12 +180,20 @@ async function beginDreamConsolidation(
   context: AutoDreamContext,
   lockStaleMs: number,
 ): Promise<{ lockPath: string; priorMtime: number } | { error: string }> {
+  if (!tryClaimConsolidation(context.memoryRoot)) {
+    return { error: 'Consolidation already in progress' };
+  }
   const lockPath = getLockFilePath(context.memoryRoot);
-  const priorMtime = await tryAcquireConsolidationLock(context.memoryRoot, context.sessionID, lockStaleMs);
+  const priorMtime = await tryAcquireConsolidationLock(context.memoryRoot, context.sessionID, lockStaleMs).catch((e: unknown) => {
+    // Delete the claim BEFORE logging: if logger.warn/String(e) throws, the claim is already released.
+    consolidationInProgress.delete(context.memoryRoot);
+    logger.warn('[AutoDream]', 'Lock acquisition threw:', e instanceof Error ? e.message : String(e));
+    return null;
+  });
   if (priorMtime === null) {
+    consolidationInProgress.delete(context.memoryRoot);
     return { error: 'Failed to acquire lock (another consolidation may be running)' };
   }
-  consolidationInProgress.set(context.memoryRoot, true);
   try {
     await updateDreamState(context.memoryRoot, { lastConsolidationAt: Date.now() });
     return { lockPath, priorMtime };
