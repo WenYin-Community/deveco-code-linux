@@ -17,7 +17,7 @@
 | 目标页根节点为 NavDestination | 目标页 `build()` 首节点必须是 `NavDestination`，否则白屏/挂载失败 | **100006** |
 | 单 navDestination builder | 链式多次 `.navDestination()` 后者覆盖前者，所有路由落到最后一个页面（编译期不报错，运行时白屏） | — |
 | 路由表与 .navDestination 互斥 | `module.json5` 声明了 `"routerMap"` 后**不要再写 `.navDestination(builder)`**：路由表已解析所有 name→page，builder 是冗余（重复映射、易漂移）。二者择一，有路由表就删掉 builder | — |
-| loadContent 路径三处一致 | `windowStage.loadContent('pages/Xxx')` 的 `Xxx` 必须与 `main_pages.json` 的 `src` 数组注册名、磁盘 `.ets` 文件名三者一致；未注册或不存在的路径运行时加载失败 → 白屏（app 不崩、编译期无诊断）。命名一个页面后，loadContent、main_pages、文件名三处用同一个名字 | — |
+| loadContent 路径三处一致 | `windowStage.loadContent('pages/Index')`（Index 为示例，以具体工程的文件名为准）的 `Index` 必须与 `main_pages.json` 的 `src` 数组注册名、磁盘 `.ets` 文件名三者一致；未注册或不存在的路径运行时加载失败 → 白屏（app 不崩、编译期无诊断）。命名一个页面后，loadContent、main_pages、文件名三处用同一个名字 | — |
 | 禁止 AppStorage 共享 NavPathStack | 经 `AppStorage.setOrCreate`/`AppStorage.get` 传栈与 `@Provide`/`@Consume` 同属反模式：其他组件在首帧渲染期间取栈并 `pushPathByName` → `@State`/`@Local` 状态变量在 render 期间被改（`AceStateMgmt: ... has changed during render!`）。目标页统一用 `NavDestination().onReady((ctx: NavDestinationContext) => { this.navPathStack = ctx.pathStack })` 取栈 | — |
 | hideNavBar 语义陷阱 | `.hideNavBar(true)` 隐藏导航页（标题+内容+工具栏），栈空时首页显示空白，且失去自适应分栏能力；全屏需求用 NavDestination 的 `.fullScreenOverlay(true)`，只藏标题用 `.hideTitleBar(true)` | — |
 | Dialog 类型 NavDestination 无默认转场 | API 13 前无默认转场动画 | — |
@@ -86,7 +86,7 @@ import { PageA } from './PageA'
 }
 ```
 
-> 页面获取栈：`onReady` 从 NavDestinationContext 取（推荐，可同时取 `pathInfo.param`）；`queryNavigationInfo()`（12+，推荐）任意自定义组件任意时机可取、不依赖生命周期。不推荐 `@Provide`/`@Consume` 或 AppStorage 传栈。
+> 页面获取栈：`onReady` 从 NavDestinationContext 取（推荐，可同时取 `pathInfo.param`）；`queryNavigationInfo()`（12+，推荐）任意自定义组件任意时机可取、不依赖生命周期。**禁止** `@Provide`/`@Consume` 或 AppStorage 传栈（渲染期取栈 `pushPathByName` 会触发 `AceStateMgmt: ... has changed during render!`）。
 
 ---
 

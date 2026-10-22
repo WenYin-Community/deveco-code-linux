@@ -101,7 +101,7 @@ animation({ curve: Curve.Smooth })         // 真实成员
 | `/pattern/g` | `new RegExp("pattern", "g")` | `arkts-no-regexp-literals` |
 | `Object.assign(t, s)` | 显式赋值字段或用构造器 | `arkts-limited-stdlib` |
 | `obj.hasOwnProperty('k')` | `obj.k !== undefined` | `arkts-limited-stdlib` |
-| `globalThis.x` | 显式导出单例 / AppStorage | `arkts-no-globalthis` |
+| `globalThis.x` | 显式导出单例 / 模块级全局变量。AppStorage **不是**等价替代——它是状态管理设施，只存放需要被 UI 观察的状态变量，不存放普通全局数据，更不存 NavPathStack 等 UI 控制器 | `arkts-no-globalthis` |
 | `// @ts-ignore` | 修复底层类型错误；抑制被禁 | `arkts-strict-typing-required` |
 | `import type { T }` | `import { T }` | `arkts-no-special-imports` |
 | `import './polyfill'` | 删除；显式 import 所需符号 | `arkts-no-side-effects-imports` |

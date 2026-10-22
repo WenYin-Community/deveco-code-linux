@@ -78,7 +78,7 @@
 
 #### EntryAbility 加载首页
 
-`windowStage.loadContent('pages/Xxx')` 的 `pages/Xxx` 必须与 `main_pages.json` 的 `src` 数组注册名、磁盘 `pages/Xxx.ets` 文件名三者一致；不一致时运行时加载失败 → 白屏（编译期无诊断）。
+`windowStage.loadContent('pages/Index')`（Index 为示例，以具体工程的文件名为准）的 `pages/Index` 必须与 `main_pages.json` 的 `src` 数组注册名、磁盘 `pages/Index.ets` 文件名三者一致；不一致时运行时加载失败 → 白屏（编译期无诊断）。
 
 #### 全局路由状态监听
 
