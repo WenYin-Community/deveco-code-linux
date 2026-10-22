@@ -1,14 +1,15 @@
 # 能力：hmos-d2a-solution-design
 
-> design-to-arkts 工作流专用步骤（非独立能力）：生成页面技术设计方案（含 HDS/沉浸式还原约束）。Pixso 工作流阶段 5 使用（在阶段 4 产出的组件实践基础上）；Figma 工作流阶段 2 可由 hmos-d2a-react-to-arkui 调用。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
+> design-to-arkts 工作流专用步骤（非独立能力）：生成页面技术设计方案（含 HDS/沉浸式还原约束）。Pixso 工作流阶段 5 使用（在阶段 4 产出的组件实践基础上）；Figma、MasterGo 工作流阶段 2 由各自转换能力调用。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
 
 本能力提供技术方案设计能力，支持两种模式：
 - **通用模块设计模式**：以代码文件和功能需求为输入，生成模块功能设计说明书
-- **UI 页面设计模式**：以 UX 设计稿（Pixso ArkUI DSL 或 Figma 设计上下文）与功能需求描述为输入，生成页面设计方案
+- **UI 页面设计模式**：以 UX 设计稿（Pixso ArkUI DSL 或 Figma/MasterGo 设计上下文）与功能需求描述为输入，生成页面设计方案
 
 UI 页面设计模式按设计来源读取证据：
 - **Pixso**：由 Pixso 工作流阶段 5 调用，输入 `arkui_dsl_spec`（ArkUI DSL JSON），调用方式和阶段编号保持不变
 - **Figma**：由 Figma 工作流阶段 2 的 `hmos-d2a-react-to-arkui` 调用，输入 Figma 导出的静态 JSX、参考截图和组件分析等证据
+- **MasterGo**：由 MasterGo 工作流阶段 2 的 `hmos-d2a-mastergo-to-arkui` 调用，输入原始设计源、参考截图和组件/工程分析
 
 ## 目录
 
@@ -64,7 +65,7 @@ UI 页面设计模式按设计来源读取证据：
 
 | 优先级 | 类型 | 判断条件 | 模板 |
 |--------|------|----------|------|
-| P0 | **UI 页面类型** | 提供了 `arkui_dsl_spec`（ArkUI DSL JSON），或 `design_source=figma` 且提供完整的 Figma 设计上下文 | `assets/template-ui-page.md` |
+| P0 | **UI 页面类型** | 提供了 `arkui_dsl_spec`（ArkUI DSL JSON），或 `design_source` 为 `figma` 或 `mastergo` 且提供完整的对应设计上下文 | `assets/template-ui-page.md` |
 | P2 | 数据存储类型 | 涉及数据库设计、缓存策略、文件存储、数据同步等 | `assets/template-data-storage.md` |
 | P2 | 网络通信类型 | 涉及HTTP请求、WebSocket、消息推送、弱网优化等 | `assets/template-network.md` |
 | P2 | 多媒体类型 | 涉及音频播放、视频播放、图片处理、摄像头等 | `assets/template-multimedia.md` |
@@ -81,9 +82,10 @@ UI 页面设计模式按设计来源读取证据：
 > 满足以下任一条件时进入此模式：
 >
 > - 提供了 `arkui_dsl_spec`（ArkUI DSL JSON）——Pixso 输入分支；
-> - `design_source=figma` 且提供完整的 Figma 设计上下文——Figma 输入分支。
+> - `design_source=figma` 且提供完整的 Figma 设计上下文——Figma 输入分支；
+> - `design_source=mastergo` 且提供原始设计源、参考截图和组件/工程分析——MasterGo 输入分支。
 >
-> Figma 输入没有 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。
+> Figma/MasterGo 输入没有 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。
 
 ### 输入参数
 
@@ -106,6 +108,10 @@ UI 页面设计模式按设计来源读取证据：
 | `arkui_dsl_spec` | ✅ | ArkUI DSL JSON，含 `ui.children[]` 嵌套树、`meta.bbox`、`layoutStrategy`、`responsive`、`breakpoints` |
 | `task_description` | ✅ | 功能需求描述的全集概述 |
 | `save_path` | - | 设计文档保存路径，默认保存到 `{projectRoot}/.deveco/{saveName}/stage5.design-doc.md` |
+
+#### MasterGo 输入参数
+
+MasterGo 阶段 2 的 `hmos-d2a-mastergo-to-arkui` 调用：design_source=mastergo，mastergo_source_path（input-contract.source.path，HTML/JSX/DSL 或社区 nodes）、reference_screenshot_path、component_analysis_path、component_tree_path、project_analysis_path、requirement_clarification_path、save_path=<runDir>/design-doc.md。这些路径必须来自同一 run，相对路径按 runDir 解析；不需要 Figma JSX 或 Pixso arkui_dsl_spec，缺少它们不进入通用模块模式。保留 MasterGo 身份、变量/组件实例证据和不确定项，结合真实工程完成组件复用/数据策略设计；输入全部只读，不执行设计源。
 
 #### Figma 输入参数
 
@@ -461,7 +467,7 @@ Figma 调用成功时返回：
 
 ## 模式二：通用模块设计模式（P2-P3）
 
-> 当未提供 `arkui_dsl_spec` 且不是 `design_source=figma` 的 Figma UI 页面输入时，进入此模式；`design_source=figma` 的输入缺少 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。完整流程（代码复用分析、类图设计、时序图设计、工作量评估、保存文档）见 [references/module-design-mode.md](references/module-design-mode.md)。
+> 当未提供 `arkui_dsl_spec` 且不是 `design_source` 为 `figma` 或 `mastergo` 的 UI 页面输入时，进入此模式；Figma/MasterGo 输入缺少 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。完整流程（代码复用分析、类图设计、时序图设计、工作量评估、保存文档）见 [references/module-design-mode.md](references/module-design-mode.md)。
 
 ---
 

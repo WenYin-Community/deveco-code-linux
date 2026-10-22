@@ -16,8 +16,8 @@
 {
   "preCheckCompleted": true,
   "clarificationTimestamp": "",
-  "designSource": "pixso | figma",
-  "acquisitionMethod": "pixso-link | selected-design-node | developer-provided | figma-link",
+  "designSource": "pixso | figma | mastergo",
+  "acquisitionMethod": "pixso-link | selected-design-node | developer-provided | figma-link | mastergo-link | mastergo-selection | mastergo-d2c",
   "targetPage": {
     "pageId": "",
     "pageName": "",
@@ -70,13 +70,13 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `designSource` | string | 设计平台，只允许 `pixso` 或 `figma`。开发者提供 Pixso DSL 仍属于 `pixso` |
-| `acquisitionMethod` | string | `pixso` 可用 `pixso-link`、`selected-design-node`、`developer-provided`；`figma` 当前只允许 `figma-link` |
+| `designSource` | string | 设计平台，只允许 `pixso`、`figma` 或 `mastergo`。开发者提供 Pixso DSL 仍属于 `pixso` |
+| `acquisitionMethod` | string | `pixso` 可用 `pixso-link`、`selected-design-node`、`developer-provided`；`figma` 当前只允许 `figma-link`；`mastergo` 可用 `mastergo-link`、`mastergo-selection`、`mastergo-d2c` |
 | `targetPage` | object | 目标页面信息 |
 | `targetPage.pageName` | string | 目标页面名称，用户指定或由当前来源工具读取 |
 | `targetPage.nodeName` | string | 目标节点名称，用户指定时可填 |
 | `targetPage.pageId` | string | 阶段 1 读取设计源后补全；Figma 没有独立 page id 时可留空并记录 file key |
-| `targetPage.nodeId` | string | 阶段 1 读取 Pixso guid 或 Figma `node-id` 后补全 |
+| `targetPage.nodeId` | string | 阶段 1 读取来源的真实节点 ID 后补全（Pixso guid、Figma `node-id`或 MasterGo nodeId） |
 | `targetPage.expectedRuntimeRoute` | string | 阶段 1 确定路由后补全 |
 | `projectRootPath` | string | ArkTS 工程根目录。用户输入已包含则采用；当前工作目录是 ArkTS 工程则直接采用；否则预检提问 |
 | `functionalDescription` | object | 功能描述 |
@@ -96,10 +96,10 @@
 | `systemUiPreference.drawGestureBar` | boolean | `false` | 是否绘制手势条作为业务 UI |
 | `systemUiPreference.immersiveRequired` | boolean | `true` | 是否需要沉浸式 |
 | `systemUiPreference.userOverrides` | object | `{}` | 用户指定的其它系统 UI 字段覆盖 |
-| `assetProvisionMode` | string | 按来源 | Pixso 默认为 `pixso-mcp-export`；Figma 固定为 `anchor-local-assets`；用户提供 Pixso 资源时为 `developer-provided` |
+| `assetProvisionMode` | string | 按来源 | Pixso 默认为 `pixso-mcp-export`；Figma 固定为 `anchor-local-assets`；用户提供 Pixso资源时为 `developer-provided`。MasterGo 资源以其 input-contract 与资源 manifest 为准，不套用其他来源枚举 |
 | `assetRootPath` | string | `""` | 开发者提供时的资源根目录 |
 | `assetMappingTablePath` | string | `""` | 开发者提供时的对照表路径 |
-| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma 为阶段 5。用户明确跳过则为 `false` |
+| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma/MasterGo 为阶段 5。用户明确跳过则为 `false` |
 | `visualCalibration.scoreThreshold` | number | `80` | 每轮评分达标阈值；轮数上限见 `visualCalibration.maxRounds`（默认 5） |
 | `visualCalibration.maxRounds` | number | `5` | 仅 Full 使用；最多有效评分轮数（含 Round 1 基线轮），1–5 的整数，仅可下调不可超过 5。用户明确提及轮数上限时写入 |
 
@@ -109,7 +109,7 @@
 
 | 字段 | 类型 | 填写阶段 | 说明 |
 |---|---|---|---|
-| `targetModule` | string | 工程分析阶段 | Pixso 阶段 3 或 Figma 阶段 2 确认，默认 `entry` |
+| `targetModule` | string | 工程分析阶段 | Pixso 阶段 3 或 Figma/MasterGo 阶段 2 确认，默认 `entry` |
 | `startupPagePolicy.userOverride` | string\|null | 工程分析阶段 | `null` 表示自动按工程现状判断；用户明确要求时为 `replace` 或 `preserve` |
 | `dataSource.userOverride` | string\|null | 方案/转换阶段 | `null` 时从设计稿推断并默认模拟数据；用户明确真实接口时为 `real-api` |
 | `dslCompleteness.hasOccurrence` | boolean\|null | 阶段 1 | 阶段 1 探索用户提供的 DSL 同级目录后填写 |
@@ -129,4 +129,8 @@
 - **阶段 7**（能力 `hmos-d2a-arkts-logic-completer`，注册表 → references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md）：通过阶段 5 设计文档间接消费 `functionalDescription` 中的交互、动效、数据描述。
 - **阶段 8**（质量审计）：直接读取需求澄清文档，审计 `systemUiPreference`、`hdsUsagePreference` 是否在最终源码中正确实现。
 
-Pixso 后续阶段继续按原编号消费。Figma 阶段 3 补业务交互，阶段 4 完成 HDS/质量/最终构建，Full 阶段 5 直接读取 `visualCalibration`，阶段 6 总结；Fast 阶段 5 总结。两种来源的后续阶段都优先消费来源无关的 `design-doc.md`、`component-tree.md` 和资源 manifest。
+上表阶段 3–8 使用 Pixso Full 编号，其他 variant 按各自 catalog 执行。Figma/MasterGo 阶段 3 补业务交互，阶段 4 完成 HDS/质量/最终构建，Full 阶段 5 直接读取 `visualCalibration`，阶段 6 总结；Fast 阶段 5 总结。各来源的后续阶段都优先消费来源无关的 `design-doc.md`、`component-tree.md` 和资源 manifest。
+
+## MasterGo 来源
+
+MasterGo 网页链接或桌面选区使用 designSource=mastergo；页面、工程、交互与数据策略复用公共预检。记录 acquisitionMethod=mastergo-link/mastergo-selection/mastergo-d2c、MasterGo mode=magic/vibe/community、serverName、documentId/nodeId 或待官方解析的短链接。先通过已有输入与工程探索补齐，缺少真实目标时一次澄清，不索取令牌。Full/Fast 目录、visualCalibration 配置和 Figma 相同；具体输入与首次连接见 mastergo/input-contract.md 和 mastergo/mcp-setup.md。

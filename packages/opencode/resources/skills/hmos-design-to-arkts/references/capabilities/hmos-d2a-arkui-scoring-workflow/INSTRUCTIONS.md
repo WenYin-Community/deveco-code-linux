@@ -1,6 +1,6 @@
 # 能力：hmos-d2a-arkui-scoring-workflow
 
-> design-to-arkts 的 Figma Full 阶段 5 / Pixso Full 阶段 9 专用步骤：以实际修复、构建部署和新截图驱动多轮视觉校准。仅由工作流显式调度，不响应独立请求。
+> design-to-arkts 的 Figma/MasterGo Full 阶段 5 / Pixso Full 阶段 9 专用步骤：以实际修复、构建部署和新截图驱动多轮视觉校准。仅由工作流显式调度，不响应独立请求。
 
 ## 目录
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MASTERGO_CONTRACT, MASTERGO_RUN_STATE, MASTERGO_CONFIRMATION_FILES, collectMasterGoInputIssues, collectMasterGoStage2Issues, collectMasterGoConfirmationIssues } from './mastergo-source.mjs';
 
 // Run files may be written by the host shell (PowerShell 5.1 UTF-8 emits a
 // BOM); JSON.parse throws on a leading U+FEFF, so strip it before parsing.
@@ -14,10 +16,10 @@ function readJsonFile(path) {
 
 const DESIGN_DOC_RECOVERY_REQUEST = 'design-doc-recovery-request.json';
 
-const VALID_MODES = new Set(['init', 'status', 'stage-start', 'confirm', 'stage-complete']);
+const VALID_MODES = new Set(['init', 'status', 'stage-start', 'confirm', 'stage-complete', 'reacquire']);
 const VALID_DECISIONS = new Set(['request', 'accepted', 'revision-requested']);
 const VALID_RESULTS = new Set(['passed', 'blocked']);
-const VALID_SOURCES = new Set(['pixso', 'figma']);
+const VALID_SOURCES = new Set(['pixso', 'figma', 'mastergo']);
 const VALID_REASON_CODES = new Set([
   'build_failed',
   'dependency_unavailable',
@@ -127,7 +129,9 @@ function reportCheckPassed(report, name) {
 const FIGMA_COMPONENT_RECOGNITION_IMAGE = 'source/figma/component-recognition-screenshot.png';
 const FIGMA_REFERENCE_SCREENSHOT = 'source/figma/reference-screenshot.png';
 
-function collectFigmaComponentRecognitionEvidenceIssues(runDir) {
+function collectComponentRecognitionEvidenceIssues(runDir, designSource = 'figma') {
+  const expectedImage = FIGMA_COMPONENT_RECOGNITION_IMAGE.replace('figma', designSource);
+  const referenceScreenshot = FIGMA_REFERENCE_SCREENSHOT.replace('figma', designSource);
   const issues = [];
   const artifactPath = join(runDir, 'stage2', 'component-vision-analysis.json');
   if (existsSync(artifactPath) && statSync(artifactPath).size > 2 * 1024 * 1024) {
@@ -172,11 +176,11 @@ function collectFigmaComponentRecognitionEvidenceIssues(runDir) {
     normalizedPath.length === 0 ||
     isAbsolute(normalizedPath) ||
     normalizedPath.split('/').includes('..') ||
-    !normalizedPath.endsWith(FIGMA_COMPONENT_RECOGNITION_IMAGE)
+    !normalizedPath.endsWith(expectedImage)
   ) {
-    if (normalizedPath.endsWith(FIGMA_REFERENCE_SCREENSHOT)) {
+    if (normalizedPath.endsWith(referenceScreenshot)) {
       issues.push(
-        `stage 2 component recognition image must not use the 2x ${FIGMA_REFERENCE_SCREENSHOT}`
+        `stage 2 component recognition image must not use the 2x ${referenceScreenshot}`
       );
     } else {
       issues.push('stage 2 component recognition image path is invalid');
@@ -185,7 +189,7 @@ function collectFigmaComponentRecognitionEvidenceIssues(runDir) {
   if (typeof image?.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(image.sha256)) {
     issues.push('stage 2 component recognition image sha256 is invalid');
   } else {
-    const expectedPath = join(runDir, ...FIGMA_COMPONENT_RECOGNITION_IMAGE.split('/'));
+    const expectedPath = join(runDir, ...expectedImage.split('/'));
     if (!existsSync(expectedPath) || !statSync(expectedPath).isFile()) {
       issues.push(`stage 2 component recognition image input is missing: ${expectedPath}`);
     } else if (hashFile(expectedPath) !== image.sha256) {
@@ -305,11 +309,11 @@ function collectFigmaStage1EvidenceIssues(runDir, catalog, ctx = {}) {
       );
     }
   }
-  issues.push(...collectFigmaStage1IntegrationIssues(runDir, catalog, manifest, ctx));
+  issues.push(...collectPageStage1IntegrationIssues(runDir, catalog, manifest, ctx));
   return issues;
 }
 
-const FIGMA_REQUIRED_SNAPSHOT_FIELDS = [
+const PAGE_REQUIRED_SNAPSHOT_FIELDS = [
   'projectRootPath',
   'runIndexFile',
   'existingGeneratedPages',
@@ -322,14 +326,14 @@ const FIGMA_REQUIRED_SNAPSHOT_FIELDS = [
   'registrationMode',
 ];
 
-function collectFigmaStage1IntegrationIssues(runDir, catalog, manifest, ctx = {}) {
+function collectPageStage1IntegrationIssues(runDir, catalog, manifest, ctx = {}) {
   const issues = [];
   const snapshot = manifest.integrationSnapshot;
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
     issues.push('stage 1 integrationSnapshot is missing');
     return issues;
   }
-  for (const field of FIGMA_REQUIRED_SNAPSHOT_FIELDS) {
+  for (const field of PAGE_REQUIRED_SNAPSHOT_FIELDS) {
     if (snapshot[field] === undefined || snapshot[field] === null) {
       issues.push(`stage 1 integrationSnapshot.${field} is missing`);
     }
@@ -340,7 +344,7 @@ function collectFigmaStage1IntegrationIssues(runDir, catalog, manifest, ctx = {}
   if (typeof snapshot.existingGeneratedRoutes !== 'object' || !Array.isArray(snapshot.existingGeneratedRoutes)) {
     issues.push('stage 1 integrationSnapshot.existingGeneratedRoutes must be an array');
   }
-  if (!FIGMA_VALID_REGISTRATION_MODES.has(snapshot.registrationMode)) {
+  if (!PAGE_VALID_REGISTRATION_MODES.has(snapshot.registrationMode)) {
     issues.push('stage 1 integrationSnapshot.registrationMode must be index-navigation, route-table or existing-router');
   }
   // The global run-index is variant-scoped and shared between Figma and Pixso;
@@ -411,16 +415,16 @@ function collectFigmaStage1IntegrationIssues(runDir, catalog, manifest, ctx = {}
   const declaredPageSet = new Set(declaredPages.map((page) => String(page)));
   const isCurrentRunRecord = (page) =>
     !!page && typeof page === 'object' &&
-    page.designSource === 'figma' && page.runId === stage2?.runId;
+    page.designSource === (catalog.designSource ?? 'figma') && page.runId === stage2?.runId;
   if (stage2 && stage2.scenario !== 'pre-commit' && stage2.identity) {
     const comparablePages = pages.filter((page) => {
       if (!isCurrentRunRecord(page)) return true;
       // A record already covered by the snapshot is historical (runId collision),
       // never a newly added current-run record.
       if (declaredPageSet.has(String(page.pageFile ?? ''))) return true;
-      return !matchesFigmaStage2Identity(page, stage2.identity);
+      return !matchesStage2Identity(page, stage2.identity);
     });
-    collectFigmaStage1PageComparisonIssues(projectRoot, comparablePages, declaredPages, declaredRoutes, issues);
+    collectStage1PageComparisonIssues(projectRoot, comparablePages, declaredPages, declaredRoutes, issues);
   } else {
     if (stage2) {
       for (const page of pages) {
@@ -431,12 +435,12 @@ function collectFigmaStage1IntegrationIssues(runDir, catalog, manifest, ctx = {}
         }
       }
     }
-    collectFigmaStage1PageComparisonIssues(projectRoot, pages, declaredPages, declaredRoutes, issues);
+    collectStage1PageComparisonIssues(projectRoot, pages, declaredPages, declaredRoutes, issues);
   }
   return issues;
 }
 
-function collectFigmaStage1PageComparisonIssues(projectRoot, pages, declaredPages, declaredRoutes, issues) {
+function collectStage1PageComparisonIssues(projectRoot, pages, declaredPages, declaredRoutes, issues) {
   const actualPages = pages.map((page) => page?.pageFile);
   const actualRoutes = pages.map((page) => page?.route);
   if (sortedStringify(declaredPages) !== sortedStringify(actualPages)) {
@@ -462,10 +466,10 @@ function sha256Text(value) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-const FIGMA_STAGE2_STARTUP_POLICY = 'stage2/startup-page-policy.json';
-const FIGMA_STAGE2_GENERATED_MANIFEST = 'stage2/generated-ui-manifest.json';
-const FIGMA_STAGE2_INITIAL_BUILD_REPORT = 'stage2/initial-build-report.json';
-const FIGMA_VALID_REGISTRATION_MODES = new Set(['index-navigation', 'route-table', 'existing-router']);
+const PAGE_STAGE2_STARTUP_POLICY = 'stage2/startup-page-policy.json';
+const PAGE_STAGE2_GENERATED_MANIFEST = 'stage2/generated-ui-manifest.json';
+const PAGE_STAGE2_INITIAL_BUILD_REPORT = 'stage2/initial-build-report.json';
+const PAGE_VALID_REGISTRATION_MODES = new Set(['index-navigation', 'route-table', 'existing-router']);
 
 function resolveLockedProjectRoot(runDir, value, label, issues) {
   if (typeof value !== 'string' || value.length === 0) {
@@ -762,16 +766,16 @@ function readProjectFile(projectRoot, rel, label, issues) {
 //   completed:  stage 2 in completedStages; exactly 1 current record is required
 //               and later stages may legitimately edit the page content, so the
 //               registered content hash is not re-compared.
-function deriveFigmaStage2IndexContext(runDir, catalog, state) {
-  if ((catalog.designSource ?? 'pixso') !== 'figma') {
+function derivePageStage2IndexContext(runDir, catalog, state) {
+  if (!['figma', 'mastergo'].includes(catalog.designSource)) {
     return null;
   }
   const runId = basename(runDir);
   if (state.completedStages.includes(2)) {
-    return { scenario: 'completed', runId, identity: readFigmaStage2TargetIdentity(runDir) };
+    return { scenario: 'completed', designSource: catalog.designSource, runId, identity: readStage2TargetIdentity(runDir) };
   }
   const gate = readGateOrNull(runDir, 2);
-  const stage2Confirmed = !requiresFigmaStage2Confirmation(catalog, 2) ||
+  const stage2Confirmed = !requiresPageStage2Confirmation(catalog, 2) ||
     (Array.isArray(state.confirmedStages) && state.confirmedStages.includes(2));
   if (
     Number(gate?.stage) === 2 &&
@@ -780,9 +784,9 @@ function deriveFigmaStage2IndexContext(runDir, catalog, state) {
     state.status === 'running' &&
     stage2Confirmed
   ) {
-    return { scenario: 'recovery', runId, identity: readFigmaStage2TargetIdentity(runDir) };
+    return { scenario: 'recovery', designSource: catalog.designSource, runId, identity: readStage2TargetIdentity(runDir) };
   }
-  return { scenario: 'pre-commit', runId, identity: null };
+  return { scenario: 'pre-commit', designSource: catalog.designSource, runId, identity: null };
 }
 
 function readGateOrNull(runDir, stage) {
@@ -797,8 +801,8 @@ function readGateOrNull(runDir, stage) {
   }
 }
 
-function readFigmaStage2TargetIdentity(runDir) {
-  const policyPath = join(runDir, FIGMA_STAGE2_STARTUP_POLICY);
+function readStage2TargetIdentity(runDir) {
+  const policyPath = join(runDir, PAGE_STAGE2_STARTUP_POLICY);
   if (!existsSync(policyPath) || !statSync(policyPath).isFile()) {
     return null;
   }
@@ -823,14 +827,14 @@ function readFigmaStage2TargetIdentity(runDir) {
   return { pageFile, componentName, route };
 }
 
-function matchesFigmaStage2Identity(record, identity) {
+function matchesStage2Identity(record, identity) {
   return !!identity &&
     String(record.pageFile ?? '').replaceAll('\\', '/') === identity.pageFile &&
     record.componentName === identity.componentName &&
     record.route === identity.route;
 }
 
-function collectFigmaRunIndexIssues(runDir, projectRoot, policy, targetComponentName, targetRoute, indexContext) {
+function collectRunIndexIssues(runDir, projectRoot, policy, targetComponentName, targetRoute, indexContext) {
   const issues = [];
   const runId = basename(runDir);
   const { pages, exists } = readRunIndexPages(projectRoot, policy.runIndexFile, issues);
@@ -865,7 +869,7 @@ function collectFigmaRunIndexIssues(runDir, projectRoot, policy, targetComponent
       }
     }
 
-    if (existing.designSource === 'figma' && existing.runId === runId) {
+    if (existing.designSource === (indexContext?.designSource ?? 'figma') && existing.runId === runId) {
       currentRecords.push(existing);
       continue;
     }
@@ -901,7 +905,7 @@ function collectFigmaRunIndexIssues(runDir, projectRoot, policy, targetComponent
       issues.push(`stage 2 runId ${runId} collides with a historical run-index record; use a new runId`);
       continue;
     }
-    if (!matchesFigmaStage2Identity(record, { pageFile: normalizedTargetPage, componentName: targetComponentName, route: targetRoute })) {
+    if (!matchesStage2Identity(record, { pageFile: normalizedTargetPage, componentName: targetComponentName, route: targetRoute })) {
       issues.push('stage 2 same run with a different target identity or content must use a new runId');
       continue;
     }
@@ -923,10 +927,10 @@ function collectFigmaRunIndexIssues(runDir, projectRoot, policy, targetComponent
   return issues;
 }
 
-function collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx = {}) {
+function collectPageRegistrationEvidenceIssues(runDir, ctx = {}) {
   const issues = [];
   const policy = readJsonOrNull(
-    join(runDir, FIGMA_STAGE2_STARTUP_POLICY),
+    join(runDir, PAGE_STAGE2_STARTUP_POLICY),
     'stage 2 startup page policy',
     issues
   );
@@ -950,7 +954,7 @@ function collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx = {}) {
     issues.push('stage 2 startup page policy changeDefaultPage must be a boolean');
   }
   if (typeof policy.targetRegistrationMode !== 'string' ||
-    !FIGMA_VALID_REGISTRATION_MODES.has(policy.targetRegistrationMode)) {
+    !PAGE_VALID_REGISTRATION_MODES.has(policy.targetRegistrationMode)) {
     issues.push('stage 2 startup page policy targetRegistrationMode must be one of index-navigation, route-table, existing-router');
   }
   for (const key of ['defaultPageBefore', 'defaultPageAfter']) {
@@ -1056,13 +1060,14 @@ function collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx = {}) {
     }
   }
 
-  issues.push(...collectFigmaRunIndexIssues(runDir, projectRoot, policy, targetComponentName, targetRoute, {
+  issues.push(...collectRunIndexIssues(runDir, projectRoot, policy, targetComponentName, targetRoute, {
     scenario: ctx.stage2?.scenario ?? 'pre-commit',
+    designSource: ctx.stage2?.designSource ?? ctx.designSource ?? 'figma',
     declaredPages: Array.isArray(snapshot.existingGeneratedPages) ? snapshot.existingGeneratedPages : null,
   }));
 
   const uiManifest = readJsonOrNull(
-    join(runDir, FIGMA_STAGE2_GENERATED_MANIFEST),
+    join(runDir, PAGE_STAGE2_GENERATED_MANIFEST),
     'stage 2 generated ui manifest',
     issues
   );
@@ -1106,7 +1111,7 @@ function collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx = {}) {
   }
 
   const buildReport = readJsonOrNull(
-    join(runDir, FIGMA_STAGE2_INITIAL_BUILD_REPORT),
+    join(runDir, PAGE_STAGE2_INITIAL_BUILD_REPORT),
     'stage 2 initial build report',
     issues
   );
@@ -1144,7 +1149,7 @@ function collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx = {}) {
   return issues;
 }
 
-function updateFigmaRunIndex(runDir, projectRoot, policy) {
+function updateRunIndex(runDir, projectRoot, policy, designSource = 'figma') {
   const runIndexFileRel = policy.runIndexFile;
   const indexPath = resolve(projectRoot, runIndexFileRel);
   const existing = existsSync(indexPath)
@@ -1152,7 +1157,7 @@ function updateFigmaRunIndex(runDir, projectRoot, policy) {
     : { schemaVersion: 1, pages: [] };
   const pages = Array.isArray(existing.pages) ? existing.pages : [];
   const record = {
-    designSource: 'figma',
+    designSource,
     runId: basename(runDir),
     pageFile: policy.targetPageFile,
     componentName: policy.targetComponentName,
@@ -1292,16 +1297,21 @@ function isConfidence(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
-const FIGMA_STAGE2_CONFIRMATION_FILES = [
+const PAGE_STAGE2_CONFIRMATION_FILES = [
   ['componentVisionAnalysis', 'stage2/component-vision-analysis.json'],
   ['componentAnalysis', 'stage2/component-analysis.md'],
   ['componentTree', 'component-tree.md'],
   ['designDoc', 'design-doc.md']
 ];
 
-function buildFigmaStage2ConfirmationSnapshot(runDir, issues) {
+function pageStage2ConfirmationFiles(catalog) {
+  if (catalog.designSource === 'mastergo') return MASTERGO_CONFIRMATION_FILES;
+  return PAGE_STAGE2_CONFIRMATION_FILES;
+}
+
+function buildPageStage2ConfirmationSnapshot(runDir, catalog, issues) {
   const files = {};
-  for (const [name, relativePath] of FIGMA_STAGE2_CONFIRMATION_FILES) {
+  for (const [name, relativePath] of pageStage2ConfirmationFiles(catalog)) {
     const path = join(runDir, ...relativePath.split('/'));
     if (!existsSync(path) || !statSync(path).isFile()) {
       issues.push(`stage 2 confirmation file is missing: ${relativePath}`);
@@ -1320,20 +1330,32 @@ function buildFigmaStage2ConfirmationSnapshot(runDir, issues) {
   if (issues.length > 0) {
     return null;
   }
-  return {
-    stage: 2,
-    files,
-    createdAt: new Date().toISOString()
-  };
+  try {
+    return {
+      stage: 2,
+      files,
+      ...(catalog.designSource === 'mastergo' ? {
+        invocationId: readJsonFile(join(runDir, MASTERGO_RUN_STATE)).invocationId,
+        contractSha256: hashFile(join(runDir, MASTERGO_CONTRACT))
+      } : {}),
+      createdAt: new Date().toISOString()
+    };
+  } catch {
+    // Evidence may disappear or change between validation and snapshot creation.
+    issues.push('stage 2 conversion checkpoint or input contract changed while creating confirmation; validate and retry');
+    return null;
+  }
 }
 
-function collectFigmaStage2ConfirmationSnapshotIssues(runDir, state) {
+function collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state) {
   const issues = [];
   const snapshot = state.confirmationSnapshots?.['2'];
+  const source = state.designSource ?? 'pixso';
+  if (source === 'mastergo') issues.push(...collectMasterGoConfirmationIssues(runDir, snapshot));
   if (!snapshot || snapshot.stage !== 2 || !snapshot.files) {
     return ['stage 2 confirmation snapshot is missing or invalid'];
   }
-  for (const [name, relativePath] of FIGMA_STAGE2_CONFIRMATION_FILES) {
+  for (const [name, relativePath] of pageStage2ConfirmationFiles(catalog)) {
     const evidence = snapshot.files[name];
     if (
       evidence?.path !== relativePath ||
@@ -1353,16 +1375,16 @@ function collectFigmaStage2ConfirmationSnapshotIssues(runDir, state) {
   return issues;
 }
 
-function isFigmaStage2(catalog, stage) {
-  return (catalog.designSource ?? 'pixso') === 'figma' && stage === 2;
+function isPageStage2(catalog, stage) {
+  return ['figma', 'mastergo'].includes(catalog.designSource) && stage === 2;
 }
 
-function requiresFigmaStage2Confirmation(catalog, stage) {
-  return isFigmaStage2(catalog, stage) && catalog.stages[stage - 1]?.requiresConfirmation === true;
+function requiresPageStage2Confirmation(catalog, stage) {
+  return isPageStage2(catalog, stage) && catalog.stages[stage - 1]?.requiresConfirmation === true;
 }
 
-// Stages whose authoritative output is design-doc.md. Figma Full keeps its
-// confirmation-snapshot validation and is intentionally excluded.
+// Stages whose authoritative output is design-doc.md. Manual Full flows keep
+// confirmation-snapshot validation and are intentionally excluded.
 function requiresDesignDocMissingGuard(catalog, stage) {
   const designSource = catalog.designSource ?? 'pixso';
   return (
@@ -1407,7 +1429,7 @@ const FIGMA_REACT_TO_ARKUI_PHASES = new Set([
 const FIGMA_REACT_TO_ARKUI_RESUME_FORBIDDEN_PHASES = new Set(['implementing', 'validating', 'completed']);
 
 function designDocStage(catalog) {
-  if ((catalog.designSource ?? 'pixso') === 'figma') return 2;
+  if (['figma', 'mastergo'].includes(catalog.designSource)) return 2;
   return 5;
 }
 
@@ -1667,7 +1689,7 @@ function figmaUpstreamInputIssues(runDir, options = {}) {
   if (!existsSync(assetsDir) || !statSync(assetsDir).isDirectory()) {
     issues.push('source/figma/assets is missing');
   }
-  issues.push(...collectFigmaComponentRecognitionEvidenceIssues(runDir));
+  issues.push(...collectComponentRecognitionEvidenceIssues(runDir));
   return issues;
 }
 
@@ -2333,7 +2355,7 @@ function collectRequirementClarificationEvidenceIssues(runDir, catalog) {
 function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
   const issues = [];
   const designSource = catalog.designSource ?? 'pixso';
-  const visualStage = designSource === 'figma' ? 5 : 9;
+  const visualStage = ['figma', 'mastergo'].includes(designSource) ? 5 : 9;
   if (stage === 1) {
     issues.push(...collectRequirementClarificationEvidenceIssues(runDir, catalog));
   }
@@ -2341,8 +2363,32 @@ function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
     issues.push(...collectFigmaStage1EvidenceIssues(runDir, catalog, ctx));
   }
   if (designSource === 'figma' && stage === 2) {
-    issues.push(...collectFigmaComponentRecognitionEvidenceIssues(runDir));
-    issues.push(...collectFigmaStage2RegistrationEvidenceIssues(runDir, ctx));
+    issues.push(...collectComponentRecognitionEvidenceIssues(runDir));
+    issues.push(...collectPageRegistrationEvidenceIssues(runDir, ctx));
+  }
+  if (designSource === 'mastergo' && stage === 1) {
+    issues.push(...collectMasterGoInputIssues(runDir));
+    const manifest = readJsonOrNull(join(runDir, 'inputs-manifest.json'), 'MasterGo inputs manifest', issues);
+    if (manifest) issues.push(...collectPageStage1IntegrationIssues(runDir, catalog, manifest, ctx));
+  }
+  if (designSource === 'mastergo' && stage === 2) {
+    issues.push(...collectComponentRecognitionEvidenceIssues(runDir, 'mastergo'));
+    issues.push(...collectMasterGoStage2Issues(runDir, { variant: catalog.variant }));
+    issues.push(...collectPageRegistrationEvidenceIssues(runDir, { ...ctx, designSource }));
+  }
+  if (designSource === 'mastergo' && stage >= 3) {
+    // The catalog owns report paths; its reuse links identify the shared Figma instructions.
+    const definition = catalog.stages[stage - 1];
+    const required = definition.requiredOutputs;
+    for (const name of required) {
+      if (!isNonEmptyFile(join(runDir, name))) issues.push(`stage ${stage} report is missing or empty: ${name}`);
+    }
+    if (definition.buildEvidence) {
+      const report = readJsonOrNull(join(runDir, definition.buildEvidence), 'quality audit', issues);
+      if (report?.build?.success !== true || report?.build?.exitCode !== 0 || !report?.build?.command?.trim() || !Number.isFinite(Date.parse(report?.build?.completedAt))) {
+        issues.push(`stage ${stage} requires successful final build evidence`);
+      }
+    }
   }
   if (requiresDesignDocMissingGuard(catalog, stage) && ctx.waiveDesignDocEvidence !== true) {
     issues.push(...collectDesignDocEvidenceIssues(runDir));
@@ -2429,6 +2475,14 @@ function validateStageCatalog(catalog, expectedVariant, expectedSource, skillRoo
     if (!instructionStat.isFile()) {
       fail(`catalog stage ${expectedId} instructionPath must be a file: ${stage.instructionPath}`);
     }
+    if (catalogSource === 'mastergo' && stage.id >= 3) {
+      if (!Array.isArray(stage.requiredOutputs) || stage.requiredOutputs.some((file) => typeof file !== 'string' || !/^[a-z0-9-]+\.(?:md|json)$/.test(file)) || new Set(stage.requiredOutputs).size !== stage.requiredOutputs.length) {
+        fail(`catalog stage ${expectedId} requiredOutputs must be unique run-relative report names`);
+      }
+      if (stage.buildEvidence !== undefined && !stage.requiredOutputs.includes(stage.buildEvidence)) {
+        fail(`catalog stage ${expectedId} buildEvidence must be a required output`);
+      }
+    }
     if (typeof stage.requiresConfirmation !== 'boolean') {
       fail(`catalog stage ${expectedId} requiresConfirmation must be boolean`);
     }
@@ -2441,6 +2495,12 @@ function validateStageCatalog(catalog, expectedVariant, expectedSource, skillRoo
     if (stage.confirmationContinuesStage === true && stage.requiresConfirmation !== true) {
       fail(`catalog stage ${expectedId} confirmationContinuesStage requires requiresConfirmation=true`);
     }
+    if (expectedSource === 'mastergo' && stage.id >= 3) {
+      const reusedPath = validatePathWithinSkillRoot(stage.reusesInstructionPath, 'reused stage instruction', skillRoot);
+      if (!existsSync(reusedPath) || !statSync(reusedPath).isFile()) {
+        fail(`reused stage instruction is missing: ${stage.reusesInstructionPath}`);
+      }
+    }
   }
 }
 
@@ -2450,6 +2510,10 @@ function computeWorkflowDigest(skillRoot, catalog, catalogRelPath) {
     catalog.runtimeContractPath,
     ...catalog.stages.map((s) => s.instructionPath)
   ];
+  if (catalog.designSource === 'mastergo') {
+    paths.push('scripts/mastergo-community-start.mjs', 'scripts/mastergo-community-verify.mjs', 'references/mastergo/community/manifest.json', 'references/mastergo/community/README.md', 'scripts/mastergo-source.mjs', 'scripts/mastergo-capture.mjs', 'scripts/mastergo-connection.mjs', 'scripts/mastergo-evidence.mjs', 'references/runtime-contract.md', 'references/mastergo/input-contract.md', 'references/mastergo/acquire.md', 'references/mastergo/convert.md', 'references/mastergo/mcp-setup.md', 'references/capabilities/hmos-d2a-mastergo-to-arkui/INSTRUCTIONS.md');
+    paths.push(...catalog.stages.filter((stage) => stage.id >= 3).map((stage) => stage.reusesInstructionPath).filter(Boolean));
+  }
   const normalized = paths.map((p) => p.replace(/\\/g, '/')).sort();
   const hash = createHash('sha256');
   for (const p of normalized) {
@@ -2608,8 +2672,8 @@ function checkCompletedGateIssues(runDir, catalog, stage, state, evidenceContext
   }
   return [
     ...collectStageEvidenceIssues(runDir, catalog, stage, evidenceContext),
-    ...(requiresFigmaStage2Confirmation(catalog, stage)
-      ? collectFigmaStage2ConfirmationSnapshotIssues(runDir, state)
+    ...(requiresPageStage2Confirmation(catalog, stage)
+      ? collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state)
       : [])
   ];
 }
@@ -2782,8 +2846,8 @@ if (mode === 'init') {
   const { catalog, catalogRelPath } = loadCatalogForVariant(skillRoot, variant, designSource);
   const digest = computeWorkflowDigest(skillRoot, catalog, catalogRelPath);
   mkdirSync(join(runDir, 'stage-gates'), { recursive: true });
-  if (designSource === 'figma') {
-    mkdirSync(join(runDir, 'source', 'figma'), { recursive: true });
+  if (['figma', 'mastergo'].includes(designSource)) {
+    mkdirSync(join(runDir, 'source', designSource), { recursive: true });
   }
   const now = new Date().toISOString();
   const responseLanguage = args.language || 'zh-CN';
@@ -2829,11 +2893,51 @@ if (digestResult.mismatch) {
   outputDigestError(state, catalog, digestResult);
 }
 
+// A new acquisition never mutates frozen inputs or inherits an old human confirmation.
+if (state.reacquisition) {
+  if (mode !== 'status') fail(`run superseded by reacquisition: ${state.reacquisition.runDir}`);
+  process.stdout.write(`${JSON.stringify({ status: 'blocked', nextRequiredAction: 'continue_reacquisition', ...state.reacquisition }, null, 2)}\n`);
+  process.exit(0);
+}
+if (mode === 'reacquire') {
+  if (state.designSource !== 'mastergo' || state.currentStage !== 2 || !['running', 'awaiting_confirmation', 'blocked'].includes(state.status)) {
+    fail('reacquire requires a MasterGo run in stage 2');
+  }
+  const reason = args.reason?.trim();
+  if (!reason || reason.length > 1000) fail('--reason must explain the missing or changed design input (1–1000 characters)');
+  const parent = realpathSync(dirname(runDir));
+  const newRun = resolve(args['new-run-dir'] ?? runDir);
+  // Compare both parents after resolving aliases such as macOS /tmp and /var.
+  if (!statSync(dirname(newRun), { throwIfNoEntry: false })?.isDirectory() || realpathSync(dirname(newRun)) !== parent || !/^[a-zA-Z0-9_-]+$/.test(basename(newRun)) || newRun === realpathSync(runDir)) {
+    fail('--new-run-dir must name a new sibling run using letters, digits, hyphens or underscores');
+  }
+  if (lstatSync(newRun, { throwIfNoEntry: false })) fail('reacquisition destination already exists');
+  mkdirSync(newRun);
+  const init = spawnSync(process.execPath, [scriptPath, '--mode', 'init', '--source', 'mastergo', '--variant', state.variant, '--language', state.responseLanguage ?? 'zh-CN', '--run-dir', newRun], { encoding: 'utf8' });
+  if (init.status !== 0) {
+    const detail = (init.error?.message || init.stderr?.trim() || `exit ${init.status ?? init.signal ?? 'unknown'}`).slice(-2000);
+    try {
+      // This directory did not exist before this invocation; discard only the failed new run.
+      rmSync(newRun, { recursive: true });
+    } catch (error) {
+      fail(`unable to initialize reacquisition run (${detail}); original run is unchanged; unable to clean new run ${newRun} (${error.code})`);
+    }
+    fail(`unable to initialize reacquisition run (${detail}); original run is unchanged`);
+  }
+  const now = new Date().toISOString();
+  const reacquisition = { runDir: newRun, reason, createdAt: now };
+  writeJsonAtomic(join(newRun, 'reacquisition-origin.json'), { runDir: realpathSync(runDir), reason, createdAt: now });
+  writeJsonAtomic(gatePath(runDir, 2), buildCanonicalGate(2, 'blocked', 'missing_asset', now));
+  writeJsonAtomic(statePath, { ...state, status: 'blocked', awaitingConfirmationFor: null, blockedReasonCode: 'missing_asset', reacquisition, updatedAt: now });
+  process.stdout.write(`${JSON.stringify({ status: 'running', currentStage: 1, nextRequiredAction: 'stage_start', ...reacquisition }, null, 2)}\n`);
+  process.exit(0);
+}
+
 // Validation context derived once per invocation from the persisted state.
 // stage2 describes how the current run relates to the run-index (see
-// deriveFigmaStage2IndexContext) so that completed-stage replays, interrupted
+// derivePageStage2IndexContext) so that completed-stage replays, interrupted
 // recovery windows, and pre-commit checks each get the right strictness.
-const evidenceContext = { stage2: deriveFigmaStage2IndexContext(runDir, catalog, state) };
+const evidenceContext = { stage2: derivePageStage2IndexContext(runDir, catalog, state) };
 
 // Every non-init mode settles a pending design-doc recovery request before any
 // gate validation or design-doc assessment runs.
@@ -2909,7 +3013,7 @@ if (mode === 'status') {
   }
   if (
     state.status === 'awaiting_confirmation' &&
-    requiresFigmaStage2Confirmation(catalog, state.currentStage)
+    requiresPageStage2Confirmation(catalog, state.currentStage)
   ) {
     // Recovering an already-written blocked result must not depend on the
     // current stage's confirmation materials still being intact. Normal
@@ -2917,7 +3021,7 @@ if (mode === 'status') {
     // Invalid gates already failed above, so the gate error keeps priority
     // over missing or corrupted confirmation snapshots.
     if (!recoveringBlockedWrite) {
-      const snapshotIssues = collectFigmaStage2ConfirmationSnapshotIssues(runDir, state);
+      const snapshotIssues = collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state);
       if (snapshotIssues.length > 0) {
         process.stdout.write(`${JSON.stringify({
           workflow: catalog.workflow,
@@ -2982,8 +3086,8 @@ if (mode === 'stage-start') {
     issues.push('workflow is already completed');
   } else if (state.status === 'awaiting_confirmation') {
     issues.push(`workflow is awaiting confirmation for stage ${state.awaitingConfirmationFor}`);
-    if (requiresFigmaStage2Confirmation(catalog, requestedStage)) {
-      issues.push(...collectFigmaStage2ConfirmationSnapshotIssues(runDir, state));
+    if (requiresPageStage2Confirmation(catalog, requestedStage)) {
+      issues.push(...collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state));
     }
   }
   if (state.status === 'running' && isCurrentStageConfirmed(state, catalog)) {
@@ -3119,9 +3223,15 @@ if (mode === 'confirm') {
     fail(`cannot confirm: completed stage gate issues: ${gateIssues.join('; ')}`);
   }
   let requestedConfirmationSnapshot = null;
-  if (decision === 'request' && isFigmaStage2(catalog, requestedStage)) {
-    const evidenceIssues = collectFigmaComponentRecognitionEvidenceIssues(runDir);
-    requestedConfirmationSnapshot = buildFigmaStage2ConfirmationSnapshot(runDir, evidenceIssues);
+  if (decision === 'request' && isPageStage2(catalog, requestedStage)) {
+    const evidenceIssues = collectComponentRecognitionEvidenceIssues(runDir, catalog.designSource);
+    if (catalog.designSource === 'mastergo') {
+      evidenceIssues.push(...collectMasterGoStage2Issues(runDir, { proposal: true, variant: catalog.variant }));
+    }
+    if (evidenceIssues.length > 0) {
+      fail(`cannot request confirmation: ${evidenceIssues.join('; ')}`);
+    }
+    requestedConfirmationSnapshot = buildPageStage2ConfirmationSnapshot(runDir, catalog, evidenceIssues);
     if (evidenceIssues.length > 0) {
       fail(`cannot request confirmation: ${evidenceIssues.join('; ')}`);
     }
@@ -3161,8 +3271,8 @@ if (mode === 'confirm') {
     if (state.awaitingConfirmationFor !== requestedStage) {
       fail(`awaitingConfirmationFor (${state.awaitingConfirmationFor}) does not match requested stage (${requestedStage})`);
     }
-    if (isFigmaStage2(catalog, requestedStage)) {
-      const snapshotIssues = collectFigmaStage2ConfirmationSnapshotIssues(runDir, state);
+    if (isPageStage2(catalog, requestedStage)) {
+      const snapshotIssues = collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state);
       if (snapshotIssues.length > 0) {
         fail(`cannot accept confirmation: ${snapshotIssues.join('; ')}`);
       }
@@ -3200,7 +3310,7 @@ if (mode === 'confirm') {
     }
     const confirmedStages = Array.isArray(state.confirmedStages) ? state.confirmedStages.filter((s) => s !== requestedStage) : [];
     const confirmationSnapshots = { ...(state.confirmationSnapshots ?? {}) };
-    if (isFigmaStage2(catalog, requestedStage)) {
+    if (isPageStage2(catalog, requestedStage)) {
       delete confirmationSnapshots[String(requestedStage)];
     }
     newState = {
@@ -3361,8 +3471,8 @@ if (mode === 'stage-complete') {
   if (result === 'passed') {
     const evidenceIssues = [
       ...collectStageEvidenceIssues(runDir, catalog, requestedStage, { ...evidenceContext, live: true }),
-      ...(requiresFigmaStage2Confirmation(catalog, requestedStage)
-        ? collectFigmaStage2ConfirmationSnapshotIssues(runDir, state)
+      ...(requiresPageStage2Confirmation(catalog, requestedStage)
+        ? collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state)
         : [])
     ];
     if (requiresDesignDocMissingGuard(catalog, requestedStage)) {
@@ -3407,8 +3517,8 @@ if (mode === 'stage-complete') {
 
   writeJsonAtomic(gatePath(runDir, requestedStage), canonicalGate);
 
-  if (result === 'passed' && isFigmaStage2(catalog, requestedStage)) {
-    const policy = readJsonOrNull(join(runDir, FIGMA_STAGE2_STARTUP_POLICY), 'stage 2 startup page policy', []);
+  if (result === 'passed' && isPageStage2(catalog, requestedStage)) {
+    const policy = readJsonOrNull(join(runDir, PAGE_STAGE2_STARTUP_POLICY), 'stage 2 startup page policy', []);
     if (policy) {
       const projectRoot = resolveLockedProjectRoot(
         runDir,
@@ -3417,7 +3527,7 @@ if (mode === 'stage-complete') {
         []
       );
       if (projectRoot) {
-        updateFigmaRunIndex(runDir, projectRoot, policy);
+        updateRunIndex(runDir, projectRoot, policy, catalog.designSource);
       }
     }
   }

@@ -59,7 +59,7 @@ Controller 脚本路径：`<designToArktsSkillRoot>/scripts/workflow.mjs`。
 ### init
 
 ```text
-node scripts/workflow.mjs --mode init --source pixso|figma --variant full|fast --run-dir <runDir>
+node scripts/workflow.mjs --mode init --source pixso|figma|mastergo --variant full|fast --run-dir <runDir>
 ```
 
 校验设计来源、variant 和对应 catalog，校验所有阶段文件存在且路径未越界，计算 `workflowDigest`，创建 `stage-gates/`，创建 `workflow-state.json`（当前阶段为 1），生成初始 Todo payload。省略 `--source` 仅为旧 Pixso 调用兼容，默认 `pixso`；新调用必须显式传入。返回 `nextRequiredAction: stage_start`，不要求立即调用 `todowrite`。
@@ -382,7 +382,7 @@ Controller 在 `stage-complete` 时根据 `--result` 决定推进或阻塞。阶
 
 ## 需求澄清证据
 
-`<runDir>/requirement-clarification.json` 由阶段 1 创建（Figma 与 Pixso 一致），是后续阶段的需求输入源。阶段 1 `stage-complete --result passed` 前必须存在该文件，且通过最小结构校验：根值必须是非 null、非数组的 JSON 对象（JSON `null`、`false`、`0`、字符串和数组均拒绝）、`preCheckCompleted=true`、`designSource` 与当前 catalog 一致（Pixso 为 `pixso`、Figma 为 `figma`）；`visualCalibration` 存在时必须是非 null、非数组的对象（字段不存在时跳过可选校验，`visualCalibration: null` 是类型错误），其 `enabled` 存在时必须为 boolean、`scoreThreshold` 存在时必须为有限 number；`enabled` 和 `scoreThreshold` 保持可选语义，默认启用与默认阈值行为不变。该文件在 `stage-start 1` 之前不要求存在，由阶段 1 执行过程生成；Controller 只验证证据，不生成、修复或回写该文件，也不为缺失字段补默认值。阶段 1 完成后，后续 `status`、`stage-start`、`confirm` 和 `stage-complete` 的 completed-stage 复核会持续校验该证据，文件被删除、损坏或根值/字段类型非法时按 completed-stage evidence 问题拒绝。字段定义与各阶段的补全职责以 `references/requirement-clarification.md` 为准。
+`<runDir>/requirement-clarification.json` 由阶段 1 创建（Pixso、Figma、MasterGo一致），是后续阶段的需求输入源。阶段 1 `stage-complete --result passed` 前必须存在该文件，且通过最小结构校验：根值必须是非 null、非数组的 JSON 对象（JSON `null`、`false`、`0`、字符串和数组均拒绝）、`preCheckCompleted=true`、`designSource` 与当前 catalog 一致（Pixso 为 `pixso`、Figma 为 `figma`、MasterGo 为 `mastergo`）；`visualCalibration` 存在时必须是非 null、非数组的对象（字段不存在时跳过可选校验，`visualCalibration: null` 是类型错误），其 `enabled` 存在时必须为 boolean、`scoreThreshold` 存在时必须为有限 number；`enabled` 和 `scoreThreshold` 保持可选语义，默认启用与默认阈值行为不变。该文件在 `stage-start 1` 之前不要求存在，由阶段 1 执行过程生成；Controller 只验证证据，不生成、修复或回写该文件，也不为缺失字段补默认值。阶段 1 完成后，后续 `status`、`stage-start`、`confirm` 和 `stage-complete` 的 completed-stage 复核会持续校验该证据，文件被删除、损坏或根值/字段类型非法时按 completed-stage evidence 问题拒绝。字段定义与各阶段的补全职责以 `references/requirement-clarification.md` 为准。
 
 ## Figma run-index 语义
 

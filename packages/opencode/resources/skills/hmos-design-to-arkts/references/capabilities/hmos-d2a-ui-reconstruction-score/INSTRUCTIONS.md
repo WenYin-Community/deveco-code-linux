@@ -1,6 +1,6 @@
 # 能力：hmos-d2a-ui-reconstruction-score
 
-> design-to-arkts 的 Figma Full 阶段 5 / Pixso Full 阶段 9 评分子步骤：对比设计/实现截图评估还原度并定位可操作问题。由工作流显式调度，不响应独立请求。
+> design-to-arkts 的 Figma/MasterGo Full 阶段 5 / Pixso Full 阶段 9 评分子步骤：对比设计/实现截图评估还原度并定位可操作问题。由工作流显式调度，不响应独立请求。
 
 ## 目录
 

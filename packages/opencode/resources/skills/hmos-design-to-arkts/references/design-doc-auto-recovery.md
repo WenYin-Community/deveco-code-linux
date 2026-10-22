@@ -86,6 +86,7 @@ Figma 的 design-only 恢复由 React-to-ArkUI 负责组件树并保持 run stat
 ## 适用范围与限制
 
 - 这两个恢复动作只适用于 Figma Fast 与 Pixso Full/Fast。
+- MasterGo 不使用本自动恢复机制，缺失方案或 checkpoint 时按其独立输入契约与阶段恢复规则处理。
 - Figma Full 的确认快照错误（`confirmation_snapshot_invalid`）仍走 revision 与重新确认语义，不属于本恢复机制。
 - `design-doc.md` 的唯一写入者是 `hmos-d2a-solution-design` 能力：入口 Agent、Controller、`hmos-d2a-react-to-arkui` 能力和其他任何能力都不得手写、补造或重写该文件。
 - 该规则优先于普通错误处理：非零退出码不得先触发停止或向用户报告，必须先检查 stdout 中的 `nextRequiredAction`。

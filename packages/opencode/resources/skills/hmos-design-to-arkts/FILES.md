@@ -78,3 +78,35 @@ references/capabilities/hmos-d2a-ui-reconstruction-score/INSTRUCTIONS.md
 # --- Evals (dev-time) ---
 # @note evals/evals.json 定义入口决策点校验用例（来源识别/双来源冲突/参数冲突/缺 node-id 澄清），开发态产物，运行时不加载
 evals/evals.json
+
+# --- MasterGo Full/Fast ---
+references/capabilities/hmos-d2a-mastergo-to-arkui/INSTRUCTIONS.md
+references/mastergo/acquire.md
+references/mastergo/convert.md
+references/mastergo/fast/stages/01-acquire-mastergo-context.md
+references/mastergo/fast/stages/02-convert-mastergo-to-arkui.md
+references/mastergo/fast/stages/03-complete-interaction-logic.md
+references/mastergo/fast/stages/04-quality-and-build.md
+references/mastergo/fast/stages/05-summary.md
+references/mastergo/full/stages/01-acquire-mastergo-context.md
+references/mastergo/full/stages/02-convert-mastergo-to-arkui.md
+references/mastergo/full/stages/03-complete-interaction-logic.md
+references/mastergo/full/stages/04-quality-and-build.md
+references/mastergo/full/stages/05-visual-calibration.md
+references/mastergo/full/stages/06-summary.md
+references/mastergo/input-contract.md
+references/mastergo/mcp-setup.md
+references/mastergo/runtime-contract.md
+references/mastergo/stage-catalog-fast.json
+references/mastergo/stage-catalog-full.json
+scripts/mastergo-source.mjs
+scripts/mastergo-capture.mjs
+scripts/mastergo-connection.mjs
+scripts/mastergo-evidence.mjs
+scripts/mastergo-community-start.mjs
+scripts/mastergo-community-verify.mjs
+references/mastergo/community/README.md
+references/mastergo/community/LICENSE
+references/mastergo/community/manifest.json
+references/mastergo/community/deveco-community.patch
+references/capabilities/hmos-d2a-mastergo-to-arkui/FILES.md
