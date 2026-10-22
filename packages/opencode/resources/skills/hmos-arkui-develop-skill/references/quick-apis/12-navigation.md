@@ -73,8 +73,12 @@
 |------|------|------|
 | `queryNavigationInfo`（12+，推荐） | `let info = this.queryNavigationInfo(); if (info !== undefined) { this.pathStack = info.pathStack }` | 自定义组件方法，任意时机可取、不依赖 NavDestination 生命周期 |
 | `onReady`（推荐） | `NavDestination().onReady((ctx: NavDestinationContext) => { this.navPathStack = ctx.pathStack; const p = ctx.pathInfo.param as DetailParams })` | NavDestination 生命周期回调，取栈同时可取本页参数 |
-| AppStorage 全局共享 | 宿主 `AppStorage.setOrCreate` / 页面 `AppStorage.get` | 不推荐 |
+| AppStorage 全局共享 | 宿主 `AppStorage.setOrCreate` / 页面 `AppStorage.get` | **禁止**：渲染期取栈并 `pushPathByName` 会触发 `AceStateMgmt: ... has changed during render!` |
 | `@Provide`/`@Consume` | 跨层级传递 | 不推荐 |
+
+#### EntryAbility 加载首页
+
+`windowStage.loadContent('pages/Xxx')` 的 `pages/Xxx` 必须与 `main_pages.json` 的 `src` 数组注册名、磁盘 `pages/Xxx.ets` 文件名三者一致；不一致时运行时加载失败 → 白屏（编译期无诊断）。
 
 #### 全局路由状态监听
 
