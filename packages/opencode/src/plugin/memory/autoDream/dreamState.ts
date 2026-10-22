@@ -63,7 +63,18 @@ export async function writeDreamState(memoryRoot: string, state: AutoDreamState)
   const statePath = getDreamStatePath(memoryRoot)
   const content = JSON.stringify(state, null, 2)
   log.debug('writeDreamState: path:', statePath)
-  await fs.writeFile(statePath, content, 'utf-8')
+  // Write to a unique .tmp then rename for atomic persistence: readers never see
+  // partial JSON after a crash, and concurrent writers resolve last-writer-wins
+  // with a complete file. The pid+random suffix keeps tmp names collision-free
+  // across concurrent writers in this and other processes.
+  const tmpPath = `${statePath}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    await fs.writeFile(tmpPath, content, 'utf-8')
+    await fs.rename(tmpPath, statePath)
+  } catch (error) {
+    await fs.unlink(tmpPath).catch(() => {})
+    throw error
+  }
 }
 
 export async function updateDreamState(
