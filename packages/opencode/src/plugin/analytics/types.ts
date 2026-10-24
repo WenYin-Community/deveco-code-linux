@@ -156,10 +156,36 @@ export interface BuildProjectAnalyticsEvent extends AnalyticsEnvironmentFields {
   buildProjectInfo: BuildProjectInfo[]
 }
 
+export type UiVerificationSubAction = "run" | "log" | "screenshot"
+
+export interface UiVerificationOperationDetail {
+  subAction: UiVerificationSubAction
+  modelName?: string
+  freshStart?: boolean
+  deviceType?: string
+  bundleName?: string
+  planLen?: number
+  verificationSuccess?: boolean
+  stepExecuted?: number
+  stepTotalDurationMs?: number
+  stepReused?: number | null
+  toolUsageDist?: Record<string, number>
+  screenshotCount?: number
+  tokenUsage?: number
+  failType?: string | null
+}
+
+export interface UiVerificationAnalyticsEvent extends AnalyticsEnvironmentFields {
+  sessionid: string
+  messageId: string
+  event_detail: UiVerificationOperationDetail
+}
+
 export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
   BUILD_PROJECT: "DevEcoCodeBuild",
+  UI_VERIFICATION: "DevEcoCodeVerify",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -176,6 +202,10 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.BUILD_PROJECT
       event: BuildProjectAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.UI_VERIFICATION
+      event: UiVerificationAnalyticsEvent
     }
 
 export interface AnalyticsTransportFields {

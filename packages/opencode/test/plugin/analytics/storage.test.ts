@@ -4,7 +4,12 @@ import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { LocalCrypto } from "@/security/local-crypto"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
-import type { AiCodeAttributionEvent, AiSessionEvent, BuildProjectAnalyticsEvent } from "@/plugin/analytics/types"
+import type {
+  AiCodeAttributionEvent,
+  AiSessionEvent,
+  BuildProjectAnalyticsEvent,
+  UiVerificationAnalyticsEvent,
+} from "@/plugin/analytics/types"
 import {
   ANALYTICS_SCHEMA_VERSION,
   enqueuePendingEvent,
@@ -540,6 +545,34 @@ function buildProjectEvent(): BuildProjectAnalyticsEvent {
   }
 }
 
+function uiVerificationEvent(): UiVerificationAnalyticsEvent {
+  return {
+    sourceType: 'DevEco-Code-Cli',
+    sourceVersion: '1.2.3',
+    os_arch: 'arm64',
+    os_name: process.platform,
+    os_version: 'os-version',
+    sessionid: 'session-verify',
+    messageId: 'message-verify',
+    event_detail: {
+      subAction: 'run',
+      modelName: 'vision-model',
+      freshStart: true,
+      deviceType: 'emulator',
+      bundleName: 'com.example.app',
+      planLen: 32,
+      verificationSuccess: false,
+      stepExecuted: 4,
+      stepTotalDurationMs: 1000,
+      stepReused: 2,
+      toolUsageDist: { getlayout: 2, other: 1 },
+      screenshotCount: 3,
+      tokenUsage: 180,
+      failType: 'assertion_failed',
+    },
+  }
+}
+
 test('build project events round-trip through the encrypted pending queue', async () => {
   await using tmp = await tmpdir()
   Global.Path.data = tmp.path
@@ -711,4 +744,85 @@ test("current-schema queue rejects ai_session events with a non-string workflow"
   )
   await fs.writeFile(file, JSON.stringify(encrypted))
   expect((await loadStorage()).pendingEvents).toEqual([])
+})
+
+test("ui verification events round-trip through the encrypted pending queue", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.UI_VERIFICATION, event: uiVerificationEvent() })
+  const pending = await getPendingEvents()
+
+  expect(pending).toHaveLength(1)
+  expect(pending[0]?.action).toBe(ANALYTICS_ACTION.UI_VERIFICATION)
+  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
+    expect(pending[0].event.event_detail).toEqual(uiVerificationEvent().event_detail)
+  }
+})
+
+test("ui verification queue rejects raw content and unknown fields", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const encrypted = LocalCrypto.encryptForLocalStorage(
+    JSON.stringify({
+      schemaVersion: ANALYTICS_SCHEMA_VERSION,
+      pendingEvents: [
+        {
+          action: ANALYTICS_ACTION.UI_VERIFICATION,
+          event: {
+            ...uiVerificationEvent(),
+            event_detail: {
+              ...uiVerificationEvent().event_detail,
+              testPlan: "private test plan",
+            },
+          },
+          uid: "uid-1",
+          queueId: "queue-1",
+          sealed: false,
+        },
+      ],
+      lastFlush: 1,
+    }),
+  )
+  await fs.writeFile(file, JSON.stringify(encrypted))
+
+  expect((await loadStorage()).pendingEvents).toEqual([])
+})
+
+test("ui verification queue accepts only the documented detail types", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const valid = uiVerificationEvent()
+  const invalidStep = {
+    ...valid,
+    event_detail: { ...valid.event_detail, stepExecuted: "4" },
+  }
+  const invalidDistribution = {
+    ...valid,
+    event_detail: { ...valid.event_detail, toolUsageDist: { getlayout: "2" } },
+  }
+  const encrypted = LocalCrypto.encryptForLocalStorage(
+    JSON.stringify({
+      schemaVersion: ANALYTICS_SCHEMA_VERSION,
+      pendingEvents: [invalidStep, invalidDistribution, valid].map((event, index) => ({
+        action: ANALYTICS_ACTION.UI_VERIFICATION,
+        event,
+        uid: `uid-${index}`,
+        queueId: `queue-${index}`,
+        sealed: false,
+      })),
+      lastFlush: 1,
+    }),
+  )
+  await fs.writeFile(file, JSON.stringify(encrypted))
+
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-2"])
+  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
+    expect(pending[0].event.event_detail.stepReused).toBe(2)
+  }
 })

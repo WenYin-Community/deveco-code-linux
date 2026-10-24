@@ -11,7 +11,11 @@ import { DEVECO_API_URL } from "@/plugin/deveco-models"
 import {
   GetUiVerificationLogTool,
   SaveUiScreenshotTool,
+  VerifyRunMetrics,
   VerifyUiTool,
+  normalizeModelName,
+  normalizeToolName,
+  readVerifyResult,
   stopUiVerificationMcp,
 } from "@/tool/ui-verification/ui-verification-tool"
 import { tmpdir } from "../fixture/fixture"
@@ -31,13 +35,15 @@ const config = spyOn(AppRuntime, "runPromise")
 // assigns a bare Promise to the prototype — backfill plain functions first so
 // the spies below always install, regardless of suite file order.
 const clientPrototype = Client.prototype as unknown as Record<string, unknown>
-for (const method of ["connect", "listTools", "callTool", "close"]) {
+for (const method of ["connect", "listTools", "callTool", "close", "setNotificationHandler"]) {
   if (typeof clientPrototype[method] !== "function") clientPrototype[method] = async () => ({})
 }
 const connect = spyOn(Client.prototype, "connect")
 const list = spyOn(Client.prototype, "listTools")
 const call = spyOn(Client.prototype, "callTool")
 const close = spyOn(Client.prototype, "close")
+const notification = spyOn(Client.prototype, "setNotificationHandler")
+const spawn = spyOn(Bun, "spawn")
 const env = ["UI_VERIFY_BASE_URL", "UI_VERIFY_API_KEY", "UI_VERIFY_MODEL_NAME"] as const
 const original = Object.fromEntries(env.map((key) => [key, process.env[key]]))
 const layer = Layer.mergeAll(
@@ -65,6 +71,10 @@ beforeEach(() => {
   list.mockReset().mockResolvedValue({ tools: [] })
   call.mockReset().mockResolvedValue({ content: [{ type: "text", text: "ok" }] })
   close.mockReset().mockResolvedValue(undefined)
+  notification.mockReset().mockImplementation(() => undefined)
+  spawn.mockReset().mockImplementation(() => {
+    throw new Error("hdc unavailable in tests")
+  })
   process.env.UI_VERIFY_BASE_URL = DEVECO_API_URL + "/no-stream"
   process.env.UI_VERIFY_API_KEY = "initial-access"
   process.env.UI_VERIFY_MODEL_NAME = "vision-model"
@@ -79,7 +89,7 @@ afterEach(async () => {
   }
 })
 afterAll(() => {
-  for (const spy of [check, config, taskDefaultModelMap, connect, list, call, close]) spy.mockRestore()
+  for (const spy of [check, config, taskDefaultModelMap, connect, list, call, close, notification, spawn]) spy.mockRestore()
 })
 
 async function verify() {
@@ -240,3 +250,109 @@ for (const name of ["log", "screenshot"] as const) {
     expect(call.mock.calls.at(-1)?.[0].name).toBe(name === "log" ? "getLog" : "saveScreenshot")
   })
 }
+
+test("normalizes verify model and engine tool names", () => {
+  expect(normalizeModelName("  vision-model  ")).toBe("vision-model")
+  expect(normalizeModelName("")).toBe("unknown")
+  expect(normalizeModelName("m".repeat(100))).toHaveLength(64)
+  expect(normalizeToolName(" GetLayout ")).toBe("getlayout")
+  expect(normalizeToolName("bad name!")).toBe("other")
+  expect(normalizeToolName("a".repeat(33))).toBe("other")
+})
+
+test("aggregates verify progress, history reuse, and screenshot counts", () => {
+  const metrics = new VerifyRunMetrics()
+  metrics.recordProgress(-1)
+  metrics.recordProgress(1)
+  metrics.recordProgress(3)
+  metrics.recordProgress(2)
+  metrics.recordToolDuration(1234)
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_HISTORY_REUSED",
+    reused_steps: 6,
+  })
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_SCREENSHOT_COUNT",
+    screenshot_count: 2,
+  })
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_SCREENSHOT_COUNT",
+    screenshot_count: 3,
+  })
+
+  expect(metrics.snapshot()).toMatchObject({
+    stepExecuted: 3,
+    stepTotalDurationMs: 1234,
+    stepReused: 6,
+    screenshotCount: 5,
+    toolUsageDist: {},
+  })
+})
+
+test("aggregates current and reference engine tool usage payload shapes", () => {
+  const metrics = new VerifyRunMetrics()
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_TOOL_USAGE",
+    innerToolUsage: { toolName: "GetLayout", source: "engine", time: 1 },
+  })
+  metrics.recordTracingMessage({ event: "UI_VERIFICATION_TOOL_USAGE", toolName: "ui-input" })
+  metrics.recordTracingMessage({ event: "UI_VERIFICATION_TOOL_USAGE", toolName: "bad name!" })
+  metrics.recordTracingMessage({ event: "UI_VERIFICATION_HISTORY_SAVED", saved_steps: 3 })
+
+  expect(metrics.snapshot().toolUsageDist).toEqual({ getlayout: 1, "ui-input": 1, other: 1 })
+})
+
+test("parses token usage from engine log lines", () => {
+  const metrics = new VerifyRunMetrics()
+  metrics.recordLogMessage("Prompt tokens: 100, Completion tokens: 20, Total tokens: 120")
+  metrics.recordLogMessage("Prompt tokens: 50, Completion tokens: 10, Total tokens: 60")
+  metrics.recordLogMessage(
+    'API返回空message (attempt 1/4), usage: {"prompt_tokens":80,"completion_tokens":5,"total_tokens":85}',
+  )
+
+  expect(metrics.snapshot().tokenUsage).toBe(265)
+})
+
+test("falls back to prompt plus completion and omits tokenUsage when nothing parses", () => {
+  const metrics = new VerifyRunMetrics()
+  metrics.recordLogMessage("Prompt tokens: 100, Completion tokens: 20, Total tokens: undefined")
+  expect(metrics.snapshot().tokenUsage).toBe(120)
+
+  const empty = new VerifyRunMetrics()
+  empty.recordLogMessage("API调用耗时: 1.23 秒")
+  empty.recordLogMessage("Prompt tokens: undefined, Completion tokens: undefined, Total tokens: undefined")
+  empty.recordLogMessage("usage: {not valid json}")
+  expect(empty.snapshot()).not.toHaveProperty("tokenUsage")
+})
+
+test("parses verify result business status and optional failType", () => {
+  const result = {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ id: "task-1", success: false, failType: "assertion_failed" }),
+      },
+    ],
+  }
+
+  expect(readVerifyResult(result)).toEqual({
+    id: "task-1",
+    detail: { verificationSuccess: false, failType: "assertion_failed" },
+  })
+  expect(
+    readVerifyResult({ content: [{ type: "text", text: JSON.stringify({ success: true, failType: null }) }] }).detail,
+  ).toEqual({ verificationSuccess: true, failType: null })
+  expect(readVerifyResult({ content: [{ type: "text", text: "not json" }] }).detail).toEqual({})
+})
+
+test("registers telemetry notifications and requests progress for verify runs", async () => {
+  await using tmp = await tmpdir()
+  setSessionCwd(ctx.sessionID, tmp.path)
+
+  await verify()
+
+  expect(notification.mock.calls.length).toBeGreaterThanOrEqual(2)
+  const options = call.mock.calls.at(-1)?.[2]
+  expect(typeof options?.onprogress).toBe("function")
+  expect(options?.resetTimeoutOnProgress).toBe(true)
+})

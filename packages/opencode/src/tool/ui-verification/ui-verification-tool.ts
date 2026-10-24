@@ -1,11 +1,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js"
+import { CallToolResultSchema, LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
 import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import { requireDevEcoAccess } from "@/plugin/deveco/access"
+import { globalCollector } from "@/plugin/analytics/collector"
+import { createEnvironmentFields } from "@/plugin/analytics/events"
+import { getVersion } from "@/plugin/analytics/storage"
+import { flushAnalyticsEvents, uploadAnalyticsEvent } from "@/plugin/analytics/uploader"
+import { ANALYTICS_ACTION, type UiVerificationOperationDetail } from "@/plugin/analytics/types"
 import { Session } from "@/session/session"
 import { Effect, Schema } from "effect"
+import { z } from "zod"
 import fs from "node:fs"
 import { createRequire } from "node:module"
 import os from "node:os"
@@ -64,6 +70,7 @@ type RuntimeState = {
   transport: StdioClientTransport
   schemaProperties: Map<string, Set<string>>
   params: UiVerifyParams
+  hdcPath?: string
 }
 
 // Tool result metadata consumed by the analytics plugin's tool.execute.after hook
@@ -81,8 +88,15 @@ const MISSING_MODEL_MESSAGE =
   "工具调用失败。请将以下内容原文告知用户，不要修改或补充：「UI 意图校验功能不可用：未配置多模态模型。请在配置文件中为 ui_verification agent 配置一个支持多模态的模型，或登录账号以使用内置多模态模型。」"
 
 let gate: Promise<void> = Promise.resolve()
+let verifyRunGate: Promise<void> = Promise.resolve()
 let bound = ""
 let runtime: RuntimeState | undefined
+let activeRunMetrics: VerifyRunMetrics | undefined
+
+const TracingNotificationSchema = z.object({
+  method: z.literal("notifications/tracing"),
+  params: z.record(z.string(), z.unknown()),
+})
 
 export const VerifyUiTool: ReturnType<
   typeof define<typeof VerifyUiParameters, UiVerifyMetadata, Session.Service, "verify_ui">
@@ -97,39 +111,7 @@ export const VerifyUiTool: ReturnType<
       execute: (args, ctx): Effect.Effect<ExecuteResult<UiVerifyMetadata>> =>
         Effect.gen(function* () {
           yield* ctx.ask({ permission: "verify_ui", metadata: {}, patterns: ["*"], always: ["*"] })
-          const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
-          if (yield* Effect.promise(() => isBoundDevecoOauthExpired(worktree))) {
-            yield* Effect.promise(() => ensureInitialized(worktree))
-          }
-          const params = yield* Effect.promise(() => resolveUIVerifyParams(worktree))
-          if (!params.baseURL || !params.apiKey || !params.modelName) {
-            // Unresolvable credentials/params: no model was called, so report no model
-            // rather than the absent config value.
-            return {
-              title: "UI verification unavailable",
-              output: MISSING_MODEL_MESSAGE,
-              metadata: { uiVerificationModel: null },
-            }
-          }
-
-          const bundleName = args.bundleName ?? (yield* Effect.promise(() => readBundleName(worktree)))
-          const payload = {
-            bundleName,
-            ...(args.device ? { device: args.device } : {}),
-            testPlan: args.testPlan,
-            freshStart: args.freshStart ?? false,
-            sessionId: ctx.sessionID,
-          }
-          const result = yield* Effect.promise(() => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort))
-          return {
-            title: "UI verification",
-            output: textFromCallResult(result),
-            // Report what the MCP child is actually bound to. `resolveUIVerifyParams` above
-            // is only a pre-check: ensureInitialized() reuses an already-started child when
-            // the binding is still valid, so a config hot-reload can leave runtime.params
-            // (the values written into the child's UI_VERIFY_* env) different from `params`.
-            metadata: { ...readResultId(result), uiVerificationModel: runtime?.params.modelName ?? null },
-          }
+          return yield* Effect.promise(() => executeVerifyUi(args, ctx, sessions))
         }).pipe(Effect.orDie),
     }
   }),
@@ -147,20 +129,7 @@ export const GetUiVerificationLogTool: ReturnType<
       execute: (args, ctx): Effect.Effect<ExecuteResult<Record<string, never>>> =>
         Effect.gen(function* () {
           yield* ctx.ask({ permission: "get_ui_verification_log", metadata: {}, patterns: ["*"], always: ["*"] })
-          const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
-          const result = yield* Effect.promise(() =>
-            callUiVerificationTool(
-              worktree,
-              "get_ui_verification_log",
-              {
-                id: args.id,
-                ...(args.maxLogSize === undefined ? {} : { maxLogSize: args.maxLogSize }),
-                ...(args.searchKeywords === undefined ? {} : { searchKeywords: args.searchKeywords }),
-              },
-              ctx.abort,
-            ),
-          )
-          return { title: "UI verification log", output: textFromCallResult(result), metadata: {} }
+          return yield* Effect.promise(() => executeGetUiVerificationLog(args, ctx, sessions))
         }).pipe(Effect.orDie),
     }
   }),
@@ -178,23 +147,148 @@ export const SaveUiScreenshotTool: ReturnType<
       execute: (args, ctx): Effect.Effect<ExecuteResult<Record<string, never>>> =>
         Effect.gen(function* () {
           yield* ctx.ask({ permission: "save_ui_screenshot", metadata: {}, patterns: ["*"], always: ["*"] })
-          const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
-          const result = yield* Effect.promise(() =>
-            callUiVerificationTool(
-              worktree,
-              "save_ui_screenshot",
-              {
-                id: args.id,
-                dirname: sanitizeFilePath(args.dirname, worktree),
-              },
-              ctx.abort,
-            ),
-          )
-          return { title: "UI screenshots", output: textFromCallResult(result), metadata: {} };
+          return yield* Effect.promise(() => executeSaveUiScreenshot(args, ctx, sessions))
         }).pipe(Effect.orDie),
     }
   }),
 );
+
+async function executeVerifyUi(
+  args: Schema.Schema.Type<typeof VerifyUiParameters>,
+  ctx: Context,
+  sessions: Session.Interface,
+): Promise<ExecuteResult> {
+  const worktree = await resolveWorktree(ctx, sessions)
+  const detail: UiVerificationOperationDetail = {
+    subAction: "run",
+    freshStart: args.freshStart ?? false,
+    planLen: Array.from(args.testPlan).length,
+  }
+  let metrics: VerifyRunMetrics | undefined
+  try {
+    if (await isBoundDevecoOauthExpired(worktree)) await ensureInitialized(worktree)
+    const params = await resolveUIVerifyParams(worktree)
+    if (!params.baseURL || !params.apiKey || !params.modelName) {
+      await reportUiVerificationOperation(ctx, detail)
+      // Unresolvable credentials/params: no model was called, so report no model
+      // rather than the absent config value.
+      return {
+        title: "UI verification unavailable",
+        output: MISSING_MODEL_MESSAGE,
+        metadata: { uiVerificationModel: null },
+      }
+    }
+
+    const bundleName = args.bundleName ?? (await readBundleName(worktree))
+    detail.bundleName = bundleName
+    await ensureInitialized(worktree)
+    const boundModel = runtime?.params.modelName ?? params.modelName
+    if (boundModel?.trim()) detail.modelName = normalizeModelName(boundModel)
+    const deviceType = await resolveUiVerificationDeviceType(args.device, runtime?.hdcPath)
+    if (deviceType) detail.deviceType = deviceType
+
+    const payload = {
+      bundleName,
+      ...(args.device ? { device: args.device } : {}),
+      testPlan: args.testPlan,
+      freshStart: args.freshStart ?? false,
+      sessionId: ctx.sessionID,
+    }
+    metrics = new VerifyRunMetrics()
+    const result = await runVerifyUiExclusive(metrics, () => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort, metrics))
+    const parsed = readVerifyResult(result)
+    Object.assign(detail, metrics.snapshot(), parsed.detail)
+    await reportUiVerificationOperation(ctx, detail)
+    return {
+      title: "UI verification",
+      output: textFromCallResult(result),
+      // Report what the MCP child is actually bound to. `resolveUIVerifyParams` above
+      // is only a pre-check: ensureInitialized() reuses an already-started child when
+      // the binding is still valid, so a config hot-reload can leave runtime.params
+      // (the values written into the child's UI_VERIFY_* env) different from `params`.
+      metadata: { ...(parsed.id ? { id: parsed.id } : {}), uiVerificationModel: runtime?.params.modelName ?? null },
+    }
+  } catch (error) {
+    if (metrics) Object.assign(detail, metrics.snapshot())
+    await reportUiVerificationOperation(ctx, detail)
+    throw error
+  }
+}
+
+async function executeGetUiVerificationLog(
+  args: Schema.Schema.Type<typeof GetLogParameters>,
+  ctx: Context,
+  sessions: Session.Interface,
+): Promise<ExecuteResult<Record<string, never>>> {
+  const worktree = await resolveWorktree(ctx, sessions)
+  try {
+    const result = await callUiVerificationTool(worktree, "get_ui_verification_log", {
+      id: args.id,
+      ...(args.maxLogSize === undefined ? {} : { maxLogSize: args.maxLogSize }),
+      ...(args.searchKeywords === undefined ? {} : { searchKeywords: args.searchKeywords }),
+    }, ctx.abort)
+    return { title: "UI verification log", output: textFromCallResult(result), metadata: {} }
+  } finally {
+    await reportUiVerificationOperation(ctx, { subAction: "log" })
+  }
+}
+
+async function executeSaveUiScreenshot(
+  args: Schema.Schema.Type<typeof SaveScreenshotParameters>,
+  ctx: Context,
+  sessions: Session.Interface,
+): Promise<ExecuteResult<Record<string, never>>> {
+  const worktree = await resolveWorktree(ctx, sessions)
+  try {
+    const result = await callUiVerificationTool(worktree, "save_ui_screenshot", {
+      id: args.id,
+      dirname: sanitizeFilePath(args.dirname, worktree),
+    }, ctx.abort)
+    return { title: "UI screenshots", output: textFromCallResult(result), metadata: {} }
+  } finally {
+    await reportUiVerificationOperation(ctx, { subAction: "screenshot" })
+  }
+}
+
+async function reportUiVerificationOperation(
+  ctx: Context,
+  detail: UiVerificationOperationDetail,
+): Promise<void> {
+  try {
+    if (!(await globalCollector.shouldCollect())) return
+    const accepted = await uploadAnalyticsEvent({
+      action: ANALYTICS_ACTION.UI_VERIFICATION,
+      event: {
+        ...createEnvironmentFields(getVersion()),
+        sessionid: ctx.sessionID,
+        messageId: ctx.messageID,
+        event_detail: detail,
+      },
+    })
+    if (accepted) void flushAnalyticsEvents().catch(() => undefined)
+  } catch {
+    // Telemetry must never affect the tool result.
+  }
+}
+
+async function runVerifyUiExclusive<T>(metrics: VerifyRunMetrics, fn: () => Promise<T>): Promise<T> {
+  const run = verifyRunGate.then(runWithMetrics, runWithMetrics)
+  verifyRunGate = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+
+  async function runWithMetrics(): Promise<T> {
+    const startedAt = Date.now()
+    try {
+      return await fn()
+    } finally {
+      metrics.recordToolDuration(Date.now() - startedAt)
+      if (activeRunMetrics === metrics) activeRunMetrics = undefined
+    }
+  }
+}
 
 async function resolveWorktree(ctx: Context, sessions: Session.Interface): Promise<string> {
   const sessionCwd = getSessionCwd(ctx.sessionID)
@@ -291,6 +385,7 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   const devecoHome = await findDevEcoHome()
   const resolvedHdcPath = devecoHome ? hdcPath(devecoHome) : undefined
   const verifiedHdcPath = resolvedHdcPath && (await Bun.file(resolvedHdcPath).exists()) ? resolvedHdcPath : undefined
+  const effectiveHdcPath = verifiedHdcPath ?? process.env.UI_VERIFY_HDC_PATH ?? process.env.RC_HDC_PATH ?? "hdc"
   const logDir = uiVerificationLogDir()
   fs.mkdirSync(logDir, { recursive: true })
   const params = await resolveUIVerifyParams(worktree)
@@ -314,11 +409,20 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   })
   const client = new Client({ name: "deveco-ui-verification", version: "1.0.0" })
   await client.connect(transport)
+  client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+    const data = notification.params.data
+    const message = data && typeof data === "object" ? (data as { message?: unknown }).message : undefined
+    if (typeof message === "string") activeRunMetrics?.recordLogMessage(message)
+  })
+  client.setNotificationHandler(TracingNotificationSchema, (notification) => {
+    activeRunMetrics?.recordTracingMessage(notification.params)
+  })
   const listed = await client.listTools()
   runtime = {
     params,
     client,
     transport,
+    hdcPath: effectiveHdcPath,
     schemaProperties: new Map(
       listed.tools.map((item) => [
         item.name,
@@ -393,11 +497,13 @@ async function callUiVerificationTool(
   toolName: ToolName,
   args: Record<string, unknown>,
   signal: AbortSignal,
+  metrics?: VerifyRunMetrics,
 ): Promise<unknown> {
   await ensureInitialized(worktree)
   if (!runtime) {
     throw new Error('ui-verification-mcp is not initialized');
   }
+  if (metrics) activeRunMetrics = metrics
   const name = TOOL_NAME_MAP[toolName]
   return await runtime.client.callTool(
     {
@@ -409,6 +515,7 @@ async function callUiVerificationTool(
       resetTimeoutOnProgress: true,
       signal,
       timeout: 30 * 60 * 1000,
+      ...(metrics ? { onprogress: (progress: { progress: number }) => metrics.recordProgress(progress.progress) } : {}),
     },
   );
 }
@@ -417,6 +524,7 @@ export async function stopUiVerificationMcp(): Promise<void> {
   const current = runtime
   runtime = undefined
   bound = ""
+  activeRunMetrics = undefined
   if (!current) {
     return;
   }
@@ -480,14 +588,204 @@ function textFromCallResult(result: unknown): string {
   return text || JSON.stringify(result, null, 2);
 }
 
-function readResultId(result: unknown): { id?: string } {
-  const text = textFromCallResult(result)
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+export function readVerifyResult(result: unknown): { id?: string; detail: Partial<UiVerificationOperationDetail> } {
   try {
-    const parsed = JSON.parse(text) as { id?: unknown }
-    return typeof parsed.id === "string" ? { id: parsed.id } : {}
+    const parsed: unknown = JSON.parse(textFromCallResult(result))
+    if (!isRecord(parsed)) return { detail: {} }
+    const detail: Partial<UiVerificationOperationDetail> = {}
+    if (typeof parsed.success === "boolean") detail.verificationSuccess = parsed.success
+    if (parsed.failType === null || typeof parsed.failType === "string") detail.failType = parsed.failType
+    return {
+      ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+      detail,
+    }
   } catch {
-    return {};
+    return { detail: {} }
   }
+}
+
+const TOOL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
+const TOKEN_LINE_PATTERN = /Prompt tokens:\s*([^,]+),\s*Completion tokens:\s*([^,]+),\s*Total tokens:\s*(\S+)/
+const USAGE_JSON_PATTERN = /usage:\s*(\{.*?\})/
+
+export function normalizeModelName(name: unknown): string {
+  if (typeof name !== "string") return "unknown"
+  const normalized = name.trim().slice(0, 64)
+  return normalized === "" ? "unknown" : normalized
+}
+
+export function normalizeToolName(name: unknown): string {
+  if (typeof name !== "string") return "other"
+  const normalized = name.trim().toLowerCase()
+  return TOOL_NAME_PATTERN.test(normalized) ? normalized : "other"
+}
+
+function asNonNegativeInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null
+}
+
+function asTokenCount(value: unknown): number | null {
+  const count = typeof value === "number" ? value : Number(value)
+  return Number.isFinite(count) && count >= 0 ? Math.trunc(count) : null
+}
+
+export class VerifyRunMetrics {
+  private stepExecuted = 0
+  private stepTotalDurationMs = 0
+  private stepReused: number | null = null
+  private readonly toolUsageDist: Record<string, number> = {}
+  private screenshotCount = 0
+  private tokenUsage = 0
+  private hasTokenUsage = false
+
+  recordProgress(progress: number): void {
+    if (!Number.isInteger(progress) || progress < 0) return
+    this.stepExecuted = Math.max(this.stepExecuted, progress)
+  }
+
+  recordToolDuration(durationMs: number): void {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return
+    this.stepTotalDurationMs = durationMs
+  }
+
+  recordTracingMessage(message: Record<string, unknown>): void {
+    if (typeof message.event !== "string") return
+    if (message.event === "UI_VERIFICATION_TOOL_USAGE") {
+      const inner = message.innerToolUsage
+      const toolName = typeof message.toolName === "string" ? message.toolName : isRecord(inner) ? inner.toolName : undefined
+      const tool = normalizeToolName(toolName)
+      this.toolUsageDist[tool] = (this.toolUsageDist[tool] ?? 0) + 1
+      return
+    }
+    if (message.event === "UI_VERIFICATION_SCREENSHOT_COUNT") {
+      const count = asNonNegativeInt(message.screenshot_count)
+      if (count !== null) this.screenshotCount += count
+      return
+    }
+    if (message.event === "UI_VERIFICATION_HISTORY_REUSED") {
+      const reused = asNonNegativeInt(message.reused_steps)
+      if (reused !== null) this.stepReused = reused
+    }
+  }
+
+  recordLogMessage(message: string): void {
+    const tokenLine = TOKEN_LINE_PATTERN.exec(message)
+    if (tokenLine) {
+      this.accumulateTokens(tokenLine[3], tokenLine[1], tokenLine[2])
+      return
+    }
+    const usageJson = USAGE_JSON_PATTERN.exec(message)
+    if (!usageJson) return
+    try {
+      const usage: unknown = JSON.parse(usageJson[1])
+      if (!isRecord(usage)) return
+      this.accumulateTokens(usage.total_tokens, usage.prompt_tokens, usage.completion_tokens)
+    } catch {
+      // Ignore malformed engine logs.
+    }
+  }
+
+  snapshot() {
+    return {
+      stepExecuted: this.stepExecuted,
+      stepTotalDurationMs: this.stepTotalDurationMs,
+      stepReused: this.stepReused,
+      toolUsageDist: { ...this.toolUsageDist },
+      screenshotCount: this.screenshotCount,
+      ...(this.hasTokenUsage ? { tokenUsage: this.tokenUsage } : {}),
+    }
+  }
+
+  private accumulateTokens(total: unknown, prompt: unknown, completion: unknown): void {
+    const totalCount = asTokenCount(total)
+    if (totalCount !== null) {
+      this.tokenUsage += totalCount
+      this.hasTokenUsage = true
+      return
+    }
+    const promptCount = asTokenCount(prompt)
+    const completionCount = asTokenCount(completion)
+    if (promptCount === null && completionCount === null) return
+    this.tokenUsage += (promptCount ?? 0) + (completionCount ?? 0)
+    this.hasTokenUsage = true
+  }
+}
+
+async function resolveUiVerificationDeviceType(
+  selector: string | undefined,
+  hdc: string | undefined,
+): Promise<"emulator" | "physical" | undefined> {
+  if (!hdc) return undefined
+  try {
+    const serials = await listHdcSerials(hdc)
+    if (!selector) return serials.length === 1 ? deviceTypeFromSerial(serials[0]) : undefined
+    const exact = serials.find((serial) => serial === selector)
+    if (exact) return deviceTypeFromSerial(exact)
+    const needle = selector.toLowerCase()
+    const named = await Promise.all(
+      serials.map(async (serial) => ({ serial, name: await fetchHdcDeviceName(hdc, serial) })),
+    )
+    const matches = named.filter((device) => device.name.toLowerCase().includes(needle))
+    return matches.length === 1 ? deviceTypeFromSerial(matches[0].serial) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function deviceTypeFromSerial(serial: string): "emulator" | "physical" {
+  return serial.startsWith("127.0.0.1:") ? "emulator" : "physical"
+}
+
+async function listHdcSerials(hdc: string): Promise<string[]> {
+  const output = await runHdcCommand(hdc, ["list", "targets"])
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/)[0])
+    .filter((serial): serial is string => !!serial && !serial.startsWith("[Empty]"))
+}
+
+async function fetchHdcDeviceName(hdc: string, serial: string): Promise<string> {
+  const qemuName = await readHdcDeviceParam(hdc, serial, "ohos.qemu.hvd.name")
+  if (qemuName) return qemuName
+  const productName = await readHdcDeviceParam(hdc, serial, "const.product.name")
+  if (productName && productName !== "emulator") return productName
+  const model = await readHdcDeviceParam(hdc, serial, "const.product.model")
+  if (model && model !== "emulator") {
+    const brand = await readHdcDeviceParam(hdc, serial, "const.product.brand")
+    return stripBrandPrefix(model, brand)
+  }
+  return serial
+}
+
+async function readHdcDeviceParam(hdc: string, serial: string, key: string): Promise<string> {
+  try {
+    const value = (await runHdcCommand(hdc, ["-t", serial, "shell", "param", "get", key])).trim()
+    return value.includes("errNum") ? "" : value
+  } catch {
+    return ""
+  }
+}
+
+function stripBrandPrefix(model: string, brand: string): string {
+  if (!brand) return model
+  const stripped = model.replace(new RegExp(`^${escapeRegExp(brand)}(?:\\s+|[-_]+)?`, "i"), "").trim()
+  return stripped || model
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+async function runHdcCommand(hdc: string, args: string[]): Promise<string> {
+  const proc = Bun.spawn([hdc, ...args], { stdout: "pipe", stderr: "ignore", timeout: 5000 })
+  const output = await new Response(proc.stdout).text()
+  const exitCode = await proc.exited
+  if (exitCode !== 0) throw new Error(`hdc ${args.join(" ")} exited with ${exitCode}`)
+  return output
 }
 
 async function readBundleName(worktree: string): Promise<string> {

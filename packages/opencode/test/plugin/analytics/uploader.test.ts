@@ -159,3 +159,49 @@ test("diagnostic failures do not block JWT refresh", async () => {
 
   expect(token).toBe("new-access")
 })
+
+test("ui verification trace keeps the dedicated action and event_detail contract", () => {
+  const queued: QueuedAnalyticsSubmission = {
+    action: ANALYTICS_ACTION.UI_VERIFICATION,
+    uid: "record-uid",
+    event: {
+      sourceType: "DevEco-Code-Cli",
+      sourceVersion: "1.2.3",
+      os_arch: "arm64",
+      os_name: process.platform,
+      os_version: "os-version",
+      sessionid: "session-1",
+      messageId: "message-1",
+      event_detail: {
+        subAction: "run",
+        modelName: "vision-model",
+        freshStart: true,
+        deviceType: "emulator",
+        bundleName: "com.example.app",
+        planLen: 32,
+        verificationSuccess: true,
+        stepExecuted: 4,
+        stepTotalDurationMs: 1000,
+        stepReused: null,
+        toolUsageDist: { getlayout: 2, other: 1 },
+        screenshotCount: 3,
+        tokenUsage: 180,
+        failType: null,
+      },
+    },
+  }
+
+  const payload = toHuaweiTracePayload(queued, 456)
+  expect(payload.action).toBe("DevEcoCodeVerify")
+  expect(payload.timestamp).toBe(456)
+  const detail = JSON.parse(payload.detail)
+  expect(detail.event_detail).toMatchObject({
+    subAction: "run",
+    modelName: "vision-model",
+    verificationSuccess: true,
+    toolUsageDist: { getlayout: 2, other: 1 },
+  })
+  expect(detail.event_detail.stepReused).toBe("null")
+  expect(detail.event_detail.failType).toBe("null")
+  expect(JSON.stringify(detail.event_detail)).not.toContain("testPlan")
+})
