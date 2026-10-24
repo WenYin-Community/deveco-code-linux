@@ -52,7 +52,7 @@ const testCase: LiveTestCase = {
   stallMs: 120_000,
   requires: ["huawei-auth", "real-llm", "deveco-provider"],
   description:
-    "验证输入生成 hello world 工程并完成编译时，AI 直接调用 devecocli create，并按 arkts_check → devecocli build 流程完成构建。",
+    "验证输入生成 hello world 工程并完成编译时，AI 直接调用 devecocli create，并按 devecocli check arkts → devecocli build 流程完成构建。",
   steps: [
     "创建临时工作目录。",
     "执行 deveco run --format json --dir <tmp>，发送生成 hello world 工程并编译的 prompt。",

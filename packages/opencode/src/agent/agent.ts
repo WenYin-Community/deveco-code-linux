@@ -328,7 +328,6 @@ export const layer = Layer.effect(
                 websearch: "allow",
                 edit: "deny",
                 bash: "allow",
-                arkts_check: "deny",
                 build_project: "deny",
                 task: "deny",
                 patch: "deny",

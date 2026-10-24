@@ -86,7 +86,7 @@ const testCase: LiveTestCase = {
       await fs.writeFile(etsPath, ERRONEOUS_INDEX_ETS)
 
       // Use the same prompt as the success case
-      const sentMessage = "请使用 arkts_check 检查后执行 devecocli build 构建当前项目工程"
+      const sentMessage = "请使用 devecocli check arkts 检查后执行 devecocli build 构建当前项目工程"
 
       const args = ["run", "--format", "json", "--dir", projectRoot, sentMessage]
       const result = await ctx.runDeveco(args, { timeoutMs: 220_000 })

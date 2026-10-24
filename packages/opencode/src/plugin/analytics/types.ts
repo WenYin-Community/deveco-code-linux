@@ -265,7 +265,6 @@ export const BUILTIN_TOOLS = new Set([
   "switch_cwd",
   "build_project",
   "start_app",
-  "arkts_check",
   "verify_ui",
   "get_ui_verification_log",
   "save_ui_screenshot",

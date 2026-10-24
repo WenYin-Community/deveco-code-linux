@@ -339,7 +339,7 @@ Key permission differences:
 - **`general`**: Same as build but `todowrite: deny`.
 - **`explore`**: Read-only — `glob/grep/read/webfetch/websearch: allow`, all others denied.
 - **`debug`**: `question/todowrite/arkts_knowledge_search/bash/debug_exit: allow`; build, run, and logs use `devecocli` through bash.
-- **`dfx`**: Read-only — `grep/glob/read/bash/webfetch/websearch/question: allow`; `skill` allows only `hmos-dfx-analyzer`, everything else denied. All `edit`/`patch`/`task`/`build_project`/`arkts_check`/`start_app`/`hdc_log`/UI/plan tools are denied. Started only by `/analyze`; `task` cannot spawn it.
+- **`dfx`**: Read-only — `grep/glob/read/bash/webfetch/websearch/question: allow`; `skill` allows only `hmos-dfx-analyzer`, everything else denied. All `edit`/`patch`/`task`/`build_project`/`start_app`/`hdc_log`/UI/plan tools are denied. Started only by `/analyze`; `task` cannot spawn it.
 
 
 All agents share base permissions: `external_directory: ask *`, `read: allow *` (except `*.env*` which requires `ask`).

@@ -82,7 +82,7 @@ const testCase: LiveTestCase = {
     const workspace = await ctx.createTempWorkspace("build-project-")
     try {
       const projectRoot = await createBuildProject(workspace)
-      const sentMessage = "请先使用 arkts_check 检查，再执行 devecocli build 构建当前项目工程"
+      const sentMessage = "请先使用 devecocli check arkts 检查，再执行 devecocli build 构建当前项目工程"
       const result = await ctx.runDeveco(["run", "--format", "json", "--dir", projectRoot, sentMessage], {
         timeoutMs: 340_000,
       })

@@ -247,7 +247,6 @@ DevEco Code 集成了常用 HarmonyOS 开发工具能力：
 | `start_app`              | 在模拟器或真机上运行应用         |
 | `hdc_log`                | 收集/清理设备日志/查看连接模拟器    |
 | `verify_ui`              | 执行 UI 操作验证功能是否正确        |
-| `arkts_check`            | ArkTS 静态语法检查         |
 | `switch_cwd`             | 切换构建项目路径             |
 
 常见场景包括：从零到一创建 HarmonyOS 工程、增量开发页面、修复编译报错、真机调试。

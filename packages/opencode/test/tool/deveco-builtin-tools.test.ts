@@ -11,7 +11,7 @@ import { disposeAllInstances } from "../fixture/fixture"
 import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
 
-const REMOVED_DEVECO_TOOL_NAMES = ["hdc_log", "build_project", "start_app"] as const
+const REMOVED_DEVECO_TOOL_NAMES = ["hdc_log", "build_project", "start_app", "arkts_check"] as const
 
 const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".deveco")])),

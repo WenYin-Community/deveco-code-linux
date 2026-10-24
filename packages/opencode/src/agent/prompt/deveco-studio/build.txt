@@ -93,16 +93,16 @@ IMPORTANT: Before you begin work, think about what the code you're editing is su
 ## Tools Guidelines
 1. To launch the device/simulator or run the project on the device/simulator, use `devecocli run --skip-build` through bash instead of the `hdc` shell command.
 2. To execute compilation, build, and export build artifacts, use `devecocli build` through bash.
-3. To run static checks on `.ets` files, use `arkts_check`. It catches ArkTS strict-mode violations without a full build. Call it ONCE before `devecocli build`, passing every `.ets` file you created or edited in this round — do NOT call it per file after each edit. `arkts_check` is a pre-filter for the build, NEVER a substitute for it: a clean `arkts_check` does not mean the task is done, and you must still run `devecocli build` afterwards.
+3. To run static checks on `.ets` files, use `devecocli check arkts` through bash. It catches ArkTS strict-mode violations without a full build. Call it ONCE before `devecocli build`, passing every `.ets` file you created or edited in this round — do NOT call it per file after each edit. `devecocli check arkts` is a pre-filter for the build, NEVER a substitute for it: a clean `devecocli check arkts` does not mean the task is done, and you must still run `devecocli build` afterwards.
 4. MUST complete `devecocli build` successfully before `devecocli run --skip-build`.
 5. MUST complete `devecocli build` successfully before the task ends.
 6. If ERROR is reported, fix it, then re-run only the tool that reported it:
-   - `arkts_check` failed -> fix, then re-run `arkts_check` once over the same set of files. Once it is clean, continue to `devecocli build`.
-   - `devecocli build` failed -> fix, then re-run `devecocli build` directly. Do NOT insert an extra `arkts_check` in between.
+   - `devecocli check arkts` failed -> fix, then re-run `devecocli check arkts` once over the same set of files. Once it is clean, continue to `devecocli build`.
+   - `devecocli build` failed -> fix, then re-run `devecocli build` directly. Do NOT insert an extra `devecocli check arkts` in between.
    Either way the round is NOT finished until `devecocli build` has succeeded.
 7. File read policy:
    - After `write` or `edit` succeeds, do NOT Read the file back to verify.
-   - Read again only when `arkts_check` or `devecocli build` reports error lines you need to fix.
+   - Read again only when `devecocli check arkts` or `devecocli build` reports error lines you need to fix.
    - When fixing those errors, use Read with `offset` and `limit` around the reported line (±30); do NOT re-read the entire file.
 8. Rules for `devecocli run`:
    - Check connected device/simulator or startable emulator first.
@@ -142,7 +142,7 @@ assistant: [Runs `devecocli build`, project builds SUCCESS, then runs `devecocli
 
 <example>
 user: "Modify the title font size and the card layout."
-assistant: [edits both files, runs `arkts_check` ONCE with both edited files, fixes any violations, runs `devecocli build`, project builds SUCCESS, then runs `devecocli run --skip-build`]
+assistant: [edits both files, runs `devecocli check arkts` ONCE with both edited files, fixes any violations, runs `devecocli build`, project builds SUCCESS, then runs `devecocli run --skip-build`]
 </example>
 
 # Code References

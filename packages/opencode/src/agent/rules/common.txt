@@ -1,6 +1,6 @@
 # ArkTS / ArkUI codegen rules
 
-Ordered by how often each class actually breaks the build. Scan this before writing `.ets` files, and again before calling `arkts_check`.
+Ordered by how often each class actually breaks the build. Scan this before writing `.ets` files, and again before calling `devecocli check arkts`.
 
 ## Imports and exports
 - All imports sit at the top of the file, before any `class`, `interface`, `struct`, `@Entry`, variable, method, or statement.

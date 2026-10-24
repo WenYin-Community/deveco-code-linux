@@ -17,7 +17,6 @@ import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { SwitchCwdTool } from "./switch-cwd"
-import { ArktsCheckTool } from "./arkts_check"
 import { GetUiVerificationLogTool, SaveUiScreenshotTool, VerifyUiTool } from "./ui-verification/ui-verification-tool"
 import { CompareImagesTool } from "./design-tools/image-compare/image-compare-tool"
 import { RecognizeUIComponentsTool } from "./design-tools/component-recognition/component-recognition-tool"
@@ -117,7 +116,6 @@ export const layer = Layer.effect(
     const skilltool = yield* SkillTool
     const specwrite = yield* SpecWriteTool
     const switchcwd = yield* SwitchCwdTool
-    const arktscheck = yield* ArktsCheckTool
     const debugexit = yield* DebugExitTool
     const verifyui = yield* VerifyUiTool
     const getuilog = yield* GetUiVerificationLogTool
@@ -237,7 +235,6 @@ export const layer = Layer.effect(
           planenter: Tool.init(planenter),
           spec_write: Tool.init(specwrite),
           switchcwd: Tool.init(switchcwd),
-          arktscheck: Tool.init(arktscheck),
           verify_ui: Tool.init(verifyui),
           get_ui_verification_log: Tool.init(getuilog),
           save_ui_screenshot: Tool.init(saveuiscreenshot),
@@ -268,7 +265,6 @@ export const layer = Layer.effect(
             ...(flags.client === "cli" ? [tool.plan, tool.planwrite, tool.planenter] : []),
             // HarmonyOS tools
             tool.switchcwd,
-            tool.arktscheck,
             tool.verify_ui,
             tool.get_ui_verification_log,
             tool.save_ui_screenshot,

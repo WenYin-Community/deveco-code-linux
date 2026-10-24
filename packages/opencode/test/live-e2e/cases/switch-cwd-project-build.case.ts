@@ -37,7 +37,7 @@ const testCase: LiveTestCase = {
       const sentMessage =
         `请按以下步骤操作：\n` +
         `1. 使用 switch_cwd 工具，将构建项目路径切换到 ${projectRoot}（该目录包含一个完整的鸿蒙工程）\n` +
-        `2. 先使用 arkts_check 检查，再执行 devecocli build 进行编译构建\n` +
+        `2. 先使用 devecocli check arkts 检查，再执行 devecocli build 进行编译构建\n` +
         `请告诉我每一步的执行结果和具体输出。`
 
       const args = ["run", "--format", "json", "--dir", workspace, sentMessage]

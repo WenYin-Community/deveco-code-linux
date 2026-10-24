@@ -235,7 +235,6 @@ it.instance("dfx agent allows analysis scripts but denies code modification", ()
 
     for (const permission of [
       "edit",
-      "arkts_check",
       "build_project",
       "task",
       "patch",

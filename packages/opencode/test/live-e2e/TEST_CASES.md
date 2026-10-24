@@ -388,7 +388,7 @@ The temporary workspace and any copied skill files are deleted after execution. 
 
 Purpose:
 
-Verify that requesting a hello world project makes the agent call `devecocli create`, then follow `arkts_check` → `devecocli build` and fix build issues when needed.
+Verify that requesting a hello world project makes the agent call `devecocli create`, then follow `devecocli check arkts` → `devecocli build` and fix build issues when needed.
 
 Steps:
 
@@ -465,7 +465,7 @@ Verify that the agent can compile a HarmonyOS project by invoking `devecocli bui
 Steps:
 
 1. Create a temporary workspace and scaffold a project with bundled `devecocli create`.
-2. Run `deveco run --format json --dir <project>` and request `arkts_check` followed by `devecocli build`.
+2. Run `deveco run --format json --dir <project>` and request `devecocli check arkts` followed by `devecocli build`.
 3. Parse JSON-line events from stdout.
 4. Verify the agent's text response indicates build success with no failure keywords.
 
@@ -489,7 +489,7 @@ Steps:
 
 1. Create a temporary workspace and scaffold a project with bundled `devecocli create`.
 2. Overwrite `entry/src/main/ets/pages/Index.ets` with an erroneous version (uses `any` type, type mismatch).
-3. Run `deveco run --format json --dir <project>` and request `arkts_check` followed by `devecocli build`.
+3. Run `deveco run --format json --dir <project>` and request `devecocli check arkts` followed by `devecocli build`.
 4. Parse JSON-line events from stdout.
 5. Verify the agent's text response contains build failure keywords.
 
@@ -873,13 +873,13 @@ Steps:
 2. 使用真实用户环境和 buildEnv 构建环境变量。
 3. 执行 `deveco debug agent build`（不带 `--tool` 参数）。
 4. 解析输出的 JSON 结果。
-5. 验证 tools 字段包含 `switch_cwd`、`arkts_check`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
+5. 验证 tools 字段包含 `switch_cwd`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
 
 Expected result:
 
 1. 命令退出码为 0。
 2. 输出为合法 JSON，包含 tools 字段。
-3. tools 中包含 `switch_cwd`、`arkts_check`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
+3. tools 中包含 `switch_cwd`、`arkts_knowledge_search`、`plan_enter`，且不包含已删除的 build/run/log Tool。
 
 Cleanup:
 

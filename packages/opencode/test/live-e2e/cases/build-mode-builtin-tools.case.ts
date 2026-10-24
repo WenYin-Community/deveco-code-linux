@@ -8,7 +8,6 @@ const CASE_ID = "BUILD_MODE_BUILTIN_TOOLS"
 const EXPECTED_TOOLS = [
   "bash",
   "switch_cwd",
-  "arkts_check",
   "plan_enter",
 ]
 const REMOVED_TOOLS = ["build_project", "start_app", "hdc_log"]
@@ -26,7 +25,7 @@ const testCase: LiveTestCase = {
     "使用真实用户环境和 buildEnv 构建环境变量。",
     "执行 deveco debug agent build（不带 --tool 参数）。",
     "解析输出的 JSON 结果。",
-    "验证 tools 字段包含 bash、switch_cwd、arkts_check、plan_enter，且不再包含旧构建、运行和日志工具。",
+    "验证 tools 字段包含 bash、switch_cwd、plan_enter，且不再包含旧构建、运行和日志工具。",
   ],
   expected: [
     "命令退出码为 0。",
