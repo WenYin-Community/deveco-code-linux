@@ -78,7 +78,7 @@ const TOOL_NAME_MAP: Record<ToolName, string> = {
 }
 
 const MISSING_MODEL_MESSAGE =
-  "工具调用失败。请将以下内容原文告知用户，不要修改或补充，告知后立即停止，不要再调用任何工具：「UI 意图校验功能不可用：未配置多模态模型。请在配置文件中为 ui_verification agent 配置一个支持多模态的模型，或登录账号以使用内置多模态模型。」"
+  "工具调用失败。请将以下内容原文告知用户，不要修改或补充：「UI 意图校验功能不可用：未配置多模态模型。请在配置文件中为 ui_verification agent 配置一个支持多模态的模型，或登录账号以使用内置多模态模型。」"
 
 let gate: Promise<void> = Promise.resolve()
 let bound = ""
