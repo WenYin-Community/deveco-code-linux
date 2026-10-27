@@ -63,7 +63,7 @@ references/figma/fast/stages/03-complete-interaction-logic.md
 references/figma/fast/stages/04-quality-and-build.md
 references/figma/fast/stages/05-summary.md
 
-# --- Capability INSTRUCTIONS.md (9, dispatch targets of the 能力注册表 in SKILL.md) ---
+# --- Capability INSTRUCTIONS.md (10, dispatch targets of the 能力注册表 in SKILL.md) ---
 # @note 每个能力的完整文件清单见其能力目录下的 FILES.md（references/capabilities/<能力名>/FILES.md）
 references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md
 references/capabilities/hmos-d2a-arkui-component-best-practices/INSTRUCTIONS.md
@@ -110,3 +110,37 @@ references/mastergo/community/LICENSE
 references/mastergo/community/manifest.json
 references/mastergo/community/deveco-community.patch
 references/capabilities/hmos-d2a-mastergo-to-arkui/FILES.md
+
+# --- Lanhu Fast ---
+scripts/lanhu-workflow.mjs
+scripts/lanhu-source.mjs
+scripts/lanhu-capture.mjs
+scripts/lanhu-connection.mjs
+scripts/lanhu-setup.mjs
+scripts/lanhu-private.mjs
+scripts/lanhu-runtime.mjs
+scripts/lanhu_login.py
+scripts/lanhu-mastergo.patch.json
+scripts/lanhu-runtime-lock.json
+scripts/lanhu-import-assets.mjs
+references/lanhu/mcp-setup.md
+references/lanhu/upstream-LICENSE
+references/lanhu/runtime-contract.md
+references/lanhu/input-contract.md
+references/capabilities/hmos-d2a-lanhu-to-arkui/INSTRUCTIONS.md
+references/capabilities/hmos-d2a-lanhu-to-arkui/FILES.md
+references/lanhu/fast/stages/01-acquire-lanhu-context.md
+references/lanhu/fast/stages/02-convert-lanhu-to-arkui.md
+references/lanhu/fast/stages/03-complete-interaction-logic.md
+references/lanhu/fast/stages/04-quality-and-build.md
+references/lanhu/fast/stages/05-summary.md
+references/lanhu/stage-catalog-fast.json
+
+# --- Lanhu Full ---
+references/lanhu/stage-catalog-full.json
+references/lanhu/full/stages/01-acquire-lanhu-context.md
+references/lanhu/full/stages/02-convert-lanhu-to-arkui.md
+references/lanhu/full/stages/03-complete-interaction-logic.md
+references/lanhu/full/stages/04-quality-and-build.md
+references/lanhu/full/stages/05-visual-calibration.md
+references/lanhu/full/stages/06-summary.md

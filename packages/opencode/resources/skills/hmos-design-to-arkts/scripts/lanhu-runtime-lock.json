@@ -1,0 +1,35 @@
+{
+  "uvVersion": "0.9.3",
+  "pythonVersion": "3.12.12",
+  "platforms": {
+    "darwin-arm64": {
+      "url": "https://files.pythonhosted.org/packages/16/25/6df8be6cd549200e80d19374579689fda39b18735afde841345284fb113d/uv-0.9.3-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "741e80c4230e1b9a5d0869aca2fb082b3832b251ef61537bc9278364b8e74df2"
+    },
+    "darwin-x64": {
+      "url": "https://files.pythonhosted.org/packages/d0/1a/8e68d0020c29f6f329a265773c23b0c01e002794ea884b8bdbd594c7ea97/uv-0.9.3-py3-none-macosx_10_12_x86_64.whl",
+      "sha256": "596a982c5a061d58412824a2ebe2960b52db23f1b1658083ba9c0e7ae390308a"
+    },
+    "linux-arm64": {
+      "url": "https://files.pythonhosted.org/packages/07/19/bb8aa38b4441e03c742e71a31779f91b42d9db255ede66f80cdfdb672618/uv-0.9.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+      "sha256": "406ab1a8b313b4b3cf67ad747fb8713a0c0cf3d3daf11942b5a4e49f60882339"
+    },
+    "linux-x64": {
+      "url": "https://files.pythonhosted.org/packages/82/45/488417c6c0127c00bcdfac3556ae2ea0597df8245fe5f9bcfda35ebdbe85/uv-0.9.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "73ae4bbc7d555ba1738da08c64b55f21ab0ea0ff85636708cebaf460d98a440d"
+    },
+    "win32-x64": {
+      "url": "https://files.pythonhosted.org/packages/87/cd/667f6249a9a3a8d2d7ba1aa72db6b1fc6cdaf7b0d7aeda43478702e2a13e/uv-0.9.3-py3-none-win_amd64.whl",
+      "sha256": "55516bf85c44a00b948472ddda80d7c5cd9990e9b5c085dc5005da93f40266a7"
+    },
+    "win32-arm64": {
+      "url": "https://files.pythonhosted.org/packages/67/e7/485f57f3415593e4e96b312aa168b9ce6b66d72e89c8b1cb59b683522672/uv-0.9.3-py3-none-win_arm64.whl",
+      "sha256": "7a63c2514833f80a006feef9b8adce1380e06a7945ceb80928d43ac8693b4dd6"
+    }
+  },
+  "nodeDependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@zip.js/zip.js": "2.7.62",
+    "pngjs": "7.0.0"
+  }
+}

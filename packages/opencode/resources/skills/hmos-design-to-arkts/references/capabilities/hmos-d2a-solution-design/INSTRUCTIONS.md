@@ -65,7 +65,7 @@ UI 页面设计模式按设计来源读取证据：
 
 | 优先级 | 类型 | 判断条件 | 模板 |
 |--------|------|----------|------|
-| P0 | **UI 页面类型** | 提供了 `arkui_dsl_spec`（ArkUI DSL JSON），或 `design_source` 为 `figma` 或 `mastergo` 且提供完整的对应设计上下文 | `assets/template-ui-page.md` |
+| P0 | **UI 页面类型** | 提供了 `arkui_dsl_spec`（ArkUI DSL JSON），或 `design_source` 为 `figma`、`mastergo` 或 `lanhu` 且提供完整的对应设计上下文 | `assets/template-ui-page.md` |
 | P2 | 数据存储类型 | 涉及数据库设计、缓存策略、文件存储、数据同步等 | `assets/template-data-storage.md` |
 | P2 | 网络通信类型 | 涉及HTTP请求、WebSocket、消息推送、弱网优化等 | `assets/template-network.md` |
 | P2 | 多媒体类型 | 涉及音频播放、视频播放、图片处理、摄像头等 | `assets/template-multimedia.md` |
@@ -85,7 +85,9 @@ UI 页面设计模式按设计来源读取证据：
 > - `design_source=figma` 且提供完整的 Figma 设计上下文——Figma 输入分支；
 > - `design_source=mastergo` 且提供原始设计源、参考截图和组件/工程分析——MasterGo 输入分支。
 >
-> Figma/MasterGo 输入没有 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。
+> - `design_source=lanhu` 且提供固定快照、节点和组件分析——蓝湖输入分支。
+>
+> Figma/MasterGo/蓝湖 输入没有 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。
 
 ### 输入参数
 
@@ -127,6 +129,12 @@ MasterGo 阶段 2 的 `hmos-d2a-mastergo-to-arkui` 调用：design_source=master
 | `save_path` | ✅ | 固定指向本次运行目录中的 `design-doc.md` |
 
 Figma 参数值必须使用相对于本次运行目录或工程根目录的路径，不要在能力中拼接或写死本机绝对路径。Pixso 的 `arkui_dsl_spec` 保持原定义，仅在 Pixso 输入分支中必需。
+
+#### 蓝湖输入参数
+
+蓝湖调用 design_source=lanhu，必需 lanhu_context_path（source/lanhu/design-context.json）、reference_screenshot_path、component_analysis_path、component_tree_path、project_analysis_path、requirement_clarification_path 和 save_path。由蓝湖转换能力提供已完成的组件树和固定版本证据；不要求 arkui_dsl_spec 或 figma_react_source_path，不为缺少 JSX 进入通用模块模式。
+
+读取 context 所引用的 node-index、region response、图片映射和资源回执；以现有 component_tree_path 为权威，不另建竞争组件树。未知响应式约束、字体可用性和 gaps 按来源限制记录，不补造事实。按同一 UI 页面模板生成方案，layout/bbox/text 证据从蓝湖节点读取，业务范围以需求澄清为准。
 
 ### 按设计来源读取证据
 
@@ -428,7 +436,7 @@ Figma 调用成功时返回：
 - `orchestrator=hmos-design-to-arkts`
 - `save_path` 指向当前 Run 根目录的 `design-doc.md`
 - 目标文件缺失、为空或全空白
-- 设计来源为 `figma` 或 `pixso`
+- 设计来源为 `figma`、`pixso` 或 `lanhu`
 - 来源对应的必需证据可读
 
 当 operation=restore_missing_design_doc 时，任一入口条件不满足都必须立即返回阻塞，不得退回 generate 或任何普通生成流程，不得写入任何文件。只有省略 operation 或 operation=generate 的调用才进入原有普通生成流程。
@@ -444,6 +452,8 @@ Figma 调用成功时返回：
 - 自行修改 ledger；ledger 由调用方管理
 
 ### 来源规则
+
+- **蓝湖**：使用上述蓝湖参数及同一固定快照，保持组件树、资源、系统 UI 和工程结论，只写缺失的设计文档。
 
 - **Figma**：继续使用现有 Figma 参数和模板规则（`figma_react_source_path`、`reference_screenshot_path`、`component_analysis_path`、`component_tree_path`、`project_analysis_path`、`requirement_clarification_path`）。
 - **Pixso**：修复模式新增读取参数：
@@ -467,7 +477,7 @@ Figma 调用成功时返回：
 
 ## 模式二：通用模块设计模式（P2-P3）
 
-> 当未提供 `arkui_dsl_spec` 且不是 `design_source` 为 `figma` 或 `mastergo` 的 UI 页面输入时，进入此模式；Figma/MasterGo 输入缺少 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。完整流程（代码复用分析、类图设计、时序图设计、工作量评估、保存文档）见 [references/module-design-mode.md](references/module-design-mode.md)。
+> 当未提供 `arkui_dsl_spec` 且不是 `design_source` 为 `figma`、`mastergo` 或 `lanhu` 的 UI 页面输入时，进入此模式；Figma/MasterGo/蓝湖 输入缺少 `arkui_dsl_spec` 不是进入通用模块设计模式的理由。完整流程（代码复用分析、类图设计、时序图设计、工作量评估、保存文档）见 [references/module-design-mode.md](references/module-design-mode.md)。
 
 ---
 

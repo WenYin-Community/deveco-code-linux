@@ -1,0 +1,44 @@
+{
+  "id": "mastergo-v1",
+  "file": "lanhu_design/normalize.py",
+  "originalSha256": "b1484ce4edd2506fb03e5134c635c8adf53097c730419ecb4e1d9d207357f8a1",
+  "patchedSha256": "8a7e2290b2192eaf51b3a8b9e6e57f58e4269dbcb94dc058e5b9a26c4cc47464",
+  "changes": [
+    {
+      "before": "source_type",
+      "after": "source_format",
+      "all": true
+    },
+    {
+      "before": "source_format != \"figma\"",
+      "after": "source_format != \"artboard\"",
+      "all": true
+    },
+    {
+      "before": "source_format == \"figma\"",
+      "after": "source_format == \"artboard\"",
+      "all": true
+    },
+    {
+      "before": "source_format = \"figma\"",
+      "after": "source_format = \"artboard\"",
+      "all": true
+    },
+    {
+      "before": "    gaps = []\n    records = []",
+      "after": "    host_name = str(host.get(\"name\", \"\")).strip().lower()\n    source_type = (\"mastergo\" if host_name in (\"master\", \"mastergo\") else\n                   \"figma\" if host_name == \"figma\" else\n                   source_format if source_format != \"artboard\" else \"unknown\")\n\n    gaps = []\n    records = []"
+    },
+    {
+      "before": "\"strategy\": \"figma_mixed_origin_normalization\",",
+      "after": "\"strategy\": \"figma_mixed_origin_normalization\" if source_type == \"figma\" else \"artboard_mixed_origin_normalization\","
+    },
+    {
+      "before": "message=\"Figma artboard and layer coordinates were normalized to the reference image canvas.\"",
+      "after": "message=\"Artboard and layer coordinates were normalized to the reference image canvas.\""
+    },
+    {
+      "before": "\"source_format\": source_format,",
+      "after": "\"source_type\": source_type,\n        \"source_format\": source_format,\n        \"source_host\": copy.deepcopy(host),"
+    }
+  ]
+}

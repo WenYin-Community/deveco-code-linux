@@ -1,6 +1,6 @@
 ---
 name: hmos-design-to-arkts
-description: 处理 Pixso、Figma 或 MasterGo 设计稿转 HarmonyOS ArkTS 代码的任务。当用户使用 `$hmos-design-to-arkts`、提供 Pixso/Figma/MasterGo 链接、Pixso/MasterGo 客户端选中节点、设计稿 DSL/截图/本地资源，或要求把 UI 设计稿转换为 ArkTS 时，必须使用本 skill。
+description: 处理 Pixso、Figma、MasterGo 或蓝湖设计稿转 HarmonyOS ArkTS 代码的任务。当用户使用 `$hmos-design-to-arkts`、提供 Pixso/Figma/MasterGo/蓝湖链接、Pixso/MasterGo 客户端选中节点、设计稿 DSL/截图/本地资源，或要求把 UI 设计稿转换为 ArkTS 时，必须使用本 skill。
 ---
 
 # hmos-design-to-arkts
@@ -13,13 +13,15 @@ description: 处理 Pixso、Figma 或 MasterGo 设计稿转 HarmonyOS ArkTS 代�
 
 预检原则：只问无法通过探索项目目录或读取设计稿自行发现的信息；能自己查到的不问用户。必须同步一次性向用户提出所有未明确项的澄清问题，不得逐条分次询问。
 
-预检项：设计来源、目标页面/节点、项目路径、功能描述。设计来源分为 `pixso`、`figma` 和 `mastergo`；Pixso 链接、Pixso 选中节点及开发者提供 Pixso DSL 都属于 `pixso`，带 file key 与 `node-id` 的 Figma URL 属于 `figma`；MasterGo 网页链接或客户端选中节点属于 `mastergo`。详细字段映射见 `references/requirement-clarification.md`。
+预检项：设计来源、目标页面/节点、项目路径、功能描述。设计来源分为 `pixso`、`figma`、`mastergo` 和 `lanhu`；Pixso 链接、Pixso 选中节点及开发者提供 Pixso DSL 都属于 `pixso`，带 file key 与 `node-id` 的 Figma URL 属于 `figma`；MasterGo 网页链接或客户端选中节点属于 `mastergo`；lanhuapp.com UI 详情/项目链接属于 `lanhu`，由设计稿 ID 定位画板，PRD 不作为 UI 画板。详细字段映射见 `references/requirement-clarification.md`。
+
+蓝湖开始使用：识别到 lanhuapp.com 链接后，先读 `references/lanhu/mcp-setup.md` 并运行 `scripts/lanhu-setup.mjs --action status`。按状态完成安装、浏览器登录和独立连接验证；这是来源预检，不要求先确定工程或启动 Controller。无需用户自行下载 GitHub 源码、安装 Python、编辑 MCP 配置或复制 Cookie。依赖与连接验证通过后继续需求预检和原设计链接选定的 Full/Fast 流程；等待登录时保留链接和用户已提供的信息。
 
 预检完成后必须生成需求澄清文档，由阶段 1 写入运行目录的 `requirement-clarification.json`。
 
 ## 选择工作流
 
-先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认按官方 Magic MCP → 官方 Vibe MCP → 社区插件的顺序验证目标设计读取，已有用户明确选择且可用的连接直接复用。Vibe 需要可用的桌面客户端；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。
+先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认按官方 Magic MCP → 官方 Vibe MCP → 社区插件的顺序验证目标设计读取，已有用户明确选择且可用的连接直接复用。Vibe 需要可用的桌面客户端；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
 
 用户选择社区插件 MCP 时，使用独立的 `community` 模式和 `nodes` 输入格式，仍保留 MasterGo 来源；安装、连接与能力边界见 `references/mastergo/mcp-setup.md`。不得将社区节点响应冒充官方 Magic DSL 或 Vibe 前端代码。
 
@@ -29,13 +31,15 @@ description: 处理 Pixso、Figma 或 MasterGo 设计稿转 HarmonyOS ArkTS 代�
 4. 用户未输入参数：读取 `~/.local/share/deveco/log/deveco.log` 尾部，取最近一条 `small=false agent=build|goal|plan mode=primary`。`build` → Fast，`goal` → Full，`plan` 或其他 → 不支持，停止。
 5. 日志不存在、不可读、无匹配项或多会话冲突时，提示用户改用 `--fast` 或 `--full`。
 
+蓝湖在 Controller init 前先读取 `references/lanhu/mcp-setup.md`；需求澄清完成后按 `references/lanhu/runtime-contract.md` 和 对应 variant 的 catalog 执行。
+
 选择后由 `workflow-state.json.designSource` 和 `.variant` 共同锁定，恢复时不得重新识别来源或切换 catalog。
 
-variant 确定后、执行 `init` 前，确认「MCP 依赖检查」已通过（见下节）；不满足时不得 `init`，按检查结果给出安装建议或引导并停止。
+variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」已通过；蓝湖按 `references/lanhu/mcp-setup.md` 验证独立脚本连接（见下节）；不满足时不得 `init`，按检查结果给出安装建议或引导并停止。
 
 ## MCP 依赖检查
 
-进入 Pixso 路径必须先检查当前 deveco 的 Pixso MCP 依赖；进入 Figma 路径必须先检查当前 deveco 的 Anchor MCP 依赖。**检查只问一句：当前会话工具列表是否存在对应能力工具**——有即满足，没有即不满足（不需要为此运行 `deveco mcp list`、读取配置或探测端点；原因可由用户自查 `deveco mcp list`）。工具名以会话实际为准（deveco 以 `<服务器名>_<官方名>` 暴露，不绑定写死前缀，如 `pixso-mcp_get_node_dsl`）。详细引导见 `references/mcp-dependency.md`。
+以下会话工具检查仅用于 Pixso/Figma；蓝湖按 `references/lanhu/mcp-setup.md` 运行独立脚本验证，不要求会话出现蓝湖 MCP 工具。进入 Pixso 路径必须先检查当前 deveco 的 Pixso MCP 依赖；进入 Figma 路径必须先检查当前 deveco 的 Anchor MCP 依赖。**检查只问一句：当前会话工具列表是否存在对应能力工具**——有即满足，没有即不满足（不需要为此运行 `deveco mcp list`、读取配置或探测端点；原因可由用户自查 `deveco mcp list`）。工具名以会话实际为准（deveco 以 `<服务器名>_<官方名>` 暴露，不绑定写死前缀，如 `pixso-mcp_get_node_dsl`）。详细引导见 `references/mcp-dependency.md`。
 
 | 设计来源 | 能力工具（按名称识别，前缀以实际为准） | 不满足时的引导入口 |
 |---|---|---|
@@ -53,13 +57,15 @@ MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查�
 - 全局运行索引位于 `runs/` 之外：Full 为 `.deveco/design-to-arkts/run-index.json`，Fast 为 `.deveco/design-to-arkts-fast/run-index.json`。`run-index.json` 不属于单次 Run；同一 variant 内各设计来源共用同一索引，Full 与 Fast 互不共用。
 - Pixso 使用内置 `scripts/pixso-arkts/`；Figma 阶段 1 使用 Anchor MCP，阶段 2 加载能力 `hmos-d2a-react-to-arkui`（注册表 → references/capabilities/hmos-d2a-react-to-arkui/INSTRUCTIONS.md），并完整执行。
 
+- 蓝湖 Full/Fast 阶段 1 使用 `scripts/lanhu-capture.mjs` 保存 dsphper MCP 的固定版本、图片与完整分页节点；阶段 2 调度 `hmos-d2a-lanhu-to-arkui`，按选择导出安装资源后生成 ArkUI。蓝湖不调用 Anchor/Pixso，也不继承 Figma 双截图倍率契约。
+
 ## Controller 操作
 
 Controller 脚本：`<designToArktsSkillRoot>/scripts/workflow.mjs`。五种操作：
 
 | 操作 | 命令 | 作用 |
 |---|---|---|
-| init | `--mode init --source pixso\|figma\|mastergo --variant full\|fast --run-dir <runDir>` | 锁定来源和 variant，初始化状态和 Todo；省略 source 仅为兼容旧调用，默认 pixso |
+| init | `--mode init --source pixso\|figma\|mastergo\|lanhu --variant full\|fast --run-dir <runDir>` | 锁定来源和 variant，初始化状态和 Todo；省略 source 仅为兼容旧调用，默认 pixso |
 | status | `--mode status --run-dir <runDir>` | 查看状态、重建 Todo、恢复入口 |
 | stage-start | `--mode stage-start --run-dir <runDir> --stage <N>` | 校验后返回当前阶段 instructionPath |
 | confirm | `--mode confirm --run-dir <runDir> --stage <N> --decision request\|accepted\|revision-requested` | 管理用户确认状态 |
@@ -83,11 +89,13 @@ Controller 脚本：`<designToArktsSkillRoot>/scripts/workflow.mjs`。五种操�
 10. Controller 返回 `design_stage_evidence_incomplete` 时不提供可执行恢复动作：上游证据或 checkpoint 不足、阶段已越过安全恢复点，或旧 Run 方案证据不完整。按真实阻塞报告，不得手写文档或回退阶段。Pixso Full 阶段 5 已完成且用户确认过的组件树缺失时固定返回该错误，不得补造组件树。
 11. Controller 返回 `design_doc_recovery_unverified` 时立即停止：不得重新生成 recoveryInvocationId、不得修改 `design-doc-recovery-request.json`、不得伪造 ledger 记录，按真实阻塞报告并交还用户。
 
-`design-doc.md` 的唯一写入者是 `hmos-d2a-solution-design`：入口 Agent、Controller、`hmos-d2a-react-to-arkui` 和其他任何能力都不得手写、补造或重写该文件。该规则优先于普通错误处理：非零退出码不得先触发停止或向用户报告，必须先检查 stdout 中的 `nextRequiredAction`。这两个动作只适用于 Figma Fast 与 Pixso Full/Fast；Figma Full 的确认快照错误（`confirmation_snapshot_invalid`）仍走 revision 与重新确认语义。
+`design-doc.md` 的唯一写入者是 `hmos-d2a-solution-design`：入口 Agent、Controller、`hmos-d2a-react-to-arkui` 和其他任何能力都不得手写、补造或重写该文件。该规则优先于普通错误处理：非零退出码不得先触发停止或向用户报告，必须先检查 stdout 中的 `nextRequiredAction`。这两个动作适用于蓝湖 Fast、Figma Fast 与 Pixso Full/Fast；Figma/蓝湖 Full 的确认快照错误（`confirmation_snapshot_invalid`）仍走 revision 与重新确认语义。
+
+蓝湖的 `resume_design_generation` 按 payload 调用 `hmos-d2a-lanhu-to-arkui`，同样转换为 `operation=restore_design_artifacts`、`stop_after_design=true`、`recovery_invocation_id`，保持 run state 原 phase，只补方案，不实现/安装/构建。
 
 ## 按阶段加载规则
 
-- 选定来源和 variant 后读取 `references/runtime-contract.md` 及 Controller 选中的 catalog。Pixso catalog 位于 `references/pixso/stage-catalog-*.json`，Figma catalog 位于 `references/figma/stage-catalog-*.json`；MasterGo catalog 位于 `references/mastergo/stage-catalog-*.json`，并读取 `references/mastergo/runtime-contract.md`。
+- 选定来源和 variant 后读取 `references/runtime-contract.md` 及 Controller 选中的 catalog。Pixso catalog 位于 `references/pixso/stage-catalog-*.json`，Figma catalog 位于 `references/figma/stage-catalog-*.json`；MasterGo catalog 位于 `references/mastergo/stage-catalog-*.json`，并读取 `references/mastergo/runtime-contract.md`；蓝湖为 `references/lanhu/stage-catalog-full.json` 或 `references/lanhu/stage-catalog-fast.json`。
 - 执行 `stage-start` 前不得读取任何阶段文件。
 - 正常执行时，只读取成功的 `stage-start` 输出的 `instructionPath` 指向的当前阶段文件。
 - 恢复例外：`status` 返回 `nextRequiredAction=resume_confirmation` 时，只恢复原确认问题；返回 `nextRequiredAction=resume_confirmed_stage` 时，只依据阶段内部 checkpoint 继续确认后的余下实现。两种情况都可以读取该次 `status` 返回的当前阶段 `instructionPath`，但不得视为新的阶段入口，不得再次调用阶段入口 `todowrite`，不得重新生成已完成产物。
@@ -111,10 +119,10 @@ Controller 脚本：`<designToArktsSkillRoot>/scripts/workflow.mjs`。五种操�
 ## 用户确认规则
 
 - catalog 中 `requiresConfirmation=true` 的阶段需要用户确认。
-- Pixso Full 仅阶段 5 需要确认；Figma/MasterGo Full 仅阶段 2 需要确认；Fast 均不确认。
+- Pixso Full 仅阶段 5 需要确认；Figma/MasterGo/蓝湖 Full 仅阶段 2 需要确认；Fast 均不确认。
 - Agent 不得直接修改 `workflow-state.json`。确认状态由 Controller 通过 `confirm --decision` 管理。
 - 生成并校验待确认产物后、向用户展示确认问题前，调用 `confirm --decision request`。Controller 将状态设为 `awaiting_confirmation` 并返回 `await_user_confirmation`，然后展示已有产物和固定确认选项并等待用户选择。
-- Pixso Full 用户确认后，`accepted` 返回 `stage_complete`，直接完成阶段。Figma/MasterGo Full 阶段 2 的确认发生在实现之前，catalog 使用 `confirmationContinuesStage=true`；`accepted` 返回 `resume_confirmed_stage`，必须在不重新 `stage-start`、不重复 Todo 的情况下继续对应的转换能力（Figma: `hmos-d2a-react-to-arkui`，MasterGo: `hmos-d2a-mastergo-to-arkui`）实现和初次构建，全部完成后才能 `stage-complete`。
+- Pixso Full 用户确认后，`accepted` 返回 `stage_complete`，直接完成阶段。Figma/MasterGo/蓝湖 Full 阶段 2 的确认发生在实现之前，catalog 使用 `confirmationContinuesStage=true`；`accepted` 返回 `resume_confirmed_stage`，必须在不重新 `stage-start`、不重复 Todo 的情况下继续对应的转换能力（Figma: `hmos-d2a-react-to-arkui`，MasterGo: `hmos-d2a-mastergo-to-arkui`，蓝湖: `hmos-d2a-lanhu-to-arkui`）实现和初次构建，全部完成后才能 `stage-complete`。
 - 用户要求修订时，调用 `confirm --decision revision-requested`，Controller 恢复 `running`、保持 `currentStage` 不变，返回 `stage_start`；随后重新 `stage-start` 当前阶段。
 - 组件树不正确时停留修订，不得跳过确认。
 
@@ -140,13 +148,14 @@ MasterGo Full 的确认和续跑沿用相同 Controller 语义，使用独立 `h
 | 能力名（= ledger 键值） | 职责 | 指令路径 | 关键脚本 | 调用约束 |
 |---|---|---|---|---|
 | hmos-d2a-mastergo-to-arkui | MasterGo 设计源 → ArkUI | references/capabilities/hmos-d2a-mastergo-to-arkui/INSTRUCTIONS.md | scripts/mastergo-source.mjs | 仅 MasterGo 阶段 2，内部加载 solution-design |
+| hmos-d2a-lanhu-to-arkui | 蓝湖结构化设计转换 ArkUI | references/capabilities/hmos-d2a-lanhu-to-arkui/INSTRUCTIONS.md | — | 蓝湖 Full/Fast 阶段2 |
 | hmos-d2a-react-to-arkui | Figma 阶段2 React→ArkUI 转换 | references/capabilities/hmos-d2a-react-to-arkui/INSTRUCTIONS.md | — | 仅 Figma 流程；内部需加载 solution-design |
-| hmos-d2a-solution-design | 设计方案 design-doc.md（唯一写入者） | references/capabilities/hmos-d2a-solution-design/INSTRUCTIONS.md | — | Pixso 阶段5 / Figma、MasterGo 经各自转换能力 |
+| hmos-d2a-solution-design | 设计方案 design-doc.md（唯一写入者） | references/capabilities/hmos-d2a-solution-design/INSTRUCTIONS.md | — | Pixso 阶段5 / Figma、MasterGo、蓝湖经各自转换能力 |
 | hmos-d2a-ui-reconstruction-score | 单轮还原度评分 | references/capabilities/hmos-d2a-ui-reconstruction-score/INSTRUCTIONS.md | scripts/ui_score.py | 仅被 scoring-workflow 调用 |
 | hmos-d2a-arkui-scoring-workflow | 多轮视觉校准评分循环 | references/capabilities/hmos-d2a-arkui-scoring-workflow/INSTRUCTIONS.md | — | 仅视觉校准阶段 |
 | hmos-d2a-repo-understand | 仓库结构理解 | references/capabilities/hmos-d2a-repo-understand/INSTRUCTIONS.md | — | Pixso 阶段3 |
-| hmos-d2a-arkui-component-best-practices | ArkUI 组件最佳实践识别 | references/capabilities/hmos-d2a-arkui-component-best-practices/INSTRUCTIONS.md | scripts/search-practices.mjs | Pixso 阶段4 / Figma、MasterGo 阶段2 |
-| hmos-d2a-arkts-logic-completer | 交互逻辑补全 | references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md | — | Pixso Full 阶段7 / Pixso Fast、Figma、MasterGo 阶段3 |
+| hmos-d2a-arkui-component-best-practices | ArkUI 组件最佳实践识别 | references/capabilities/hmos-d2a-arkui-component-best-practices/INSTRUCTIONS.md | scripts/search-practices.mjs | Pixso 阶段4 / Figma、MasterGo、蓝湖 阶段2 |
+| hmos-d2a-arkts-logic-completer | 交互逻辑补全 | references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md | — | Pixso Full 阶段7 / Pixso Fast、Figma、MasterGo、蓝湖 阶段3 |
 | hmos-d2a-arkui2hds | HDS 材质迁移 | references/capabilities/hmos-d2a-arkui2hds/INSTRUCTIONS.md | — | 阶段4/质量构建阶段 |
 | hmos-d2a-responsive-layout-generator | 响应式布局生成 | references/capabilities/hmos-d2a-responsive-layout-generator/INSTRUCTIONS.md | — | Pixso 阶段5 条件加载 |
 
@@ -166,3 +175,5 @@ MasterGo Full 的确认和续跑沿用相同 Controller 语义，使用独立 `h
 - MasterGo MCP 配置：`references/mastergo/mcp-setup.md`
 - MasterGo 输入、资源和恢复：`references/mastergo/input-contract.md`
 - MasterGo Full/Fast：`references/mastergo/stage-catalog-full.json`、`references/mastergo/stage-catalog-fast.json`
+- 蓝湖 Full/Fast catalog：`references/lanhu/stage-catalog-full.json`、`references/lanhu/stage-catalog-fast.json`
+- 蓝湖输入契约：`references/lanhu/input-contract.md`

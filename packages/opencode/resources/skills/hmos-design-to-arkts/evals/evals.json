@@ -6,10 +6,22 @@
       "prompt": "帮我把这个 Figma 设计稿转成 HarmonyOS 应用，链接：https://www.figma.com/design/AbCdEfgh/HarmonyDemo?node-id=123-456，目标工程在 D:/work/MyApplication",
       "expected_output": "识别来源为 figma（design URL 且含 node-id）；先做需求预检与必要澄清（一次性问全），预检完成前不选择、不读取、不执行任一 workflow；确认后走 Figma 路线（Anchor MCP 获取输入 + 能力 hmos-d2a-react-to-arkui 实现），不得走 Pixso 流程",
       "assertions": [
-        { "text": "判定设计来源为 figma，未误判为 pixso", "type": "behavioral" },
-        { "text": "需求预检完成前未选择、未读取或执行任何 workflow", "type": "behavioral" },
-        { "text": "澄清问题一次性同步提出，未逐条分次询问", "type": "behavioral" },
-        { "text": "能通过探索工程或读取设计稿自行发现的信息未询问用户", "type": "behavioral" }
+        {
+          "text": "判定设计来源为 figma，未误判为 pixso",
+          "type": "behavioral"
+        },
+        {
+          "text": "需求预检完成前未选择、未读取或执行任何 workflow",
+          "type": "behavioral"
+        },
+        {
+          "text": "澄清问题一次性同步提出，未逐条分次询问",
+          "type": "behavioral"
+        },
+        {
+          "text": "能通过探索工程或读取设计稿自行发现的信息未询问用户",
+          "type": "behavioral"
+        }
       ]
     },
     {
@@ -17,9 +29,18 @@
       "prompt": "帮我把这两个设计稿都转成应用：https://pixso.design/design/xyz889 和 https://www.figma.com/design/AbCdEfgh/Demo?node-id=3-1",
       "expected_output": "识别到同时提供两种来源：先一次性澄清要求用户二选一，不得猜测默认来源，不得启动 pixso 或 figma 任一工作流（当前不支持同一 run 混合来源）",
       "assertions": [
-        { "text": "识别到双来源冲突并停止，未猜测默认来源", "type": "behavioral" },
-        { "text": "澄清一次性提出（要求二选一），未逐条分次询问", "type": "behavioral" },
-        { "text": "未启动 pixso-arkts 或 Figma 任一流程", "type": "behavioral" }
+        {
+          "text": "识别到双来源冲突并停止，未猜测默认来源",
+          "type": "behavioral"
+        },
+        {
+          "text": "澄清一次性提出（要求二选一），未逐条分次询问",
+          "type": "behavioral"
+        },
+        {
+          "text": "未启动 pixso-arkts 或 Figma 任一流程",
+          "type": "behavioral"
+        }
       ]
     },
     {
@@ -27,9 +48,18 @@
       "prompt": "$hmos-design-to-arkts --fast --full 把这个 Pixso 设计稿转成应用：https://pixso.design/design/xyz889，工程在 ./MyApplication",
       "expected_output": "识别到 --fast 与 --full 参数冲突：停止并提示用户输入 --fast 或 --full，不启动任何流程",
       "assertions": [
-        { "text": "识别参数冲突并停止，未启动工作流", "type": "behavioral" },
-        { "text": "提示用户改用单一 --fast 或 --full", "type": "behavioral" },
-        { "text": "未自行猜测选用 fast 或 full", "type": "behavioral" }
+        {
+          "text": "识别参数冲突并停止，未启动工作流",
+          "type": "behavioral"
+        },
+        {
+          "text": "提示用户改用单一 --fast 或 --full",
+          "type": "behavioral"
+        },
+        {
+          "text": "未自行猜测选用 fast 或 full",
+          "type": "behavioral"
+        }
       ]
     },
     {
@@ -37,9 +67,96 @@
       "prompt": "用这个 Figma 文件生成鸿蒙页面：https://www.figma.com/design/AbCdEfgh/Demo （链接里没有节点信息）",
       "expected_output": "识别 Figma URL 缺少 node-id：一次性澄清索取 node-id，不得猜测节点，不得转走 pixso 流程，澄清完成前不启动任一 workflow",
       "assertions": [
-        { "text": "识别 Figma 缺少 node-id 并请求补充", "type": "behavioral" },
-        { "text": "未将来源误判为 pixso 或改走 Pixso 流程", "type": "behavioral" },
-        { "text": "澄清完成前未启动任一 workflow", "type": "behavioral" }
+        {
+          "text": "识别 Figma 缺少 node-id 并请求补充",
+          "type": "behavioral"
+        },
+        {
+          "text": "未将来源误判为 pixso 或改走 Pixso 流程",
+          "type": "behavioral"
+        },
+        {
+          "text": "澄清完成前未启动任一 workflow",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "--fast 把蓝湖 UI 画板转为 ArkTS：https://lanhuapp.com/web/#/item/project/detailDetach?pid=p&image_id=i，工程 ./MyApplication",
+      "expected_output": "完成需求预检后识别 lanhu，只走蓝湖 Fast；通过 lanhu-capture.mjs 获取同快照完整分页与干净图，阶段2完成资源安装及工程接入",
+      "assertions": [
+        {
+          "text": "来源为 lanhu，未走 Anchor/Pixso 或伪造 JSX",
+          "type": "behavioral"
+        },
+        {
+          "text": "完整分页与版本锁定通过后才进入转换",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "--full 用蓝湖设计稿生成页面：https://lanhuapp.com/web/#/item/project/detailDetach?pid=p&image_id=i",
+      "expected_output": "识别 lanhu Full，先完成 MCP 连接和取数，阶段 2 主 Agent 展示组件方案并人工确认，accepted 后同阶段续跑实现，阶段 5 复用 Figma Full 视觉校准能力。",
+      "assertions": [
+        {
+          "text": "使用蓝湖 Full 六阶段 catalog，未改走 Figma/Anchor/Pixso，也未降级为 Fast。",
+          "type": "behavioral"
+        },
+        {
+          "text": "用户确认前不修改工程，确认后使用 resume_confirmed_stage，复用原交互/HDS/评分能力。",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "蓝湖资源 export 返回 status=partial，但有 ZIP 路径，继续生成页面吧",
+      "expected_output": "报告缺失资源并 blocked，不将部分交付当完整安装",
+      "assertions": [
+        {
+          "text": "必需资源部分失败时阻塞，没有占位图冒充完成",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "把这个蓝湖稿件转成代码：https://lanhuapp.com/web/#/item/project/detailDetach?pid=p&image_id=i。这是第一次使用，还没安装过蓝湖 MCP。",
+      "expected_output": "先运行 lanhu-setup.mjs --action status，setup_required 时安装并检查状态，login_required 时打开专用浏览器让用户登录，已登录后用独立采集脚本验证连接，再继续原链接的 Fast 流程。",
+      "assertions": [
+        {
+          "text": "用户无需下载 GitHub/Python、编辑 MCP 配置或复制 Cookie；等待登录时保留原链接。",
+          "type": "behavioral"
+        },
+        {
+          "text": "未验证登录和工具可用前不宣称 ready；失败不无限重试。",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "蓝湖里的稿件是用 MasterGo 画的，但数据结构包含 artboard，是否改走 Figma？",
+      "expected_output": "保持 designSource=lanhu，依据原始 host 识别 MasterGo，artboard 仅决定数据解析；不调用 Figma MCP，不覆盖已锁定旧快照。",
+      "assertions": [
+        {
+          "text": "区分设计工具来源和数据结构，未因 artboard 字段将来源视为 Figma。",
+          "type": "behavioral"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "蓝湖 Full 在等待方案确认时压缩了上下文，现在继续；确认后还要做视觉评分。",
+      "expected_output": "status 为 resume_confirmation 时恢复原方案，accepted 后保持 invocationId 并续做实现；不重复抓图或改写已确认七文件。评分按同一 Full 能力执行，缺少设备时 blocked，不擅自禁用。",
+      "assertions": [
+        {
+          "text": "保持确认快照、checkpoint、Full 索引和评分启用配置，不跳过人工确认或评分证据。",
+          "type": "behavioral"
+        }
       ]
     }
   ]

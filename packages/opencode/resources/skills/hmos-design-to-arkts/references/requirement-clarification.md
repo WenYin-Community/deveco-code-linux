@@ -99,7 +99,7 @@
 | `assetProvisionMode` | string | 按来源 | Pixso 默认为 `pixso-mcp-export`；Figma 固定为 `anchor-local-assets`；用户提供 Pixso资源时为 `developer-provided`。MasterGo 资源以其 input-contract 与资源 manifest 为准，不套用其他来源枚举 |
 | `assetRootPath` | string | `""` | 开发者提供时的资源根目录 |
 | `assetMappingTablePath` | string | `""` | 开发者提供时的对照表路径 |
-| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma/MasterGo 为阶段 5。用户明确跳过则为 `false` |
+| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma/MasterGo/蓝湖 为阶段 5。用户明确跳过则为 `false` |
 | `visualCalibration.scoreThreshold` | number | `80` | 每轮评分达标阈值；轮数上限见 `visualCalibration.maxRounds`（默认 5） |
 | `visualCalibration.maxRounds` | number | `5` | 仅 Full 使用；最多有效评分轮数（含 Round 1 基线轮），1–5 的整数，仅可下调不可超过 5。用户明确提及轮数上限时写入 |
 
@@ -129,8 +129,14 @@
 - **阶段 7**（能力 `hmos-d2a-arkts-logic-completer`，注册表 → references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md）：通过阶段 5 设计文档间接消费 `functionalDescription` 中的交互、动效、数据描述。
 - **阶段 8**（质量审计）：直接读取需求澄清文档，审计 `systemUiPreference`、`hdsUsagePreference` 是否在最终源码中正确实现。
 
-上表阶段 3–8 使用 Pixso Full 编号，其他 variant 按各自 catalog 执行。Figma/MasterGo 阶段 3 补业务交互，阶段 4 完成 HDS/质量/最终构建，Full 阶段 5 直接读取 `visualCalibration`，阶段 6 总结；Fast 阶段 5 总结。各来源的后续阶段都优先消费来源无关的 `design-doc.md`、`component-tree.md` 和资源 manifest。
+上表阶段 3–8 使用 Pixso Full 编号，其他 variant 按各自 catalog 执行。Figma/MasterGo/蓝湖 阶段 3 补业务交互，阶段 4 完成 HDS/质量/最终构建，Full 阶段 5 直接读取 `visualCalibration`，阶段 6 总结；Fast 阶段 5 总结。各来源的后续阶段都优先消费来源无关的 `design-doc.md`、`component-tree.md` 和资源 manifest。
 
 ## MasterGo 来源
 
 MasterGo 网页链接或桌面选区使用 designSource=mastergo；页面、工程、交互与数据策略复用公共预检。记录 acquisitionMethod=mastergo-link/mastergo-selection/mastergo-d2c、MasterGo mode=magic/vibe/community、serverName、documentId/nodeId 或待官方解析的短链接。先通过已有输入与工程探索补齐，缺少真实目标时一次澄清，不索取令牌。Full/Fast 目录、visualCalibration 配置和 Figma 相同；具体输入与首次连接见 mastergo/input-contract.md 和 mastergo/mcp-setup.md。
+
+## 蓝湖 Full/Fast 字段映射
+
+蓝湖使用 designSource=lanhu、acquisitionMethod=lanhu-link、assetProvisionMode=lanhu-mcp-bundle；用户明确提供本地图片时允许 developer-provided，按 references/lanhu/input-contract.md 导入并锁定来源，扩展上表枚举。targetPage.pageId 对应 design_id；nodeId 仅填写实际来源节点 ID。lanhuSource 对象包含 mcpServerName、designUrl、requestedVersion、resolvedVersion、snapshotId；阶段 1 解析并锁定版本与快照，恢复不更新到 latest。
+
+阶段 1 保存真实输入和工程接入快照；阶段 2 完成资源安装后补 assetRootPath 与 assetMappingTablePath，不覆盖既有用户需求。截图、节点、资源与工程契约见 [蓝湖输入契约](lanhu/input-contract.md)。支持 Full/Fast；Full 阶段 2 手动确认方案后续做实现，阶段 5 复用原视觉校准及 visualCalibration 配置。

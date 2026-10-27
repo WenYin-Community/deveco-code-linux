@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "workflowVersion": 4,
+  "designSource": "lanhu",
+  "variant": "full",
+  "workflow": "design-to-arkts",
+  "runtimeContractPath": "references/lanhu/runtime-contract.md",
+  "stages": [
+    {
+      "id": 1,
+      "title": "01 - 获取并校验蓝湖上下文",
+      "instructionPath": "references/lanhu/full/stages/01-acquire-lanhu-context.md",
+      "requiresConfirmation": false
+    },
+    {
+      "id": 2,
+      "title": "02 - 设计并实现 ArkUI 页面（需人工确认）",
+      "instructionPath": "references/lanhu/full/stages/02-convert-lanhu-to-arkui.md",
+      "requiresConfirmation": true,
+      "confirmationContinuesStage": true
+    },
+    {
+      "id": 3,
+      "title": "03 - 补全 ArkTS 业务交互逻辑",
+      "instructionPath": "references/lanhu/full/stages/03-complete-interaction-logic.md",
+      "requiresConfirmation": false
+    },
+    {
+      "id": 4,
+      "title": "04 - 完成 HDS 适配、质量审计与最终构建",
+      "instructionPath": "references/lanhu/full/stages/04-quality-and-build.md",
+      "requiresConfirmation": false
+    },
+    {
+      "id": 5,
+      "title": "05 - 视觉还原度校准",
+      "instructionPath": "references/lanhu/full/stages/05-visual-calibration.md",
+      "requiresConfirmation": false
+    },
+    {
+      "id": 6,
+      "title": "06 - 总结",
+      "instructionPath": "references/lanhu/full/stages/06-summary.md",
+      "requiresConfirmation": false
+    }
+  ]
+}

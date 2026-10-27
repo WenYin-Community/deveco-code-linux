@@ -1,6 +1,6 @@
 # 能力：hmos-d2a-arkts-logic-completer
 
-> design-to-arkts 工作流显式调度步骤（Pixso Full 阶段 7，Figma/MasterGo Full/Fast 与 Pixso Fast 阶段 3）：在前序阶段产出的 ArkUI 组件代码基础上，补全交互逻辑（状态/事件/数据绑定/动效）。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
+> design-to-arkts 工作流显式调度步骤（Pixso Full 阶段 7，Figma/MasterGo/蓝湖 Full/Fast 与 Pixso Fast 阶段 3）：在前序阶段产出的 ArkUI 组件代码基础上，补全交互逻辑（状态/事件/数据绑定/动效）。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
 
 ## 目录
 

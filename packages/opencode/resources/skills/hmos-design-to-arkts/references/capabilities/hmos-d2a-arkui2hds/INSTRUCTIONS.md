@@ -1,6 +1,6 @@
 # 能力：hmos-d2a-arkui2hds
 
-> design-to-arkts 工作流 HDS 适配步骤（Pixso Full 阶段 8，Figma/MasterGo Full/Fast 与 Pixso Fast 质量构建阶段）：将组件替换为 HDS 组件。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
+> design-to-arkts 工作流 HDS 适配步骤（Pixso Full 阶段 8，Figma/MasterGo/蓝湖 Full/Fast 与 Pixso Fast 质量构建阶段）：将组件替换为 HDS 组件。仅由 design-to-arkts 工作流显式调度，不响应独立请求。
 
 本能力帮助外部应用将ArkUI基础组件或自定义组件替换为HDS（UI Design Kit）组件。
 

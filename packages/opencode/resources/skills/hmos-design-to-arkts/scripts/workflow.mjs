@@ -6,6 +6,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MASTERGO_CONTRACT, MASTERGO_RUN_STATE, MASTERGO_CONFIRMATION_FILES, collectMasterGoInputIssues, collectMasterGoStage2Issues, collectMasterGoConfirmationIssues } from './mastergo-source.mjs';
+import { LANHU_RUN_STATE, collectLanhuInputIssues, collectLanhuStage2Issues, collectLanhuConfirmationIssues, collectLanhuRecoveryIssues, lanhuRecoveryInputPaths } from './lanhu-workflow.mjs';
 
 // Run files may be written by the host shell (PowerShell 5.1 UTF-8 emits a
 // BOM); JSON.parse throws on a leading U+FEFF, so strip it before parsing.
@@ -19,7 +20,7 @@ const DESIGN_DOC_RECOVERY_REQUEST = 'design-doc-recovery-request.json';
 const VALID_MODES = new Set(['init', 'status', 'stage-start', 'confirm', 'stage-complete', 'reacquire']);
 const VALID_DECISIONS = new Set(['request', 'accepted', 'revision-requested']);
 const VALID_RESULTS = new Set(['passed', 'blocked']);
-const VALID_SOURCES = new Set(['pixso', 'figma', 'mastergo']);
+const VALID_SOURCES = new Set(['pixso', 'figma', 'mastergo', 'lanhu']);
 const VALID_REASON_CODES = new Set([
   'build_failed',
   'dependency_unavailable',
@@ -130,7 +131,7 @@ const FIGMA_COMPONENT_RECOGNITION_IMAGE = 'source/figma/component-recognition-sc
 const FIGMA_REFERENCE_SCREENSHOT = 'source/figma/reference-screenshot.png';
 
 function collectComponentRecognitionEvidenceIssues(runDir, designSource = 'figma') {
-  const expectedImage = FIGMA_COMPONENT_RECOGNITION_IMAGE.replace('figma', designSource);
+  const expectedImage = designSource === 'lanhu' ? 'source/lanhu/component-recognition.png' : FIGMA_COMPONENT_RECOGNITION_IMAGE.replace('figma', designSource);
   const referenceScreenshot = FIGMA_REFERENCE_SCREENSHOT.replace('figma', designSource);
   const issues = [];
   const artifactPath = join(runDir, 'stage2', 'component-vision-analysis.json');
@@ -767,7 +768,7 @@ function readProjectFile(projectRoot, rel, label, issues) {
 //               and later stages may legitimately edit the page content, so the
 //               registered content hash is not re-compared.
 function derivePageStage2IndexContext(runDir, catalog, state) {
-  if (!['figma', 'mastergo'].includes(catalog.designSource)) {
+  if (!['figma', 'mastergo', 'lanhu'].includes(catalog.designSource)) {
     return null;
   }
   const runId = basename(runDir);
@@ -1306,7 +1307,15 @@ const PAGE_STAGE2_CONFIRMATION_FILES = [
 
 function pageStage2ConfirmationFiles(catalog) {
   if (catalog.designSource === 'mastergo') return MASTERGO_CONFIRMATION_FILES;
-  return PAGE_STAGE2_CONFIRMATION_FILES;
+  return [
+    ...PAGE_STAGE2_CONFIRMATION_FILES,
+    ...(catalog.designSource === 'lanhu' ? [
+      ['projectAnalysis', 'stage2/project-analysis.md'],
+      ['systemUiPolicy', 'system-ui-policy.json'],
+      ['viewportBoundary', 'viewport-boundary-spec.json'],
+      ['assetSelection', 'stage2/asset-selection.json']
+    ] : [])
+  ];
 }
 
 function buildPageStage2ConfirmationSnapshot(runDir, catalog, issues) {
@@ -1338,6 +1347,9 @@ function buildPageStage2ConfirmationSnapshot(runDir, catalog, issues) {
         invocationId: readJsonFile(join(runDir, MASTERGO_RUN_STATE)).invocationId,
         contractSha256: hashFile(join(runDir, MASTERGO_CONTRACT))
       } : {}),
+      ...(catalog.designSource === 'lanhu' ? {
+        invocationId: readJsonOrNull(join(runDir, LANHU_RUN_STATE), 'Lanhu confirmation checkpoint', issues)?.invocationId
+      } : {}),
       createdAt: new Date().toISOString()
     };
   } catch {
@@ -1354,6 +1366,11 @@ function collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state) {
   if (source === 'mastergo') issues.push(...collectMasterGoConfirmationIssues(runDir, snapshot));
   if (!snapshot || snapshot.stage !== 2 || !snapshot.files) {
     return ['stage 2 confirmation snapshot is missing or invalid'];
+  }
+  if (catalog.designSource === 'lanhu') {
+    const checkpoint = readJsonOrNull(join(runDir, LANHU_RUN_STATE), 'Lanhu confirmation checkpoint', issues);
+    if (!snapshot.invocationId || snapshot.invocationId !== checkpoint?.invocationId)
+      issues.push('Lanhu confirmed invocation must match the original capability checkpoint');
   }
   for (const [name, relativePath] of pageStage2ConfirmationFiles(catalog)) {
     const evidence = snapshot.files[name];
@@ -1376,7 +1393,7 @@ function collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state) {
 }
 
 function isPageStage2(catalog, stage) {
-  return ['figma', 'mastergo'].includes(catalog.designSource) && stage === 2;
+  return ['figma', 'mastergo', 'lanhu'].includes(catalog.designSource) && stage === 2;
 }
 
 function requiresPageStage2Confirmation(catalog, stage) {
@@ -1388,7 +1405,7 @@ function requiresPageStage2Confirmation(catalog, stage) {
 function requiresDesignDocMissingGuard(catalog, stage) {
   const designSource = catalog.designSource ?? 'pixso';
   return (
-    (designSource === 'figma' && catalog.variant === 'fast' && stage === 2) ||
+    (['figma', 'lanhu'].includes(designSource) && catalog.variant === 'fast' && stage === 2) ||
     (designSource === 'pixso' && stage === 5)
   );
 }
@@ -1429,7 +1446,7 @@ const FIGMA_REACT_TO_ARKUI_PHASES = new Set([
 const FIGMA_REACT_TO_ARKUI_RESUME_FORBIDDEN_PHASES = new Set(['implementing', 'validating', 'completed']);
 
 function designDocStage(catalog) {
-  if (['figma', 'mastergo'].includes(catalog.designSource)) return 2;
+  if (['figma', 'mastergo', 'lanhu'].includes(catalog.designSource)) return 2;
   return 5;
 }
 
@@ -1774,7 +1791,9 @@ function assessDesignDocRecovery(runDir, catalog, state) {
     }
   }
 
-  const restoreIssues = designSource === 'figma'
+  const restoreIssues = designSource === 'lanhu'
+    ? collectLanhuRecoveryIssues(runDir, true)
+    : designSource === 'figma'
     ? figmaRestoreDocumentInputIssues(runDir)
     : pixsoRestoreDocumentInputIssues(runDir);
   if (restoreIssues.length === 0) {
@@ -1782,7 +1801,9 @@ function assessDesignDocRecovery(runDir, catalog, state) {
   }
 
   if (inGenerationStage || docStageCompleted) {
-    const upstreamIssues = designSource === 'figma'
+    const upstreamIssues = designSource === 'lanhu'
+      ? collectLanhuRecoveryIssues(runDir, false)
+      : designSource === 'figma'
       ? figmaUpstreamInputIssues(runDir, { designOnlyRecovery: docStageCompleted })
       : pixsoUpstreamInputIssues(runDir);
     if (upstreamIssues.length === 0) {
@@ -1818,6 +1839,9 @@ function buildDesignDocRecoveryPayload(runDir, catalog, assessment, retry) {
       retry
     };
   }
+  if (catalog.designSource === 'lanhu') {
+    return { strategy: 'resume_design_generation', runnerSkill: 'hmos-d2a-lanhu-to-arkui', operation: 'restore_design_artifacts', stopAfterDesign: true, runStatePath: runDirRelativePath(runDir, LANHU_RUN_STATE), mustInvokeSkill: SOLUTION_DESIGN_SKILL, instructionPath: DESIGN_DOC_RECOVERY_INSTRUCTION, retry };
+  }
   if ((catalog.designSource ?? 'pixso') === 'figma') {
     return {
       strategy: 'resume_design_generation',
@@ -1845,6 +1869,7 @@ function buildDesignDocRecoveryPayload(runDir, catalog, assessment, retry) {
 // recovery may (re)create are never hashed.
 function designDocRecoveryInputPaths(runDir, catalog, strategy) {
   const designSource = catalog.designSource ?? 'pixso';
+  if (designSource === 'lanhu') return [...lanhuRecoveryInputPaths(runDir), ...(strategy === 'restore_document' ? ['component-tree.md', 'system-ui-policy.json', 'viewport-boundary-spec.json'] : [])];
   if (strategy === 'restore_document') {
     if (designSource === 'figma') {
       return [
@@ -2352,12 +2377,43 @@ function collectRequirementClarificationEvidenceIssues(runDir, catalog) {
   return issues;
 }
 
+function successfulBuild(build) {
+  return build?.success === true && build?.exitCode === 0 &&
+    typeof build?.command === 'string' && Number.isFinite(Date.parse(build?.completedAt));
+}
+
 function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
   const issues = [];
   const designSource = catalog.designSource ?? 'pixso';
-  const visualStage = ['figma', 'mastergo'].includes(designSource) ? 5 : 9;
+  const visualStage = ['figma', 'mastergo', 'lanhu'].includes(designSource) ? 5 : 9;
   if (stage === 1) {
     issues.push(...collectRequirementClarificationEvidenceIssues(runDir, catalog));
+  }
+  if (designSource === 'lanhu' && stage === 1) {
+    issues.push(...collectLanhuInputIssues(runDir));
+    const manifest = readJsonOrNull(join(runDir, 'inputs-manifest.json'), 'stage 1 inputs manifest', issues);
+    if (manifest) issues.push(...collectPageStage1IntegrationIssues(runDir, catalog, manifest, ctx));
+  }
+  if (designSource === 'lanhu' && stage === 2) {
+    issues.push(...collectLanhuStage2Issues(runDir, catalog.variant));
+    issues.push(...collectComponentRecognitionEvidenceIssues(runDir, 'lanhu'));
+    issues.push(...collectPageRegistrationEvidenceIssues(runDir, { ...ctx, designSource: 'lanhu' }));
+  }
+  if (designSource === 'lanhu' && catalog.variant === 'fast' && stage >= 3) {
+    const report = readJsonOrNull(join(runDir, `stage${stage}-report.json`), `Lanhu stage ${stage} report`, issues);
+    if (report?.status !== 'completed') issues.push(`Lanhu stage ${stage} report must record completed`);
+    if (stage === 4 && !successfulBuild(report?.build)) issues.push('Lanhu final build report is invalid');
+  }
+  if (designSource === 'lanhu' && catalog.variant === 'full') {
+    const outputs = { 3: ['stage3-interaction-report.md'], 4: ['stage4-quality-audit.json', 'stage4-quality-audit.md', 'stage4-build-report.md', 'hds-decision.json'], 6: ['completeness-report.md'] };
+    for (const file of outputs[stage] ?? []) {
+      if (!isNonEmptyFile(join(runDir, file))) issues.push(`Lanhu Full requires ${file}`);
+      else if (file.endsWith('.json')) readJsonOrNull(join(runDir, file), file, issues);
+    }
+    if (stage === 4) {
+      const audit = readJsonOrNull(join(runDir, 'stage4-quality-audit.json'), 'Lanhu Full quality audit', issues);
+      if (!successfulBuild(audit?.build)) issues.push('Lanhu Full quality audit must record a successful final build');
+    }
   }
   if (designSource === 'figma' && stage === 1) {
     issues.push(...collectFigmaStage1EvidenceIssues(runDir, catalog, ctx));
@@ -2508,6 +2564,7 @@ function computeWorkflowDigest(skillRoot, catalog, catalogRelPath) {
   const paths = [
     catalogRelPath,
     catalog.runtimeContractPath,
+    ...(catalog.designSource === 'lanhu' ? ['scripts/lanhu-source.mjs', 'scripts/lanhu-capture.mjs', 'scripts/lanhu-connection.mjs', 'scripts/lanhu-setup.mjs', 'scripts/lanhu-private.mjs', 'scripts/lanhu-runtime.mjs', 'scripts/lanhu-runtime-lock.json', 'scripts/lanhu-mastergo.patch.json', 'scripts/lanhu_login.py', 'scripts/lanhu-import-assets.mjs', 'references/lanhu/mcp-setup.md', 'scripts/lanhu-workflow.mjs', 'references/lanhu/input-contract.md', 'references/capabilities/hmos-d2a-lanhu-to-arkui/INSTRUCTIONS.md', ...(catalog.variant === 'full' ? ['references/lanhu/fast/stages/01-acquire-lanhu-context.md', 'references/figma/full/stages/03-complete-interaction-logic.md', 'references/figma/full/stages/04-quality-and-build.md', 'references/figma/full/stages/05-visual-calibration.md'] : [])] : []),
     ...catalog.stages.map((s) => s.instructionPath)
   ];
   if (catalog.designSource === 'mastergo') {
@@ -2846,7 +2903,7 @@ if (mode === 'init') {
   const { catalog, catalogRelPath } = loadCatalogForVariant(skillRoot, variant, designSource);
   const digest = computeWorkflowDigest(skillRoot, catalog, catalogRelPath);
   mkdirSync(join(runDir, 'stage-gates'), { recursive: true });
-  if (['figma', 'mastergo'].includes(designSource)) {
+  if (['figma', 'mastergo', 'lanhu'].includes(designSource)) {
     mkdirSync(join(runDir, 'source', designSource), { recursive: true });
   }
   const now = new Date().toISOString();
@@ -3228,6 +3285,7 @@ if (mode === 'confirm') {
     if (catalog.designSource === 'mastergo') {
       evidenceIssues.push(...collectMasterGoStage2Issues(runDir, { proposal: true, variant: catalog.variant }));
     }
+    if (catalog.designSource === 'lanhu') evidenceIssues.push(...collectLanhuConfirmationIssues(runDir));
     if (evidenceIssues.length > 0) {
       fail(`cannot request confirmation: ${evidenceIssues.join('; ')}`);
     }
@@ -3273,6 +3331,7 @@ if (mode === 'confirm') {
     }
     if (isPageStage2(catalog, requestedStage)) {
       const snapshotIssues = collectPageStage2ConfirmationSnapshotIssues(runDir, catalog, state);
+      if (catalog.designSource === 'lanhu') snapshotIssues.push(...collectLanhuConfirmationIssues(runDir));
       if (snapshotIssues.length > 0) {
         fail(`cannot accept confirmation: ${snapshotIssues.join('; ')}`);
       }
