@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/burnice-cn/mastergo-mcp-server",
   "baseCommit": "0b710a4b9d8f580ccd91945b0328b22b7e398f51",
-  "patchSha256": "80a770227a5262e9dfdd8cb26becf668dc63af5618dfda230126a1d2ead9cf85",
+  "patchSha256": "10df3c71d11d113cda61fa7ea528fb994e49309789f1115e53dfc61b37bbd07e",
   "files": [
     "mastergo-api-bridge/README.md",
     "mastergo-api-bridge/package.json",

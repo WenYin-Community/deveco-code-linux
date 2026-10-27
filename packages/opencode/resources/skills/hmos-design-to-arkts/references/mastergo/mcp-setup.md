@@ -113,7 +113,7 @@ Magic 的 `--url` 支持指定服务地址，但不证明任意私有版本兼�
 - https://mastergo.com/help/ai-features/vibe-mcp.html
 - https://github.com/mastergo-design/mastergo-magic-mcp
 
-本次实际通过 MCP tools/list 检查的包版本为 Magic 0.2.10、Vibe 1.0.31；官方 MCP 的真实账号设计取数、私有化联调、Windows 系统确认框及真实 Full 视觉评分验收尚未完成，不得将协议检查或自动化测试描述为这些验收已通过。
+本次实际通过 MCP tools/list 检查的包版本为 Magic 0.2.10、Vibe 1.0.31；官方 MCP 的真实账号设计取数、私有化联调及真实 Full 视觉评分验收尚未完成，不得将协议检查或自动化测试描述为这些验收已通过。
 
 ## 执行权限与错误处理
 

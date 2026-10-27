@@ -1226,7 +1226,7 @@ index 0000000..83053d0
 +  end try
 +end run`, text] : process.platform === "win32" ? ["-NoProfile", "-NonInteractive", "-Sta", "-Command", `
 +Add-Type -AssemblyName System.Windows.Forms
-+$result = [System.Windows.Forms.MessageBox]::Show($env.DEVECO_PAIRING_TEXT, 'MasterGo 连接 DevEco Code', 'YesNo', 'Question', 'Button2')
++$result = [System.Windows.Forms.MessageBox]::Show($env:DEVECO_PAIRING_TEXT, 'MasterGo 连接 DevEco Code', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
 +if ($result -eq 'Yes') { Write-Output 'approved' } else { Write-Output 'denied' }
 +`] : ["--question", "--title=MasterGo 连接 DevEco Code", `--text=${text}`,
 +    "--ok-label=允许连接", "--cancel-label=取消", "--default-cancel", "--timeout=120"];

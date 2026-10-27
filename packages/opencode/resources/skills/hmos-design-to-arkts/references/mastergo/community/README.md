@@ -64,8 +64,8 @@ macOS 使用系统自带 osascript，Windows 使用 PowerShell / Windows Forms�
 ## 验证边界
 
 测试覆盖本地真实 HTTP/WebSocket 配对，以及插件主线程与 UI 脚本的宿主模拟运行。
-macOS 系统确认框已在本机试运行并收到允许结果；Windows / Linux 的弹窗尚未实机验证。
-这些测试不等于 MasterGo 真客户端的完整连接验收、真实设计 Full 工作流或视觉评分验收。
+macOS 系统确认框已在本机试运行并收到允许结果；Windows 系统确认框已在 Windows 实机验证，可正常弹出并返回允许结果，MasterGo 真客户端配对连接成功；Linux 的确认框尚未实机验证。
+Windows 真客户端的配对连接验收已完成；真实设计 Full 工作流与视觉评分验收仍未完成，测试结果不能替代这两项验收。
 
 ## 凭据目录与权限
 
