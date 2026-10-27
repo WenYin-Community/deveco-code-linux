@@ -10,7 +10,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { SandboxError, fromNativeError } from "./error.js";
 const require = createRequire(import.meta.url);
 const PACKAGE_NAME = "@bitfun-ai/sandbox";
-const CONTRACT_GENERATION = 1;
+const CONTRACT_GENERATION = 2;
 const NAPI_BASELINE = 8;
 /** realpathSync with fallback: in bun's compiled binary (bunfs), realpathSync
  *  fails on virtual paths like /$bunfs/root/...; fall back to the original

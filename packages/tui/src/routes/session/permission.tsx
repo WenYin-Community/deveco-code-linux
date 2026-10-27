@@ -374,6 +374,47 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
+            if (permission.startsWith("hdc:")) {
+              const meta = props.request.metadata ?? {}
+              const command = typeof meta["command"] === "string" ? meta["command"] : ""
+              const target = typeof meta["targetAppOrPath"] === "string" ? meta["targetAppOrPath"] : ""
+              const device = typeof meta["targetDevice"] === "string" ? meta["targetDevice"] : ""
+              const operationType = typeof meta["operationType"] === "string" ? meta["operationType"] : ""
+              const fallbackRisk = typeof meta["risk"] === "string" ? meta["risk"] : ""
+              // Locale-aware risk copy for the main approval flows; core-provided
+              // risk text (metadata.risk) is the fallback for other operations.
+              const risk =
+                operationType === "install"
+                  ? t("permission.hdc_risk_install")
+                  : operationType === "file send"
+                    ? t("permission.hdc_risk_file_send")
+                    : operationType === "file recv"
+                      ? t("permission.hdc_risk_file_recv")
+                      : operationType === "aa start"
+                        ? t("permission.hdc_risk_app_start")
+                        : fallbackRisk
+              return {
+                icon: "#",
+                title: t("permission.action_hdc"),
+                body: (
+                  <box paddingLeft={1} flexDirection="column" gap={0}>
+                    <Show when={command}>
+                      <text fg={theme.text}>{"$ " + command}</text>
+                    </Show>
+                    <Show when={target && target !== "N/A"}>
+                      <text fg={theme.textMuted}>{t("permission.hdc_target", { target })}</text>
+                    </Show>
+                    <Show when={device && device !== "N/A" && device !== "unknown"}>
+                      <text fg={theme.textMuted}>{t("permission.hdc_device", { device })}</text>
+                    </Show>
+                    <Show when={risk}>
+                      <text fg={theme.textMuted}>{risk}</text>
+                    </Show>
+                  </box>
+                ),
+              }
+            }
+
             return {
               icon: "⚙",
               title: t("permission.action_call_tool", { name: permission }),
@@ -407,7 +448,17 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title={t("permission.required")}
               header={header()}
               body={current.body}
-              options={{ once: t("dialog.allow_once"), always: t("dialog.allow_always"), reject: t("dialog.reject") }}
+              // FR-APPROVAL-101: Always allow is only offered when the
+              // product ceiling allows persisting it for this operation
+              // (canAlwaysAllow → non-empty always list). Ask-ceiling
+              // hdc operations get Allow once / Reject only.
+              options={
+                props.request.permission.startsWith("hdc:")
+                  ? props.request.always.length > 0
+                    ? { once: t("dialog.allow_once"), always: t("dialog.allow_always"), reject: t("dialog.reject") }
+                    : { once: t("dialog.allow_once"), reject: t("dialog.reject") }
+                  : { once: t("dialog.allow_once"), always: t("dialog.allow_always"), reject: t("dialog.reject") }
+              }
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {

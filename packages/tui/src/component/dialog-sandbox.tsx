@@ -249,7 +249,7 @@ export function DialogSandbox() {
     }
     const cfg = sandboxConfig()
     if (!cfg || !cfg.profile) {
-      return { id: "full-access", isImplicit: true, sourceLabel: t("dialog.sandbox.config_source_default") }
+      return { id: "workspace", isImplicit: true, sourceLabel: t("dialog.sandbox.config_source_default") }
     }
     const source = configSource()
     return {

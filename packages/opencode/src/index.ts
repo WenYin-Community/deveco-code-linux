@@ -40,6 +40,15 @@ if (args[0] === "__devecocli-proxy") {
   process.exit(await runDevecoCliProxy(proxyArgs, process.cwd()))
 }
 
+// HDC guard shim re-entry (SR1): the `hdc` shim script in
+// Global.Path.bin execs `deveco __hdc-shim -- <argv>`, which
+// routes the call through the in-process guard over IPC.
+if (args[0] === "__hdc-shim") {
+  const hdcArgs = args[1] === "--" ? args.slice(2) : args.slice(1)
+  const { runHdcShim } = await import("./hdc/shim")
+  process.exit(await runHdcShim(hdcArgs))
+}
+
 function show(out: string) {
   const text = out.trimStart()
   if (!text.startsWith("deveco ")) {

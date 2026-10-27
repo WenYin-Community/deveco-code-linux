@@ -7,6 +7,7 @@ import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { AskTimedOutError } from "./ask-timeout"
 
 export type Ruleset = PermissionV1.Ruleset
 
@@ -22,8 +23,18 @@ export const Event = {
   }),
 }
 
+export { AskTimedOutError }
+
+export interface AskOptions {
+  // Auto-reject the ask after this many milliseconds. Used by the
+  // hdc guard so a forgotten prompt cannot pin a device command
+  // forever. On expiry the pending request is removed, a reject
+  // reply is published, and the ask fails with AskTimedOutError.
+  timeoutMs?: number
+}
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: PermissionV1.AskInput, options?: AskOptions) => Effect.Effect<void, PermissionV1.Error>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
@@ -77,7 +88,7 @@ export const layer = Layer.effect(
       }),
     )
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
+    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput, options?: AskOptions) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
       let needsAsk = false
@@ -106,16 +117,37 @@ export const layer = Layer.effect(
         always: request.always,
         tool: request.tool,
       }
-      yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
+      yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns, metadata: info.metadata })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
-      return yield* Effect.ensuring(
+
+      const awaitReply = Effect.ensuring(
         Deferred.await(deferred),
         Effect.sync(() => {
           pending.delete(id)
         }),
+      )
+
+      if (!options?.timeoutMs) return yield* awaitReply
+
+      return yield* Effect.raceFirst(
+        awaitReply,
+        Effect.sleep(options.timeoutMs).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              // Losing the race interrupts awaitReply, whose
+              // finalizer already removed the pending entry.
+              yield* events.publish(Event.Replied, {
+                sessionID: info.sessionID,
+                requestID: id,
+                reply: "reject",
+              })
+              return yield* new AskTimedOutError()
+            }),
+          ),
+        ),
       )
     })
 

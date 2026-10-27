@@ -20,6 +20,7 @@ import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { DevEcoAuthPlugin } from "./deveco"
 import { DevEcoCliEnvPlugin } from "./deveco-cli-env"
+import { HdcGuardEnvPlugin } from "./hdc-guard-env"
 import AnalyticsPlugin from "./analytics/analytics-plugin"
 import AnalyticsMagpiePlugin from "./analytics-magpie/analytics-plugin"
 import { XaiAuthPlugin } from "./xai"
@@ -83,6 +84,7 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     DigitalOceanAuthPlugin,
     DevEcoAuthPlugin,
     DevEcoCliEnvPlugin,
+    HdcGuardEnvPlugin,
     AnalyticsPlugin,
     AnalyticsMagpiePlugin,
     SnowflakeCortexAuthPlugin,

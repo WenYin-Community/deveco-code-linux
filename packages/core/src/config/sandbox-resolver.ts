@@ -73,6 +73,7 @@ function toMutable(def: ProfileDefinition): MutableProfileDefinition {
     ...(def.workspace_roots !== undefined && { workspace_roots: [...def.workspace_roots] }),
     ...(def.filesystem !== undefined && { filesystem: { ...def.filesystem } }),
     ...(def.network !== undefined && { network: { ...def.network } }),
+    ...(def.process !== undefined && { process: { deny_exec: [...def.process.deny_exec] } }),
   }
 }
 
@@ -97,6 +98,8 @@ function mergeProfileDefinitions(
   }
 
   if (override.network !== undefined) merged.network = override.network
+
+  if (override.process !== undefined) merged.process = override.process
 
   return merged
 }
@@ -425,7 +428,10 @@ export interface SelectionResult {
 /**
  * Resolve the effective profile selection.
  * S-SEL-1: highest-priority layer's explicit sandbox.profile wins
- * S-SEL-2: no declaration → implicit default (read-only, deviation D1)
+ * S-SEL-2: no declaration → implicit default full-access (temporary FR-DEF-001
+ *   deviation D1: sandbox permission issues block workspace default; restore
+ *   workspace once resolved — FR-DEF-001 verification then requires explicit
+ *   sandbox.profile declaration)
  * S-SEL-3: resolved result must pass V-SEL-1 / V-SEL-2
  */
 export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult {
@@ -440,7 +446,8 @@ export function resolveSelection(layers: LayeredSandboxConfig): SelectionResult 
     return { profile_id: layers.global.profile, is_implicit: false, source_layer: "global" }
   }
 
-  // S-SEL-2: no declaration → implicit default
+  // S-SEL-2: no declaration → implicit default full-access (temporary D1
+  // deviation from FR-DEF-001; see resolveSelection doc comment)
   return { profile_id: "full-access", is_implicit: true, source_layer: "global" }
 }
 
@@ -475,6 +482,7 @@ export function resolveProfile(
       filesystem: (flatDef.filesystem ?? {}) as Record<string, AccessMode>,
       network_enabled,
       workspace_roots,
+      process: flatDef.process,
       is_implicit: selection.is_implicit,
       source_layer: selection.source_layer,
     } satisfies ResolvedProfile

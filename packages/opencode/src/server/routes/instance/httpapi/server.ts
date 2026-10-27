@@ -106,6 +106,7 @@ import { schemaErrorLayer as v2SchemaErrorLayer } from "@opencode-ai/server/midd
 import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { syncGuardLayer } from "./middleware/sync-guard"
+import { ServerRuntime } from "@/server/server-runtime"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
@@ -116,6 +117,24 @@ import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
+
+// Re-entry handle into this layer graph for module-level code outside
+// the tree (e.g. the HDC guard IPC handler): its permission asks must
+// land in the same Permission/Session/InstanceStore instances the
+// HTTP routes serve, or the TUI's replies cannot resolve them.
+const serverRuntimeHandle = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const ctx = yield* Effect.context<never>()
+    const handle: ServerRuntime.Shape = {
+      // The routes context satisfies the effect's requirements at
+      // runtime; the erased R in the handle shape cannot be proven here.
+      runPromise: <A, E, R>(effect: Effect.Effect<A, E, R>): Promise<A> =>
+        Effect.runPromise(effect.pipe(Effect.provide(ctx)) as Effect.Effect<A, E>),
+    }
+    yield* Effect.addFinalizer(() => Effect.sync(() => ServerRuntime.unregister(handle)))
+    yield* Effect.sync(() => ServerRuntime.register(handle))
+  }),
+)
 
 const cors = (corsOptions?: CorsOptions) =>
   HttpRouter.middleware(
@@ -284,6 +303,7 @@ export function createRoutes(
     serverRoutes,
     docRoute,
     uiRoute,
+    serverRuntimeHandle,
   ).pipe(
     Layer.provide([
       errorLayer,

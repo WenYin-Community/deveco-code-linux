@@ -8,5 +8,15 @@ import { runDevecoCliProxy } from "./router"
 // .tsx 组件，只有在 packages/opencode 目录下才加载得动；而 shim 的调用方 cwd 是用户的工程目录
 // （devecocli create 成功后还会自动切过去）。本文件不依赖任何 .tsx，因此从任意 cwd 都能运行。
 const args = process.argv.slice(2)
+
+// hdc shim 的重入入口（见 hdc/shim-env.ts 写出的 hdc shim 与 index.ts 的 __hdc-shim 路由）。
+// 与 __devecocli-proxy 同理：hdc/shim.ts 不依赖任何 .tsx，从任意 cwd 都能运行，
+// 而 src/index.ts 只有在 packages/opencode 目录下才加载得动。
+if (args[0] === "__hdc-shim") {
+  const hdcArgs = args[1] === "--" ? args.slice(2) : args.slice(1)
+  const { runHdcShim } = await import("../hdc/shim")
+  process.exit(await runHdcShim(hdcArgs))
+}
+
 const proxyArgs = args[0] === "__devecocli-proxy" && args[1] === "--" ? args.slice(2) : args
 process.exit(await runDevecoCliProxy(proxyArgs, process.cwd()))

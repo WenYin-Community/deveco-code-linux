@@ -36,6 +36,7 @@ import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
 import { resolveCliInvocation } from "@/deveco-cli/commands"
 import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/event"
 import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV } from "@/deveco-cli/router"
+import { HdcHostEnforcement } from "@/hdc/host-enforcement"
 import { Global } from "@opencode-ai/core/global"
 import { Agent } from "@/agent/agent"
 
@@ -543,10 +544,10 @@ export const ShellTool = Tool.define(
       return scan
     })
 
-    const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string) {
+    const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string, directory: string) {
       const extra = yield* plugin.trigger(
         "shell.env",
-        { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
+        { cwd, sessionID: ctx.sessionID, callID: ctx.callID, directory },
         { env: {} },
       )
       return {
@@ -816,6 +817,66 @@ export const ShellTool = Tool.define(
         state.sandboxNetworkEnabled = profile.network_enabled
       }
 
+      // FR-HOST-101 / AR-HDC-SEC1-007: macOS host anti-bypass. Discover the
+      // real hdc binaries and inject direct-exec/direct-read deny plus the
+      // minimal guard UDS allowance into the profile, then run the four
+      // canaries before any protected command starts. Any canary failure
+      // fails closed — the command must not start (no degraded run).
+      if (isMac && profile && profile.profile_id !== "full-access") {
+        const protectedBins = yield* Effect.promise(() => HdcHostEnforcement.protectedHdcBinaries()).pipe(
+          Effect.catch(() => Effect.succeed([] as string[])),
+        )
+        if (protectedBins.length > 0) {
+          const injectedProfile = HdcHostEnforcement.injectHostEnforcement(profile, protectedBins, input.env.DEVECO_CODE_HDC_ENDPOINT)
+          profile = injectedProfile
+          const canaries = yield* Effect.tryPromise({
+            try: () =>
+              HdcHostEnforcement.runHostEnforcementCanaries(
+                {
+                  profile: injectedProfile,
+                  bins: protectedBins,
+                  env: input.env as Record<string, string>,
+                  cwd: input.cwd,
+                  armed: Boolean(
+                    input.env.DEVECO_CODE_HDC_ENDPOINT &&
+                      input.env.DEVECO_CODE_HDC_TOKEN &&
+                      input.env.DEVECO_CODE_HDC_SESSION,
+                  ),
+                },
+                {
+                  prepare: (request) => nativeRuntime().prepare(request),
+                },
+              ),
+            catch: (err) =>
+              new Sandbox.SandboxError({
+                code: "ProbeFailed",
+                phase: "Probe",
+                message: err instanceof Error ? err.message : String(err),
+              }),
+          }).pipe(
+            Effect.catchTags({
+              SandboxError: (err) =>
+                Effect.gen(function* () {
+                  state.hostEnforcement = "failed"
+                  yield* Effect.logInfo(
+                    `sandbox_request_finished request_id=${requestId} enforcement_result=failed execution_result=failed host_enforcement=failed duration_ms=${Date.now() - sandboxStartTime} failure_stage=${err.phase} error_type=${err.code} error_message=${err.message}`,
+                  )
+                  return yield* Effect.fail(err)
+                }),
+            }),
+          )
+          state.hostEnforcement = "applied"
+          const summary = canaries.cached
+            ? "cached"
+            : canaries.results.map((result) => `${result.name}:${result.status}`).join(",")
+          yield* Effect.logInfo(
+            `hdc_host_enforcement bins=${protectedBins.length} host_enforcement=applied canaries=${summary}`,
+          )
+        }
+      } else if (isMac && profile && profile.profile_id === "full-access") {
+        state.hostEnforcement = "bypassed"
+      }
+
       let spawnCmd = cmd(input.shell, input.command, input.cwd, input.env)
 
       let prepareDurationMs: number | undefined
@@ -850,7 +911,7 @@ export const ShellTool = Tool.define(
                 failureStage = err.phase
                 errorType = err.code
                 yield* Effect.logInfo(
-                  `sandbox_request_finished request_id=${requestId} enforcement_result=failed execution_result=failed duration_ms=${Date.now() - sandboxStartTime} prepare_duration_ms=${prepareDurationMs} failure_stage=${failureStage} error_type=${errorType} error_message=${err.message}`,
+                  `sandbox_request_finished request_id=${requestId} enforcement_result=failed host_enforcement=${state.hostEnforcement ?? "not_applicable"} execution_result=failed duration_ms=${Date.now() - sandboxStartTime} prepare_duration_ms=${prepareDurationMs} failure_stage=${failureStage} error_type=${errorType} error_message=${err.message}`,
                 )
                 return yield* Effect.fail(err)
               }),
@@ -900,6 +961,7 @@ export const ShellTool = Tool.define(
       const finishedParts = [
         `request_id=${requestId}`,
         `enforcement_result=${enforcementResult}`,
+        `host_enforcement=${state.hostEnforcement ?? (isMac ? "not_applicable" : "not_applicable")}`,
         `execution_result=${executionResult}`,
         `duration_ms=${Date.now() - sandboxStartTime}`,
         `cleanup_result=${cleanupResult}`,
@@ -1045,7 +1107,7 @@ export const ShellTool = Tool.define(
             // FR-OBS-002: Record finished event for non-SandboxError failures.
             if (state.requestId && state.sandboxStartTime) {
               yield* Effect.logInfo(
-                `sandbox_request_finished request_id=${state.requestId} enforcement_result=failed execution_result=failed duration_ms=${Date.now() - state.sandboxStartTime} error_type=internal_error error_message=${err instanceof Error ? err.message : String(err)}`,
+                `sandbox_request_finished request_id=${state.requestId} enforcement_result=failed host_enforcement=${state.hostEnforcement ?? "not_applicable"} execution_result=failed duration_ms=${Date.now() - state.sandboxStartTime} error_type=internal_error error_message=${err instanceof Error ? err.message : String(err)}`,
               )
             }
             yield* ctx.metadata({ metadata: { output: `[shell error] ${err instanceof Error ? err.message : String(err)}`, description: input.description } })
@@ -1096,7 +1158,7 @@ export const ShellTool = Tool.define(
                 `${process.pid}-${randomUUID()}.jsonl`,
               )
               const env: NodeJS.ProcessEnv = {
-                ...(yield* shellEnv(ctx, cwd)),
+                ...(yield* shellEnv(ctx, cwd, instanceCtx.directory)),
                 [DEVECO_CLI_EVENT_FILE]: devecoCliEventFile,
               }
               // ask gets a larger single-pass docs preview; every other agent has the variable

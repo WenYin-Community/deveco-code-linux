@@ -289,18 +289,16 @@ for (const item of targets) {
   await $`mkdir -p dist/${name}/bin`
 
   // Patch @bitfun-ai/sandbox dist/loader.js to support bun compiled binaries
-  // (bunfs). The upstream npm package (0.2.19) uses realpathSync on bunfs
-  // virtual paths, which fails with "Sandbox wrapper package identity is invalid".
-  // Our patched version adds tryRealpath(), isBunfs(), and loadNativeFromBunfs().
+  // (bunfs) and keep CONTRACT_GENERATION in sync with the vendored
+  // sandbox.node build-identity.json. Always overwrite: bun install may
+  // restore the upstream version, and the upstream may already contain
+  // isBunfs (e.g. 0.3.0) but with a stale CONTRACT_GENERATION constant.
   const sandboxLoaderPath = path.join(dir, "node_modules/@bitfun-ai/sandbox/dist/loader.js")
   const patchedLoaderPath = path.join(dir, "patches/sandbox-loader.js")
   if (fs.existsSync(sandboxLoaderPath) && fs.existsSync(patchedLoaderPath)) {
-    const upstreamContent = fs.readFileSync(sandboxLoaderPath, "utf8")
     const patchedContent = fs.readFileSync(patchedLoaderPath, "utf8")
-    if (!upstreamContent.includes("isBunfs")) {
-      fs.writeFileSync(sandboxLoaderPath, patchedContent)
-      console.log("  Patched @bitfun-ai/sandbox dist/loader.js for bunfs support")
-    }
+    fs.writeFileSync(sandboxLoaderPath, patchedContent)
+    console.log("  Patched @bitfun-ai/sandbox dist/loader.js for bunfs support")
   }
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")

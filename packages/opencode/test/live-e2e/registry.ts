@@ -21,6 +21,15 @@ import mcpAddServer from "./cases/mcp-add-server.case"
 import mcpListServers from "./cases/mcp-list-servers.case"
 import startAppDeploy from "./cases/start-app-deploy.case"
 import hdcLogListDevices from "./cases/hdc-log-list-devices.case"
+import hdcGuardAllowBasic from "./cases/hdc-guard-allow-basic.case"
+import hdcGuardDenyOperations from "./cases/hdc-guard-deny-operations.case"
+import hdcGuardFileSendApprove from "./cases/hdc-guard-file-send-approve.case"
+import hdcGuardFileSendReject from "./cases/hdc-guard-file-send-reject.case"
+import hdcGuardInstallLaunch from "./cases/hdc-guard-install-launch.case"
+import hdcGuardSubprocess from "./cases/hdc-guard-subprocess.case"
+import hdcGuardObjectBoundary from "./cases/hdc-guard-object-boundary.case"
+import hdcGuardExecReliability from "./cases/hdc-guard-exec-reliability.case"
+import hdcGuardFaultInjection from "./cases/hdc-guard-fault-injection.case"
 import incrementalDevBuildProject from "./cases/incremental-dev-build-project.case"
 import commandExecution from "./cases/command-execution.case"
 import switchCwdBuild from "./cases/switch-cwd-build.case"
@@ -76,6 +85,15 @@ export const cases: LiveTestCase[] = [
   mcpListServers,
   startAppDeploy,
   hdcLogListDevices,
+  hdcGuardAllowBasic,
+  hdcGuardDenyOperations,
+  hdcGuardFileSendApprove,
+  hdcGuardFileSendReject,
+  hdcGuardInstallLaunch,
+  hdcGuardSubprocess,
+  hdcGuardObjectBoundary,
+  hdcGuardExecReliability,
+  hdcGuardFaultInjection,
   incrementalDevBuildProject,
   commandExecution,
   switchCwdBuild,

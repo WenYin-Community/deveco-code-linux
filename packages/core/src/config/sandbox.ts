@@ -22,6 +22,17 @@ export const NetworkOverride = Schema.Struct({
 })
 export type NetworkOverride = typeof NetworkOverride.Type
 
+// ─── Process Override ──────────────────────────────────────
+// User-configurable process exec deny list; maps to native ProcessSandboxPolicy
+
+export const ProcessOverride = Schema.Struct({
+  deny_exec: Schema.Array(Schema.String),
+}).annotate({
+  identifier: "ConfigV2.Sandbox.ProcessOverride",
+  description: "Process exec deny list; absolute paths to block from direct exec",
+})
+export type ProcessOverride = typeof ProcessOverride.Type
+
 // ─── Profile Definition ─────────────────────────────────────
 // §3.3.2: profiles.<id> = { description, extends, workspace_roots, filesystem, network }
 
@@ -31,6 +42,7 @@ export const ProfileDefinition = Schema.Struct({
   workspace_roots: Schema.Array(Schema.String).pipe(Schema.optional),
   filesystem: Schema.Record(Schema.String, AccessMode).pipe(Schema.optional),
   network: NetworkOverride.pipe(Schema.optional),
+  process: ProcessOverride.pipe(Schema.optional),
 }).annotate({
   identifier: "ConfigV2.Sandbox.ProfileDefinition",
   description: "A named sandbox profile definition; extends flattens at load time",
@@ -94,7 +106,7 @@ export function validateSandboxShape(raw: unknown): SandboxConfig | undefined {
 }
 
 const knownNetKeys = new Set(["enabled"])
-const knownProfileKeys = new Set(["description", "extends", "workspace_roots", "filesystem", "network"])
+const knownProfileKeys = new Set(["description", "extends", "workspace_roots", "filesystem", "network", "process"])
 
 function validateNetwork(raw: unknown): boolean {
   if (typeof raw !== "object" || raw === null) return false
@@ -116,7 +128,17 @@ function validateProfileDefinition(raw: unknown): boolean {
   if (p.workspace_roots !== undefined && !validateWorkspaceRoots(p.workspace_roots)) return false
   if (p.network !== undefined && !validateNetwork(p.network)) return false
   if (p.filesystem !== undefined && !validateFilesystemField(p.filesystem)) return false
+  if (p.process !== undefined && !validateProcessField(p.process)) return false
   return true
+}
+
+function validateProcessField(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false
+  const proc = value as Record<string, unknown>
+  for (const key of Object.keys(proc)) {
+    if (key !== "deny_exec") return false
+  }
+  return Array.isArray(proc.deny_exec) && proc.deny_exec.every((v) => typeof v === "string")
 }
 
 function validateWorkspaceRoots(value: unknown): boolean {
@@ -192,6 +214,7 @@ export const ResolvedProfile = Schema.Struct({
   filesystem: Schema.Record(Schema.String, AccessMode),
   network_enabled: Schema.Boolean,
   workspace_roots: Schema.Array(Schema.String),
+  process: ProcessOverride.pipe(Schema.optional),
   is_implicit: Schema.Boolean,
   source_layer: Schema.String,
 }).annotate({
@@ -209,4 +232,5 @@ export type MutableProfileDefinition = {
   workspace_roots?: string[]
   filesystem?: Record<string, AccessMode>
   network?: NetworkOverride
+  process?: ProcessOverride
 }

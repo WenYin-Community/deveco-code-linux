@@ -60,7 +60,7 @@
     "drizzle-kit": "catalog:"
   },
   "dependencies": {
-    "@bitfun-ai/sandbox": "0.2.20",
+    "@bitfun-ai/sandbox": "0.3.0",
     "@ai-sdk/alibaba": "1.0.17",
     "@ai-sdk/amazon-bedrock": "4.0.112",
     "@ai-sdk/anthropic": "3.0.82",

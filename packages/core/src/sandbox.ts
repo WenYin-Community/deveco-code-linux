@@ -17,6 +17,7 @@ import type {
   FileSystemPath as NativeFileSystemPath,
   FileSystemAccessMode as NativeFileSystemAccessMode,
   NetworkSandboxPolicy as NativeNetworkSandboxPolicy,
+  ProcessSandboxPolicy as NativeProcessSandboxPolicy,
   SandboxTargetCommand as NativeSandboxTargetCommand,
 } from "@bitfun-ai/sandbox"
 import { Config } from "./config"
@@ -28,8 +29,9 @@ import {
   SandboxConfigError,
   type ResolvedProfile,
   type SandboxConfig,
+  AccessMode,
+  ProcessOverride,
 } from "./config/sandbox"
-import { AccessMode } from "./config/sandbox"
 import { getRuntimeSandbox, setRuntimeSandbox, clearRuntimeSandbox } from "./config/runtime-sandbox"
 
 // ─── Public Contract Types (from sandbox-architecture.md §5) ──
@@ -70,9 +72,10 @@ export const PermissionProfile = Schema.Struct({
   filesystem: Schema.Record(Schema.String, AccessMode),
   network_enabled: Schema.Boolean,
   workspace_roots: Schema.Array(Schema.String),
+  process: ProcessOverride.pipe(Schema.optional),
 }).annotate({
   identifier: "Sandbox.PermissionProfile",
-  description: "Resolved permission profile: profile id, filesystem rules, network, workspace roots",
+  description: "Resolved permission intent: profile id, filesystem rules, network, workspace roots, process deny list",
 })
 export type PermissionProfile = typeof PermissionProfile.Type
 
@@ -304,10 +307,15 @@ function toNativePermissionProfile(resolved: ResolvedProfile): NativePermissionP
     ? { type: "Enabled" }
     : { type: "Restricted" }
 
+  const process: NativeProcessSandboxPolicy = resolved.process?.deny_exec.length
+    ? { type: "DenyListed", executable_paths: [...resolved.process.deny_exec] }
+    : { type: "AllowAll" }
+
   return {
     type: "Managed",
     file_system: policy,
     network,
+    process,
   }
 }
 
@@ -392,6 +400,9 @@ function toNativePermissions(permissions: SandboxPrepareRequest["permissions"]):
     network: permissions.network_enabled
       ? { type: "Enabled" as const }
       : { type: "Restricted" as const },
+    process: permissions.process?.deny_exec.length
+      ? { type: "DenyListed" as const, executable_paths: [...permissions.process.deny_exec] }
+      : { type: "AllowAll" as const },
   }
 }
 
@@ -598,6 +609,7 @@ export const contextLayer = Layer.effect(
           ),
           network_enabled: resolved.network_enabled,
           workspace_roots: resolved.workspace_roots,
+          process: resolved.process,
         },
         io: { kind: "pipe" },
       }),

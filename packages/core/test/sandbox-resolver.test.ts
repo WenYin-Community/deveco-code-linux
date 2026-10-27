@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { Effect } from "effect"
 import { SandboxResolver } from "../src/config/sandbox-resolver"
+import { toNativePrepareRequest } from "../src/sandbox"
 import {
   SandboxConfigError,
   BUILTIN_PROFILES,
@@ -183,7 +184,9 @@ describe("SandboxResolver.resolveSelection", () => {
   })
 
   // FR-CFG-005 S-SEL-2: 无任何声明时隐式默认 full-access
-  it("S-SEL-2: implicit default is full-access", () => {
+  // （临时 FR-DEF-001 偏差 D1：沙箱权限问题未解决前暂不默认 workspace，
+  //   沙箱修复后恢复 workspace 并解除本偏差）
+  it("S-SEL-2: implicit default is full-access (temporary D1 deviation)", () => {
     const result = SandboxResolver.resolveSelection({})
     expect(result.profile_id).toBe("full-access")
     expect(result.is_implicit).toBe(true)
@@ -211,7 +214,7 @@ describe("SandboxResolver.resolveSandbox", () => {
     expect(result.is_implicit).toBe(false)
   })
 
-  // FR-CFG-005: 无配置时隐式默认 full-access
+  // FR-CFG-005: 无配置时隐式默认 full-access（临时 D1 偏差）
   it("succeeds for implicit default (no config)", async () => {
     const result = await Effect.runPromise(
       SandboxResolver.resolveSandbox({}),
@@ -562,5 +565,231 @@ describe("D3 regression: network off no longer rejected", () => {
       }),
     )
     expect(result.network_enabled).toBe(true)
+  })
+})
+
+// ─── process 字段测试（AR-HDC-SEC1-007: macOS 主机强制防绕过）──
+// 覆盖：validateSandboxShape 校验、merge 跨层合并、flatten extends 展平、resolve 解析
+
+describe("process: validateSandboxShape accepts valid process field", () => {
+  // process.deny_exec: string[] 合法
+  it("accepts process with deny_exec string array", () => {
+    const result = validateSandboxShape({
+      profiles: {
+        dev: {
+          filesystem: { ":root": "read" },
+          process: { deny_exec: ["/usr/bin/dd", "/path/to/hdc"] },
+        },
+      },
+    })
+    expect(result).toBeDefined()
+    expect(result?.profiles?.["dev"]?.process?.deny_exec).toEqual(["/usr/bin/dd", "/path/to/hdc"])
+  })
+
+  // process 为空对象 → 拒绝（deny_exec 缺失）
+  it("rejects process with missing deny_exec", () => {
+    const result = validateSandboxShape({
+      profiles: {
+        dev: {
+          filesystem: { ":root": "read" },
+          process: {} as any,
+        },
+      },
+    })
+    expect(result).toBeUndefined()
+  })
+
+  // process.deny_exec 非数组 → 拒绝
+  it("rejects process with non-array deny_exec", () => {
+    const result = validateSandboxShape({
+      profiles: {
+        dev: {
+          filesystem: { ":root": "read" },
+          process: { deny_exec: "not-an-array" } as any,
+        },
+      },
+    })
+    expect(result).toBeUndefined()
+  })
+
+  // process.deny_exec 包含非字符串 → 拒绝
+  it("rejects process with non-string elements in deny_exec", () => {
+    const result = validateSandboxShape({
+      profiles: {
+        dev: {
+          filesystem: { ":root": "read" },
+          process: { deny_exec: ["/valid", 123] } as any,
+        },
+      },
+    })
+    expect(result).toBeUndefined()
+  })
+
+  // process 含未知键 → 拒绝
+  it("rejects process with unknown key", () => {
+    const result = validateSandboxShape({
+      profiles: {
+        dev: {
+          filesystem: { ":root": "read" },
+          process: { deny_exec: ["/x"], unknownKey: true } as any,
+        },
+      },
+    })
+    expect(result).toBeUndefined()
+  })
+})
+
+describe("process: mergeLayers preserves process across layers", () => {
+  // 子层 process 覆盖父层 process（整体覆盖，类似 network）
+  it("higher layer process overrides lower layer process", () => {
+    const result = SandboxResolver.mergeLayers({
+      global: {
+        profiles: {
+          dev: { filesystem: { ":root": "read" }, process: { deny_exec: ["/a"] } },
+        },
+      },
+      project: {
+        profiles: {
+          dev: { process: { deny_exec: ["/b", "/c"] } },
+        },
+      },
+    })
+    expect(result.profiles?.["dev"]?.process?.deny_exec).toEqual(["/b", "/c"])
+  })
+
+  // 仅一层有 process 时保留
+  it("preserves process when only one layer defines it", () => {
+    const result = SandboxResolver.mergeLayers({
+      global: {
+        profiles: {
+          dev: { filesystem: { ":root": "read" }, process: { deny_exec: ["/x"] } },
+        },
+      },
+    })
+    expect(result.profiles?.["dev"]?.process?.deny_exec).toEqual(["/x"])
+  })
+})
+
+describe("process: flattenProfile inherits process from extends chain", () => {
+  // extends 链中子 profile 的 process 覆盖父 profile
+  it("child process overrides parent process in extends chain", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.flattenProfile("dev", {
+        parent: { filesystem: { ":root": "read" }, process: { deny_exec: ["/parent"] } },
+        dev: { extends: "parent", process: { deny_exec: ["/child"] } },
+      }),
+    )
+    expect(result.process?.deny_exec).toEqual(["/child"])
+  })
+
+  // extends 链中子 profile 没有 process 时继承父 profile 的
+  it("child inherits parent process when child has no process", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.flattenProfile("dev", {
+        parent: { filesystem: { ":root": "read" }, process: { deny_exec: ["/parent"] } },
+        dev: { extends: "parent", filesystem: { "/custom": "write" } },
+      }),
+    )
+    expect(result.process?.deny_exec).toEqual(["/parent"])
+  })
+})
+
+describe("process: resolveSandbox includes process in resolved profile", () => {
+  // 自定义 profile 带 process → resolve 后 ResolvedProfile 包含 process
+  it("resolved profile includes process from custom profile", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
+        global: {
+          profile: "dev",
+          profiles: {
+            dev: {
+              filesystem: { ":root": "read" },
+              process: { deny_exec: ["/usr/bin/dd", "/path/to/hdc"] },
+            },
+          },
+        },
+      }),
+    )
+    expect(result.profile_id).toBe("dev")
+    expect(result.process?.deny_exec).toEqual(["/usr/bin/dd", "/path/to/hdc"])
+  })
+
+  // 内建 profile 无 process → resolve 后 process 为 undefined
+  it("resolved profile has undefined process for builtin profile", async () => {
+    const result = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
+        global: { profile: "read-only" },
+      }),
+    )
+    expect(result.profile_id).toBe("read-only")
+    expect(result.process).toBeUndefined()
+  })
+})
+
+describe("process: toNativePrepareRequest maps process to native ProcessSandboxPolicy", () => {
+  const target = {
+    executable: "/bin/echo",
+    args: ["hello"],
+    cwd: "/tmp",
+    env: {} as Record<string, string>,
+  }
+
+  // 有 deny_exec → DenyListed
+  it("maps deny_exec to DenyListed with executable_paths", async () => {
+    const resolved = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
+        global: {
+          profile: "dev",
+          profiles: {
+            dev: {
+              filesystem: { ":root": "read" },
+              process: { deny_exec: ["/path/to/hdc", "/usr/bin/dd"] },
+            },
+          },
+        },
+      }),
+    )
+    const native = toNativePrepareRequest(resolved, target)
+    expect(native.permissions.type).toBe("Managed")
+    if (native.permissions.type === "Managed") {
+      expect(native.permissions.process.type).toBe("DenyListed")
+      if (native.permissions.process.type === "DenyListed") {
+        expect(native.permissions.process.executable_paths).toEqual(["/path/to/hdc", "/usr/bin/dd"])
+      }
+    }
+  })
+
+  // 无 process → AllowAll
+  it("maps missing process to AllowAll", async () => {
+    const resolved = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
+        global: { profile: "read-only" },
+      }),
+    )
+    const native = toNativePrepareRequest(resolved, target)
+    if (native.permissions.type === "Managed") {
+      expect(native.permissions.process.type).toBe("AllowAll")
+    }
+  })
+
+  // 空 deny_exec → AllowAll
+  it("maps empty deny_exec to AllowAll", async () => {
+    const resolved = await Effect.runPromise(
+      SandboxResolver.resolveSandbox({
+        global: {
+          profile: "dev",
+          profiles: {
+            dev: {
+              filesystem: { ":root": "read" },
+              process: { deny_exec: [] },
+            },
+          },
+        },
+      }),
+    )
+    const native = toNativePrepareRequest(resolved, target)
+    if (native.permissions.type === "Managed") {
+      expect(native.permissions.process.type).toBe("AllowAll")
+    }
   })
 })

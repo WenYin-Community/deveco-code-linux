@@ -61,6 +61,28 @@ export async function createHarmonyProject(
   return projectRoot
 }
 
+// Runs `devecocli build` inside an existing HarmonyOS project directory
+// and throws when the build fails or times out.
+export async function buildHarmonyProject(
+  projectRoot: string,
+  env: Record<string, string | undefined> = realUserEnv(),
+  timeoutMs = 300_000,
+) {
+  const proc = Bun.spawn([process.execPath, bundledDevecoCliEntry, "build", "--build-mode", "debug"], {
+    cwd: projectRoot,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const timeout = setTimeout(() => proc.kill(), timeoutMs)
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]).finally(() => clearTimeout(timeout))
+  if (exitCode !== 0) throw new Error(`devecocli build exited with ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`)
+}
+
 export async function runDeveco(
   args: string[],
   options: { timeoutMs?: number; cwd?: string; stdin?: string; env?: Record<string, string | undefined>; entry?: string; stallMs?: number } = {},
@@ -151,6 +173,57 @@ export async function runDevecoPrompt(
   }
 }
 
+// Runs the in-process hdc guard ask driver (see
+// fixtures/hdc-guard-ask-driver.ts) and returns its JSON result. The
+// caller must pass an env whose XDG_CACHE_HOME points at an isolated
+// cache dir so the hdc shim is written to a temp Global.Path.bin.
+export async function runHdcGuardDriver(options: {
+  env: Record<string, string | undefined>
+  workspace: string
+  reply: "once" | "reject"
+  repeat?: number
+  timeoutMs?: number
+  hdcArgs: string[]
+}) {
+  const driverPath = path.join(import.meta.dir, "fixtures", "hdc-guard-ask-driver.ts")
+  const resultFile = path.join(os.tmpdir(), `hdc-guard-driver-${process.pid}-${Date.now()}.json`)
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      driverPath,
+      options.workspace,
+      options.reply,
+      resultFile,
+      String(options.repeat ?? 1),
+      ...options.hdcArgs,
+    ],
+    {
+      cwd: opencodeRoot,
+      env: options.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
+  const timeout = setTimeout(() => proc.kill(), options.timeoutMs ?? 180_000)
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]).finally(() => clearTimeout(timeout))
+  const file = Bun.file(resultFile)
+  const parsed = (await file.exists()) ? await file.json() : undefined
+  await fs.rm(resultFile, { force: true }).catch(() => undefined)
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`hdc guard driver did not write a result (exit ${exitCode})\nstdout: ${stdout}\nstderr: ${stderr}`)
+  }
+  return {
+    driver: parsed as import("./fixtures/hdc-guard-ask-driver").HdcGuardDriverResult,
+    exitCode,
+    stdout,
+    stderr,
+  }
+}
+
 export function parseJsonLines(stdout: string) {
   return stdout
     .split("\n")
@@ -232,7 +305,7 @@ async function collectThirdPartyModelConfig(): Promise<ThirdPartyModelEnv> {
   }
 }
 
-async function runProcess(cmd: string[], timeoutMs = 30_000) {
+export async function runProcess(cmd: string[], timeoutMs = 30_000) {
   const proc = Bun.spawn(cmd, {
     stdout: "pipe",
     stderr: "pipe",
@@ -244,6 +317,63 @@ async function runProcess(cmd: string[], timeoutMs = 30_000) {
     new Response(proc.stderr).text(),
   ]).finally(() => clearTimeout(timeout))
   return { exitCode, stdout, stderr }
+}
+
+// Runs the in-process hdc guard exec/fault driver (see
+// fixtures/hdc-guard-exec-driver.ts) and returns its JSON result. The
+// caller must pass an env whose XDG_CACHE_HOME points at an isolated
+// cache dir so the hdc shim is written to a temp Global.Path.bin.
+export async function runHdcGuardExecDriver(options: {
+  env: Record<string, string | undefined>
+  workspace: string
+  mode: string
+  wrapper?: "node" | "npm"
+  hdcArgs?: string[]
+  localFile?: string
+  remoteA?: string
+  remoteB?: string
+  n?: number
+  timeoutMs?: number
+}) {
+  const driverPath = path.join(import.meta.dir, "fixtures", "hdc-guard-exec-driver.ts")
+  const resultFile = path.join(os.tmpdir(), `hdc-guard-exec-${process.pid}-${Date.now()}.json`)
+  const args: string[] = [driverPath, options.mode, options.workspace, resultFile]
+  const hdcArgs = options.hdcArgs ?? []
+  if (options.mode === "subprocess" && options.wrapper) {
+    args.push(options.wrapper)
+    args.push(...hdcArgs)
+  } else if (options.mode === "concurrent" && options.localFile && options.remoteA && options.remoteB) {
+    args.push(options.localFile, options.remoteA, options.remoteB)
+  } else if (options.mode === "perf" && options.n) {
+    args.push(String(options.n))
+    args.push(...hdcArgs)
+  } else {
+    args.push(...hdcArgs)
+  }
+  const proc = Bun.spawn([process.execPath, ...args], {
+    cwd: opencodeRoot,
+    env: options.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const timeout = setTimeout(() => proc.kill(), options.timeoutMs ?? 180_000)
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]).finally(() => clearTimeout(timeout))
+  const file = Bun.file(resultFile)
+  const parsed = (await file.exists()) ? await file.json() : undefined
+  await fs.rm(resultFile, { force: true }).catch(() => undefined)
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`hdc guard exec driver did not write a result (exit ${exitCode})\nstdout: ${stdout}\nstderr: ${stderr}`)
+  }
+  return {
+    driver: parsed as import("./fixtures/hdc-guard-exec-driver").HdcGuardExecDriverResult,
+    exitCode,
+    stdout,
+    stderr,
+  }
 }
 
 async function collectDevEcoEnvironment() {
