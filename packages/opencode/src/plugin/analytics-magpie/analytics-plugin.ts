@@ -114,9 +114,16 @@ function assistantModel(info: Record<string, unknown>) {
 
 function assistantUsage(info: Record<string, unknown>) {
   const tokens = record(info.tokens)
+  const cache = record(tokens?.cache)
   return {
-    inputTokenCount: number(tokens?.input) ?? 0,
-    outputTokenCount: number(tokens?.output) ?? 0,
+    // `tokens.input` is the non-cached remainder, so on a fully prefix-cached
+    // turn (the deveco MaaS norm) it is 0 and the prompt size only shows up in
+    // the cache counters. Mirrors the classic ai-session event's accounting.
+    inputTokens: number(tokens?.input) ?? 0,
+    outputTokens: number(tokens?.output) ?? 0,
+    // An absent tokens.cache means the provider said nothing about caching, so omit the key
+    // rather than synthesizing 0, which downstream would read as "measured zero hits".
+    ...(cache === undefined ? {} : { cacheTokens: (number(cache.read) ?? 0) + (number(cache.write) ?? 0) }),
   }
 }
 
@@ -216,7 +223,8 @@ export async function setAnalyticsMagpieCollectionEnabled(enabled: boolean): Pro
     return
   }
   globalCollector.clear()
-  await globalUploader.disableAndClear()
+  // 传入具体原因，让清空日志能区分「用户关掉开关」与「同意被拒」这两条路径。
+  await globalUploader.disableAndClear("preference disabled")
 }
 
 export function enableAnalyticsMagpieCollection(): Promise<void> {

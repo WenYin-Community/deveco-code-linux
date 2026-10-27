@@ -90,7 +90,7 @@ bun run dev
 - 验证以下字段正确：
   - `modelId`: 使用的模型 ID
   - `query`: 用户输入
-  - `inputTokenCount` / `outputTokenCount`: Token 数
+  - `inputTokens` / `outputTokens` / `cacheTokens`: Token 数（`inputTokens` 是非缓存输入，真实上下文体量 = `inputTokens + cacheTokens`；`cacheTokens` 是可选字段，缺键表示未采集，不要当成 0）
   - `totalElapsed` / `firstResultElapsed`: 耗时
   - `modifiedFileList`: 编辑的文件列表
   - `toolExecutions`: 工具调用记录

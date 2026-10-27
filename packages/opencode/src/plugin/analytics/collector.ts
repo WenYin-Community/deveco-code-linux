@@ -141,12 +141,17 @@ export class SessionCollector {
   }
 
   // Accumulates the same step-finish parts the session projector sums into
-  // SessionTable.tokens_input/tokens_output, so both stay comparable. The plugin
-  // boundary filters events by the tracked sessionID before calling this.
-  recordTokenUsage(inputTokens: number, outputTokens: number): void {
+  // SessionTable.tokens_input/tokens_output, so both stay comparable. cacheTokens carries the same
+  // parts' cache breakdown (read + write), which the session row keeps in tokens_cache_read/write;
+  // without it a fully prefix-cached turn would report only input 0. The plugin boundary filters
+  // events by the tracked sessionID before calling this.
+  recordTokenUsage(inputTokens: number, outputTokens: number, cacheTokens?: number): void {
     if (!this.context) return
     this.context.inputTokens += inputTokens
     this.context.outputTokens += outputTokens
+    // undefined means this step reported nothing about caching, so the accumulator stays unset and
+    // the event omits cacheTokens instead of claiming a measured zero.
+    if (cacheTokens !== undefined) this.context.cacheTokens = (this.context.cacheTokens ?? 0) + cacheTokens
   }
 
   // Records the model a verify_ui call actually ran against. Last successful value wins;
@@ -292,6 +297,7 @@ export class SessionCollector {
       uiReconstructionScore: UI_RECONSTRUCTION_SCORE_UNAVAILABLE,
       inputTokens: this.context.inputTokens,
       outputTokens: this.context.outputTokens,
+      ...(this.context.cacheTokens === undefined ? {} : { cacheTokens: this.context.cacheTokens }),
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
       finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
       workflow: this.context.workflow,

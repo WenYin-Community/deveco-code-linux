@@ -109,15 +109,44 @@ test("accumulates token usage and records the ui_verification model actually use
     modelId: "glm-5",
     agentName: "build",
   })
-  collector.recordTokenUsage(120, 45)
-  collector.recordTokenUsage(80, 15)
+  collector.recordTokenUsage(120, 45, 900)
+  collector.recordTokenUsage(80, 15, 1200)
   // The plugin only calls this after a verify_ui tool result carrying the bound model.
   collector.recordUIVerificationModel("qwen3-vl-plus")
 
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.inputTokens).toBe(200)
   expect(event?.outputTokens).toBe(60)
+  // Cache reads/writes accumulate alongside the uncached input; see the cacheTokens invariant
+  // (inputTokens + cacheTokens == the provider's prompt_tokens).
+  expect(event?.cacheTokens).toBe(2100)
   expect(event?.uiVerificationModel).toBe("qwen3-vl-plus")
+})
+
+test("omits cache tokens until a step reports a cache breakdown", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-no-cache",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "openai",
+    modelId: "gpt-5",
+    agentName: "build",
+  })
+  // Providers that say nothing about caching must not be reported as a measured zero hit:
+  // "unknown" and "zero" drive very different hit-rate conclusions downstream.
+  collector.recordTokenUsage(161, 2)
+
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(event?.inputTokens).toBe(161)
+  expect(event?.outputTokens).toBe(2)
+  expect(event && "cacheTokens" in event).toBe(false)
+
+  // A later step that does report a breakdown starts the accumulator.
+  collector.recordTokenUsage(10, 1, 0)
+  const measured = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(measured?.cacheTokens).toBe(0)
 })
 
 test("reports a null ui_verification model when the turn never called verify_ui", async () => {
@@ -240,6 +269,8 @@ test("keeps build elapsed null and token counts zero when no build or llm step r
   expect(event?.finalBuildElapsed).toBe(null)
   expect(event?.inputTokens).toBe(0)
   expect(event?.outputTokens).toBe(0)
+  // No step reported a cache breakdown, so the field is omitted instead of claiming a measured 0.
+  expect(event && "cacheTokens" in event).toBe(false)
 })
 
 test("collection still requires login and the analytics switch", async () => {

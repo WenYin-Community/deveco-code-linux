@@ -22,8 +22,10 @@ interface AnalyticsEvent {
   sessionid: string
   query: string
   answer: string
-  inputTokenCount: number
-  outputTokenCount: number
+  inputTokens: number
+  outputTokens: number
+  /** Absent on events queued by clients that predate the field. */
+  cacheTokens?: number
   projectName: string
   bundleName: string
   modifiedFileList: Array<{ fileName: string; additions: number; deletions: number }>
@@ -125,7 +127,7 @@ async function handleUpload(req: Request): Promise<Response> {
       })
 
       console.log(
-        `[${formatLocalTime()}] Event received: model=${event.modelId}, session=${event.sessionid?.slice(0, 8)}..., tokens=${event.inputTokenCount}/${event.outputTokenCount}`,
+        `[${formatLocalTime()}] Event received: model=${event.modelId}, session=${event.sessionid?.slice(0, 8)}..., tokens=${event.inputTokens}/${event.outputTokens} (cache ${event.cacheTokens ?? "-"})`,
       )
     }
 
@@ -288,7 +290,7 @@ function renderPage(): string {
 
       let html = '<table><thead><tr>'
         + '<th>#</th><th>Time</th><th>Model</th><th>Bundle</th><th>Session</th><th>User</th>'
-        + '<th>Query</th><th>In Tokens</th><th>Out Tokens</th>'
+        + '<th>Query</th><th>In Tokens</th><th>Out Tokens</th><th>Cache Tokens</th>'
         + '<th>Total</th><th>First Resp</th><th>Tools</th><th>Files</th><th>OK</th>'
         + '</tr></thead><tbody>';
 
@@ -309,8 +311,9 @@ function renderPage(): string {
           + '<td class="mono" title="' + esc(e.sessionid) + '">' + esc((e.sessionid || '').slice(0, 8)) + '...</td>'
           + '<td>' + esc(e.userid) + '</td>'
           + '<td title="' + esc(e.query) + '">' + esc(truncate(e.query, 50)) + '</td>'
-          + '<td class="mono">' + (e.inputTokenCount || 0) + '</td>'
-          + '<td class="mono">' + (e.outputTokenCount || 0) + '</td>'
+          + '<td class="mono">' + (e.inputTokens || 0) + '</td>'
+          + '<td class="mono">' + (e.outputTokens || 0) + '</td>'
+          + '<td class="mono">' + (e.cacheTokens === undefined ? '-' : e.cacheTokens) + '</td>'
           + '<td class="mono">' + formatTime(e.totalElapsed) + '</td>'
           + '<td class="mono">' + formatTime(e.firstResultElapsed) + '</td>'
           + '<td class="mono">' + toolCount(e.operations) + '</td>'

@@ -52,8 +52,9 @@ export interface AssistantUpdate {
   providerId?: string
   agentName: string
   finishReason?: string
-  inputTokenCount?: number
-  outputTokenCount?: number
+  inputTokens?: number
+  outputTokens?: number
+  cacheTokens?: number
   error?: unknown
 }
 
@@ -436,12 +437,19 @@ export class SessionCollector {
       agentName: input.agentName,
       ...(input.finishReason ? { finishReason: input.finishReason } : {}),
       status: error ? "error" : "success",
-      inputTokenCount: input.inputTokenCount ?? 0,
-      outputTokenCount: input.outputTokenCount ?? 0,
+      inputTokens: input.inputTokens ?? 0,
+      outputTokens: input.outputTokens ?? 0,
+      ...(input.cacheTokens === undefined ? {} : { cacheTokens: input.cacheTokens }),
       ...(error ? { error } : {}),
     }
-    context.inputTokens += execution.inputTokenCount - (previous?.inputTokenCount ?? 0)
-    context.outputTokens += execution.outputTokenCount - (previous?.outputTokenCount ?? 0)
+    // message.updated fires repeatedly per assistant message, so accumulate the
+    // delta since the previous snapshot instead of the absolute values.
+    context.inputTokens += execution.inputTokens - (previous?.inputTokens ?? 0)
+    context.outputTokens += execution.outputTokens - (previous?.outputTokens ?? 0)
+    // cacheTokens is tri-state (measured / measured zero / unreported), so an unreported snapshot
+    // must not subtract the previous value: skip it and leave the accumulator untouched.
+    if (execution.cacheTokens !== undefined)
+      context.cacheTokens = (context.cacheTokens ?? 0) + execution.cacheTokens - (previous?.cacheTokens ?? 0)
     context.assistantExecutions.set(input.messageID, execution)
     if (error) context.isSuccess = false
 
@@ -686,8 +694,9 @@ export class SessionCollector {
       agentName: context.agentName,
       query: context.query,
       answer: context.answer,
-      inputTokenCount: context.inputTokens,
-      outputTokenCount: context.outputTokens,
+      inputTokens: context.inputTokens,
+      outputTokens: context.outputTokens,
+      ...(context.cacheTokens === undefined ? {} : { cacheTokens: context.cacheTokens }),
       projectId,
       bundleName,
       modifiedFileList,

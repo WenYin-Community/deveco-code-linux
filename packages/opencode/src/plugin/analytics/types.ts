@@ -105,6 +105,12 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   // tokens_input/tokens_output accumulation (projector sums the same step-finish parts). output excludes reasoning.
   inputTokens: number
   outputTokens: number
+  // Sum of step-finish cache tokens for this session turn: cache.read (entry reuse from implicit
+  // prefix caching, the MaaS path) + cache.write (explicit cache writes, Anthropic family only, so 0
+  // here). inputTokens counts only uncached input, so a fully cached turn reports 0 and the real
+  // context size is inputTokens + cacheTokens (= the provider's prompt_tokens). Absent when the
+  // provider reported no cache breakdown at all: unknown has to stay distinguishable from a measured 0.
+  cacheTokens?: number
   // Prompt submission to first/final executed build_project completion, in ms; null when no build ran
   firstBuildElapsed: number | null
   finalBuildElapsed: number | null
@@ -196,6 +202,8 @@ export interface SessionContext {
   firstResponseTime: number | null
   inputTokens: number
   outputTokens: number
+  // Undefined until a step-finish carries a cache breakdown; the event then omits the field.
+  cacheTokens?: number
   modifiedFiles: Map<string, FileDiffInfo>
   toolExecutions: ToolExecution[]
   toolCounts: Map<string, { name: string; category: ToolBucket; count: number }>

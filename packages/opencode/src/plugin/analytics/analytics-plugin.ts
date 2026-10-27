@@ -24,7 +24,7 @@ interface AnalyticsCollectorDependency {
   analyticsEnabled(): Promise<boolean>
   startSession(input: SessionStart): void
   recordResponseDelta(): void
-  recordTokenUsage(inputTokens: number, outputTokens: number): void
+  recordTokenUsage(inputTokens: number, outputTokens: number, cacheTokens?: number): void
   recordUIVerificationModel(model: string | null): void
   recordBuildProjectInfo(entry: BuildProjectInfo): void
   recordFileEdit(filePath: string): void
@@ -267,9 +267,20 @@ class AnalyticsRuntime {
     if (part?.type !== "step-finish" || typeof props?.sessionID !== "string") return
     if (this.dependencies.collector.getSessionID() !== props.sessionID) return
     const tokens = part.tokens as Record<string, unknown> | undefined
+    // Step-finish parts carry the Session.getUsage breakdown, where input is the UNCACHED input only:
+    // a fully prefix-cached turn reports input 0 and the real context size would never reach the
+    // platform. cache.read is the implicit-prefix-cache hit (MaaS/vLLM path, what cached_tokens
+    // becomes) and cache.write the explicit-cache write (Anthropic family, always 0 here). Summing
+    // both keeps inputTokens + cacheTokens == the provider's prompt_tokens.
+    // No tokens.cache at all means the step reported nothing about caching (not "zero hits"), so
+    // pass undefined and let the event omit cacheTokens: unknown must not masquerade as measured 0.
+    const cache = tokens?.cache as Record<string, unknown> | undefined
     this.dependencies.collector.recordTokenUsage(
       typeof tokens?.input === "number" ? tokens.input : 0,
       typeof tokens?.output === "number" ? tokens.output : 0,
+      cache === undefined
+        ? undefined
+        : (typeof cache.read === "number" ? cache.read : 0) + (typeof cache.write === "number" ? cache.write : 0),
     )
   }
 

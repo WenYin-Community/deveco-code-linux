@@ -144,10 +144,10 @@ function isAssistantExecution(value: unknown): value is AssistantExecution {
         "modelId",
         "agentName",
         "status",
-        "inputTokenCount",
-        "outputTokenCount",
+        "inputTokens",
+        "outputTokens",
       ],
-      ["completedAt", "providerId", "finishReason", "error"],
+      ["completedAt", "providerId", "finishReason", "error", "cacheTokens"],
     )
   )
     return false
@@ -162,8 +162,9 @@ function isAssistantExecution(value: unknown): value is AssistantExecution {
     typeof value.agentName === "string" &&
     (value.finishReason === undefined || typeof value.finishReason === "string") &&
     (value.status === "success" || value.status === "error") &&
-    isNonNegativeNumber(value.inputTokenCount) &&
-    isNonNegativeNumber(value.outputTokenCount) &&
+    isNonNegativeNumber(value.inputTokens) &&
+    isNonNegativeNumber(value.outputTokens) &&
+    (value.cacheTokens === undefined || isNonNegativeNumber(value.cacheTokens)) &&
     (value.error === undefined || isErrorSummary(value.error))
   )
 }
@@ -240,8 +241,8 @@ const ANALYTICS_EVENT_REQUIRED_KEYS = [
   "agentName",
   "query",
   "answer",
-  "inputTokenCount",
-  "outputTokenCount",
+  "inputTokens",
+  "outputTokens",
   "projectId",
   "bundleName",
   "modifiedFileList",
@@ -253,7 +254,7 @@ const ANALYTICS_EVENT_REQUIRED_KEYS = [
   "startedAt",
   "assistantExecutions",
 ] as const
-const ANALYTICS_EVENT_OPTIONAL_KEYS = ["parentSessionId", "parentRef", "sessionError"] as const
+const ANALYTICS_EVENT_OPTIONAL_KEYS = ["parentSessionId", "parentRef", "sessionError", "cacheTokens"] as const
 
 export function isMagpieAnalyticsEvent(value: unknown): value is AnalyticsEvent {
   if (!isRecord(value) || !hasKeys(value, ANALYTICS_EVENT_REQUIRED_KEYS, ANALYTICS_EVENT_OPTIONAL_KEYS)) return false
@@ -278,8 +279,9 @@ function hasValidAnalyticsMetadata(value: Record<string, unknown>): boolean {
     typeof value.agentName === "string" &&
     typeof value.query === "string" &&
     typeof value.answer === "string" &&
-    isNonNegativeNumber(value.inputTokenCount) &&
-    isNonNegativeNumber(value.outputTokenCount) &&
+    isNonNegativeNumber(value.inputTokens) &&
+    isNonNegativeNumber(value.outputTokens) &&
+    (value.cacheTokens === undefined || isNonNegativeNumber(value.cacheTokens)) &&
     isUuid(value.projectId) &&
     typeof value.bundleName === "string"
   )
@@ -304,16 +306,90 @@ function hasValidAnalyticsDetails(value: Record<string, unknown>): boolean {
   )
 }
 
-function isPendingEvent(value: unknown): value is PendingMagpieAnalyticsEvent {
+/** Detects a queue record that still carries the pre-rename token key pair. */
+function hasLegacyTokenKeys(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && ("inputTokenCount" in value || "outputTokenCount" in value)
+}
+
+/**
+ * Rewrites the legacy key pair of a single record. Both target keys are always
+ * written, because a legacy record may carry only one of the two source keys.
+ */
+function upgradeLegacyTokenKeys(record: Record<string, unknown>): Record<string, unknown> {
+  const { inputTokenCount, outputTokenCount, ...rest } = record
+  return {
+    ...rest,
+    inputTokens: isNonNegativeNumber(inputTokenCount) ? inputTokenCount : 0,
+    outputTokens: isNonNegativeNumber(outputTokenCount) ? outputTokenCount : 0,
+  }
+}
+
+function migrateLegacyExecution(execution: unknown): unknown {
+  return hasLegacyTokenKeys(execution) ? upgradeLegacyTokenKeys(execution) : execution
+}
+
+/**
+ * One-time migration for queue entries written before the token fields were
+ * renamed (`inputTokenCount`/`outputTokenCount` -> `inputTokens`/`outputTokens`).
+ * Without it `hasKeys`' strict key set would reject those entries and drop them
+ * silently on upgrade.
+ *
+ * Only the names are migrated: the legacy entries also predate `cacheTokens`, so
+ * the key is left absent instead of being filled with a zero that would claim a
+ * measured cache miss. A present key means "collected", an absent one "never
+ * collected" — the same encoding the collectors use when a provider reports no
+ * cache breakdown, so upgraded and fresh entries stay indistinguishable.
+ * `inputTokens` / `outputTokens` are still filled with 0 when the legacy value is
+ * not a number: they are required by the upload contract, so a broken legacy
+ * value is replaced to keep the entry uploadable. `cacheTokens` is different
+ * because there a zero would be indistinguishable from a measurement.
+ */
+function migrateLegacyTokenFields(event: unknown): unknown {
+  if (!isRecord(event)) return event
+
+  const executions = Array.isArray(event.assistantExecutions) ? event.assistantExecutions : undefined
+  const legacyTopLevel = hasLegacyTokenKeys(event)
+  const legacyExecutions = executions ? executions.some(hasLegacyTokenKeys) : false
+  // Returning the original reference matters: parseStorage compares identities
+  // to decide whether the queue file has to be rewritten on load.
+  if (!legacyTopLevel && !legacyExecutions) return event
+
+  const upgraded = legacyTopLevel ? upgradeLegacyTokenKeys(event) : event
+  if (!executions || !legacyExecutions) return upgraded
+  return { ...upgraded, assistantExecutions: executions.map(migrateLegacyExecution) }
+}
+
+/**
+ * Envelope-level check used when reading the queue back from disk.
+ *
+ * The envelope (action / event / queueId / sealed) is written by this process
+ * and is stable across builds, so it stays strict. The payload inside `event`
+ * is NOT: its business fields change between builds (e.g. the token field
+ * rename), so here it only has to be an object. Payload validity is re-checked
+ * right before upload, where a rejection costs a retry. Dropping a row while
+ * reading is irreversible — a different (older/newer) build wrote it and may
+ * still be able to upload it — so unreadable payloads are retained, not deleted.
+ */
+export function isPendingEnvelope(value: unknown): value is PendingMagpieAnalyticsEvent {
   return (
     isRecord(value) &&
     hasKeys(value, ["action", "event", "queueId", "sealed"]) &&
     value.action === MAGPIE_ANALYTICS_ACTION &&
-    isMagpieAnalyticsEvent(value.event) &&
+    isRecord(value.event) &&
     typeof value.queueId === "string" &&
-    !!value.queueId &&
+    value.queueId.length > 0 &&
     typeof value.sealed === "boolean"
   )
+}
+
+/**
+ * Strict queue-entry check: envelope plus a payload that satisfies the current
+ * upload contract. It is deliberately NOT the disk-read gate (that would delete
+ * entries written by other builds); kept for call sites that need the
+ * upload-ready shape.
+ */
+export function isPendingEvent(value: unknown): value is PendingMagpieAnalyticsEvent {
+  return isPendingEnvelope(value) && isMagpieAnalyticsEvent(value.event)
 }
 
 function parseStorage(value: unknown): { storage: MagpieAnalyticsStorage; needsSave: boolean } {
@@ -321,13 +397,18 @@ function parseStorage(value: unknown): { storage: MagpieAnalyticsStorage; needsS
   if (value.schemaVersion !== MAGPIE_ANALYTICS_STORAGE_SCHEMA_VERSION) {
     return { storage: createStorage(), needsSave: true }
   }
-  if (
-    !hasKeys(value, ["schemaVersion", "pendingEvents", "lastFlush"], ["pathRedactionSalt"]) ||
-    !Array.isArray(value.pendingEvents)
-  )
+  if (!hasKeys(value, ["schemaVersion", "pendingEvents", "lastFlush"], ["pathRedactionSalt"]))
     return { storage: createStorage(), needsSave: true }
 
-  const pendingEvents = value.pendingEvents.filter(isPendingEvent).slice(-MAGPIE_ANALYTICS_MAX_PENDING_EVENTS)
+  const rawPendingEvents = value.pendingEvents
+  if (!Array.isArray(rawPendingEvents)) return { storage: createStorage(), needsSave: true }
+
+  const migratedEvents = rawPendingEvents.map((entry) => {
+    if (!isRecord(entry)) return entry
+    const event = migrateLegacyTokenFields(entry.event)
+    return event === entry.event ? entry : { ...entry, event }
+  })
+  const pendingEvents = migratedEvents.filter(isPendingEnvelope).slice(-MAGPIE_ANALYTICS_MAX_PENDING_EVENTS)
   const pathRedactionSalt =
     typeof value.pathRedactionSalt === "string" && /^[a-f0-9]{64}$/.test(value.pathRedactionSalt)
       ? value.pathRedactionSalt
@@ -340,7 +421,8 @@ function parseStorage(value: unknown): { storage: MagpieAnalyticsStorage; needsS
       ...(pathRedactionSalt ? { pathRedactionSalt } : {}),
     },
     needsSave:
-      pendingEvents.length !== value.pendingEvents.length ||
+      pendingEvents.length !== rawPendingEvents.length ||
+      migratedEvents.some((entry, index) => entry !== rawPendingEvents[index]) ||
       !isNonNegativeNumber(value.lastFlush) ||
       (value.pathRedactionSalt !== undefined && !pathRedactionSalt),
   }
@@ -419,9 +501,19 @@ export async function getPendingEvents(): Promise<PendingMagpieAnalyticsEvent[]>
   return (await loadStorage()).pendingEvents
 }
 
-export async function preparePendingBatch(limit: number): Promise<PendingMagpieAnalyticsEvent[]> {
+/**
+ * Seals and returns the oldest `limit` pending events, skipping the `exclude`
+ * queueIds first. Excluding is what keeps an unreadable event (payload this
+ * build cannot validate) from blocking the head of the queue forever: the
+ * uploader skips it for the current round without removing it.
+ */
+export async function preparePendingBatch(
+  limit: number,
+  exclude: readonly string[] = [],
+): Promise<PendingMagpieAnalyticsEvent[]> {
   return mutateStorage((storage) => {
-    const batch = storage.pendingEvents.slice(0, Math.max(0, limit))
+    const skip = new Set(exclude)
+    const batch = storage.pendingEvents.filter((pending) => !skip.has(pending.queueId)).slice(0, Math.max(0, limit))
     for (const pending of batch) pending.sealed = true
     return structuredClone(batch)
   })

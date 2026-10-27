@@ -28,8 +28,21 @@ export interface AssistantExecution {
   agentName: string
   finishReason?: string
   status: "success" | "error"
-  inputTokenCount: number
-  outputTokenCount: number
+  /**
+   * Non-cached input tokens. Same definition as the classic ai-session event:
+   * `prompt_tokens - cache.read - cache.write`, so a turn whose whole prompt was
+   * a prefix-cache hit (the deveco MaaS norm) reports 0 here and the real
+   * context size lives in `cacheTokens`.
+   */
+  inputTokens: number
+  outputTokens: number
+  /**
+   * Prompt tokens served from (or written to) the provider cache in this turn.
+   * Optional on purpose: the field is omitted when the provider reports no cache
+   * breakdown at all, and events queued by older clients predate it entirely. An
+   * absent key ("not collected") must stay distinguishable from a measured zero.
+   */
+  cacheTokens?: number
   error?: ErrorSummary
 }
 
@@ -83,8 +96,21 @@ export interface AnalyticsEvent {
   agentName: string
   query: string
   answer: string
-  inputTokenCount: number
-  outputTokenCount: number
+  /**
+   * Non-cached input tokens. When `cacheTokens` is present, `inputTokens +
+   * cacheTokens` is the prompt size; an absent `cacheTokens` means the cache
+   * portion was never collected, so the sum is then the non-cached part only.
+   */
+  inputTokens: number
+  outputTokens: number
+  /**
+   * Prompt tokens served from (or written to) the provider cache.
+   * Optional on purpose: the field is omitted when no assistant snapshot reported
+   * a cache breakdown, and the token-field migration only renames the legacy keys,
+   * so an upgraded queue entry stays valid without inventing a value that was
+   * never collected.
+   */
+  cacheTokens?: number
   projectId: string
   bundleName: string
   modifiedFileList: ModifiedFile[]
@@ -118,6 +144,8 @@ export interface SessionContext {
   answer: string
   inputTokens: number
   outputTokens: number
+  // Undefined until an assistant snapshot carries a cache breakdown; the event then omits the field.
+  cacheTokens?: number
   modifiedFiles: Map<string, FileDiffInfo>
   assistantExecutions: Map<string, AssistantExecution>
   toolExecutions: Map<string, ToolExecution>

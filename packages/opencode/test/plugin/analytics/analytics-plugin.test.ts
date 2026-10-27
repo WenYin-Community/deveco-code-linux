@@ -60,6 +60,7 @@ const builtEvent: AiSessionEvent = {
   uiReconstructionScore: -1,
   inputTokens: 0,
   outputTokens: 0,
+  cacheTokens: 0,
   firstBuildElapsed: null,
   finalBuildElapsed: null,
 }
@@ -81,7 +82,7 @@ function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
     startSession: mock((_input: SessionStart) => {
       state.active = true
     }),
-    recordTokenUsage: mock((_inputTokens: number, _outputTokens: number) => undefined),
+    recordTokenUsage: mock((_inputTokens: number, _outputTokens: number, _cacheTokens: number) => undefined),
     recordUIVerificationModel: mock((_model: string | null) => undefined),
     recordBuildProjectInfo: mock((_entry: BuildProjectInfo) => undefined),
     recordToolExecution: mock(
@@ -735,7 +736,10 @@ test("accumulates step-finish token usage only for the tracked session", async (
   await hooks.event!({
     event: {
       type: "message.part.updated",
-      properties: { sessionID: "session-1", part: { type: "step-finish", tokens: { input: 120, output: 45 } } },
+      properties: {
+        sessionID: "session-1",
+        part: { type: "step-finish", tokens: { input: 120, output: 45, cache: { read: 900, write: 0 } } },
+      },
     } as never,
   })
   await hooks.event!({
@@ -752,7 +756,48 @@ test("accumulates step-finish token usage only for the tracked session", async (
   })
 
   expect(harness.recordTokenUsage).toHaveBeenCalledTimes(1)
-  expect(harness.recordTokenUsage).toHaveBeenCalledWith(120, 45)
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(120, 45, 900)
+})
+
+test("reports cache hits so a fully prefix-cached turn is not just zero input", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "deveco")
+
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-1",
+        part: {
+          type: "step-finish",
+          // Shape Session.getUsage produces on the MaaS path: the whole prompt was a prefix-cache
+          // hit, so input is the uncached remainder (0) and the real context size lives in cache.read.
+          tokens: { total: 14963, input: 0, output: 3, reasoning: 0, cache: { read: 14960, write: 0 } },
+        },
+      },
+    } as never,
+  })
+
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(0, 3, 14960)
+})
+
+test("counts explicit cache writes as cache tokens too", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "anthropic")
+
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-1",
+        part: { type: "step-finish", tokens: { input: 9, output: 5, cache: { write: 5752 } } },
+      },
+    } as never,
+  })
+
+  // Explicit-cache writes (Anthropic family) are billed input too, so they join cache.read;
+  // with input only covering the uncached remainder, input + cache == the prompt size.
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(9, 5, 5752)
 })
 
 test("defaults step-finish token usage to zero when the part carries no tokens", async () => {
@@ -766,7 +811,26 @@ test("defaults step-finish token usage to zero when the part carries no tokens",
     } as never,
   })
 
-  expect(harness.recordTokenUsage).toHaveBeenCalledWith(0, 0)
+  // No tokens.cache means the step reported nothing about caching, so the event omits cacheTokens.
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(0, 0, undefined)
+})
+
+test("reports a measured zero when the step says the prompt was not cached", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks.event!({
+    event: {
+      type: "message.part.updated",
+      properties: {
+        sessionID: "session-1",
+        part: { type: "step-finish", tokens: { input: 161, output: 2, cache: { read: 0 } } },
+      },
+    } as never,
+  })
+
+  // An explicit 0 is a real measurement and must not collapse into "unreported".
+  expect(harness.recordTokenUsage).toHaveBeenCalledWith(161, 2, 0)
 })
 
 test("extractBuildExitCode ignores success markers and keeps the fallback", () => {
