@@ -896,6 +896,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           location: LocationRef
+          projectID?: string
           subdirectory?: string
         }
       }
@@ -2175,6 +2176,18 @@ export type Config = {
   }
 }
 
+export type DirectoryMissingError = {
+  _tag: "DirectoryMissingError"
+  directory: string
+  message: string
+}
+
+export type DirectoryUnreadableError = {
+  _tag: "DirectoryUnreadableError"
+  directory: string
+  message: string
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -2450,6 +2463,7 @@ export type Path = {
   home: string
   state: string
   config: string
+  projectConfig: string
   worktree: string
   directory: string
 }
@@ -2513,6 +2527,12 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+}
+
+export type SkillNotFoundError = {
+  _tag: "SkillNotFoundError"
+  name: string
+  message: string
 }
 
 export type LspStatus = {
@@ -2934,14 +2954,21 @@ export type InvalidCursorError = {
   message: string
 }
 
-export type SessionNotFoundError = {
-  _tag: "SessionNotFoundError"
-  sessionID: string
+export type ForbiddenError = {
+  _tag: "ForbiddenError"
   message: string
 }
 
-export type ForbiddenError = {
-  _tag: "ForbiddenError"
+export type SessionDirectoryMissingError = {
+  _tag: "SessionDirectoryMissingError"
+  sessionID: string
+  directory: string
+  message: string
+}
+
+export type SessionNotFoundError = {
+  _tag: "SessionNotFoundError"
+  sessionID: string
   message: string
 }
 
@@ -3317,6 +3344,7 @@ export type SyncEventSessionNextMoved = {
       timestamp: number
       sessionID: string
       location: LocationRef
+      projectID?: string
       subdirectory?: string
     }
   }
@@ -4575,6 +4603,7 @@ export type EventSessionNextMoved = {
     timestamp: number
     sessionID: string
     location: LocationRef
+    projectID?: string
     subdirectory?: string
   }
 }
@@ -5918,6 +5947,23 @@ export type EventSubscribeData = {
   url: "/event"
 }
 
+export type EventSubscribeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type EventSubscribeError = EventSubscribeErrors[keyof EventSubscribeErrors]
+
 export type EventSubscribeResponses = {
   /**
    * Event stream
@@ -5942,6 +5988,14 @@ export type ConfigGetErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ConfigGetError = ConfigGetErrors[keyof ConfigGetErrors]
@@ -5970,6 +6024,14 @@ export type ConfigUpdateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ConfigUpdateError = ConfigUpdateErrors[keyof ConfigUpdateErrors]
@@ -5998,6 +6060,14 @@ export type ConfigProvidersErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ConfigProvidersError = ConfigProvidersErrors[keyof ConfigProvidersErrors]
@@ -6031,6 +6101,14 @@ export type ExperimentalCapabilitiesGetErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalCapabilitiesGetError =
@@ -6062,9 +6140,13 @@ export type ExperimentalConsoleGetErrors = {
    */
   400: BadRequestError
   /**
-   * InternalServerError
+   * DirectoryMissingError
    */
-  500: EffectHttpApiErrorInternalServerError
+  409: DirectoryMissingError
+  /**
+   * InternalServerError | DirectoryUnreadableError
+   */
+  500: EffectHttpApiErrorInternalServerError | DirectoryUnreadableError
 }
 
 export type ExperimentalConsoleGetError = ExperimentalConsoleGetErrors[keyof ExperimentalConsoleGetErrors]
@@ -6094,9 +6176,13 @@ export type ExperimentalConsoleListOrgsErrors = {
    */
   400: BadRequestError
   /**
-   * InternalServerError
+   * DirectoryMissingError
    */
-  500: EffectHttpApiErrorInternalServerError
+  409: DirectoryMissingError
+  /**
+   * InternalServerError | DirectoryUnreadableError
+   */
+  500: EffectHttpApiErrorInternalServerError | DirectoryUnreadableError
 }
 
 export type ExperimentalConsoleListOrgsError =
@@ -6134,6 +6220,20 @@ export type ExperimentalConsoleSwitchOrgData = {
   url: "/experimental/console/switch"
 }
 
+export type ExperimentalConsoleSwitchOrgErrors = {
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type ExperimentalConsoleSwitchOrgError =
+  ExperimentalConsoleSwitchOrgErrors[keyof ExperimentalConsoleSwitchOrgErrors]
+
 export type ExperimentalConsoleSwitchOrgResponses = {
   /**
    * Switch success
@@ -6161,6 +6261,14 @@ export type ToolListErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ToolListError = ToolListErrors[keyof ToolListErrors]
@@ -6189,6 +6297,14 @@ export type ToolIdsErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ToolIdsError = ToolIdsErrors[keyof ToolIdsErrors]
@@ -6217,6 +6333,14 @@ export type WorktreeRemoveErrors = {
    * WorktreeError | InvalidRequestError
    */
   400: WorktreeError | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type WorktreeRemoveError = WorktreeRemoveErrors[keyof WorktreeRemoveErrors]
@@ -6245,6 +6369,14 @@ export type WorktreeListErrors = {
    * WorktreeError | InvalidRequestError
    */
   400: WorktreeError | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type WorktreeListError = WorktreeListErrors[keyof WorktreeListErrors]
@@ -6273,6 +6405,14 @@ export type WorktreeCreateErrors = {
    * WorktreeError | InvalidRequestError
    */
   400: WorktreeError | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type WorktreeCreateError = WorktreeCreateErrors[keyof WorktreeCreateErrors]
@@ -6301,6 +6441,14 @@ export type WorktreeResetErrors = {
    * WorktreeError | InvalidRequestError
    */
   400: WorktreeError | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type WorktreeResetError = WorktreeResetErrors[keyof WorktreeResetErrors]
@@ -6335,6 +6483,14 @@ export type ExperimentalSessionListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalSessionListError = ExperimentalSessionListErrors[keyof ExperimentalSessionListErrors]
@@ -6365,6 +6521,14 @@ export type ExperimentalSessionBackgroundErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalSessionBackgroundError =
@@ -6395,6 +6559,14 @@ export type ExperimentalResourceListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalResourceListError = ExperimentalResourceListErrors[keyof ExperimentalResourceListErrors]
@@ -6427,6 +6599,14 @@ export type FindTextErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FindTextError = FindTextErrors[keyof FindTextErrors]
@@ -6475,6 +6655,14 @@ export type FindFilesErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FindFilesError = FindFilesErrors[keyof FindFilesErrors]
@@ -6504,6 +6692,14 @@ export type FindSymbolsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FindSymbolsError = FindSymbolsErrors[keyof FindSymbolsErrors]
@@ -6533,6 +6729,14 @@ export type FileListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FileListError = FileListErrors[keyof FileListErrors]
@@ -6562,6 +6766,14 @@ export type FileReadErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FileReadError = FileReadErrors[keyof FileReadErrors]
@@ -6590,6 +6802,14 @@ export type FileStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FileStatusError = FileStatusErrors[keyof FileStatusErrors]
@@ -6618,6 +6838,14 @@ export type InstanceDisposeErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type InstanceDisposeError = InstanceDisposeErrors[keyof InstanceDisposeErrors]
@@ -6646,6 +6874,14 @@ export type PathGetErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PathGetError = PathGetErrors[keyof PathGetErrors]
@@ -6674,6 +6910,14 @@ export type VcsGetErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type VcsGetError = VcsGetErrors[keyof VcsGetErrors]
@@ -6702,6 +6946,14 @@ export type VcsStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type VcsStatusError = VcsStatusErrors[keyof VcsStatusErrors]
@@ -6732,6 +6984,14 @@ export type VcsDiffErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type VcsDiffError = VcsDiffErrors[keyof VcsDiffErrors]
@@ -6760,6 +7020,14 @@ export type VcsDiffRawErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type VcsDiffRawError = VcsDiffRawErrors[keyof VcsDiffRawErrors]
@@ -6790,6 +7058,14 @@ export type VcsApplyErrors = {
    * VcsApplyError | InvalidRequestError
    */
   400: VcsApplyError | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type VcsApplyError2 = VcsApplyErrors[keyof VcsApplyErrors]
@@ -6820,6 +7096,14 @@ export type CommandListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type CommandListError = CommandListErrors[keyof CommandListErrors]
@@ -6848,6 +7132,14 @@ export type AppAgentsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type AppAgentsError = AppAgentsErrors[keyof AppAgentsErrors]
@@ -6876,6 +7168,14 @@ export type AppSkillsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type AppSkillsError = AppSkillsErrors[keyof AppSkillsErrors]
@@ -6894,6 +7194,101 @@ export type AppSkillsResponses = {
 
 export type AppSkillsResponse = AppSkillsResponses[keyof AppSkillsResponses]
 
+export type AppSkillsStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill/status"
+}
+
+export type AppSkillsStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type AppSkillsStatusError = AppSkillsStatusErrors[keyof AppSkillsStatusErrors]
+
+export type AppSkillsStatusResponses = {
+  /**
+   * List of skill statuses
+   */
+  200: Array<{
+    name: string
+    description?: string
+    location: string
+    content: string
+    scope: "global" | "project" | "builtin"
+    enabled: boolean
+  }>
+}
+
+export type AppSkillsStatusResponse = AppSkillsStatusResponses[keyof AppSkillsStatusResponses]
+
+export type AppSkillsUpdateData = {
+  body?: {
+    scope: "global" | "project" | "builtin"
+    enabled: boolean
+  }
+  path: {
+    name: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/skill/{name}"
+}
+
+export type AppSkillsUpdateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * SkillNotFoundError
+   */
+  404: SkillNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type AppSkillsUpdateError = AppSkillsUpdateErrors[keyof AppSkillsUpdateErrors]
+
+export type AppSkillsUpdateResponses = {
+  /**
+   * Updated skill
+   */
+  200: {
+    name: string
+    description?: string
+    location: string
+    content: string
+    scope: "global" | "project" | "builtin"
+    enabled: boolean
+  }
+}
+
+export type AppSkillsUpdateResponse = AppSkillsUpdateResponses[keyof AppSkillsUpdateResponses]
+
 export type LspStatusData = {
   body?: never
   path?: never
@@ -6909,6 +7304,14 @@ export type LspStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type LspStatusError = LspStatusErrors[keyof LspStatusErrors]
@@ -6937,6 +7340,14 @@ export type FormatterStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type FormatterStatusError = FormatterStatusErrors[keyof FormatterStatusErrors]
@@ -6965,6 +7376,14 @@ export type McpStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpStatusError = McpStatusErrors[keyof McpStatusErrors]
@@ -6998,6 +7417,14 @@ export type McpAddErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpAddError = McpAddErrors[keyof McpAddErrors]
@@ -7034,6 +7461,14 @@ export type McpAuthRemoveErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpAuthRemoveError = McpAuthRemoveErrors[keyof McpAuthRemoveErrors]
@@ -7070,6 +7505,14 @@ export type McpAuthStartErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpAuthStartError = McpAuthStartErrors[keyof McpAuthStartErrors]
@@ -7109,6 +7552,14 @@ export type McpAuthCallbackErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpAuthCallbackError = McpAuthCallbackErrors[keyof McpAuthCallbackErrors]
@@ -7143,6 +7594,14 @@ export type McpAuthAuthenticateErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpAuthAuthenticateError = McpAuthAuthenticateErrors[keyof McpAuthAuthenticateErrors]
@@ -7177,6 +7636,14 @@ export type McpConnectErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpConnectError = McpConnectErrors[keyof McpConnectErrors]
@@ -7211,6 +7678,14 @@ export type McpDisconnectErrors = {
    * McpServerNotFoundError
    */
   404: McpServerNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type McpDisconnectError = McpDisconnectErrors[keyof McpDisconnectErrors]
@@ -7239,6 +7714,14 @@ export type ProjectListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProjectListError = ProjectListErrors[keyof ProjectListErrors]
@@ -7267,6 +7750,14 @@ export type ProjectCurrentErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProjectCurrentError = ProjectCurrentErrors[keyof ProjectCurrentErrors]
@@ -7295,6 +7786,14 @@ export type ProjectInitGitErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProjectInitGitError = ProjectInitGitErrors[keyof ProjectInitGitErrors]
@@ -7342,6 +7841,14 @@ export type ProjectUpdateErrors = {
    * ProjectNotFoundError
    */
   404: ProjectNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProjectUpdateError = ProjectUpdateErrors[keyof ProjectUpdateErrors]
@@ -7372,6 +7879,14 @@ export type ProjectDirectoriesErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProjectDirectoriesError = ProjectDirectoriesErrors[keyof ProjectDirectoriesErrors]
@@ -7404,6 +7919,14 @@ export type ExperimentalProjectCopyGenerateNameErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalProjectCopyGenerateNameError =
@@ -7436,6 +7959,14 @@ export type PtyShellsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyShellsError = PtyShellsErrors[keyof PtyShellsErrors]
@@ -7468,6 +7999,14 @@ export type PtyListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyListError = PtyListErrors[keyof PtyListErrors]
@@ -7504,6 +8043,14 @@ export type PtyCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyCreateError = PtyCreateErrors[keyof PtyCreateErrors]
@@ -7538,6 +8085,14 @@ export type PtyRemoveErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyRemoveError = PtyRemoveErrors[keyof PtyRemoveErrors]
@@ -7572,6 +8127,14 @@ export type PtyGetErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyGetError = PtyGetErrors[keyof PtyGetErrors]
@@ -7612,6 +8175,14 @@ export type PtyUpdateErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyUpdateError = PtyUpdateErrors[keyof PtyUpdateErrors]
@@ -7650,6 +8221,14 @@ export type PtyConnectTokenErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyConnectTokenError = PtyConnectTokenErrors[keyof PtyConnectTokenErrors]
@@ -7681,6 +8260,14 @@ export type QuestionListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type QuestionListError = QuestionListErrors[keyof QuestionListErrors]
@@ -7720,6 +8307,14 @@ export type QuestionReplyErrors = {
    * QuestionNotFoundError
    */
   404: QuestionNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type QuestionReplyError = QuestionReplyErrors[keyof QuestionReplyErrors]
@@ -7754,6 +8349,14 @@ export type QuestionRejectErrors = {
    * QuestionNotFoundError
    */
   404: QuestionNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type QuestionRejectError = QuestionRejectErrors[keyof QuestionRejectErrors]
@@ -7782,6 +8385,14 @@ export type PermissionListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PermissionListError = PermissionListErrors[keyof PermissionListErrors]
@@ -7819,6 +8430,14 @@ export type PermissionReplyErrors = {
    * PermissionNotFoundError
    */
   404: PermissionNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PermissionReplyError = PermissionReplyErrors[keyof PermissionReplyErrors]
@@ -7847,6 +8466,14 @@ export type ProviderListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderListError = ProviderListErrors[keyof ProviderListErrors]
@@ -7881,6 +8508,14 @@ export type ProviderRefreshErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderRefreshError = ProviderRefreshErrors[keyof ProviderRefreshErrors]
@@ -7915,6 +8550,14 @@ export type ProviderAuthErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderAuthError2 = ProviderAuthErrors[keyof ProviderAuthErrors]
@@ -7955,6 +8598,14 @@ export type ProviderOauthAuthorizeErrors = {
    * ProviderAuthError | InvalidRequestError
    */
   400: ProviderAuthError1 | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderOauthAuthorizeError = ProviderOauthAuthorizeErrors[keyof ProviderOauthAuthorizeErrors]
@@ -7991,6 +8642,14 @@ export type ProviderOauthCallbackErrors = {
    * ProviderAuthError | InvalidRequestError
    */
   400: ProviderAuthError1 | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderOauthCallbackError = ProviderOauthCallbackErrors[keyof ProviderOauthCallbackErrors]
@@ -8021,6 +8680,14 @@ export type ProviderOauthCancelErrors = {
    * ProviderAuthError | InvalidRequestError
    */
   400: ProviderAuthError1 | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ProviderOauthCancelError = ProviderOauthCancelErrors[keyof ProviderOauthCancelErrors]
@@ -8033,6 +8700,83 @@ export type ProviderOauthCancelResponses = {
 }
 
 export type ProviderOauthCancelResponse = ProviderOauthCancelResponses[keyof ProviderOauthCancelResponses]
+
+export type ProviderDeleteModelData = {
+  body?: never
+  path: {
+    providerID: string
+    modelID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/models/{modelID}"
+}
+
+export type ProviderDeleteModelErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type ProviderDeleteModelError = ProviderDeleteModelErrors[keyof ProviderDeleteModelErrors]
+
+export type ProviderDeleteModelResponses = {
+  /**
+   * Model deleted successfully
+   */
+  200: boolean
+}
+
+export type ProviderDeleteModelResponse = ProviderDeleteModelResponses[keyof ProviderDeleteModelResponses]
+
+export type ProviderDeleteProviderData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}"
+}
+
+export type ProviderDeleteProviderErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type ProviderDeleteProviderError = ProviderDeleteProviderErrors[keyof ProviderDeleteProviderErrors]
+
+export type ProviderDeleteProviderResponses = {
+  /**
+   * Provider deleted successfully
+   */
+  200: boolean
+}
+
+export type ProviderDeleteProviderResponse = ProviderDeleteProviderResponses[keyof ProviderDeleteProviderResponses]
 
 export type SessionListData = {
   body?: never
@@ -8055,6 +8799,14 @@ export type SessionListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionListError = SessionListErrors[keyof SessionListErrors]
@@ -8097,6 +8849,14 @@ export type SessionCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]
@@ -8125,6 +8885,14 @@ export type SessionStatusErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionStatusError = SessionStatusErrors[keyof SessionStatusErrors]
@@ -8161,6 +8929,14 @@ export type SessionDeleteErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -8195,6 +8971,14 @@ export type SessionGetErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionGetError = SessionGetErrors[keyof SessionGetErrors]
@@ -8238,6 +9022,14 @@ export type SessionUpdateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]
@@ -8272,6 +9064,14 @@ export type SessionDebugStateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionDebugStateError = SessionDebugStateErrors[keyof SessionDebugStateErrors]
@@ -8315,6 +9115,14 @@ export type SessionChildrenErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionChildrenError = SessionChildrenErrors[keyof SessionChildrenErrors]
@@ -8349,6 +9157,14 @@ export type SessionTodoErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionTodoError = SessionTodoErrors[keyof SessionTodoErrors]
@@ -8380,6 +9196,14 @@ export type SessionDiffErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionDiffError = SessionDiffErrors[keyof SessionDiffErrors]
@@ -8416,6 +9240,14 @@ export type SessionMessagesErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionMessagesError = SessionMessagesErrors[keyof SessionMessagesErrors]
@@ -8468,6 +9300,14 @@ export type SessionPromptErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -8507,9 +9347,13 @@ export type SessionDeleteMessageErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * SessionBusyError | DirectoryMissingError
    */
-  409: SessionBusyError
+  409: SessionBusyError | DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionDeleteMessageError = SessionDeleteMessageErrors[keyof SessionDeleteMessageErrors]
@@ -8545,6 +9389,14 @@ export type SessionMessageErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionMessageError = SessionMessageErrors[keyof SessionMessageErrors]
@@ -8588,6 +9440,14 @@ export type SessionForkErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionForkError = SessionForkErrors[keyof SessionForkErrors]
@@ -8618,6 +9478,14 @@ export type SessionAbortErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionAbortError = SessionAbortErrors[keyof SessionAbortErrors]
@@ -8656,6 +9524,14 @@ export type SessionInitErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionInitError = SessionInitErrors[keyof SessionInitErrors]
@@ -8691,9 +9567,13 @@ export type SessionUnshareErrors = {
    */
   404: NotFoundError
   /**
-   * InternalServerError
+   * DirectoryMissingError
    */
-  500: EffectHttpApiErrorInternalServerError
+  409: DirectoryMissingError
+  /**
+   * InternalServerError | DirectoryUnreadableError
+   */
+  500: EffectHttpApiErrorInternalServerError | DirectoryUnreadableError
 }
 
 export type SessionUnshareError = SessionUnshareErrors[keyof SessionUnshareErrors]
@@ -8729,9 +9609,13 @@ export type SessionShareErrors = {
    */
   404: NotFoundError
   /**
-   * InternalServerError
+   * DirectoryMissingError
    */
-  500: EffectHttpApiErrorInternalServerError
+  409: DirectoryMissingError
+  /**
+   * InternalServerError | DirectoryUnreadableError
+   */
+  500: EffectHttpApiErrorInternalServerError | DirectoryUnreadableError
 }
 
 export type SessionShareError = SessionShareErrors[keyof SessionShareErrors]
@@ -8770,6 +9654,14 @@ export type SessionSummarizeErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummarizeErrors]
@@ -8819,6 +9711,14 @@ export type SessionPromptAsyncErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionPromptAsyncErrors]
@@ -8868,6 +9768,14 @@ export type SessionCommandErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionCommandError = SessionCommandErrors[keyof SessionCommandErrors]
@@ -8914,9 +9822,13 @@ export type SessionShellErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * SessionBusyError | DirectoryMissingError
    */
-  409: SessionBusyError
+  409: SessionBusyError | DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionShellError = SessionShellErrors[keyof SessionShellErrors]
@@ -8958,9 +9870,13 @@ export type SessionRevertErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * SessionBusyError | DirectoryMissingError
    */
-  409: SessionBusyError
+  409: SessionBusyError | DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionRevertError = SessionRevertErrors[keyof SessionRevertErrors]
@@ -8996,9 +9912,13 @@ export type SessionUnrevertErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * SessionBusyError | DirectoryMissingError
    */
-  409: SessionBusyError
+  409: SessionBusyError | DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionUnrevertError = SessionUnrevertErrors[keyof SessionUnrevertErrors]
@@ -9036,6 +9956,14 @@ export type PermissionRespondErrors = {
    * NotFoundError | PermissionNotFoundError
    */
   404: NotFoundError | PermissionNotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PermissionRespondError = PermissionRespondErrors[keyof PermissionRespondErrors]
@@ -9072,6 +10000,14 @@ export type PartDeleteErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PartDeleteError = PartDeleteErrors[keyof PartDeleteErrors]
@@ -9108,6 +10044,14 @@ export type PartUpdateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PartUpdateError = PartUpdateErrors[keyof PartUpdateErrors]
@@ -9146,6 +10090,14 @@ export type SessionBtwErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionBtwError = SessionBtwErrors[keyof SessionBtwErrors]
@@ -9235,6 +10187,14 @@ export type SyncStartErrors = {
    * Not found
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SyncStartError = SyncStartErrors[keyof SyncStartErrors]
@@ -9283,6 +10243,14 @@ export type SyncReplayErrors = {
    * Not found
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SyncReplayError = SyncReplayErrors[keyof SyncReplayErrors]
@@ -9324,6 +10292,14 @@ export type SyncStealErrors = {
    * Not found
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SyncStealError = SyncStealErrors[keyof SyncStealErrors]
@@ -9360,6 +10336,14 @@ export type SyncHistoryListErrors = {
    * Not found
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SyncHistoryListError = SyncHistoryListErrors[keyof SyncHistoryListErrors]
@@ -9398,6 +10382,14 @@ export type TuiAppendPromptErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiAppendPromptError = TuiAppendPromptErrors[keyof TuiAppendPromptErrors]
@@ -9426,6 +10418,14 @@ export type TuiOpenHelpErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiOpenHelpError = TuiOpenHelpErrors[keyof TuiOpenHelpErrors]
@@ -9454,6 +10454,14 @@ export type TuiOpenSessionsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiOpenSessionsError = TuiOpenSessionsErrors[keyof TuiOpenSessionsErrors]
@@ -9482,6 +10490,14 @@ export type TuiOpenThemesErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiOpenThemesError = TuiOpenThemesErrors[keyof TuiOpenThemesErrors]
@@ -9510,6 +10526,14 @@ export type TuiOpenModelsErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiOpenModelsError = TuiOpenModelsErrors[keyof TuiOpenModelsErrors]
@@ -9538,6 +10562,14 @@ export type TuiSubmitPromptErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiSubmitPromptError = TuiSubmitPromptErrors[keyof TuiSubmitPromptErrors]
@@ -9566,6 +10598,14 @@ export type TuiClearPromptErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiClearPromptError = TuiClearPromptErrors[keyof TuiClearPromptErrors]
@@ -9596,6 +10636,14 @@ export type TuiExecuteCommandErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiExecuteCommandError = TuiExecuteCommandErrors[keyof TuiExecuteCommandErrors]
@@ -9629,6 +10677,14 @@ export type TuiShowToastErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiShowToastError = TuiShowToastErrors[keyof TuiShowToastErrors]
@@ -9657,6 +10713,14 @@ export type TuiPublishErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiPublishError = TuiPublishErrors[keyof TuiPublishErrors]
@@ -9694,6 +10758,14 @@ export type TuiSelectSessionErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiSelectSessionError = TuiSelectSessionErrors[keyof TuiSelectSessionErrors]
@@ -9722,6 +10794,14 @@ export type TuiControlNextErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiControlNextError = TuiControlNextErrors[keyof TuiControlNextErrors]
@@ -9753,6 +10833,14 @@ export type TuiControlResponseErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type TuiControlResponseError = TuiControlResponseErrors[keyof TuiControlResponseErrors]
@@ -9781,6 +10869,14 @@ export type ExperimentalWorkspaceAdapterListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceAdapterListError =
@@ -9815,6 +10911,14 @@ export type ExperimentalWorkspaceListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceListError = ExperimentalWorkspaceListErrors[keyof ExperimentalWorkspaceListErrors]
@@ -9849,6 +10953,14 @@ export type ExperimentalWorkspaceCreateErrors = {
    * WorkspaceCreateError | BadRequest | InvalidRequestError
    */
   400: WorkspaceCreateError | EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceCreateError =
@@ -9879,6 +10991,14 @@ export type ExperimentalWorkspaceSyncListErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceSyncListError =
@@ -9909,6 +11029,14 @@ export type ExperimentalWorkspaceStatusErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceStatusError =
@@ -9944,6 +11072,14 @@ export type ExperimentalWorkspaceRemoveErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceRemoveError =
@@ -9982,6 +11118,14 @@ export type ExperimentalWorkspaceWarpErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type ExperimentalWorkspaceWarpError = ExperimentalWorkspaceWarpErrors[keyof ExperimentalWorkspaceWarpErrors]
@@ -10048,6 +11192,10 @@ export type V2LocationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2LocationGetError = V2LocationGetErrors[keyof V2LocationGetErrors]
@@ -10082,6 +11230,10 @@ export type V2AgentListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2AgentListError = V2AgentListErrors[keyof V2AgentListErrors]
@@ -10164,6 +11316,10 @@ export type V2SessionCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionCreateError = V2SessionCreateErrors[keyof V2SessionCreateErrors]
@@ -10205,6 +11361,14 @@ export type V2SessionGetErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionGetError = V2SessionGetErrors[keyof V2SessionGetErrors]
@@ -10252,9 +11416,13 @@ export type V2SessionPromptErrors = {
    */
   404: SessionNotFoundError
   /**
-   * ConflictError
+   * ConflictError | SessionDirectoryMissingError
    */
-  409: ConflictError
+  409: ConflictError | SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]
@@ -10296,6 +11464,14 @@ export type V2SessionCompactErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
   /**
    * ServiceUnavailableError
    */
@@ -10340,6 +11516,14 @@ export type V2SessionWaitErrors = {
    */
   404: SessionNotFoundError
   /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -10383,9 +11567,13 @@ export type V2SessionContextErrors = {
    */
   404: SessionNotFoundError
   /**
-   * UnknownError
+   * SessionDirectoryMissingError
    */
-  500: UnknownError
+  409: SessionDirectoryMissingError
+  /**
+   * UnknownError | DirectoryUnreadableError
+   */
+  500: UnknownError | DirectoryUnreadableError
 }
 
 export type V2SessionContextError = V2SessionContextErrors[keyof V2SessionContextErrors]
@@ -10435,9 +11623,13 @@ export type V2SessionMessagesErrors = {
    */
   404: SessionNotFoundError
   /**
-   * UnknownError
+   * SessionDirectoryMissingError
    */
-  500: UnknownError
+  409: SessionDirectoryMissingError
+  /**
+   * UnknownError | DirectoryUnreadableError
+   */
+  500: UnknownError | DirectoryUnreadableError
 }
 
 export type V2SessionMessagesError = V2SessionMessagesErrors[keyof V2SessionMessagesErrors]
@@ -10472,6 +11664,10 @@ export type V2ModelListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
   /**
    * ServiceUnavailableError
    */
@@ -10513,6 +11709,10 @@ export type V2ProviderListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
   /**
    * ServiceUnavailableError
    */
@@ -10561,6 +11761,10 @@ export type V2ProviderGetErrors = {
    */
   404: ProviderNotFoundError
   /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -10601,6 +11805,10 @@ export type V2IntegrationListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationListError = V2IntegrationListErrors[keyof V2IntegrationListErrors]
@@ -10640,6 +11848,10 @@ export type V2IntegrationGetErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationGetError = V2IntegrationGetErrors[keyof V2IntegrationGetErrors]
@@ -10682,6 +11894,10 @@ export type V2IntegrationConnectKeyErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationConnectKeyError = V2IntegrationConnectKeyErrors[keyof V2IntegrationConnectKeyErrors]
@@ -10724,6 +11940,10 @@ export type V2IntegrationConnectOauthErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationConnectOauthError = V2IntegrationConnectOauthErrors[keyof V2IntegrationConnectOauthErrors]
@@ -10764,6 +11984,10 @@ export type V2IntegrationAttemptCancelErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationAttemptCancelError = V2IntegrationAttemptCancelErrors[keyof V2IntegrationAttemptCancelErrors]
@@ -10801,6 +12025,10 @@ export type V2IntegrationAttemptStatusErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationAttemptStatusError = V2IntegrationAttemptStatusErrors[keyof V2IntegrationAttemptStatusErrors]
@@ -10872,6 +12100,10 @@ export type V2IntegrationAttemptCompleteErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2IntegrationAttemptCompleteError =
@@ -10910,6 +12142,10 @@ export type V2CredentialRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2CredentialRemoveError = V2CredentialRemoveErrors[keyof V2CredentialRemoveErrors]
@@ -10948,6 +12184,10 @@ export type V2CredentialUpdateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2CredentialUpdateError = V2CredentialUpdateErrors[keyof V2CredentialUpdateErrors]
@@ -10982,6 +12222,10 @@ export type V2PermissionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PermissionRequestListError = V2PermissionRequestListErrors[keyof V2PermissionRequestListErrors]
@@ -11016,6 +12260,10 @@ export type V2PermissionSavedListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PermissionSavedListError = V2PermissionSavedListErrors[keyof V2PermissionSavedListErrors]
@@ -11049,6 +12297,10 @@ export type V2PermissionSavedRemoveErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PermissionSavedRemoveError = V2PermissionSavedRemoveErrors[keyof V2PermissionSavedRemoveErrors]
@@ -11088,6 +12340,14 @@ export type V2SessionPermissionListErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionPermissionListError = V2SessionPermissionListErrors[keyof V2SessionPermissionListErrors]
@@ -11130,9 +12390,17 @@ export type V2SessionPermissionReplyErrors = {
    */
   403: ForbiddenError
   /**
-   * SessionNotFoundError | PermissionNotFoundError
+   * PermissionNotFoundError | SessionNotFoundError
    */
   404: PermissionNotFoundError | SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionPermissionReplyError = V2SessionPermissionReplyErrors[keyof V2SessionPermissionReplyErrors]
@@ -11168,6 +12436,10 @@ export type V2FsReadErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2FsReadError = V2FsReadErrors[keyof V2FsReadErrors]
@@ -11203,6 +12475,10 @@ export type V2FsListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2FsListError = V2FsListErrors[keyof V2FsListErrors]
@@ -11243,6 +12519,10 @@ export type V2FsFindErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2FsFindError = V2FsFindErrors[keyof V2FsFindErrors]
@@ -11280,6 +12560,10 @@ export type V2CommandListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2CommandListError = V2CommandListErrors[keyof V2CommandListErrors]
@@ -11317,6 +12601,10 @@ export type V2SkillListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SkillListError = V2SkillListErrors[keyof V2SkillListErrors]
@@ -11354,6 +12642,10 @@ export type V2EventSubscribeErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2EventSubscribeError = V2EventSubscribeErrors[keyof V2EventSubscribeErrors]
@@ -11388,6 +12680,10 @@ export type V2PtyListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyListError = V2PtyListErrors[keyof V2PtyListErrors]
@@ -11433,6 +12729,10 @@ export type V2PtyCreateErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyCreateError = V2PtyCreateErrors[keyof V2PtyCreateErrors]
@@ -11476,6 +12776,10 @@ export type V2PtyRemoveErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyRemoveError = V2PtyRemoveErrors[keyof V2PtyRemoveErrors]
@@ -11516,6 +12820,10 @@ export type V2PtyGetErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyGetError = V2PtyGetErrors[keyof V2PtyGetErrors]
@@ -11565,6 +12873,10 @@ export type V2PtyUpdateErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyUpdateError = V2PtyUpdateErrors[keyof V2PtyUpdateErrors]
@@ -11612,6 +12924,10 @@ export type V2PtyConnectTokenErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyConnectTokenError = V2PtyConnectTokenErrors[keyof V2PtyConnectTokenErrors]
@@ -11662,6 +12978,10 @@ export type V2PtyConnectErrors = {
    * PtyNotFoundError
    */
   404: PtyNotFoundError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2PtyConnectError = V2PtyConnectErrors[keyof V2PtyConnectErrors]
@@ -11696,6 +13016,10 @@ export type V2QuestionRequestListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2QuestionRequestListError = V2QuestionRequestListErrors[keyof V2QuestionRequestListErrors]
@@ -11738,6 +13062,14 @@ export type V2SessionQuestionListErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionQuestionListError = V2SessionQuestionListErrors[keyof V2SessionQuestionListErrors]
@@ -11777,9 +13109,17 @@ export type V2SessionQuestionReplyErrors = {
    */
   403: ForbiddenError
   /**
-   * SessionNotFoundError | QuestionNotFoundError
+   * QuestionNotFoundError | SessionNotFoundError
    */
   404: QuestionNotFoundError | SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionQuestionReplyError = V2SessionQuestionReplyErrors[keyof V2SessionQuestionReplyErrors]
@@ -11817,9 +13157,17 @@ export type V2SessionQuestionRejectErrors = {
    */
   403: ForbiddenError
   /**
-   * SessionNotFoundError | QuestionNotFoundError
+   * QuestionNotFoundError | SessionNotFoundError
    */
   404: QuestionNotFoundError | SessionNotFoundError
+  /**
+   * SessionDirectoryMissingError
+   */
+  409: SessionDirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2SessionQuestionRejectError = V2SessionQuestionRejectErrors[keyof V2SessionQuestionRejectErrors]
@@ -11854,6 +13202,10 @@ export type V2ReferenceListErrors = {
    * UnauthorizedError
    */
   401: UnauthorizedError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2ReferenceListError = V2ReferenceListErrors[keyof V2ReferenceListErrors]
@@ -11892,6 +13244,10 @@ export type V2ProjectCopyRemoveErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2ProjectCopyRemoveError = V2ProjectCopyRemoveErrors[keyof V2ProjectCopyRemoveErrors]
@@ -11928,6 +13284,10 @@ export type V2ProjectCopyCreateErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2ProjectCopyCreateError = V2ProjectCopyCreateErrors[keyof V2ProjectCopyCreateErrors]
@@ -11960,6 +13320,10 @@ export type V2ProjectCopyRefreshErrors = {
    * ProjectCopyError | InvalidRequestError
    */
   400: ProjectCopyError | InvalidRequestError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type V2ProjectCopyRefreshError = V2ProjectCopyRefreshErrors[keyof V2ProjectCopyRefreshErrors]
@@ -11989,6 +13353,10 @@ export type PtyConnectData = {
 
 export type PtyConnectErrors = {
   /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
    * Forbidden
    */
   403: EffectHttpApiErrorForbidden
@@ -11996,6 +13364,14 @@ export type PtyConnectErrors = {
    * Not found
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type PtyConnectError = PtyConnectErrors[keyof PtyConnectErrors]

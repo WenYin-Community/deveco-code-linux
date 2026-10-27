@@ -6,18 +6,21 @@ import { useSDK } from "./sdk"
 
 type WorkspaceStatus = "connected" | "connecting" | "disconnected" | "error"
 
+/**
+ * Fallback path used until the server sends the real one. The regenerated SDK types the
+ * whole payload the server returns, so every field has to be present here as well; the
+ * server value replaces this object once the first request completes.
+ */
+function placeholderPath(directory: string): Path {
+  return { home: "", state: "", config: "", projectConfig: "", worktree: "", directory }
+}
+
 export const { use: useProject, provider: ProjectProvider } = createSimpleContext({
   name: "Project",
   init: () => {
     const sdk = useSDK()
 
-    const defaultPath = {
-      home: "",
-      state: "",
-      config: "",
-      worktree: "",
-      directory: sdk.directory ?? "",
-    } satisfies Path
+    const defaultPath = placeholderPath(sdk.directory ?? "")
 
     const [store, setStore] = createStore({
       project: {

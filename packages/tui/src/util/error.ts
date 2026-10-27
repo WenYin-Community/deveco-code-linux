@@ -180,3 +180,40 @@ export function errorData(error: unknown) {
   data.formatted = errorFormat(error)
   return data
 }
+
+// Two server APIs report a deleted working directory: the typed `/api` errors send
+// "SessionDirectoryMissingError" (which names the session), while the instance API
+// answers "DirectoryMissingError" (which only names the directory). Both mean the
+// recorded project directory is gone, so callers treat them alike.
+const MISSING_DIRECTORY_TAGS: readonly string[] = ["SessionDirectoryMissingError", "DirectoryMissingError"]
+
+/**
+ * Recognizes the 409 "working directory no longer exists" failure.
+ *
+ * Every request that can produce one is made with `throwOnError`, and the SDK wraps
+ * such a failure in an Error whose `cause.body` is the decoded response body
+ * (packages/sdk/js/src/error-interceptor.ts). That Error is the only carrier callers
+ * hand over, so there is nothing else to search. Anything unrecognized yields
+ * undefined instead of throwing, which lets callers fall back to their generic toast.
+ */
+export function missingDirectoryError(input: unknown): { sessionID?: string; directory?: string } | undefined {
+  if (!(input instanceof Error)) return undefined
+  const cause = input.cause
+  if (!isRecord(cause)) return undefined
+  const body = bodyRecord(cause.body)
+  if (!body) return undefined
+  if (typeof body._tag !== "string" || !MISSING_DIRECTORY_TAGS.includes(body._tag)) return undefined
+  return { sessionID: field(body, "sessionID"), directory: field(body, "directory") }
+}
+
+/** Decoded bodies are objects; a transport that kept the raw text needs one parse. */
+function bodyRecord(input: unknown): Record<string, unknown> | undefined {
+  if (isRecord(input)) return input
+  if (typeof input !== "string" || !input.trimStart().startsWith("{")) return undefined
+  try {
+    const parsed = JSON.parse(input) as unknown
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}

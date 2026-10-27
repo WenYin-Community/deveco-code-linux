@@ -57,6 +57,7 @@ import { DialogConfirm } from "../../ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { useSessionDirectoryMissingRecovery } from "../../component/session-directory-missing-recovery"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { SlowResponseTip } from "./slow-response-tip"
@@ -301,6 +302,7 @@ export function Session() {
   const toast = useToast()
   const sdk = useSDK()
   const editor = useEditorContext()
+  const recovery = useSessionDirectoryMissingRecovery()
 
   createEffect(() => {
     const sessionID = route.sessionID
@@ -334,6 +336,10 @@ export function Session() {
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
+      // A deleted working directory is recoverable: offer to move this session
+      // into the current one instead of dumping the raw error and bouncing home.
+      // The id is passed explicitly because the 409 body carries the directory only.
+      if (recovery.recover(error, sessionID)) return
       toast.show({
         message: errorMessage(error),
         variant: "error",

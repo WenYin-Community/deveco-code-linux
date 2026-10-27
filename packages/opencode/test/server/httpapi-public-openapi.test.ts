@@ -199,7 +199,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["get", "/api/session/{sessionID}/context"],
       ["get", "/api/session/{sessionID}/message"],
     ] as const) {
-      expect(componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["404"])).toContain("SessionNotFoundError")
+      expect(componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["404"])).toEqual(["SessionNotFoundError"])
     }
   })
 
@@ -223,9 +223,10 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["get", "/api/session/{sessionID}/context"],
       ["get", "/api/session/{sessionID}/message"],
     ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["500"]) ?? "")).toMatch(
-        /^UnknownError\d*$/,
-      )
+      // A session read can fail with 500 in two declared ways: an unexpected defect, and a
+      // working directory that is still there but cannot be read. Clients need both.
+      const names = componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["500"])
+      expect([...names].sort()).toEqual(["DirectoryUnreadableError", "UnknownError"])
     }
   })
 
@@ -238,9 +239,10 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["post", "/session/{sessionID}/unrevert"],
       ["delete", "/session/{sessionID}/message/{messageID}"],
     ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["409"]) ?? "")).toBe(
-        "SessionBusyError",
-      )
+      // 409 carries two declared errors on the instance routes: the session is busy, or the
+      // working directory it points at is gone and the instance cannot be booted at all.
+      const names = componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["409"])
+      expect([...names].sort()).toEqual(["DirectoryMissingError", "SessionBusyError"])
     }
   })
 

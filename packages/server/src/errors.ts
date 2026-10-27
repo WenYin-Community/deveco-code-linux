@@ -61,6 +61,38 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
   { httpApiStatus: 404 },
 ) {}
 
+/**
+ * The session row still exists, but the directory it was created in has been removed
+ * (for example a git worktree that was cleaned up). The location service layer cannot
+ * be booted without it, so session-scoped requests fail with an actionable 409 instead
+ * of an Effect defect.
+ */
+export class SessionDirectoryMissingError extends Schema.TaggedErrorClass<SessionDirectoryMissingError>()(
+  "SessionDirectoryMissingError",
+  {
+    sessionID: Schema.String,
+    directory: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+/**
+ * The directory the request points at exists but cannot be inspected (permissions, I/O error).
+ * This is not the same failure as a deleted directory: the user cannot fix it by picking another
+ * location, and treating it as "missing" would make the client offer a migration that moves the
+ * session away from a directory that may still be perfectly usable. Answered as a server error so
+ * the client stops instead of repairing something that is not broken.
+ */
+export class DirectoryUnreadableError extends Schema.TaggedErrorClass<DirectoryUnreadableError>()(
+  "DirectoryUnreadableError",
+  {
+    directory: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 500 },
+) {}
+
 export class InvalidCursorError extends Schema.TaggedErrorClass<InvalidCursorError>()(
   "InvalidCursorError",
   { message: Schema.String },

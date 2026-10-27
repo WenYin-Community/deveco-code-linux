@@ -31,6 +31,18 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
   { httpApiStatus: 409 },
 ) {}
 
+// Raised when a request addresses an instance directory that no longer exists on
+// disk. Booting an instance for such a directory (and later its location services)
+// would die inside realPath, so the instance context middleware rejects it up front.
+export class DirectoryMissingError extends Schema.TaggedErrorClass<DirectoryMissingError>()(
+  "DirectoryMissingError",
+  {
+    directory: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class UpstreamError extends Schema.TaggedErrorClass<UpstreamError>()(
   "UpstreamError",
   {

@@ -8,6 +8,7 @@ import { FileAttachment, Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { Location } from "../location"
 import { RelativePath } from "../schema"
+import { ProjectV2 } from "../project"
 import { SessionMessageID } from "./message-id"
 
 export { FileAttachment }
@@ -75,6 +76,9 @@ export const Moved = EventV2.define({
   schema: {
     ...Base,
     location: Location.Ref,
+    // Optional so that moves recorded before the session could leave a deleted directory still
+    // replay: they only rewrote the location and the projection must not invent a project move.
+    projectID: ProjectV2.ID.pipe(Schema.optional),
     subdirectory: RelativePath.pipe(Schema.optional),
   },
 })

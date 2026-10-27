@@ -1,11 +1,14 @@
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { FileSystem } from "@opencode-ai/core/filesystem"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { sanitizePath } from "@opencode-ai/core/sanitize-path"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Effect, Layer, Schema } from "effect"
 import { HttpServerRequest } from "effect/unstable/http"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
+import { DirectoryUnreadableError, InvalidRequestError } from "../errors"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -52,7 +55,9 @@ export class LocationMiddleware extends HttpApiMiddleware.Service<
   {
     provides: LocationServices
   }
->()("@opencode/HttpApiLocation") {}
+>()("@opencode/HttpApiLocation", {
+  error: [DirectoryUnreadableError, InvalidRequestError],
+}) {}
 
 export const LocationGroup = HttpApiGroup.make("server.location")
   .add(
@@ -94,12 +99,37 @@ function decode(input: string) {
 export const layer = Layer.effect(
   LocationMiddleware,
   Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
     const locations = yield* LocationServiceMap
     return LocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        return yield* effect.pipe(Effect.provide(locations.get(ref(request))))
+        const target = ref(request)
+        // Booting the location services calls fs.realPath on the directory and dies when it is
+        // gone, so reject an unknown directory here to keep the failure typed. A directory that
+        // exists but cannot be inspected is reported as a server error instead of "missing": the
+        // client must not act on a permission problem as if the path had been deleted.
+        const state = yield* fs.checkDir(target.directory)
+        if (state === "missing") {
+          yield* Effect.logWarning("requested location directory is missing", {
+            directory: sanitizePath(target.directory),
+          })
+          return yield* new InvalidRequestError({
+            message: `The requested location directory no longer exists: ${target.directory}`,
+            field: "location",
+          })
+        }
+        if (state === "unreadable") {
+          yield* Effect.logWarning("requested location directory cannot be read", {
+            directory: sanitizePath(target.directory),
+          })
+          return yield* new DirectoryUnreadableError({
+            directory: target.directory,
+            message: `The requested location directory cannot be read: ${target.directory}`,
+          })
+        }
+        return yield* effect.pipe(Effect.provide(locations.get(target)))
       }),
     )
   }),
-)
+).pipe(Layer.provide(FSUtil.defaultLayer))

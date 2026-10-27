@@ -9,10 +9,9 @@ import { Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
   ConflictError,
+  DirectoryUnreadableError,
   InvalidCursorError,
-  InvalidRequestError,
   ServiceUnavailableError,
-  SessionNotFoundError,
   UnknownError,
 } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
@@ -98,7 +97,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
           next: SessionsCursor.pipe(Schema.optional),
         }),
       }).annotate({ identifier: "SessionsResponse" }),
-      error: [InvalidCursorError, InvalidRequestError],
+      error: InvalidCursorError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.session.list",
@@ -117,6 +116,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         location: Location.Ref.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionV2.Info }),
+      error: DirectoryUnreadableError,
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.session.create",
@@ -129,7 +129,6 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     HttpApiEndpoint.get("session.get", "/api/session/:sessionID", {
       params: { sessionID: SessionV2.ID },
       success: Schema.Struct({ data: SessionV2.Info }),
-      error: SessionNotFoundError,
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -150,7 +149,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         resume: Schema.Boolean.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, SessionNotFoundError],
+      error: [ConflictError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -165,7 +164,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
       params: { sessionID: SessionV2.ID },
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, ServiceUnavailableError],
+      error: [ServiceUnavailableError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -180,7 +179,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     HttpApiEndpoint.post("session.wait", "/api/session/:sessionID/wait", {
       params: { sessionID: SessionV2.ID },
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, ServiceUnavailableError],
+      error: [ServiceUnavailableError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -195,7 +194,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     HttpApiEndpoint.get("session.context", "/api/session/:sessionID/context", {
       params: { sessionID: SessionV2.ID },
       success: Schema.Struct({ data: Schema.Array(SessionMessage.Message) }),
-      error: [SessionNotFoundError, UnknownError],
+      error: [UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

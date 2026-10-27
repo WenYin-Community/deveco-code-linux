@@ -53,6 +53,7 @@ import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
+import { useSessionDirectoryMissingRecovery } from "../session-directory-missing-recovery"
 import { useArgs } from "../../context/args"
 import { DEVECO_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
 import { useTuiConfig } from "../../config"
@@ -181,6 +182,47 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const btw = useBtw()
   const toast = useToast()
+  const recovery = useSessionDirectoryMissingRecovery()
+  // Both the prompt and the slash-command request fail the same way when the working
+  // directory of the session is gone, so both report through one handler. It lives outside
+  // submitInner to keep that function from growing.
+  function failSubmit(error: unknown, sessionID: string) {
+    if (recovery.recover(error, sessionID)) return
+    toast.show({ title: t("command.failed_send_prompt"), message: errorMessage(error), variant: "error" })
+  }
+  /**
+   * Sends a slash command. Command failures take the same path as prompt failures, so both
+   * go through failSubmit; the parsing lives here to keep submitInner from growing.
+   */
+  function sendSlashCommand(input: {
+    sessionID: string
+    inputText: string
+    agent: string
+    model: string
+    variant: Parameters<typeof sdk.client.session.command>[0]["variant"]
+    parts: Parameters<typeof sdk.client.session.command>[0]["parts"]
+  }) {
+    // Parse command from first line, preserve multi-line content in arguments
+    const firstLineEnd = input.inputText.indexOf("\n")
+    const firstLine = firstLineEnd === -1 ? input.inputText : input.inputText.slice(0, firstLineEnd)
+    const [command, ...firstLineArgs] = firstLine.split(" ")
+    const restOfInput = firstLineEnd === -1 ? "" : input.inputText.slice(firstLineEnd + 1)
+    const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
+    void sdk.client.session
+      .command(
+        {
+          sessionID: input.sessionID,
+          command: command.slice(1),
+          arguments: args,
+          agent: input.agent,
+          model: input.model,
+          variant: input.variant,
+          parts: input.parts,
+        },
+        { throwOnError: true },
+      )
+      .catch((error) => failSubmit(error, input.sessionID))
+  }
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -1284,17 +1326,9 @@ export function Prompt(props: PromptProps) {
       sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
     ) {
       move.startSubmit()
-      // Parse command from first line, preserve multi-line content in arguments
-      const firstLineEnd = inputText.indexOf("\n")
-      const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
-      const [command, ...firstLineArgs] = firstLine.split(" ")
-      const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-      const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
-
-      void sdk.client.session.command({
+      sendSlashCommand({
         sessionID,
-        command: command.slice(1),
-        arguments: args,
+        inputText,
         agent: agent.name,
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         variant,
@@ -1321,13 +1355,7 @@ export function Prompt(props: PromptProps) {
           },
           { throwOnError: true },
         )
-        .catch((error) => {
-          toast.show({
-            title: t("command.failed_send_prompt"),
-            message: errorMessage(error),
-            variant: "error",
-          })
-        })
+        .catch((error) => failSubmit(error, sessionID))
       if (editorParts.length > 0) editor.markSelectionSent()
       lastSubmittedPrompt = {
         ...store.prompt,

@@ -172,15 +172,40 @@ describe("HttpApi instance context middleware", () => {
     }),
   )
 
-  it.live("falls back to the raw directory when URI decoding fails", () =>
+  it.live("rejects a directory that cannot be decoded as a bad request", () =>
     Effect.gen(function* () {
       yield* serveProbe()
 
+      // A malformed escape is a broken request, not a directory that went away, so the
+      // middleware answers 400 instead of reporting a missing instance directory.
       const response = yield* HttpClient.get("/probe?directory=%25E0%25A4%25A")
+
+      expect(response.status).toBe(400)
+      expect(yield* response.json).toEqual({
+        _tag: "InvalidRequestError",
+        message: "Invalid directory query parameter",
+        kind: "Query",
+        field: "directory",
+      })
+    }),
+  )
+
+  it.live("keeps a directory whose name looks like an escape reachable", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const percentDirectory = path.join(dir, "a%20b")
+      yield* Effect.promise(() => mkdir(percentDirectory))
+      const project = yield* Project.use.fromDirectory(percentDirectory)
+      yield* serveProbe()
+
+      // The name only decodes once: decoding it twice would turn it into "a b" and hide
+      // the directory behind a missing-directory error.
+      const response = yield* HttpClient.get(`/probe?directory=${encodeURIComponent(percentDirectory)}`)
 
       expect(response.status).toBe(200)
       expect(yield* response.json).toMatchObject({
-        directory: path.join(process.cwd(), "%E0%A4%A"),
+        directory: percentDirectory,
+        projectID: project.project.id,
       })
     }),
   )

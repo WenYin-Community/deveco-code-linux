@@ -244,12 +244,19 @@ export const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
+        const projectID = event.data.projectID
         yield* db
           .update(SessionTable)
           .set({
             directory: event.data.location.directory,
             path: event.data.subdirectory,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
+            // A move out of a deleted directory can change the owning project, because the old
+            // project id was only a hash of the vanished path. Sessions are listed per project,
+            // so leaving the old id behind would hide the moved session from its new directory's
+            // list. `MoveSession` makes sure the destination project row exists first, which is
+            // what keeps this update inside the session.project_id -> project.id foreign key.
+            ...(projectID ? { project_id: projectID } : {}),
             time_updated: DateTime.toEpochMillis(event.data.timestamp),
           })
           .where(eq(SessionTable.id, event.data.sessionID))

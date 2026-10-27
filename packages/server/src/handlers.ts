@@ -1,3 +1,4 @@
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { PermissionSaved } from "@opencode-ai/core/permission/saved"
@@ -54,4 +55,5 @@ export const handlers = Layer.mergeAll(
   Layer.provide(PtyTicket.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
   Layer.provide(Credential.defaultLayer),
+  Layer.provide(FSUtil.defaultLayer),
 )

@@ -1,3 +1,4 @@
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { DateTime, Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
@@ -5,7 +6,9 @@ import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
 import {
   ConflictError,
+  DirectoryUnreadableError,
   InvalidCursorError,
+  InvalidRequestError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -17,6 +20,7 @@ const DefaultSessionsLimit = 50
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
+    const fs = yield* FSUtil.Service
 
     return handlers
       .handle(
@@ -65,12 +69,32 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          // The directory stored on the session becomes its location, and booting those services
+          // dies when the path is gone, so validate what is actually going to be stored — including
+          // the server cwd when the payload omits a location, because the process can be sitting in
+          // a directory that was deleted from under it.
+          //
+          // The three states matter here: a missing directory is a bad request the client can fix,
+          // while one that cannot be inspected is a server-side problem. Folding the latter into
+          // "does not exist" would send the client looking for the wrong fix.
+          const location = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          const state = yield* fs.checkDir(location.directory)
+          if (state === "missing")
+            return yield* new InvalidRequestError({
+              message: `Location directory does not exist: ${location.directory}`,
+              field: "location",
+            })
+          if (state === "unreadable")
+            return yield* new DirectoryUnreadableError({
+              directory: location.directory,
+              message: `Location directory cannot be read: ${location.directory}`,
+            })
           return {
             data: yield* session.create({
               id: ctx.payload.id,
               agent: ctx.payload.agent,
               model: ctx.payload.model,
-              location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              location,
             }),
           }
         }),

@@ -2,7 +2,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
-import { InvalidCursorError, SessionNotFoundError, UnknownError } from "../errors"
+import { InvalidCursorError, UnknownError } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
 
 export const SessionMessagesQuery = Schema.Struct({
@@ -34,7 +34,7 @@ export const MessageGroup = HttpApiGroup.make("server.message")
           next: Schema.String.pipe(Schema.optional),
         }),
       }).annotate({ identifier: "SessionMessagesResponse" }),
-      error: [InvalidCursorError, SessionNotFoundError, UnknownError],
+      error: [InvalidCursorError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

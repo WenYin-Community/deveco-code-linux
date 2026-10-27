@@ -5,7 +5,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
+import { PermissionNotFoundError } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
 import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
@@ -53,7 +53,6 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
     HttpApiEndpoint.get("session.permission.list", "/api/session/:sessionID/permission", {
       params: { sessionID: SessionV2.ID },
       success: Schema.Struct({ data: Schema.Array(PermissionV2.Request) }),
-      error: SessionNotFoundError,
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
@@ -72,7 +71,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
         message: Schema.String.pipe(Schema.optional),
       }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, PermissionNotFoundError],
+      error: PermissionNotFoundError,
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

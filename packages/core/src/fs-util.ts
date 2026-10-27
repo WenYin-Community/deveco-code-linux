@@ -23,8 +23,15 @@ export namespace FSUtil {
     readonly type: "file" | "directory" | "symlink" | "other"
   }
 
+  /**
+   * What the filesystem says about a directory a piece of state points at.
+   * `isDir` cannot express this: it folds every stat failure into "no".
+   */
+  export type DirectoryState = "available" | "missing" | "unreadable"
+
   export interface Interface extends FileSystem.FileSystem {
     readonly isDir: (path: string) => Effect.Effect<boolean>
+    readonly checkDir: (path: string) => Effect.Effect<DirectoryState>
     readonly isFile: (path: string) => Effect.Effect<boolean>
     readonly existsSafe: (path: string) => Effect.Effect<boolean>
     readonly readFileStringSafe: (path: string) => Effect.Effect<string | undefined, Error>
@@ -62,6 +69,39 @@ export namespace FSUtil {
       const isDir = Effect.fn("FileSystem.isDir")(function* (path: string) {
         const info = yield* fs.stat(path).pipe(Effect.catch(() => Effect.void))
         return info?.type === "Directory"
+      })
+
+      // `isDir` answers "no" for every stat failure, so an unreadable directory (EACCES, EIO, a
+      // bad mount) is indistinguishable from a deleted one. Callers that react to a missing
+      // directory by relocating state (session recovery, session moves) must tell the two apart,
+      // because only one of them is something the user can fix by moving the session:
+      //
+      // - "missing": the entry is gone (`NotFound`), or it stopped being a directory
+      //   (`BadResource`, e.g. a cleanup script left a file where the checkout was, or a
+      //   parent path became a file). Nothing can be opened there any more.
+      // - "unreadable": the entry is there but the process may not look at it
+      //   (`PermissionDenied` and everything else). Relocating state over this would rewrite
+      //   the user's session because of a permission problem, so callers must refuse instead.
+      const checkDir = Effect.fn("FileSystem.checkDir")(function* (path: string) {
+        const state = yield* fs.stat(path).pipe(
+          Effect.map((info): DirectoryState => (info.type === "Directory" ? "available" : "missing")),
+          Effect.catchTag("PlatformError", (error) =>
+            Effect.succeed<DirectoryState>(
+              error.reason._tag === "NotFound" || error.reason._tag === "BadResource" ? "missing" : "unreadable",
+            ),
+          ),
+        )
+        if (state !== "available") return state
+        // `stat` only needs the ancestors to be searchable, so on POSIX a directory whose own
+        // mode denies access still stats as a directory and reads as "available" here; the caller
+        // then fails later, on its first `readdir`, far away from the decision this function
+        // exists to make. The extra syscall buys the one thing the three states are for: telling
+        // a directory that is gone from one the user may open again after fixing its permissions.
+        const readable = yield* fs.access(path, { readable: true }).pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        )
+        return readable ? "available" : "unreadable"
       })
 
       const isFile = Effect.fn("FileSystem.isFile")(function* (path: string) {
@@ -180,6 +220,7 @@ export namespace FSUtil {
         existsSafe,
         readFileStringSafe,
         isDir,
+        checkDir,
         isFile,
         readDirectoryEntries,
         readJson,
