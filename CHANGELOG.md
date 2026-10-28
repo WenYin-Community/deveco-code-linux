@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.2.5 (2026-10-28)
+
+### DevEco Code 核心
+
+#### 新特性
+
+- 新增 MasterGo 设计稿转 ArkTS 能力，与 Pixso / Figma 共用 Fast / Full 工作流；自动选择接入方案，支持社区插件引导安装、本机配对、断线自动重连与后台取数（`ca4e90b8a8`、`eac6390a05`）
+- 新增 `/analyze` 故障分析命令与 `dfx` 子代理，自动识别 AppFreeze / CppCrash / JSCrash 并给出修复建议，输出会话内摘要与独立 HTML 报告（`a690f2fdf6`）
+- 登录成功后保存国家 / 地区码，供 DevEco Studio 读取同一用户的国别设置（`cc7a159dc7`）
+
+#### 优化
+
+- 设计稿转 ArkTS 技能更名为 `hmos-design-to-arkts`，Pixso / Figma 路径新增 MCP 依赖前置检查与安装引导（`99ccfbb878`）
+- ArkTS 静态检查改由 `devecocli check arkts` 提供，移除内置 `arkts_check` 工具（`d04f53cbf6`）
+- 补充 ArkTS 导航路由规则：路由表与 `.navDestination` 互斥、`loadContent` 路径须与 `main_pages.json` 注册一致、禁止通过 `AppStorage` 共享 `NavPathStack`；同步修正 `globalThis` 替换与 `loadContent` 示例措辞（`dc24c217da`、`98c7eac57f`）
+- 大幅降低运行时内存占用：启用 JSC 小堆模式、启动后执行一次全量回收、合并重复的模型目录副本、精简服务端与终端间的 provider 数据、缩小 SQLite 页缓存、tree-sitter 改为惰性加载（`58b604e8bd`、`d76dc150be`、`53a75727e6`、`acaee48d7e`、`6dbd51f048`、`ace7a2af99`）
+- 体验数据上报新增缓存 token 统计，token 字段统一为 `inputTokens` / `outputTokens`；修复上报队列静默丢事件与同意状态未知时反复重试（`aa24ee3478`）
+- 界面验证缺少模型时给出明确提示与配置指引（`13bafe6583`）
+
+#### 缺陷修复
+
+- 修复会话工作目录被删除后会话彻底不可用的问题：改为给出明确提示，并支持把会话迁移到仍存在的目录、完整保留历史（`f5f0a35a4f`）
+- 修复首次登录需重复签署协议、协议面板偶发卡在加载态的问题；在线协议检查收敛到启动与华为登录两个时机（`abc2d62370`、`800418221a`）
+- 模型排队不再受全局重试上限约束，保留服务端排队位置直到成功或用户中断（`b52d4be71b`）
+- 用户中断主会话后，已完成的后台任务结果不再立即注入，改为随下一次提问一并提交（`cc1d2d3a04`）
+- 为 SSE 事件订阅、工具 HTTP 响应体、MCP 资源附件设置大小上限，避免超大响应撑爆内存（`80a8cac569`、`1919b100ba`、`ffea464666`）
+
+#### 重构
+
+- 拆分协议检查与界面准入相关函数，降低复杂度（`8e630593d5`）
+
+### TUI 终端界面
+
+#### 优化
+
+- 切换会话时回收非活跃会话的消息、附件与差异数据，缓解长时使用下的内存增长（`f2ec8101a6`）
+
 ## v0.2.4 (2026-10-15)
 
 ### DevEco Code 核心
