@@ -268,7 +268,13 @@ Every verification-unit plan must state a complete URI when a URI jump is reques
 
 After all URI routes for all verification units have been inserted and the temporary build is deployed, call `verify_ui` once per functional point or user story, sequentially, with that unit's reduced test plan, `freshStart: true`, and an optional device identifier. This preserves an independent verification boundary and retry counter for every unit. Route insertion is performed only once for the complete verification run.
 
-Each call represents exactly one verification unit: an independent functional point or user story. Process units sequentially, retry only when the failure is caused by this temporary route, and limit each unit to three attempts. If a temporary-route fix is required, update the shared temporary route set, rebuild and redeploy, then continue the loop. When a fix occurred, perform one final no-fix pass for every verification unit before cleanup. After all units and any final pass finish, clean up the shared temporary changes once.
+Each call represents exactly one verification unit: an independent functional point or user story. Process units sequentially. Read `failType` when `verify_ui` returns it. A unit passes when `success` is true or `failType` is `''`. Older engines omit `failType`; then use `success` alone.
+
+Retry only when `failType` is `verification_failed` and the failure is caused by this temporary route, and limit each unit to three attempts. If `failType` is absent, keep that same rule: retry only when the failure is caused by this temporary route. If a temporary-route fix is required, update the shared temporary route set, rebuild and redeploy, then continue the loop. Do not edit business code for a `verification_failed` result that this temporary route did not cause.
+
+Do not edit application code or the temporary route to chase a pass when `failType` is `unsupported` or `invalid_plan`. `execution_error` and `inconclusive` do not confirm an application defect: `execution_error` is an interruption, and `inconclusive` includes an engine round limit. Retry `verify_ui` for that unit within the same three-attempt limit, without editing application code or the temporary route. If that retry returns `verification_failed` and this temporary route caused it, continue with the temporary-route fix above. Otherwise record the result and continue to the next unit.
+
+When a temporary-route fix occurred, perform one final no-fix pass for every verification unit before cleanup. After all units and any final pass finish, clean up the shared temporary changes once.
 
 Check that each URI actually opens its target page, query values reach the business correctly, later URI jumps preserve earlier state, and there is no parameter loss, duplicate consumption, abnormal back stack, or unintended side effect.
 

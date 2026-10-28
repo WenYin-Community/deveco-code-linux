@@ -106,7 +106,7 @@ export const VerifyUiTool: ReturnType<
     const sessions = yield* Session.Service
     return {
       description:
-        "在提供自然语言描述的功能步骤之后，本工具可以在HarmonyOS设备上运行应用，根据截图进行判断，执行UI操作，验证功能是否可以正确完成。\n注意：当前支持点击、双击、滑动、长按、按键等触控操作，以及鼠标和键盘操作。支持在步骤中通过 URI 直接跳转到指定页面；使用 URI 跳转时，必须在测试步骤中提供完整、明确且可直接执行的 URI，不能只描述目标页面或省略 URI 内容。\n返回的successPart、failPart字段描述了本次验证过程的主要步骤，id字段是本次校验的唯一标识符，可用于后续的日志查询。\n使用场景：\n1. 开发时验证：通过自然语言描述测试用例，自动执行UI操作，验证应用功能。\n2. 获取运行时日志：配合getLog工具使用，在执行UI操作的同时，收集设备日志，帮助定位问题。\n3. 保存截图：配合saveScreenshot工具使用，在执行UI操作的同时，保存截图，帮助定位问题。",
+        "在提供自然语言描述的功能步骤之后，本工具可以在HarmonyOS设备上运行应用，根据截图进行判断，执行UI操作，验证功能是否可以正确完成。\n注意：当前支持点击、双击、滑动、长按、按键等触控操作，以及鼠标和键盘操作。支持在步骤中通过 URI 直接跳转到指定页面；使用 URI 跳转时，必须在测试步骤中提供完整、明确且可直接执行的 URI，不能只描述目标页面或省略 URI 内容。\n返回的successPart、failPart字段描述了本次验证过程的主要步骤，id字段是本次校验的唯一标识符，可用于后续的日志查询。failType 为失败类型：空字符串表示验证通过；verification_failed 表示在工具能力范围内步骤未按预期完成；unsupported 表示关键操作超出工具能力（声音、触觉、对帧间持续移动的目标操作）；invalid_plan 表示计划不规范或当前设备无法执行；execution_error 表示模型、设备或服务中断，没有验证结论；inconclusive 表示证据不足，无法区分验证失败与工具不支持，包括达到轮数上限。旧引擎不返回 failType。\n使用场景：\n1. 开发时验证：通过自然语言描述测试用例，自动执行UI操作，验证应用功能。\n2. 获取运行时日志：配合getLog工具使用，在执行UI操作的同时，收集设备日志，帮助定位问题。\n3. 保存截图：配合saveScreenshot工具使用，在执行UI操作的同时，保存截图，帮助定位问题。",
       parameters: VerifyUiParameters,
       execute: (args, ctx): Effect.Effect<ExecuteResult<UiVerifyMetadata>> =>
         Effect.gen(function* () {
