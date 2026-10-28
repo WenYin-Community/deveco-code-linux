@@ -1,83 +1,97 @@
 import { Global } from "../global"
 import path from "node:path"
-import { readFile, writeFile, unlink, rename, mkdir } from "node:fs/promises"
+import { readFile, writeFile, unlink, rename, mkdir, readdir } from "node:fs/promises"
 
 // FR-EXEC-006: Persist sandbox-exec PIDs so that a crashed/killed host can
-// clean up orphaned controlled processes on next bootstrap. The file stores
-// a JSON array of PIDs that were spawned but not yet gracefully terminated.
+// clean up orphaned controlled processes on next bootstrap.
+//
+// Each deveco process writes its own file (<pid>.json) under sandbox-pids/,
+// so that a new bootstrap can distinguish orphaned processes (owner dead)
+// from processes owned by a still-running deveco instance.
 
-const FILENAME = "sandbox-pids.json"
+const DIRNAME = "sandbox-pids"
 
-function filepath(): string {
-  return path.join(Global.Path.data, FILENAME)
+function dir(): string {
+  return path.join(Global.Path.data, DIRNAME)
 }
 
-/** Add a sandbox-exec PID to the persistent list. Called after spawn. */
+function ownFile(): string {
+  return path.join(dir(), `${process.pid}.json`)
+}
+
+// PIDs spawned by this process, kept in memory to avoid read-modify-write
+// races with other deveco instances.
+const owned = new Set<number>()
+
+/** Add a sandbox-exec PID to this process's persistent list. Called after spawn. */
 export async function addSandboxPid(pid: number) {
-  const pids = await readSandboxPids()
-  if (!pids.includes(pid)) pids.push(pid)
-  await writeSandboxPids(pids)
+  owned.add(pid)
+  await writePids(ownFile(), [...owned])
 }
 
-/** Remove a sandbox-exec PID from the persistent list. Called after graceful exit. */
+/** Remove a sandbox-exec PID from this process's persistent list. Called after graceful exit. */
 export async function removeSandboxPid(pid: number) {
-  const pids = await readSandboxPids()
-  const filtered = pids.filter((p) => p !== pid)
-  await writeSandboxPids(filtered)
-}
-
-/** Read all persisted sandbox-exec PIDs. Returns [] on error or missing file. */
-export async function readSandboxPids(): Promise<number[]> {
-  try {
-    const text = await readFile(filepath(), "utf-8")
-    const parsed = JSON.parse(text)
-    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === "number") : []
-  } catch (err) {
-    if (err instanceof Error && "code" in err && err.code === "ENOENT") return []
-    console.warn(`[sandbox] Failed to read sandbox-pids:`, err instanceof Error ? err.message : String(err))
-    return []
-  }
-}
-
-async function writeSandboxPids(pids: number[]) {
-  const fp = filepath()
-  await mkdir(path.dirname(fp), { recursive: true })
-  // Atomic write: temp file + rename
-  const tmpPath = `${fp}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(tmpPath, JSON.stringify(pids), "utf-8")
-  try {
-    await rename(tmpPath, fp)
-  } catch {
-    await writeFile(fp, JSON.stringify(pids), "utf-8")
-  }
+  owned.delete(pid)
+  await writePids(ownFile(), [...owned])
 }
 
 /**
  * Clear stale sandbox-exec PIDs on bootstrap (FR-EXEC-006).
- * Kills any still-running processes and their descendants, then removes the file.
- * Should be called at startup before any new sandbox commands are issued.
+ * Only kills processes whose owner (deveco process) has already exited;
+ * processes owned by still-running deveco instances are left alone.
  */
 export async function clearStaleSandboxPids(
   killDescendants: (pid: number) => Promise<number[]>,
 ): Promise<void> {
-  const pids = await readSandboxPids()
-  for (const pid of pids) {
-    try {
-      process.kill(pid, 0) // Check if still alive
-    } catch {
-      continue // Already dead — skip
+  const files = await readdir(dir()).catch(() => [] as string[])
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue
+    const owner = Number.parseInt(file.slice(0, -5), 10)
+    if (!Number.isFinite(owner)) continue
+    // Owner still alive (self or another running deveco) — do not touch.
+    if (isAlive(owner)) continue
+    // Owner has exited — clean up its orphaned processes.
+    const pids = await readPids(path.join(dir(), file))
+    for (const pid of pids) {
+      if (!isAlive(pid)) continue
+      const descendantPids = await killDescendants(pid).catch(() => [] as number[])
+      for (const dpid of descendantPids) {
+        try { process.kill(dpid, "SIGTERM") } catch {}
+      }
+      try { process.kill(pid, "SIGTERM") } catch {}
     }
-    // Kill descendants first, then the root
-    const descendantPids = await killDescendants(pid).catch(() => [] as number[])
-    for (const dpid of descendantPids) {
-      try { process.kill(dpid, "SIGTERM") } catch {}
-    }
-    try { process.kill(pid, "SIGTERM") } catch {}
+    try { await unlink(path.join(dir(), file)) } catch {}
   }
-  // Remove the file regardless — surviving processes will be reaped by OS
+}
+
+function isAlive(pid: number): boolean {
   try {
-    await unlink(filepath())
-  } catch (err) {
-    if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readPids(filepath: string): Promise<number[]> {
+  try {
+    const text = await readFile(filepath, "utf-8")
+    const parsed = JSON.parse(text)
+    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === "number") : []
+  } catch {
+    return []
+  }
+}
+
+async function writePids(filepath: string, pids: number[]) {
+  await mkdir(path.dirname(filepath), { recursive: true })
+  // Atomic write: temp file + rename
+  const tmpPath = `${filepath}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(tmpPath, JSON.stringify(pids), "utf-8")
+  try {
+    await rename(tmpPath, filepath)
+  } catch {
+    await writeFile(filepath, JSON.stringify(pids), "utf-8")
+    try { await unlink(tmpPath) } catch {}
   }
 }
