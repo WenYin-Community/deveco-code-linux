@@ -825,11 +825,12 @@ function selectDefaultModel(snapshot: Directory.Snapshot) {
 }
 
 function detectSlashCommand(parts: ReturnType<typeof promptContentToParts>) {
-  const text = parts
-    .filter((part): part is Extract<(typeof parts)[number], { type: "text" }> => part.type === "text")
-    .map((part) => part.text)
-    .join("")
-    .trim()
+  // Only the FIRST text part can carry a slash command: clients send attachment
+  // inlines as further text parts (their fenced headers start with "---"), and
+  // joining every part let those headers glue onto the command name — "/init"
+  // plus an attachment parsed as the nonexistent command "init---".
+  const first = parts.find((part): part is Extract<(typeof parts)[number], { type: "text" }> => part.type === "text")
+  const text = first?.text.trim() ?? ""
   if (!text.startsWith("/")) return
 
   const [name, ...rest] = text.slice(1).split(/\s+/)
