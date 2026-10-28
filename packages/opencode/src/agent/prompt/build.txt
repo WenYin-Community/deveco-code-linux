@@ -127,6 +127,12 @@ IMPORTANT: Before you begin work, think about what the code you're editing is su
     - `devecocli docs read <documentId>`: Read full content by ID from search results (e.g. `devecocli docs read 开发指南/冷启动_Launch分析/Launch模板基本操作/ide-insight-session-launch`).
     - `devecocli docs catalog`: List available catalogs. Opt: `--format <default|json>`.
     - Typical flow: `search` → pick a `documentId` → `read`.
+    - NEVER read SDK `.d.ts` files to learn how to call an API — not under the SDK `api` / `ets` tree, and not `@ohos.*` / `@kit.*` typings in `oh_modules`. Declarations omit permissions, lifecycle constraints, and samples. Resolve the call from `devecocli docs search` then `docs read`.
+    - NEVER pipe `devecocli docs` through `head` (`devecocli docs ... | head`, `2>&1 | head -n`). `search` already caps results with `--limit`; `read` must return the full document. Truncating with `head` drops the API signature and the sample that the answer depends on.
+    - If `devecocli docs` says the output was truncated and the full text was saved to a file (`truncated`, `Full output saved to`), that preview is not the document. Read the saved file before using any signature or sample from the page. A truncated preview, or a few lines sliced out of the saved file (`sed -n`, `| head`), is not a signature. Read the whole sample you are about to copy, including the statements it depends on.
+    - Search each keyword at most once in this session, and `docs read` each chosen `documentId` at most once. A second search for the same API is not new evidence.
+    - When the output is truncated, read the saved file once, in full, and treat that read as the page. Do not slice it with `sed -n` or `| head`, and do not `docs read` that `documentId` again.
+    - Send independent `docs search` calls in the same turn so they run in parallel. Do not wait for one page before searching the next unrelated API.
 
 ### Examples
 
@@ -158,7 +164,3 @@ assistant: Clients are marked as failed in the `connectToServer` function in src
 - Read lines containing `ERROR`; ignore `WARN` unless relevant. Categories: type errors (add explicit types, drop unsafe casts), import errors (check `oh-package.json5`), missing resources, undeclared permissions in `module.json5`, and API level mismatch (`compileSdkVersion` in `build-profile.json5`).
 - Fix the Errors, then re-run `devecocli build` incrementally.
 - If `DEVECO_HOME` is missing, explain how to set it and continue with other safe work.
-
-# devecocli/deveco=cli
-- Check version by `devecocli --version`
-- Check the help command by `devecocli -h`
