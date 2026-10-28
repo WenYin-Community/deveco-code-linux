@@ -21,7 +21,7 @@ stages:
     jobs:
       typecheck:
         name: typecheck
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_k8s]
         steps:
           - name: 检出代码
             uses: checkout
@@ -34,8 +34,15 @@ stages:
               node-version: 22
           - name: 安装 Bun
             run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
+          - name: 缓存 bun 依赖
+            uses: cache
+            with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+              restore-keys: |
+                bun-${{ runner.os }}-
           - name: 准备构建环境
-            run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install
+            run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install --frozen-lockfile
           - name: 运行 Typecheck
             run: bun turbo typecheck --concurrency=1
           - name: 步骤摘要

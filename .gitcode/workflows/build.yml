@@ -21,7 +21,7 @@ stages:
     jobs:
       build:
         name: build-cli
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_k8s]
         steps:
           - name: 检出代码
             uses: checkout
@@ -34,11 +34,25 @@ stages:
               node-version: 22
           - name: 安装 Bun
             run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
+          - name: 缓存 bun 依赖
+            uses: cache
+            with:
+              path: ~/.bun/install/cache
+              key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+              restore-keys: |
+                bun-${{ runner.os }}-
           - name: 准备构建环境
-            run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install
+            run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install --frozen-lockfile
+          - name: 修复 bin 可执行权限
+            # 镜像缓存的 bin 缺 +x，bun 会把它当成 missing script
+            run: find . -path '*/node_modules/.bin/*' -type l -exec chmod +x {} +
           - name: 构建 CLI 二进制
             id: build
-            run: cd packages/opencode && bun run script/build.ts
+            # 只编 darwin-arm64 做编译闸门；registry 镜像避免 build.ts 内部安装走 npmjs
+            env:
+              NPM_CONFIG_REGISTRY: https://mirrors.huaweicloud.com/repository/npm/
+              NODEJS_ORG_MIRROR: https://mirrors.huaweicloud.com/nodejs
+            run: cd packages/opencode && bun run script/build.ts --target=darwin-arm64
           - name: 步骤摘要
             if: always()
             env:
