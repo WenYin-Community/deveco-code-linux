@@ -1242,8 +1242,8 @@ describe("tool.shell abort", () => {
         const sh = Shell.name(Shell.acceptable())
         const isPowerShell = sh === "pwsh" || sh === "powershell"
         const command = isPowerShell
-          ? 'Write-Output "first"; Start-Sleep -Milliseconds 100; Write-Output "second"'
-          : 'echo first && sleep 0.1 && echo second'
+          ? 'Write-Output "first"; Start-Sleep -Milliseconds 300; Write-Output "second"'
+          : 'echo first && sleep 0.3 && echo second'
         const result = yield* run(
           {
             command,
