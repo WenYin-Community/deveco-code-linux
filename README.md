@@ -251,6 +251,28 @@ DevEco Code 集成了常用 HarmonyOS 开发工具能力：
 
 常见场景包括：从零到一创建 HarmonyOS 工程、增量开发页面、修复编译报错、真机调试。
 
+### UX 设计稿生成 ArkTS 代码
+
+内置 `hmos-design-to-arkts` Skill 可把 Figma / Pixso / MasterGo 的 UX 设计稿转换成现有 ArkTS 工程中的页面。支持基于直板机设计稿生成一套 ArkTS 代码，同时具备响应式布局与多设备适配能力，可在直板机、双折叠、三折叠、阔折叠等设备上正常运行。
+
+使用前需按设计稿来源配置对应 MCP（配置后需重启 DevEco Code 生效）：
+
+| 来源 | 配置 |
+| --- | --- |
+| Figma | [Anchor MCP](https://gitcode.com/OpenHarmonyToolkitsPlaza/anchor-d2c-mcp)：先设置 `FIGMA_ACCESS_TOKEN` 环境变量，再执行 `deveco mcp add`，名称 `anchor-d2c-mcp`、类型 `Local`、命令 `npx -y anchor-d2c-mcp@latest stdio` |
+| Pixso | [Pixso MCP](https://pixso.cn/developer/zh/mcp/remote-mcp.html)：远程形态免开客户端，执行 `deveco mcp add pixso-mcp --url https://pixso.cn/mcp` 后再执行 `deveco mcp auth pixso-mcp` 完成授权；也可以使用[本地 MCP](https://pixso.cn/developer/zh/mcp/local-mcp.html) 服务 |
+| MasterGo | [Magic MCP](https://mastergo.com/help/ai-features/magic-mcp.html)（需团队版账号与 `MG_MCP_TOKEN` 环境变量）或 [Vibe MCP](https://mastergo.com/help/ai-features/vibe-mcp.html)（需已开启 MCP 的桌面客户端）；两者都不适用时可用[社区插件](https://github.com/burnice-cn/mastergo-mcp-server)（插件通道，需本机配对） |
+
+说明：MCP 未就绪时，Skill 会先给出配置引导并停下，不会带着缺失依赖开始。
+
+在目标工程目录下启动 DevEco Code 后，给出设计稿链接和需求说明即可；Agent 会自动识别需求并加载 `hmos-design-to-arkts` Skill 生成页面代码（信息不全时会先澄清再开始）：
+
+```text
+把这个 Figma 设计稿转成 ArkTS 页面：https://www.figma.com/design/xxxx/OrderList?node-id=1-2（订单列表画板），点击列表项进入详情页
+```
+
+提供 Fast 与 Full 两种工作流：Fast 直接快速出页面，推荐使用 Full，它额外包含组件树人工确认与按还原度评分迭代的视觉校准（需模拟器或真机）。`Goal` 模式默认 Full，`Build` 模式默认 Fast；也可在需求中直接说明使用哪一种。`Plan` 模式不支持该 Skill。
+
 ## 扩展能力
 
 DevEco Code 兼容 OpenCode 的 Skill、MCP 和 Plugin 扩展方式。

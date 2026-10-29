@@ -251,6 +251,28 @@ DevEco Code integrates common HarmonyOS development tools:
 
 Common scenarios include creating a HarmonyOS project from scratch, incremental page development, fixing build errors, and on-device debugging.
 
+### UX Designs to ArkTS Code
+
+The built-in `hmos-design-to-arkts` Skill turns Figma, Pixso or MasterGo UX designs into pages in an existing ArkTS project. Based on a bar-phone design it generates one set of ArkTS code with responsive layout and multi-device adaptation, running on bar phones, dual-fold, tri-fold, and wide-fold devices.
+
+Configure the MCP server for your design source before use (restart DevEco Code afterwards):
+
+| Source | Setup |
+| --- | --- |
+| Figma | [Anchor MCP](https://gitcode.com/OpenHarmonyToolkitsPlaza/anchor-d2c-mcp): set the `FIGMA_ACCESS_TOKEN` environment variable first, then run `deveco mcp add` with name `anchor-d2c-mcp`, type `Local`, command `npx -y anchor-d2c-mcp@latest stdio` |
+| Pixso | [Pixso MCP](https://pixso.cn/developer/zh/mcp/remote-mcp.html): the remote form needs no client — run `deveco mcp add pixso-mcp --url https://pixso.cn/mcp`, then `deveco mcp auth pixso-mcp` to authorize; a [local MCP](https://pixso.cn/developer/zh/mcp/local-mcp.html) service also works |
+| MasterGo | [Magic MCP](https://mastergo.com/help/ai-features/magic-mcp.html) (team plan + the `MG_MCP_TOKEN` environment variable) or [Vibe MCP](https://mastergo.com/help/ai-features/vibe-mcp.html) (desktop client with MCP enabled); if neither applies, use the [community plugin](https://github.com/burnice-cn/mastergo-mcp-server) (plugin channel, needs local pairing) |
+
+Note: if the MCP setup is missing, the Skill provides the setup guidance and stops rather than starting with a missing dependency.
+
+After starting DevEco Code in the target project directory, give the design link and a short description of the requirements; the Agent detects them and loads the `hmos-design-to-arkts` Skill to generate the page code (anything missing is clarified first):
+
+```text
+Convert this Figma design into an ArkTS page: https://www.figma.com/design/xxxx/OrderList?node-id=1-2 (order list board), tapping a list item opens the detail page
+```
+
+Two workflows are available: Fast generates the page right away; Full is recommended — it adds component-tree confirmation plus iterative visual calibration against the design (needs an emulator or device). `Goal` mode defaults to Full and `Build` mode defaults to Fast; either can also be requested explicitly. `Plan` is not supported.
+
 ## Extensions
 
 DevEco Code is compatible with OpenCode's Skill, MCP, and Plugin extension mechanisms.
