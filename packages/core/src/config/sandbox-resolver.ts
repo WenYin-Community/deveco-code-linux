@@ -495,6 +495,96 @@ function logWarnings(warnings: string[]): Effect.Effect<void> {
   })
 }
 
+export function validateWindowsProfile(
+  layers: LayeredSandboxConfig,
+  resolved: ResolvedProfile,
+): Effect.Effect<"full-access" | "workspace", SandboxConfigError> {
+  return Effect.gen(function* () {
+    if (resolved.profile_id === "full-access") return "full-access" as const
+    if (resolved.profile_id === "read-only") {
+      return yield* new SandboxConfigError({
+        rule: "V-WIN-PROFILE-1",
+        message: 'Windows CLI supports only "full-access" and profiles based on "workspace"',
+        path: "sandbox.profile",
+      })
+    }
+
+    const merged = mergeLayers(layers)
+    const profiles = (merged.profiles ?? {}) as unknown as Record<string, MutableProfileDefinition>
+    if ((yield* windowsProfileAncestor(resolved.profile_id, profiles)) !== "workspace") {
+      return yield* new SandboxConfigError({
+        rule: "V-WIN-PROFILE-1",
+        message: `Windows profile "${resolved.profile_id}" must extend "workspace"`,
+        path: `sandbox.profiles.${resolved.profile_id}.extends`,
+      })
+    }
+    if (merged.network?.enabled === false) {
+      return yield* new SandboxConfigError({
+        rule: "V-WIN-NET-1",
+        message: "Windows workspace sandbox requires network access to remain enabled",
+        path: "sandbox.network.enabled",
+      })
+    }
+
+    const base = BUILTIN_PROFILES.workspace.filesystem ?? {}
+    const unsupported = Object.entries(resolved.filesystem).find(([key, mode]) => base[key] !== mode && mode !== "read")
+    if (unsupported) {
+      return yield* new SandboxConfigError({
+        rule: "V-WIN-FS-1",
+        message: `Windows profile "${resolved.profile_id}" may add only read-only filesystem rules`,
+        path: `sandbox.profiles.${resolved.profile_id}.filesystem.${unsupported[0]}`,
+      })
+    }
+    if (resolved.filesystem[":workspace_roots"] !== "write") {
+      return yield* new SandboxConfigError({
+        rule: "V-WIN-FS-2",
+        message: 'Windows workspace profiles cannot override ":workspace_roots" write access',
+        path: `sandbox.profiles.${resolved.profile_id}.filesystem.:workspace_roots`,
+      })
+    }
+    return "workspace" as const
+  })
+}
+
+function windowsProfileAncestor(
+  id: string,
+  profiles: Record<string, MutableProfileDefinition>,
+  visited: ReadonlySet<string> = new Set(),
+): Effect.Effect<string, SandboxConfigError> {
+  if (isBuiltinProfile(id)) return Effect.succeed(id)
+  if (visited.has(id)) {
+    return new SandboxConfigError({
+      rule: "V-WIN-PROFILE-2",
+      message: `Windows workspace profile inheritance cycle detected at "${id}"`,
+      path: `sandbox.profiles.${id}`,
+    })
+  }
+
+  const definition = profiles[id]
+  if (!definition?.extends) {
+    return new SandboxConfigError({
+      rule: "V-WIN-PROFILE-1",
+      message: `Windows profile "${id}" must extend "workspace"`,
+      path: `sandbox.profiles.${id}.extends`,
+    })
+  }
+  if (definition.filesystem && Object.values(definition.filesystem).some((mode) => mode !== "read")) {
+    return new SandboxConfigError({
+      rule: "V-WIN-FS-1",
+      message: `Windows profile "${id}" may add only read-only filesystem rules`,
+      path: `sandbox.profiles.${id}.filesystem`,
+    })
+  }
+  if (definition.network?.enabled === false) {
+    return new SandboxConfigError({
+      rule: "V-WIN-NET-1",
+      message: "Windows workspace sandbox requires network access to remain enabled",
+      path: `sandbox.profiles.${id}.network.enabled`,
+    })
+  }
+  return windowsProfileAncestor(definition.extends, profiles, new Set([...visited, id]))
+}
+
 /**
  * S-NET-4: resolve effective network switch.
  * 1. If any layer declares sandbox.network.enabled, take highest-priority layer's value

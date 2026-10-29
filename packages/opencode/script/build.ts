@@ -361,17 +361,29 @@ for (const item of targets) {
     }
   }
 
-  // Vendor sandbox native addon (.node) alongside the binary, since bun's
-  // compiled binary cannot require() .node files from bunfs.
-  if (item.os === "darwin") {
+  // Copy the native runtime from the registry-installed optional platform
+  // package beside the CLI because Bun cannot require .node files from bunfs.
+  if (item.os === "darwin" || (item.os === "win32" && item.arch === "x64")) {
     const sandboxPkgPath = require.resolve("@bitfun-ai/sandbox/package.json")
     const sandboxPkgDir = path.dirname(sandboxPkgPath)
     const sandboxVersion = require(sandboxPkgPath).version
     const nativePkgName = `@bitfun-ai+sandbox-${item.os}-${item.arch}@${sandboxVersion}`
-    // bun stores optional dependencies in node_modules/.bun/<name>@<version>/node_modules/<pkg>
+    // Bun's isolated linker normally stores optional platform packages here.
     const monorepoRoot = path.resolve(dir, "..", "..")
-    const bunDir = path.join(monorepoRoot, "node_modules", ".bun", nativePkgName, "node_modules", `@bitfun-ai/sandbox-${item.os}-${item.arch}`)
-    const nativePkgDir = fs.existsSync(bunDir) ? bunDir : path.join(sandboxPkgDir, "node_modules", `@bitfun-ai/sandbox-${item.os}-${item.arch}`)
+    const bunDir = path.join(
+      monorepoRoot,
+      "node_modules",
+      ".bun",
+      nativePkgName,
+      "node_modules",
+      `@bitfun-ai/sandbox-${item.os}-${item.arch}`,
+    )
+    const platformPackage = `@bitfun-ai/sandbox-${item.os}-${item.arch}`
+    const rootPackage = path.join(monorepoRoot, "node_modules", ...platformPackage.split("/"))
+    const nestedPackage = path.join(sandboxPkgDir, "node_modules", platformPackage)
+    const nativePkgDir =
+      [bunDir, rootPackage, nestedPackage].find((candidate) => fs.existsSync(path.join(candidate, "sandbox.node"))) ??
+      nestedPackage
     const addonSrc = path.join(nativePkgDir, "sandbox.node")
     const identitySrc = path.join(nativePkgDir, "build-identity.json")
     if (!fs.existsSync(addonSrc)) {
@@ -382,7 +394,17 @@ for (const item of targets) {
     await fs.promises.mkdir(vendorSandboxDir, { recursive: true })
     await fs.promises.copyFile(addonSrc, path.join(vendorSandboxDir, "sandbox.node"))
     await fs.promises.copyFile(identitySrc, path.join(vendorSandboxDir, "build-identity.json"))
-    // Also copy the wrapper package.json for version identification
+    if (item.os === "win32") {
+      await fs.promises.copyFile(
+        path.join(nativePkgDir, "bitfun-windows-sandbox-launcher.exe"),
+        path.join(vendorSandboxDir, "bitfun-windows-sandbox-launcher.exe"),
+      )
+      await fs.promises.copyFile(
+        path.join(nativePkgDir, "windows-sandbox-manifest.json"),
+        path.join(vendorSandboxDir, "windows-sandbox-manifest.json"),
+      )
+    }
+    // Keep both package manifests with the runtime for version identification.
     await fs.promises.copyFile(
       path.join(sandboxPkgDir, "package.json"),
       path.join(vendorSandboxDir, "wrapper-package.json"),

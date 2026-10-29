@@ -1,6 +1,7 @@
 export * as Sandbox from "./sandbox"
 
 import { Context, Effect, Layer, Schema } from "effect"
+import os from "node:os"
 import path from "path"
 import { modify, applyEdits, parse, type ParseError } from "jsonc-parser"
 import { SandboxRuntime as NativeSandboxRuntime, SandboxError as NativeSandboxError } from "@bitfun-ai/sandbox"
@@ -33,6 +34,8 @@ import {
   ProcessOverride,
 } from "./config/sandbox"
 import { getRuntimeSandbox, setRuntimeSandbox, clearRuntimeSandbox } from "./config/runtime-sandbox"
+
+export const STATE_DIR = path.join(Global.Path.data, "sandbox")
 
 // ─── Public Contract Types (from sandbox-architecture.md §5) ──
 // These mirror the Rust sandbox-contracts types that @bitfun-ai/sandbox
@@ -286,15 +289,24 @@ export function toNativePath(key: string): NativeFileSystemPath {
   return { type: "Path", path: key }
 }
 
+function toNativeFileSystemEntry(key: string, mode: AccessMode): NativeFileSystemSandboxEntry {
+  const nativePath = toNativePath(key)
+  return {
+    path: nativePath,
+    access: toNativeAccessMode(mode),
+    missing_path_behavior:
+      mode === "read" &&
+      nativePath.type === "Special" &&
+      nativePath.value.type === "ProjectRoots" &&
+      nativePath.value.subpath !== null
+        ? { type: "Skip" }
+        : null,
+  }
+}
+
 /** Convert internal ResolvedProfile to native PermissionProfile */
 function toNativePermissionProfile(resolved: ResolvedProfile): NativePermissionProfile {
-  const entries: NativeFileSystemSandboxEntry[] = Object.entries(resolved.filesystem).map(
-    ([key, mode]) => ({
-      path: toNativePath(key),
-      access: toNativeAccessMode(mode),
-      missing_path_behavior: null,
-    }),
-  )
+  const entries = Object.entries(resolved.filesystem).map(([key, mode]) => toNativeFileSystemEntry(key, mode))
 
   const isFullAccess = entries.length === 0
   const policy: NativeFileSystemSandboxPolicy = {
@@ -325,7 +337,17 @@ function toNativeTargetCommand(target: SandboxTargetCommand): NativeSandboxTarge
     executable: target.executable,
     args: [...target.args],
     cwd: target.cwd,
-    env: Object.entries(target.env) as [string, string][],
+    env:
+      process.platform === "win32"
+        ? Array.from(
+            Object.entries(target.env)
+              .reduce(
+                (entries, entry) => entries.set(entry[0].toUpperCase(), entry as [string, string]),
+                new Map<string, [string, string]>(),
+              )
+              .values(),
+          )
+        : (Object.entries(target.env) as [string, string][]),
   }
 }
 
@@ -339,7 +361,7 @@ export function toNativePrepareRequest(
     file_system_context: {
       cwd: target.cwd,
       workspace_roots: [...resolved.workspace_roots],
-      temporary_directories: [process.env.TMPDIR ?? "/tmp"],
+      temporary_directories: [os.tmpdir()],
     },
     permissions: toNativePermissionProfile(resolved),
     io: { type: "Pipe", stdin: { type: "Closed" } },
@@ -383,13 +405,7 @@ function toNativeFileSystemContext(request: SandboxPrepareRequest): NativeFileSy
 
 /** Build native PermissionProfile from internal permissions */
 function toNativePermissions(permissions: SandboxPrepareRequest["permissions"]): NativePermissionProfile {
-  const entries = Object.entries(permissions.filesystem).map(
-    ([key, mode]) => ({
-      path: toNativePath(key),
-      access: toNativeAccessMode(mode),
-      missing_path_behavior: null,
-    }),
-  )
+  const entries = Object.entries(permissions.filesystem).map(([key, mode]) => toNativeFileSystemEntry(key, mode))
   return {
     type: "Managed" as const,
     file_system: {
@@ -518,17 +534,29 @@ export function resolveSandboxAndMapError(
   layers: SandboxResolver.LayeredSandboxConfig,
 ): Effect.Effect<ResolvedProfile, SandboxError, never> {
   return SandboxResolver.resolveSandbox(layers).pipe(
-    Effect.mapError((error) => {
-      if (error instanceof SandboxConfigError) {
-        const { code, phase } = mapErrorTagToCodePhase("config_invalid")
-        return new SandboxError({ code, phase, message: error.message })
-      }
-      const { code, phase } = mapErrorTagToCodePhase("invalid_request")
-      // S24: avoid exposing internal details (paths, stack, env names) in
-      // user-facing error messages; use a generic message and rely on logs.
-      return new SandboxError({ code, phase, message: "An unexpected error occurred during sandbox resolution" })
-    }),
+    Effect.flatMap(validateResolvedProfile(layers)),
+    Effect.mapError(mapResolutionError),
   )
+}
+
+function validateResolvedProfile(layers: SandboxResolver.LayeredSandboxConfig) {
+  return (resolved: ResolvedProfile) => {
+    if (process.platform !== "win32") return Effect.succeed(resolved)
+    return SandboxResolver.validateWindowsProfile(layers, resolved).pipe(
+      Effect.as(resolved.profile_id === "full-access" ? resolved : { ...resolved, network_enabled: true }),
+    )
+  }
+}
+
+function mapResolutionError(error: unknown) {
+  if (error instanceof SandboxConfigError) {
+    const { code, phase } = mapErrorTagToCodePhase("config_invalid")
+    return new SandboxError({ code, phase, message: error.message })
+  }
+  const { code, phase } = mapErrorTagToCodePhase("invalid_request")
+  // S24: avoid exposing internal details (paths, stack, env names) in
+  // user-facing error messages; use a generic message and rely on logs.
+  return new SandboxError({ code, phase, message: "An unexpected error occurred during sandbox resolution" })
 }
 
 // ─── Layers ─────────────────────────────────────────────────
@@ -638,7 +666,7 @@ export const runtimeLayer = Layer.effect(
         if (runtimeInstance) return runtimeInstance
         if (runtimeInitFailed) return yield* Effect.fail(runtimeInitFailed)
         const config: NativeSandboxRuntimeConfig = {
-          state_dir: null,
+          state_dir: STATE_DIR,
           bundled_executables_dir: null,
         }
         const result = yield* Effect.try({

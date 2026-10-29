@@ -242,7 +242,7 @@ export function DialogSandbox() {
     // Check env vars that inject the runtime layer
     if (process.env.DEVECO_CONFIG_CONTENT || process.env.DEVECO_CONFIG) {
       return {
-        id: sandboxConfig()?.profile ?? "read-only",
+        id: sandboxConfig()?.profile ?? "full-access",
         isImplicit: false,
         sourceLabel: t("dialog.sandbox.config_source_runtime"),
       }
@@ -268,6 +268,7 @@ export function DialogSandbox() {
     if (rt?.network) return rt.network.enabled
     const cfg = sandboxConfig()
     if (cfg?.network) return cfg.network.enabled
+    if (process.platform === "win32" && effectiveProfile().id !== "full-access") return true
     // Fall back to profile's network (BUILTIN_PROFILES or custom profile definition)
     const profileId = effectiveProfile().id
     const profileDef = BUILTIN_PROFILES[profileId as keyof typeof BUILTIN_PROFILES] ?? cfg?.profiles?.[profileId]
@@ -327,11 +328,15 @@ export function DialogSandbox() {
 
   const builtinOptions = createMemo<DialogSelectOption<string>[]>(() => {
     return [
-      {
-        title: "Read-only",
-        value: "read-only",
-        description: t("dialog.sandbox.readonly_desc"),
-      },
+      ...(process.platform === "win32"
+        ? []
+        : [
+            {
+               title: "Read-only",
+              value: "read-only",
+              description: t("dialog.sandbox.readonly_desc"),
+            },
+          ]),
       {
         title: "Workspace",
         value: "workspace",
@@ -459,7 +464,7 @@ export function DialogSandbox() {
               hideHeader
               options={builtinOptions()}
               current={
-                ["read-only", "workspace", "full-access"].includes(effectiveProfile().id)
+                builtinOptions().some((option) => option.value === effectiveProfile().id)
                   ? effectiveProfile().id
                   : undefined
               }
@@ -484,8 +489,12 @@ export function DialogSandbox() {
                     {t("dialog.sandbox.status_source")}: {effectiveProfile().sourceLabel}
                   </text>
                   <text fg={theme.textMuted}>
-                    {t("dialog.sandbox.home_platform")}: {platform()}  |  {t("dialog.sandbox.home_capability")}:{" "}
-                    {platform() === "darwin" ? "macos-seatbelt" : "none"}
+                    {t("dialog.sandbox.home_platform")}: {platform()} | {t("dialog.sandbox.home_capability")}:{" "}
+                    {platform() === "darwin"
+                      ? "macos-seatbelt"
+                      : platform() === "win32"
+                        ? "windows-unelevated"
+                        : "none"}
                   </text>
                   <KeyChip key="←/→" label={t("dialog.sandbox.tab_switch")} />
                 </box>

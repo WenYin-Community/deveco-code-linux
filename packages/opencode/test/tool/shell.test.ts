@@ -9,6 +9,7 @@ import { Config } from "@/config/config"
 import { Shell } from "@opencode-ai/core/shell"
 import {
   DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS,
+  resolveSandboxWorkspaceRoots,
   resolveShellTimeout,
   ShellTool,
 } from "../../src/tool/shell"
@@ -290,6 +291,25 @@ describe("tool.shell docs preview env", () => {
       ),
     30_000,
   )
+})
+
+describe("tool.shell Windows sandbox roots", () => {
+  test.skipIf(process.platform !== "win32")(
+    "keeps the current workspace and de-duplicates configured roots",
+    () => {
+      const cwd = path.resolve("C:\\workspace")
+      expect(resolveSandboxWorkspaceRoots(cwd, [cwd.toUpperCase(), "..\\shared", "..\\shared"])).toEqual([
+        cwd,
+        path.resolve(cwd, "..\\shared"),
+      ])
+    },
+  )
+
+  test("expands home-relative roots", () => {
+    expect(resolveSandboxWorkspaceRoots(path.resolve("C:\\workspace"), ["~\\sandbox-root"])).toContain(
+      path.resolve(os.homedir(), "sandbox-root"),
+    )
+  })
 })
 
 describe("tool.shell permissions", () => {

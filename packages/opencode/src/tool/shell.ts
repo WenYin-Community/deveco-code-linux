@@ -24,7 +24,7 @@ import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
 import { ConfigSandbox, type ResolvedProfile } from "@opencode-ai/core/config/sandbox"
 import { getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
 import { addSandboxPid, removeSandboxPid } from "@opencode-ai/core/config/sandbox-pids"
-import { SandboxRuntime as NativeSandboxRuntime } from "@bitfun-ai/sandbox"
+import { SandboxError as NativeSandboxError, SandboxRuntime as NativeSandboxRuntime } from "@bitfun-ai/sandbox"
 
 import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
@@ -430,6 +430,22 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     detached: process.platform !== "win32",
   })
 }
+
+export function resolveSandboxWorkspaceRoots(cwd: string, roots: readonly string[]) {
+  const resolved = [cwd, ...roots].map((root) => {
+    if (root === "~") return os.homedir()
+    if (root.startsWith("~/") || root.startsWith("~\\")) return path.resolve(os.homedir(), root.slice(2))
+    return path.resolve(cwd, root)
+  })
+  return resolved.filter((root, index) => {
+    const key = process.platform === "win32" ? root.toLowerCase() : root
+    return (
+      resolved.findIndex(
+        (candidate) => (process.platform === "win32" ? candidate.toLowerCase() : candidate) === key,
+      ) === index
+    )
+  })
+}
 const parser = lazy(async () => {
   const { Parser, Language } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -473,7 +489,7 @@ export const ShellTool = Tool.define(
     // that doesn't match across package boundaries), so we resolve directly
     // to the default profile and call the native runtime ourselves.
     const nativeRuntime = lazy(() =>
-      NativeSandboxRuntime.new({ state_dir: null, bundled_executables_dir: null }),
+      NativeSandboxRuntime.new({ state_dir: Sandbox.STATE_DIR, bundled_executables_dir: null }),
     )
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
 
@@ -768,25 +784,28 @@ export const ShellTool = Tool.define(
       // On macOS: prepare() generates a Seatbelt policy wrapped in sandbox-exec.
       // full-access skips prepare() and spawns directly — sandbox-exec with
       // Unrestricted filesystem still blocks macOS system services (§8.22).
-      // On non-macOS: sandbox is macOS-only, commands execute without sandbox.
+      // Linux remains direct execution until its npm runtime is shipped.
       const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const commandTag = input.command.trim().split(/\s+/)[0] || "unknown"
       const sandboxStartTime = Date.now()
       const isMac = process.platform === "darwin"
+      const isWindows = process.platform === "win32"
+      const isSandboxPlatform = isMac || isWindows
       state.requestId = requestId
       state.sandboxStartTime = sandboxStartTime
 
       // FR-OBS-001: Record started event before any sandbox work so config
       // failures still produce a start event. Only one start event per request.
       yield* Effect.logInfo(
-        `sandbox_request_started request_id=${requestId} capability=${isMac ? "macos-seatbelt" : "none"} platform=${process.platform} profile_type=pending network_state=pending command_tag=${commandTag}`,
+        `sandbox_request_started request_id=${requestId} capability=${isMac ? "macos-seatbelt" : isWindows ? "windows-unelevated" : "none"} platform=${process.platform} profile_type=pending network_state=pending command_tag=${commandTag}`,
       )
 
       // FR-CFG-010/011: Load and validate sandbox config before executing any command.
       // Config errors (config_invalid) cause the command to be rejected — fail closed.
-      // Sandbox is macOS-only. Non-macOS falls through to direct execution.
+      // Linux falls through to direct execution. Windows and macOS fail closed
+      // when a selected managed profile cannot be prepared.
       let profile: ResolvedProfile | undefined
-      if (isMac) {
+      if (isSandboxPlatform) {
         // FR-CFG-008 (S-AGENT-1): per-agent sandbox override, merged into project layer
         let agentSandbox: ConfigSandbox.SandboxConfig | undefined
         if (ctx.agent) {
@@ -805,13 +824,17 @@ export const ShellTool = Tool.define(
               }),
           }),
         )
-        // Native prepare requires at least one workspace root (the cwd).
-        // full-access bypasses sandbox-exec entirely.
-        profile = resolvedProfile.profile_id === "full-access"
-          ? resolvedProfile
-          : resolvedProfile.workspace_roots.length === 0
-            ? { ...resolvedProfile, workspace_roots: [input.cwd] }
-            : resolvedProfile
+        profile =
+          resolvedProfile.profile_id === "full-access"
+            ? resolvedProfile
+            : {
+                ...resolvedProfile,
+                workspace_roots: isWindows
+                  ? resolveSandboxWorkspaceRoots(input.cwd, resolvedProfile.workspace_roots)
+                  : resolvedProfile.workspace_roots.length === 0
+                    ? [input.cwd]
+                    : resolvedProfile.workspace_roots,
+              }
         // Save effective profile info to state for sandbox-denial hint in shell_metadata.
         state.sandboxProfileId = profile.profile_id
         state.sandboxNetworkEnabled = profile.network_enabled
@@ -885,10 +908,10 @@ export const ShellTool = Tool.define(
 
       // full-access: direct execution without sandbox-exec. read-only/workspace
       // go through native prepare() to generate Seatbelt policy.
-      if (isMac && profile && profile.profile_id !== "full-access") {
+      if (isSandboxPlatform && profile && profile.profile_id !== "full-access") {
         const prepareRequest = toNativePrepareRequest(profile, {
           executable: input.shell,
-          args: ["-c", input.command],
+          args: isWindows ? Shell.args(input.shell, input.command, input.cwd) : ["-c", input.command],
           cwd: input.cwd,
           env: Object.fromEntries(
             Object.entries(input.env).filter(([, v]) => v !== undefined),
@@ -898,11 +921,12 @@ export const ShellTool = Tool.define(
         const prepareStartTime = Date.now()
         const prepared = yield* Effect.tryPromise({
           try: () => nativeRuntime().prepare(prepareRequest),
-          catch: (err) => new Sandbox.SandboxError({
-            code: "PrepareFailed",
-            phase: "Prepare",
-            message: err instanceof Error ? err.message : "Sandbox prepare failed",
-          }),
+          catch: (err) =>
+            new Sandbox.SandboxError({
+              code: err instanceof NativeSandboxError ? err.code : "PrepareFailed",
+              phase: err instanceof NativeSandboxError ? err.phase : "Prepare",
+              message: err instanceof Error ? err.message : "Sandbox prepare failed",
+            }),
         }).pipe(
           Effect.catchTags({
             SandboxError: (err) =>
@@ -955,8 +979,19 @@ export const ShellTool = Tool.define(
         ),
       ])
 
-      const enforcementResult = isMac ? (profile?.profile_id === "full-access" ? "bypassed" : "applied") : "bypassed"
-      const executionResult = exit.kind === "exit" ? (exit.code === 0 ? "success" : "failed") : exit.kind === "timeout" ? "timeout" : "cancelled"
+      const enforcementResult = isSandboxPlatform
+        ? profile?.profile_id === "full-access"
+          ? "bypassed"
+          : "applied"
+        : "bypassed"
+      const executionResult =
+        exit.kind === "exit"
+          ? exit.code === 0
+            ? "success"
+            : "failed"
+          : exit.kind === "timeout"
+            ? "timeout"
+            : "cancelled"
       const cleanupResult = exit.kind === "exit" ? "none" : "killed"
       const finishedParts = [
         `request_id=${requestId}`,

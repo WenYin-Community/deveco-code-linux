@@ -793,3 +793,62 @@ describe("process: toNativePrepareRequest maps process to native ProcessSandboxP
     }
   })
 })
+
+describe("SandboxResolver.validateWindowsProfile", () => {
+  it("accepts a workspace-derived profile with multiple roots and read-only rules", async () => {
+    const layers = {
+      project: {
+        profile: "workspace-protected",
+        profiles: {
+          "workspace-base": {
+            extends: "workspace",
+            workspace_roots: ["C:\\source", "D:\\cache"],
+          },
+          "workspace-protected": {
+            extends: "workspace-base",
+            workspace_roots: ["E:\\shared"],
+            filesystem: { ":workspace_roots/secrets": "read" as const },
+          },
+        },
+      },
+    }
+    const resolved = await Effect.runPromise(SandboxResolver.resolveSandbox(layers))
+
+    expect(await Effect.runPromise(SandboxResolver.validateWindowsProfile(layers, resolved))).toBe("workspace")
+    expect(resolved.workspace_roots).toEqual(["C:\\source", "D:\\cache", "E:\\shared"])
+    expect(resolved.filesystem[":workspace_roots/secrets"]).toBe("read")
+  })
+
+  it("rejects filesystem write rules in a derived profile", async () => {
+    const layers = {
+      project: {
+        profile: "workspace-expanded",
+        profiles: {
+          "workspace-expanded": {
+            extends: "workspace",
+            filesystem: { "C:\\outside": "write" as const },
+          },
+        },
+      },
+    }
+    const resolved = await Effect.runPromise(SandboxResolver.resolveSandbox(layers))
+
+    await expect(Effect.runPromise(SandboxResolver.validateWindowsProfile(layers, resolved))).rejects.toMatchObject({
+      rule: "V-WIN-FS-1",
+    })
+  })
+
+  it("rejects profiles that do not inherit workspace", async () => {
+    const layers = {
+      project: {
+        profile: "custom",
+        profiles: { custom: { filesystem: { ":root": "read" as const } } },
+      },
+    }
+    const resolved = await Effect.runPromise(SandboxResolver.resolveSandbox(layers))
+
+    await expect(Effect.runPromise(SandboxResolver.validateWindowsProfile(layers, resolved))).rejects.toMatchObject({
+      rule: "V-WIN-PROFILE-1",
+    })
+  })
+})
