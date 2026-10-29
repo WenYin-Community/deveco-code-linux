@@ -446,6 +446,11 @@ export function Autocomplete(props: {
       analyze: t("command.cmd_analyze_desc"),
       init: t("command.cmd_init_desc"),
       review: t("command.cmd_review_desc"),
+      "dream-force": t("command.cmd_dream_force_desc"),
+      "auto-skill": t("command.cmd_auto_skill_desc"),
+      dream: t("command.cmd_dream_desc"),
+      "dream-approve": t("command.cmd_dream_approve_desc"),
+      "dream-reject": t("command.cmd_dream_reject_desc"),
     }
 
     const results: AutocompleteOption[] = [...slashes()]
