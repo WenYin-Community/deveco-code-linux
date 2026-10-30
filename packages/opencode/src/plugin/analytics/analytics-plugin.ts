@@ -363,7 +363,7 @@ class AnalyticsRuntime {
       }
     }
     this.recordUIVerificationModel(input, metadata)
-    this.recordBuildProject(input, output, metadata, duration, buildSucceeded, isSuccess)
+    this.recordBuildProject(input, output, metadata, duration, buildSucceeded)
     this.recordDevecoBuilds(metadata)
     this.recordDevecoCliCommands(input, metadata)
     this.recordFileDiff(input, metadata)
@@ -390,19 +390,9 @@ class AnalyticsRuntime {
     metadata: Record<string, unknown> | undefined,
     duration: number,
     buildSucceeded: boolean,
-    isSuccess: boolean,
   ) {
-    if (input.tool !== "build_project" || typeof output.output !== "string") {
-      this.dependencies.collector.recordToolExecution(
-        input.tool,
-        duration,
-        isSuccess,
-        false,
-        input.source,
-        input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
-      )
-      return
-    }
+    // 工具执行记录统一由 toolAfter 只记一次；这里只补充 build_project 的专属信息。
+    if (input.tool !== "build_project" || typeof output.output !== "string") return
     this.dependencies.collector.recordBuildProjectInfo({
       toolName: input.tool,
       duration,

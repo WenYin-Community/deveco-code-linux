@@ -405,6 +405,36 @@ test("rechecks privacy before shutdown and purges pending attribution data", asy
   expect(harness.purgeAttribution).toHaveBeenCalledTimes(1)
 })
 
+test("records each tool execution exactly once", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "tool-1" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "tool-1", args: {} },
+    { title: "Bash", output: "ok", metadata: {} },
+  )
+
+  // 回归：recordBuildProject 曾在早返回分支里再记一次，导致除 build_project 外的工具全部双计。
+  expect(harness.recordToolExecution).toHaveBeenCalledTimes(1)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), true, false, undefined, undefined)
+  expect(harness.recordBuildProjectInfo).toHaveBeenCalledTimes(0)
+
+  const build = createHarness()
+  const buildHooks = await startSession(build, "openai")
+  await buildHooks["tool.execute.before"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-once" },
+    { args: {} },
+  )
+  await buildHooks["tool.execute.after"]!(
+    { tool: "build_project", sessionID: "session-1", callID: "build-once", args: {} },
+    { title: "Build", output: "Build completed successfully", metadata: { exitCode: 0 } },
+  )
+
+  expect(build.recordToolExecution).toHaveBeenCalledTimes(1)
+  expect(build.recordBuildProjectInfo).toHaveBeenCalledTimes(1)
+})
+
 test("records successful devecocli build metadata", async () => {
   const harness = createHarness()
   const hooks = await startSession(harness, "openai")
@@ -1015,6 +1045,8 @@ test("passes explicit tool origin to session collection", async () => {
       undefined,
     )
   }
+  // 回归：每种来源（builtin / custom / mcp）各一次调用 → 恰好 3 条记录，不能翻倍。
+  expect(harness.recordToolExecution).toHaveBeenCalledTimes(3)
 })
 
 test("takes the skill name from arguments rather than result metadata", async () => {
@@ -1120,6 +1152,16 @@ test("marks the design-to-arkts workflow when the entry skill is invoked", async
   )
 
   expect(harness.markWorkflow).toHaveBeenCalledWith("design-to-arkts")
+  // 回归：skill 调用同样只记一次，且 skillName 取自 args.name。
+  expect(harness.recordToolExecution).toHaveBeenCalledTimes(1)
+  expect(harness.recordToolExecution).toHaveBeenCalledWith(
+    "skill",
+    expect.any(Number),
+    true,
+    false,
+    undefined,
+    "hmos-design-to-arkts",
+  )
 })
 
 test("does not mark the workflow for other skills", async () => {
@@ -1133,4 +1175,5 @@ test("does not mark the workflow for other skills", async () => {
   )
 
   expect(harness.markWorkflow).not.toHaveBeenCalled()
+  expect(harness.recordToolExecution).toHaveBeenCalledTimes(1)
 })
