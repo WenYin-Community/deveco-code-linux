@@ -690,14 +690,42 @@ describe("SEC2-002: Param validators (§3, F.1)", () => {
     expect(validateParamName("persist.sys.hilog.level")._tag).toBe("valid")
   })
 
-  // 验证: allowlist 内的 persist.ace.darkmode 参数通过校验
-  it("allowlist persist.ace.darkmode passes", () => {
-    expect(validateParamName("persist.ace.darkmode")._tag).toBe("valid")
+  // 验证: allowlist 内的 hilog.* 参数通过校验
+  it("allowlist hilog.* passes", () => {
+    expect(validateParamName("hilog.flowctrl.proc.on")._tag).toBe("valid")
   })
 
-  // 验证: allowlist 内的 persist.sys.font_scale 参数通过校验
-  it("allowlist persist.sys.font_scale passes", () => {
-    expect(validateParamName("persist.sys.font_scale")._tag).toBe("valid")
+  // 验证: allowlist 内的 web.debug.* 参数通过校验
+  it("allowlist web.debug.* passes", () => {
+    expect(validateParamName("web.debug.devtools")._tag).toBe("valid")
+  })
+
+  // 验证: allowlist 内的 persist.hdc.jdwp 参数通过校验
+  it("allowlist persist.hdc.jdwp passes", () => {
+    expect(validateParamName("persist.hdc.jdwp")._tag).toBe("valid")
+  })
+
+  // 验证: allowlist 内的 persist.graphic.profiler.* 参数通过校验
+  it("allowlist persist.graphic.profiler.* passes", () => {
+    expect(validateParamName("persist.graphic.profiler.enabled")._tag).toBe("valid")
+  })
+
+  // 验证: 已移除的 persist.ace.darkmode 不再在 allowlist 中 (fail closed)
+  it("removed persist.ace.darkmode denied (param_not_allowed)", () => {
+    const result = validateParamName("persist.ace.darkmode")
+    expect(result._tag).toBe("invalid")
+    if (result._tag === "invalid") {
+      expect(result.reasonCode).toBe("param_not_allowed")
+    }
+  })
+
+  // 验证: 已移除的 persist.sys.font_scale 不再在 allowlist 中 (fail closed)
+  it("removed persist.sys.font_scale denied (param_not_allowed)", () => {
+    const result = validateParamName("persist.sys.font_scale")
+    expect(result._tag).toBe("invalid")
+    if (result._tag === "invalid") {
+      expect(result.reasonCode).toBe("param_not_allowed")
+    }
   })
 
   // 验证: 不在 allowlist 内的 persist.* 参数被拒绝 (fail closed)

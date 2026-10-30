@@ -273,10 +273,11 @@ const READONLY_PARAM_PREFIXES: readonly string[] = [
 // - Prefix-based matching, same as device path allowlist
 const PARAM_ALLOWLIST: readonly (string | RegExp)[] = [
   "persist.sys.hilog.",
+  "hilog.",
   "debug.",
-  "persist.ace.darkmode",
-  "persist.sys.font_scale",
-  "persist.sys.font_wght_scale",
+  "web.debug.",
+  "persist.hdc.jdwp",
+  "persist.graphic.profiler.",
 ]
 
 export function validateParamName(paramName: string): ValidationResult {
