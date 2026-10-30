@@ -11,6 +11,7 @@ import { UI } from "../ui"
 import { MCP } from "../../mcp"
 import { McpAuth } from "../../mcp/auth"
 import { McpOAuthProvider } from "../../mcp/oauth-provider"
+import { withBuiltInHomegraph } from "../../mcp/homegraph"
 import { Config } from "@/config/config"
 import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -117,7 +118,10 @@ export const McpListCommand = effectCmd({
     prompts.intro("MCP Servers")
 
     const { config, statuses, stored } = yield* listState()
-    const servers = configuredServers(config)
+    const wired = yield* Effect.promise(() =>
+      withBuiltInHomegraph(config.mcp as Record<string, unknown> | undefined),
+    )
+    const servers = configuredServers({ ...config, mcp: wired.config as ConfigV1.Info["mcp"] })
 
     if (servers.length === 0) {
       prompts.log.warn("No MCP servers configured")

@@ -149,6 +149,8 @@ const mcpTest = testEffect(
 
 const config = (name: string) => ({
   mcp: {
+    // Isolate OAuth lifecycle from product HomeGraph inject.
+    homegraph: { enabled: false as const },
     [name]: {
       type: "remote" as const,
       url: "https://example.com/mcp",
@@ -264,12 +266,14 @@ mcpTest.instance(
 
         simulateAuthFlow = false
         connectSucceedsImmediately = true
+        const toolsCallsBefore = listToolsCalls
         serverCapabilities = { resources: {} }
 
         const result = yield* mcp.authenticate("test-oauth-resources")
         expect(result.status).toBe("connected")
-        expect(listToolsCalls).toBe(0)
-        expect(Object.keys(yield* mcp.resources())).toEqual(["test-oauth-resources:docs"])
+        // Built-in homegraph may have listed tools already; resource-only auth must not add more.
+        expect(listToolsCalls).toBe(toolsCallsBefore)
+        expect(Object.keys(yield* mcp.resources())).toContain("test-oauth-resources:docs")
       }),
     ),
   { config: config("test-oauth-resources") },

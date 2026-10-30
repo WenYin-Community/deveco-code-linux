@@ -40,6 +40,14 @@ process.chdir(cliDir)
 const pkg = (await Bun.file("./package.json").json()) as { name: string; license: string; dependencies: Record<string, string> }
 const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
 if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
+// Build-time pin only (vendor-only delivery). Exact x.y.z - not a published meta dep.
+const homegraphVersion = pkg.dependencies.homegraph
+if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
+if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
+  throw new Error(
+    `Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`,
+  )
+}
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
 // HarmonyOS arm64 is prebuilt and published from a separate repo, so it never lands in

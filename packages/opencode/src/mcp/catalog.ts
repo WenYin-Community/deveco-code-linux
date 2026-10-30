@@ -7,6 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { dynamicTool, jsonSchema, type JSONSchema7, type Tool } from "ai"
 import { Effect } from "effect"
+import { HOMEGRAPH_MCP_NAME } from "./homegraph"
 
 const DEFAULT_TIMEOUT = 30_000
 const MAX_LIST_PAGES = 1_000
@@ -110,6 +111,21 @@ export function fetch<T extends { name: string }>(
 }
 
 export const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "_")
+
+/**
+ * Agent-visible tool id. Hosts prefix the MCP server name, but HomeGraph tools
+ * are already `homegraph_*`. A second prefix would show `homegraph_homegraph_project`.
+ *
+ * Compat: de-dupe applies only when `clientName` sanitizes to `homegraph` (product
+ * inject or a user mcp server also named `homegraph`). Other MCP servers keep the
+ * historical `server_tool` key. The MCP call still uses the original tool name.
+ */
+export function toolKey(clientName: string, toolName: string): string {
+  const prefix = sanitize(clientName) + "_"
+  const name = sanitize(toolName)
+  if (sanitize(clientName) === sanitize(HOMEGRAPH_MCP_NAME) && name.startsWith(prefix)) return name
+  return prefix + name
+}
 
 export function prompts(client: Client, timeout?: number) {
   if (!client.getServerCapabilities()?.prompts) return Promise.resolve([])

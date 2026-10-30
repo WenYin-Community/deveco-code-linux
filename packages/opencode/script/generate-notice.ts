@@ -26,6 +26,7 @@ const OUTPUT = join(MONOREPO_ROOT, "NOTICE")
 // Key = package name, Value = SPDX license identifier.
 const LICENSE_OVERRIDES: Record<string, string> = {
   "@openauthjs/openauth": "MIT", // license not in npm tarball; repo is MIT
+  arkanalyzer: "Apache-2.0", // npm license field empty; package LICENSE is Apache-2.0
 }
 
 // Workspace-internal packages (workspace:*) — skip these.
@@ -149,37 +150,102 @@ function collectAllPackages(): Map<string, PkgInfo> {
 // Match direct dependencies
 // ---------------------------------------------------------------------------
 
-function getDirectDeps(): string[] {
+function getDirectDepSpecs(): Record<string, string> {
   const pkg = readJSON(PACKAGE_JSON)
-  const deps: Record<string, string> = pkg.dependencies ?? {}
-  return Object.keys(deps)
+  return (pkg.dependencies ?? {}) as Record<string, string>
+}
+
+/** Bare x.y.z or x.y.z-prerelease (no ^/~ range). */
+function isExactVersionSpec(spec: string): boolean {
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(spec)
+}
+
+/** Numeric semver compare (prerelease < release). Avoids string key bugs like "8.3.0" > "14.0.3". */
+function compareVersions(a: string, b: string): number {
+  const parse = (v: string) => {
+    const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/)
+    if (!m) return null
+    return { major: +m[1]!, minor: +m[2]!, patch: +m[3]!, pre: m[4] ?? null }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  if (!pa || !pb) return a.localeCompare(b)
+  if (pa.major !== pb.major) return pa.major - pb.major
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch
+  if (pa.pre === null && pb.pre !== null) return 1
+  if (pa.pre !== null && pb.pre === null) return -1
+  if (pa.pre && pb.pre) return pa.pre.localeCompare(pb.pre)
+  return 0
+}
+
+/**
+ * HomeGraph vendor tree as shipped into platform packages.
+ * Source of truth: committed npm lock used by `vendor-homegraph.ts` (not bun node_modules).
+ */
+function collectHomegraphVendorFromLock(): PkgInfo[] {
+  const lockPath = join(import.meta.dir, "homegraph-vendor-package-lock.json")
+  if (!existsSync(lockPath)) {
+    console.warn(`  Warning: ${lockPath} not found; homegraph vendor deps omitted from NOTICE`)
+    return []
+  }
+  const lock = readJSON(lockPath) as {
+    packages?: Record<string, { version?: string; license?: string }>
+  }
+  const out: PkgInfo[] = []
+  const seen = new Set<string>()
+  for (const [pathKey, meta] of Object.entries(lock.packages ?? {})) {
+    if (!pathKey || !meta?.version) continue
+    const name = pathKey.includes("/node_modules/")
+      ? pathKey.slice(pathKey.lastIndexOf("/node_modules/") + "/node_modules/".length)
+      : pathKey.replace(/^node_modules\//, "")
+    if (!name) continue
+    const key = `${name}@${meta.version}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const override = LICENSE_OVERRIDES[name]
+    const lic = override ?? meta.license ?? "UNKNOWN"
+    out.push({
+      name,
+      version: meta.version,
+      license: normalizeLicense(lic),
+      publisher: "",
+      repository: "",
+    })
+  }
+  return out
 }
 
 function matchDirectDeps(
   allPkgs: Map<string, PkgInfo>,
-  directNames: string[],
+  specs: Record<string, string>,
 ): Map<string, PkgInfo> {
   const result = new Map<string, PkgInfo>()
 
-  for (const depName of directNames) {
+  for (const [depName, spec] of Object.entries(specs)) {
     if (WORKSPACE_SCOPE.includes(depName)) continue
 
-    // Find all versions, pick the latest
     let best: PkgInfo | null = null
-    let bestKey = ""
-    for (const [key, info] of allPkgs) {
-      if (info.name !== depName) continue
-      if (!best || key > bestKey) {
-        best = info
-        bestKey = key
+    // Prefer the version declared in package.json when it is an exact pin.
+    if (isExactVersionSpec(spec)) {
+      for (const info of allPkgs.values()) {
+        if (info.name === depName && info.version === spec) {
+          best = info
+          break
+        }
+      }
+    }
+    if (!best) {
+      for (const info of allPkgs.values()) {
+        if (info.name !== depName) continue
+        if (!best || compareVersions(info.version, best.version) > 0) best = info
       }
     }
 
     if (best) {
-      // Apply overrides
       const override = LICENSE_OVERRIDES[depName]
       if (override) best.license = normalizeLicense(override)
-      result.set(depName, best)
+      result.set(`${best.name}@${best.version}`, best)
     } else {
       console.warn(`  Warning: ${depName} not found in node_modules`)
     }
@@ -280,9 +346,21 @@ function main() {
   console.log(`  Found ${allPkgs.size} total packages`)
 
   console.log("Matching direct dependencies...")
-  const directNames = getDirectDeps()
-  const matched = matchDirectDeps(allPkgs, directNames)
-  console.log(`  Matched ${matched.size} / ${directNames.length} direct dependencies`)
+  const directSpecs = getDirectDepSpecs()
+  const matched = matchDirectDeps(allPkgs, directSpecs)
+  console.log(`  Matched ${matched.size} / ${Object.keys(directSpecs).length} direct dependencies`)
+
+  console.log("Matching HomeGraph vendor dependencies from package-lock...")
+  const hgVendor = collectHomegraphVendorFromLock()
+  // Same name+version: keep node_modules metadata (publisher). Else add lock entry.
+  let added = 0
+  for (const info of hgVendor) {
+    const exists = [...matched.values()].some((p) => p.name === info.name && p.version === info.version)
+    if (exists) continue
+    matched.set(`${info.name}@${info.version}`, info)
+    added++
+  }
+  console.log(`  Added ${added} homegraph vendor packages from lock (${hgVendor.length} in lock)`)
 
   console.log("Generating NOTICE...")
   const content = generateNotice(matched)

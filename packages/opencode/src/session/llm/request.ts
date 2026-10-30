@@ -6,6 +6,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
 import { AgentRules } from "@/agent/rules"
+import { AgentPromptParts, agentNeedsHomegraphPrompt } from "@/agent/prompt-parts"
+import { probeHomegraphReady } from "@/mcp/homegraph-ready"
 import type { MessageV2 } from "../message-v2"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -45,20 +47,28 @@ export type Prepared = {
     readonly topP?: number
     readonly topK?: number
     readonly maxOutputTokens?: number
-    readonly options: Record<string, any>
+    readonly options: Record<string, unknown>
   }
-  readonly messageTransformOptions: Record<string, any>
+  readonly messageTransformOptions: Record<string, unknown>
   readonly headers: Record<string, string>
 }
 
-const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
-  mergeDeep(target, source ?? {}) as Record<string, any>
+const mergeOptions = (
+  target: Record<string, unknown>,
+  source: Record<string, unknown> | undefined,
+): Record<string, unknown> => mergeDeep(target, source ?? {}) as Record<string, unknown>
 
-export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
-  const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
-  const system = [
+function buildSystemParts(
+  input: PrepareInput,
+  homegraph: { ready: boolean; source?: "product" | "user" },
+): string[] {
+  return [
     [
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      ...AgentPromptParts.forAgent(input.agent, {
+        homegraphReady: homegraph.ready,
+        homegraphSource: homegraph.source,
+      }),
       ...AgentRules.forAgent(input.model, input.agent),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
@@ -66,19 +76,17 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       .filter((x) => x)
       .join("\n"),
   ]
+}
 
-  const header = system[0]
-  yield* input.plugin.trigger(
-    "experimental.chat.system.transform",
-    { sessionID: input.sessionID, model: input.model },
-    { system },
-  )
+function collapseSystemAfterTransform(system: string[], header: string): void {
   if (system.length > 2 && system[0] === header) {
     const rest = system.slice(1)
     system.length = 0
     system.push(header, rest.join("\n"))
   }
+}
 
+function buildProviderOptions(input: PrepareInput, system: string[], isOpenaiOauth: boolean): Record<string, unknown> {
   const variant =
     !input.small && input.model.variants && input.user.model.variant
       ? input.model.variants[input.user.model.variant]
@@ -99,109 +107,132 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     delete options.include
   }
   if (isOpenaiOauth) options.instructions = system.join("\n")
+  return options
+}
 
-  const messages =
-    isOpenaiOauth || input.isWorkflow
-      ? input.messages
-      : [
-          ...system.map(
-            (x): ModelMessage => ({
-              role: "system",
-              content: x,
-            }),
-          ),
-          ...input.messages,
-        ]
+function buildMessages(input: PrepareInput, system: string[], isOpenaiOauth: boolean): ModelMessage[] {
+  if (isOpenaiOauth || input.isWorkflow) return input.messages
+  return [
+    ...system.map(
+      (x): ModelMessage => ({
+        role: "system",
+        content: x,
+      }),
+    ),
+    ...input.messages,
+  ]
+}
 
-  const params = yield* input.plugin.trigger(
-    "chat.params",
-    {
-      sessionID: input.sessionID,
-      agent: input.agent.name,
-      model: input.model,
-      provider: input.provider,
-      message: input.user,
-    },
-    {
-      temperature: input.model.capabilities.temperature
-        ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
-        : undefined,
-      topP: input.agent.topP ?? ProviderTransform.topP(input.model),
-      topK: ProviderTransform.topK(input.model),
-      maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
-      options,
-    },
+function ensureCopilotNoopTool(input: PrepareInput, tools: Record<string, Tool>): void {
+  if (
+    !input.model.providerID.includes("github-copilot") ||
+    Object.keys(tools).length !== 0 ||
+    !hasToolCalls(input.messages)
+  ) {
+    return
+  }
+  // Copilot needs a tools field when replaying prior tool calls, even if no tools are currently enabled.
+  tools._noop = aiTool({
+    description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
+    inputSchema: jsonSchema({
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Unused" },
+      },
+    }),
+    execute: async () => ({ output: "", title: "", metadata: {} }),
+  })
+}
+
+function affinityHeaders(input: PrepareInput, projectID: string | undefined): Record<string, string> {
+  if (input.model.providerID.startsWith("opencode")) {
+    return {
+      ...(projectID ? { "x-opencode-project": projectID } : {}),
+      "x-opencode-session": input.sessionID,
+      "x-opencode-request": input.user.id,
+      "x-opencode-client": input.flags.client,
+      "User-Agent": USER_AGENT,
+    }
+  }
+  if (input.model.providerID.startsWith("deveco")) {
+    return {
+      ...(projectID ? { "x-deveco-project": projectID } : {}),
+      "x-deveco-session": input.sessionID,
+      "x-deveco-request": input.user.id,
+      "x-deveco-client": input.flags.client,
+      "User-Agent": USER_AGENT,
+    }
+  }
+  return {
+    "x-session-affinity": input.sessionID,
+    "X-Session-Id": input.sessionID,
+    ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
+    "User-Agent": USER_AGENT,
+  }
+}
+
+function defaultChatParams(input: PrepareInput, options: Record<string, unknown>) {
+  return {
+    temperature: input.model.capabilities.temperature
+      ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
+      : undefined,
+    topP: input.agent.topP ?? ProviderTransform.topP(input.model),
+    topK: ProviderTransform.topK(input.model),
+    maxOutputTokens: ProviderTransform.maxOutputTokens(input.model, input.flags.outputTokenMax),
+    options,
+  }
+}
+
+function pluginChatContext(input: PrepareInput) {
+  return {
+    sessionID: input.sessionID,
+    agent: input.agent.name,
+    model: input.model,
+    provider: input.provider,
+    message: input.user,
+  }
+}
+
+function sortedTools(tools: Record<string, Tool>): Record<string, Tool> {
+  return Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b)))
+}
+
+export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
+  const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  // Skip readiness probe for agents that never inject the HG prompt part.
+  const homegraph = agentNeedsHomegraphPrompt(input.agent.name)
+    ? yield* probeHomegraphReady
+    : { ready: false as const, source: undefined }
+
+  const system = buildSystemParts(input, homegraph)
+  const header = system[0]
+  yield* input.plugin.trigger(
+    "experimental.chat.system.transform",
+    { sessionID: input.sessionID, model: input.model },
+    { system },
   )
+  collapseSystemAfterTransform(system, header)
 
-  const { headers } = yield* input.plugin.trigger(
-    "chat.headers",
-    {
-      sessionID: input.sessionID,
-      agent: input.agent.name,
-      model: input.model,
-      provider: input.provider,
-      message: input.user,
-    },
-    {
-      headers: {},
-    },
-  )
+  const options = buildProviderOptions(input, system, isOpenaiOauth)
+  const messages = buildMessages(input, system, isOpenaiOauth)
+  const ctx = pluginChatContext(input)
+  const params = yield* input.plugin.trigger("chat.params", ctx, defaultChatParams(input, options))
+  const { headers } = yield* input.plugin.trigger("chat.headers", ctx, { headers: {} })
 
   const tools = resolveTools(input)
-  if (
-    input.model.providerID.includes("github-copilot") &&
-    Object.keys(tools).length === 0 &&
-    hasToolCalls(input.messages)
-  ) {
-    // Copilot needs a tools field when replaying prior tool calls, even if no tools are currently enabled.
-    tools["_noop"] = aiTool({
-      description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
-      inputSchema: jsonSchema({
-        type: "object",
-        properties: {
-          reason: { type: "string", description: "Unused" },
-        },
-      }),
-      execute: async () => ({ output: "", title: "", metadata: {} }),
-    })
-  }
+  ensureCopilotNoopTool(input, tools)
 
-  const projectID = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
-    ? (yield* InstanceState.context).project.id
-    : undefined
+  const needsProject =
+    input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
+  const projectID = needsProject ? (yield* InstanceState.context).project.id : undefined
 
   return {
     system,
     messages,
-    tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
+    tools: sortedTools(tools),
     params,
     messageTransformOptions: options,
-    headers: {
-      ...(input.model.providerID.startsWith("opencode")
-        ? {
-            ...(projectID ? { "x-opencode-project": projectID } : {}),
-            "x-opencode-session": input.sessionID,
-            "x-opencode-request": input.user.id,
-            "x-opencode-client": input.flags.client,
-            "User-Agent": USER_AGENT,
-          }
-        : input.model.providerID.startsWith("deveco")
-          ? {
-              ...(projectID ? { "x-deveco-project": projectID } : {}),
-              "x-deveco-session": input.sessionID,
-              "x-deveco-request": input.user.id,
-              "x-deveco-client": input.flags.client,
-              "User-Agent": USER_AGENT,
-            }
-          : {
-              "x-session-affinity": input.sessionID,
-              "X-Session-Id": input.sessionID,
-              ...(input.parentSessionID ? { "x-parent-session-id": input.parentSessionID } : {}),
-              "User-Agent": USER_AGENT,
-            }),
-      ...input.model.headers,
-      ...headers,
-    },
+    headers: { ...affinityHeaders(input, projectID), ...input.model.headers, ...headers },
   }
 })
 

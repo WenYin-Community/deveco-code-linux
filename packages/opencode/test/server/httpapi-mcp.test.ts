@@ -65,11 +65,15 @@ describe("mcp HttpApi", () => {
         const response = yield* request(handler, McpPaths.status, tmp.directory)
 
         expect(response.status).toBe(200)
-        expect(yield* json(response)).toEqual({ demo: { status: "disabled" } })
+        const body = yield* json<{ demo: { status: string }; homegraph?: { status: string } }>(response)
+        expect(body.demo).toEqual({ status: "disabled" })
+        // Opted out of product HomeGraph — stub stays visible as disabled for status.
+        expect(body.homegraph?.status).toBe("disabled")
       }),
     {
       config: {
         mcp: {
+          homegraph: { enabled: false },
           demo: {
             type: "local",
             command: ["echo", "demo"],
@@ -116,6 +120,7 @@ describe("mcp HttpApi", () => {
     {
       config: {
         mcp: {
+          homegraph: { enabled: false },
           demo: {
             type: "local",
             command: ["echo", "demo"],
@@ -145,6 +150,7 @@ describe("mcp HttpApi", () => {
     {
       config: {
         mcp: {
+          homegraph: { enabled: false },
           demo: {
             type: "local",
             command: ["echo", "demo"],
@@ -179,6 +185,7 @@ describe("mcp HttpApi", () => {
         formatter: false,
         lsp: false,
         mcp: {
+          homegraph: { enabled: false },
           demo: {
             type: "local",
             command: ["echo", "demo"],
@@ -218,6 +225,6 @@ describe("mcp HttpApi", () => {
           })
         }
       }),
-    { config: { mcp: {} } },
+    { config: { mcp: { homegraph: { enabled: false } } } },
   )
 })

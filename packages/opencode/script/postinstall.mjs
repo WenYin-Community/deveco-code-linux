@@ -223,6 +223,8 @@ function installPackage(name) {
     const packageDir = path.join(temp, "node_modules", name)
     copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
     copyVendor(packageDir)
+    // Do not write marker into packageDir: it lives under mkdtemp and is deleted in finally.
+    // Marker for the install root is written in main() via writeDevecoCliEntryMarker(__dirname).
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })

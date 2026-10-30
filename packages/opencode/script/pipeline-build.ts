@@ -30,6 +30,7 @@ await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
+import { copyHomegraphRuntime } from "./vendor-homegraph.ts"
 
 // Parse CLI arguments
 const singleFlag = process.argv.includes("--single")
@@ -304,6 +305,12 @@ for (const item of targets) {
   })
 
   await copyUiVerificationRuntime(name)
+  // Vendor-only HomeGraph: platform packages ship a complete vendor/homegraph tree.
+  await copyHomegraphRuntime({
+    packageDir: dir,
+    destVendorDir: path.join(dir, "dist", name, "vendor", "homegraph"),
+    platform: `${item.os}-${item.arch}`,
+  })
 
   // Copy ripgrep from cache
   const rgKey = `${item.os}-${item.arch}`
