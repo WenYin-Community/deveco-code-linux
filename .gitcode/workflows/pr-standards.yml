@@ -69,17 +69,9 @@ stages:
               bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
               PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
-              AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
               TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
 
-              echo "Author: $AUTHOR"
               echo "Title: $TITLE"
-
-              if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                echo "Skipping: $AUTHOR is a team member"
-                bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
-                exit 0
-              fi
 
               CLEAN_TITLE=$(echo "$TITLE" | sed 's/^\[[^]]*\]//')
               TITLE_PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?!?: .{1,72}$'
@@ -199,15 +191,8 @@ stages:
 
               PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
 
-              AUTHOR=$(echo "$PR_DATA" | jq -r '.user.login // .user.username // ""')
               TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
               BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
-
-              if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                echo "Skipping: $AUTHOR is a team member"
-                bash .gitcode/scripts/gitcode-api.sh remove-label "$PR_NUMBER" waiting_on_author
-                exit 0
-              fi
 
               ISSUES=""
               add_issue() {
@@ -301,7 +286,7 @@ stages:
                 bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
                 bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
-                COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **6 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
+                COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **3 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
 
                 echo "$COMMENT_BODY" | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
                 exit 1

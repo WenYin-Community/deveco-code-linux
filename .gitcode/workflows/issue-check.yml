@@ -2,7 +2,8 @@ name: Issue Check
 
 on:
   schedule:
-    - cron: '0 0/30 * * * ?'
+    # 每天扫一次，回看窗口 25 小时（见 LOOKBACK_MINUTES），比周期多留 1 小时余量
+    - cron: '0 0 4 * * ?'
   workflow_dispatch:
     inputs:
       issue_number:
@@ -47,6 +48,8 @@ stages:
             env:
               GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
               DASHSCOPE_API_KEY: ${{ inputs.dashscope_api_key || secrets.DASHSCOPE_API_KEY }}
+              # 与上面的 cron 周期配套：窗口略大于周期，避免某次运行延迟而漏掉 Issue
+              LOOKBACK_MINUTES: "1500"
               OPENCODE_PERMISSION: |
                 {
                   "bash": {
@@ -61,7 +64,7 @@ stages:
               if [ -n "$ISSUE_INPUT" ]; then
                 ISSUES_TO_CHECK="$ISSUE_INPUT"
               else
-                SINCE=$(date -u -d '60 minutes ago' '+%Y-%m-%dT%H:%M:%SZ')
+                SINCE=$(date -u -d "$LOOKBACK_MINUTES minutes ago" '+%Y-%m-%dT%H:%M:%SZ')
                 echo "Polling for new issues since $SINCE"
 
                 RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
@@ -71,7 +74,7 @@ stages:
               import json, sys
               from datetime import datetime, timezone, timedelta
               data = json.load(sys.stdin)
-              cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+              cutoff = datetime.now(timezone.utc) - timedelta(minutes=int('$LOOKBACK_MINUTES'))
               for issue in data:
                   if issue.get('pull_request') is not None:
                       continue
@@ -112,15 +115,6 @@ stages:
                 # Pre-fetch issue data
                 ISSUE_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                   "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER" 2>/dev/null)
-                AUTHOR=$(echo "$ISSUE_DATA" | jq -r '.user.login // .user.username // ""' 2>/dev/null)
-                echo "  Author: $AUTHOR"
-
-                if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                  echo "  Skipping: $AUTHOR is a team member"
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
-
                 # Pre-fetch comments - skip if already has compliance comment
                 COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                   "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER/comments" 2>/dev/null)
@@ -207,7 +201,7 @@ stages:
 
               如果 Issue 不合规，以以下内容开头：
               <!-- issue-compliance -->
-              然后说明需要修复的问题，并告知有 6 小时时间编辑 Issue，否则将被自动关闭。同时添加 waiting_on_author 标签。
+              然后说明需要修复的问题，并告知有 3 小时时间编辑 Issue，否则将被自动关闭。同时添加 waiting_on_author 标签。
 
               如果发现重复，附上可能重复的 Issue 链接。
 
@@ -222,7 +216,7 @@ stages:
               **需要修复的问题：**
               - [具体原因]
 
-              请在 **6 小时内**编辑此 Issue 以解决上述问题，否则将被自动关闭。
+              请在 **3 小时内**编辑此 Issue 以解决上述问题，否则将被自动关闭。
 
               [发现重复时，附加:]
               ---
@@ -306,15 +300,7 @@ stages:
                 # Pre-fetch issue data
                 ISSUE_DATA=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                   "$GITCODE_API/repos/$GITCODE_REPO/issues/$NUMBER" 2>/dev/null)
-                AUTHOR=$(echo "$ISSUE_DATA" | jq -r '.user.login // .user.username // ""' 2>/dev/null)
                 UPDATED_AT=$(echo "$ISSUE_DATA" | jq -r '.updated_at' 2>/dev/null)
-
-                if grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                  echo "  Skipping: $AUTHOR is a team member, removing label"
-                  bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
-                  SKIPPED=$((SKIPPED + 1))
-                  continue
-                fi
 
                 # Pre-fetch comments
                 COMMENTS=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \

@@ -6,6 +6,7 @@ on:
     comments:
       - '/merge'
   schedule:
+    # 每 10 分钟兜底扫一次；评论 /merge 走事件触发，不受此周期影响
     - cron: '0 0/10 * * * ?'
   workflow_dispatch:
     inputs:

@@ -2,7 +2,8 @@ name: Compliance Close
 
 on:
   schedule:
-    - cron: '0 0/30 * * * ?'
+    # 每小时扫一次：合规关闭窗口是 3 小时，分钟级精度没有必要
+    - cron: '0 20 * * * ?'
   workflow_dispatch:
 
 permissions:
@@ -33,7 +34,9 @@ stages:
               CLOSED=0
               SKIPPED=0
               NOW_EPOCH=$(date +%s)
-              SIX_HOURS=$((6 * 60 * 60))
+              # 修改窗口时长后，必须同步 pr-standards / issue-check / pr-guide 里对贡献者的承诺文案
+              WINDOW_HOURS=3
+              WINDOW_SECONDS=$((WINDOW_HOURS * 60 * 60))
 
               check_and_close() {
                 TYPE="$1"
@@ -42,21 +45,13 @@ stages:
                 RESPONSE=$(curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
                   "$GITCODE_API/repos/$GITCODE_REPO/$TYPE?state=open&labels=waiting_on_author&per_page=100" 2>/dev/null)
 
-                NUMBERS=$(echo "$RESPONSE" | jq -r '.[] | "\(.number // .iid)"' 2>/dev/null)
+                ROWS=$(echo "$RESPONSE" | jq -r '.[] | "\(.number // .iid)\t\(.updated_at // "")"' 2>/dev/null)
 
-                for NUMBER in $NUMBERS; do
-                  [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ] && continue
-                  echo "Checking $KIND #$NUMBER"
-
-                  ITEM_DATA=$(GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh get-issue "$NUMBER" 2>/dev/null)
-                  AUTHOR=$(echo "$ITEM_DATA" | jq -r '.user.login // .user.username // ""')
-
-                  if [ -n "$AUTHOR" ] && grep -qxiF "$AUTHOR" .gitcode/TEAM_MEMBERS .github/TEAM_MEMBERS 2>/dev/null; then
-                    echo "  Skipping: $AUTHOR is a team member"
-                    GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh remove-label "$NUMBER" waiting_on_author 2>/dev/null
-                    SKIPPED=$((SKIPPED + 1))
+                while IFS=$'\t' read -r NUMBER UPDATED_AT; do
+                  if [ -z "$NUMBER" ] || [ "$NUMBER" = "null" ]; then
                     continue
                   fi
+                  echo "Checking $KIND #$NUMBER"
 
                   COMMENTS=$(GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh list-comments "$NUMBER" 2>/dev/null)
                   COMMENT_CREATED=$(echo "$COMMENTS" \
@@ -75,9 +70,19 @@ stages:
                     continue
                   fi
 
+                  # 作者在被标记之后又改过（Issue 复查是每天一次），交给复查处理，不关闭
+                  if [ -n "$UPDATED_AT" ]; then
+                    UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null || echo 0)
+                    if [ "$UPDATED_EPOCH" -gt $((COMMENT_EPOCH + 60)) ]; then
+                      echo "  Edited after the compliance comment, waiting for recheck"
+                      SKIPPED=$((SKIPPED + 1))
+                      continue
+                    fi
+                  fi
+
                   AGE=$((NOW_EPOCH - COMMENT_EPOCH))
-                  if [ "$AGE" -lt "$SIX_HOURS" ]; then
-                    echo "  Still within 6-hour window ($(( AGE / 60 ))m elapsed)"
+                  if [ "$AGE" -lt "$WINDOW_SECONDS" ]; then
+                    echo "  Still within ${WINDOW_HOURS}h window ($(( AGE / 60 ))m elapsed)"
                     SKIPPED=$((SKIPPED + 1))
                     continue
                   fi
@@ -85,7 +90,7 @@ stages:
                   echo "  Closing: compliance window expired ($KIND)"
 
                   {
-                    echo "此${KIND}已被自动关闭，因为未在 6 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
+                    echo "此${KIND}已被自动关闭，因为未在 ${WINDOW_HOURS} 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
                     echo ""
                     echo "欢迎按照规范重新提交${KIND}。"
                   } | GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null
@@ -94,7 +99,7 @@ stages:
                   GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh close-issue "$NUMBER" 2>/dev/null
 
                   CLOSED=$((CLOSED + 1))
-                done
+                done <<< "$ROWS"
               }
 
               check_and_close "issues"

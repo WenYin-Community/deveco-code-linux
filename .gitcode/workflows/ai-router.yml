@@ -1,10 +1,13 @@
 name: AI Router
 
 on:
+  # 平台上评论事件只有 pull_request_comment 一个，Issue 与 PR 的评论都从这里进来，
+  # 具体是 Issue 还是 PR 由脚本按命令 + API 校验区分
   pull_request_comment:
     types: [created]
     comments:
       - '/ai review'
+      - '/ai issue fix'
 
 permissions:
   repository: read
@@ -34,83 +37,149 @@ stages:
               fetch-depth: 1
               ref: ${{ atomgit.sha }}
 
-          - name: 转发 review 请求
+          - name: 转发 AI 命令
             run: |
               set -e
-              PR_NUMBER="${{ atomgit.event.pull_request.number || atomgit.event.issue.number }}"
-              echo "context: PR_NUMBER=$PR_NUMBER HEAD_REF=$HEAD_REF BASE_REF=$BASE_REF COMMENT_USER=$COMMENT_USER"
+              TARGET="${{ atomgit.event.pull_request.number || atomgit.event.issue.number }}"
+              echo "context: TARGET=$TARGET HEAD_REF=$HEAD_REF BASE_REF=$BASE_REF COMMENT_USER=$COMMENT_USER"
               if [ -z "$MULTICA_WEBHOOK" ]; then
                 echo "::error::secret MULTICA_WEBHOOK_URL 未配置,请在仓库 Settings → Secrets 添加(值为 Multica autopilot 的 webhook_url)"
                 exit 1
               fi
-              if [ -z "$PR_NUMBER" ]; then
-                echo "::error::PR_NUMBER 为空(无法从事件上下文解析 PR 编号)"
+              if [ -z "$TARGET" ]; then
+                echo "::error::TARGET 为空(无法从事件上下文解析 PR / Issue 编号)"
                 exit 1
               fi
               # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
-              COMMAND_BODY="${COMMENT_BODY:-$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
+              COMMAND_BODY="${COMMENT_BODY:-$(GITCODE_TYPE=issues bash .gitcode/scripts/gitcode-api.sh list-comments "$TARGET" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
               TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
               case "$TRIMMED" in
-                '/ai review'*) ;;
+                '/ai review'*) MODE=review ;;
+                '/ai issue fix'*) MODE=issue-fix ;;
                 *)
-                  echo "触发评论不是 /ai review 命令,跳过转发"
+                  echo "触发评论不是 /ai review 或 /ai issue fix 命令,跳过转发"
                   exit 0
                   ;;
               esac
-              PR_DATA=""
-              if [ -n "$GITCODE_TOKEN" ]; then
-                PR_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
-                  "https://api.gitcode.com/api/v5/repos/$REPO/pulls/$PR_NUMBER" \
-                  | tr -d '\000-\010\013-\037' || true)
-              fi
-              if echo "$PR_DATA" | jq -e '.number' >/dev/null 2>&1; then
-                PAYLOAD=$(echo "$PR_DATA" | jq -c --arg comment_user "$COMMENT_USER" '
-                  {
-                    action: "reopened",
-                    object_kind: "note",
-                    event_type: "note",
-                    number: .number,
-                    repository: {
-                      full_name: .base.repo.full_name,
-                      html_url: .base.repo.html_url,
-                      clone_url: ("https://gitcode.com/" + .base.repo.full_name + ".git")
-                    },
-                    pull_request: {
+              echo "mode=$MODE target=$TARGET"
+
+              if [ "$MODE" = "review" ]; then
+                PR_DATA=""
+                if [ -n "$GITCODE_TOKEN" ]; then
+                  PR_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                    "https://api.gitcode.com/api/v5/repos/$REPO/pulls/$TARGET" \
+                    | tr -d '\000-\010\013-\037' || true)
+                fi
+                if echo "$PR_DATA" | jq -e '.number' >/dev/null 2>&1; then
+                  PAYLOAD=$(echo "$PR_DATA" | jq -c --arg comment_user "$COMMENT_USER" '
+                    {
+                      action: "reopened",
+                      object_kind: "note",
+                      event_type: "note",
                       number: .number,
-                      title: .title,
-                      body: .body,
-                      state: .state,
-                      user: {login: .user.login},
-                      html_url: .html_url,
-                      head: {ref: .head.ref, sha: .head.sha, repo: {full_name: .head.repo.full_name, clone_url: .head.repo.html_url}},
-                      base: {ref: .base.ref, sha: .base.sha, repo: {full_name: .base.repo.full_name, clone_url: .base.repo.html_url}}
-                    },
-                    merge_request: {
-                      iid: .number,
-                      number: .number,
-                      title: .title,
-                      description: .body,
-                      state: (if .state == "open" then "opened" else .state end),
-                      source_branch: .head.ref,
-                      target_branch: .base.ref,
-                      url: .html_url,
-                      author: {username: .user.login},
-                      last_commit: {id: .head.sha},
-                      source: {path_with_namespace: .head.repo.full_name, git_http_url: .head.repo.html_url},
-                      target: {path_with_namespace: .base.repo.full_name, git_http_url: .base.repo.html_url}
-                    },
-                    object_attributes: {note: "/ai review", description: "/ai review", noteable_type: "MergeRequest"},
-                    user: {username: (if $comment_user != "" then $comment_user else .user.login end)}
-                  }')
+                      repository: {
+                        full_name: .base.repo.full_name,
+                        html_url: .base.repo.html_url,
+                        clone_url: ("https://gitcode.com/" + .base.repo.full_name + ".git")
+                      },
+                      pull_request: {
+                        number: .number,
+                        title: .title,
+                        body: .body,
+                        state: .state,
+                        user: {login: .user.login},
+                        html_url: .html_url,
+                        head: {ref: .head.ref, sha: .head.sha, repo: {full_name: .head.repo.full_name, clone_url: .head.repo.html_url}},
+                        base: {ref: .base.ref, sha: .base.sha, repo: {full_name: .base.repo.full_name, clone_url: .base.repo.html_url}}
+                      },
+                      merge_request: {
+                        iid: .number,
+                        number: .number,
+                        title: .title,
+                        description: .body,
+                        state: (if .state == "open" then "opened" else .state end),
+                        source_branch: .head.ref,
+                        target_branch: .base.ref,
+                        url: .html_url,
+                        author: {username: .user.login},
+                        last_commit: {id: .head.sha},
+                        source: {path_with_namespace: .head.repo.full_name, git_http_url: .head.repo.html_url},
+                        target: {path_with_namespace: .base.repo.full_name, git_http_url: .base.repo.html_url}
+                      },
+                      object_attributes: {note: "/ai review", description: "/ai review", noteable_type: "MergeRequest"},
+                      user: {username: (if $comment_user != "" then $comment_user else .user.login end)}
+                    }')
+                else
+                  # /pulls 取不到时用 /issues 判断目标到底是不是 PR,避免把 Issue 当 PR 转发
+                  TARGET_META=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                    "https://api.gitcode.com/api/v5/repos/$REPO/issues/$TARGET" \
+                    | tr -d '\000-\010\013-\037' || true)
+                  if echo "$TARGET_META" | jq -e '.number' >/dev/null 2>&1 \
+                    && ! echo "$TARGET_META" | jq -e '.pull_request' >/dev/null 2>&1; then
+                    echo "目标 #$TARGET 是 Issue 而非 PR,/ai review 不适用(请使用 /ai issue fix)"
+                    exit 0
+                  fi
+                  echo "::warning::PR API 数据获取失败,回退到事件上下文的精简 payload"
+                  PAYLOAD=$(jq -c -n --argjson number "$TARGET" --arg repo "$REPO" --arg head "$HEAD_REF" --arg base "$BASE_REF" \
+                    '{action:"reopened",number:$number,repository:{full_name:$repo},
+                      pull_request:({number:$number}
+                        + (if $head != "" then {head:{ref:$head}} else {} end)
+                        + (if $base != "" then {base:{ref:$base}} else {} end))}')
+                fi
               else
-                echo "::warning::PR API 数据获取失败,回退到事件上下文的精简 payload"
-                PAYLOAD=$(jq -c -n --argjson number "$PR_NUMBER" --arg repo "$REPO" --arg head "$HEAD_REF" --arg base "$BASE_REF" \
-                  '{action:"reopened",number:$number,repository:{full_name:$repo},
-                    pull_request:({number:$number}
-                      + (if $head != "" then {head:{ref:$head}} else {} end)
-                      + (if $base != "" then {base:{ref:$base}} else {} end))}')
+                ISSUE_DATA=""
+                if [ -n "$GITCODE_TOKEN" ]; then
+                  ISSUE_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                    "https://api.gitcode.com/api/v5/repos/$REPO/issues/$TARGET" \
+                    | tr -d '\000-\010\013-\037' || true)
+                fi
+                # issue_comment 事件在某些平台也会覆盖 PR 评论，这里用 pull_request 字段排除
+                if echo "$ISSUE_DATA" | jq -e '.pull_request' >/dev/null 2>&1; then
+                  echo "目标 #$TARGET 是 PR 而非 Issue,跳过(PR 评论请使用 /ai review)"
+                  exit 0
+                fi
+                if echo "$ISSUE_DATA" | jq -e '.number' >/dev/null 2>&1; then
+                  PAYLOAD=$(echo "$ISSUE_DATA" | jq -c --arg comment_user "$COMMENT_USER" --arg repo "$REPO" '
+                    {
+                      action: "reopened",
+                      object_kind: "note",
+                      event_type: "note",
+                      number: .number,
+                      repository: {
+                        full_name: $repo,
+                        html_url: ("https://gitcode.com/" + $repo),
+                        clone_url: ("https://gitcode.com/" + $repo + ".git")
+                      },
+                      issue: {
+                        iid: .number,
+                        number: .number,
+                        title: .title,
+                        description: .body,
+                        state: (if .state == "open" then "opened" else .state end),
+                        url: .html_url,
+                        author: {username: .user.login},
+                        labels: [(.labels // [])[] | if type == "object" then .name else . end]
+                      },
+                      object_attributes: {
+                        note: "/ai issue fix",
+                        description: "/ai issue fix",
+                        noteable_type: "Issue",
+                        iid: .number,
+                        title: .title
+                      },
+                      user: {username: (if $comment_user != "" then $comment_user else .user.login end)}
+                    }')
+                else
+                  echo "::warning::Issue API 数据获取失败,回退到事件上下文的精简 payload"
+                  PAYLOAD=$(jq -c -n --argjson number "$TARGET" --arg repo "$REPO" \
+                    '{action:"reopened",object_kind:"note",event_type:"note",number:$number,
+                      repository:{full_name:$repo},
+                      issue:{number:$number},
+                      object_attributes:{note:"/ai issue fix",noteable_type:"Issue"}}')
+                fi
               fi
-              echo "转发 PR #$PR_NUMBER 的 /ai review 到 Multica"
+
+              echo "转发 $MODE #$TARGET 到 Multica"
               echo "$PAYLOAD" | jq .
               code=$(curl -s -o /tmp/resp.txt -w "%{http_code}" -X POST "$MULTICA_WEBHOOK" \
                 -H "Content-Type: application/json" \

@@ -32,7 +32,7 @@ Commands:
   approve-test <number> [state]  Submit test result (passed/failed)
   reset-test <number>            Reset test approval (revoke tester accept)
   check-ci <number>              Check Test/Typecheck CI status (OK or failures)
-  rerun-failed <number>          Re-dispatch failed workflows for a PR
+  rerun-failed <number>          Re-dispatch failed CI workflows (Test/Typecheck/Build only)
 
 Examples:
   echo "Please fix the title" | bash gitcode-api.sh post-comment 653
@@ -341,13 +341,14 @@ import json,sys
 data = json.load(sys.stdin)
 runs = data.get('workflow_runs', [])
 sha = '$HEAD_SHA'
-skip = {'PR Standards', 'Auto Merge', 'Compliance Close', 'Issue Check', 'Publish', 'Publish Tag'}
+# 白名单：只有 CI 类流水线允许被重跑，避免误触发发布、自动合入等有副作用的流程
+allow = {'Test', 'Typecheck', 'Build'}
 seen = set()
 for r in runs:
     if r.get('head_sha') == sha and r.get('status') in ('FAILED', 'CANCELED'):
         name = r.get('workflow_name', '')
         wf_id = r.get('workflow_id', '')
-        if name not in skip and wf_id not in seen:
+        if name in allow and wf_id not in seen:
             seen.add(wf_id)
             print(f'{wf_id}|{name}')
 " 2>/dev/null)
