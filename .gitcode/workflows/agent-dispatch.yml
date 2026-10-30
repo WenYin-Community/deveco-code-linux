@@ -1,0 +1,47 @@
+name: Agent Dispatch
+
+on:
+  # Issue 评论事件在平台上不可用，改用定时轮询：把指派给 deveco-agent 的 Issue 转交给 Multica
+  schedule:
+    - cron: '0 0/10 * * * ?'
+  workflow_dispatch:
+    inputs:
+      assignee:
+        description: "负责人登录名"
+        required: false
+        default: "deveco-agent"
+        type: string
+      dry_run:
+        description: "预览模式（true 时只打印不转发）"
+        required: false
+        default: "false"
+        type: string
+
+permissions:
+  repository: read
+  issue: write
+  note: write
+
+stages:
+  dispatch:
+    name: 转交指派给 agent 的 Issue
+    jobs:
+      dispatch:
+        name: scan-and-dispatch
+        runs-on: ubuntu-latest
+        env:
+          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_REPO: ${{ atomgit.repository }}
+        steps:
+          - name: 检出代码
+            uses: checkout
+            with:
+              fetch-depth: 1
+
+          - name: 扫描并转发
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
+              ASSIGNEE: ${{ inputs.assignee || 'deveco-agent' }}
+              DRY_RUN: ${{ inputs.dry_run || 'false' }}
+            run: bash .gitcode/scripts/dispatch-assigned-issues.sh

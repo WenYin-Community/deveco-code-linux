@@ -356,8 +356,9 @@ for r in runs:
       echo "No failed workflows to re-run for PR #$NUMBER"
     else
       echo "$FAILED" | while IFS='|' read -r WF_ID WF_NAME; do
+        # 用 head sha 而不是分支名：fork 仓库的分支名在基础仓库里解析不到，会 404 Not Found Commit
         curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-          -d "{\"ref\":\"$HEAD_BRANCH\"}" \
+          -d "{\"ref\":\"$HEAD_SHA\"}" \
           "$ACTIONS_API/repos/$REPO/actions/workflows/$WF_ID/dispatches" 2>/dev/null
         echo "Re-triggered: $WF_NAME"
       done
