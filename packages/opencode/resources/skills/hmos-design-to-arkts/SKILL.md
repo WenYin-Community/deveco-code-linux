@@ -21,7 +21,7 @@ description: 处理 Pixso、Figma、MasterGo 或蓝湖设计稿转 HarmonyOS Ark
 
 ## 选择工作流
 
-先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认按官方 Magic MCP → 官方 Vibe MCP → 社区插件的顺序验证目标设计读取，已有用户明确选择且可用的连接直接复用。Vibe 需要可用的桌面客户端；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
+先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按 mcp-setup 的降级路径执行，已有用户明确选择且可用的连接直接复用。Vibe 可用性按桌面客户端本地服务探针判定（见 mcp-setup）；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
 
 用户选择社区插件 MCP 时，使用独立的 `community` 模式和 `nodes` 输入格式，仍保留 MasterGo 来源；安装、连接与能力边界见 `references/mastergo/mcp-setup.md`。不得将社区节点响应冒充官方 Magic DSL 或 Vibe 前端代码。
 
@@ -48,7 +48,7 @@ variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」
 
 Pixso/Figma 依赖不满足时：停止并给出安装建议/修复引导（见 `references/mcp-dependency.md`；只给指引不代装），不得进入 `init`、不得获取 DSL/JSX。Pixso 路径下开发者直接提供 DSL/截图/本地资源（全程不调用 MCP）时，依赖检查记录为不适用并继续。
 
-MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：默认 Magic → Vibe → 社区插件，保留用户已明确选择且可用的方案。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
+MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按该指引的降级路径执行，保留用户已明确选择且可用的方案。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
 
 ## 运行目录
 

@@ -158,6 +158,27 @@
           "type": "behavioral"
         }
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "把这个 MasterGo 页面转成鸿蒙应用：https://mastergo.com/file/207413499401404?layer_id=1:02，画板里有一排 PATH 矢量图标菜单，工程在 D:/work/MyApplication",
+      "expected_output": "走 MasterGo Magic 通道：优先 getDesignSections（先取分区列表，再逐个 sectionIndex 取全部 section DSL）；DSL 中 PATH 节点只有 svgShortKey，通过 extractSvg 两步分页（先不带 page 取 totalCount，再 page=0…n、pageSize=100 逐页）提取图标 SVG 并按响应内容落盘为资产，按 svgShortKey 所在 PATH 的父图标 FRAME 的 nodeId 与 svgs[].id 对应（两值取值域不相交）；不调用白名单外的 applyDesign，不凭记忆手写 path data 或挪用图标",
+      "assertions": [
+        { "text": "优先调用 getDesignSections 并取全部分区（列表+逐 sectionIndex），未依赖分区目录直接出码", "type": "behavioral" },
+        { "text": "对 PATH/svgShortKey 图标走 extractSvg 两步分页提取并按响应内容落盘为资产", "type": "behavioral" },
+        { "text": "未调用 applyDesign 或其他白名单外工具，未手写或臆造图标 path data", "type": "behavioral" },
+        { "text": "图标 SVG 资产进入导入契约（assets 与 requiredAssetReferences），对应关系记入分析", "type": "behavioral" }
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "用 Magic MCP 把这个设计稿转成应用：https://mastergo.com/file/207413499401404?layer_id=1:02，个人访问令牌已保存在 MG_MCP_TOKEN，工程在 D:/work/MyApplication",
+      "expected_output": "capture 调用 Magic 返回错误码 10003（令牌正确但席位不足）时：判定为席位门槛而非配置错误，按 blocked（dependency_unavailable）处理并引导用户核对团队版及以上编辑/研发席位；不反复重试配置、不当作令牌错误重问、不切换设计来源、不把失败响应当取数成功",
+      "assertions": [
+        { "text": "将 10003 判定为席位门槛（令牌有效但席位不足），未当作令牌配置错误反复重试", "type": "behavioral" },
+        { "text": "按 blocked（dependency_unavailable）处理并引导用户核对席位，未切换设计来源或伪造取数成功", "type": "behavioral" },
+        { "text": "失败响应作为证据保留，未被当作成功设计输入导入", "type": "behavioral" }
+      ]
     }
   ]
 }

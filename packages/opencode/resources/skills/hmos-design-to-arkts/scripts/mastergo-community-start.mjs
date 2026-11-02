@@ -41,24 +41,39 @@ function protectCredential(directory, file, existing) {
     return;
   }
   // Restrict the directory before creating a secret; existing files need their own ACL reset.
-  const script = `
-$ErrorActionPreference = 'Stop'
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = New-Object System.Security.AccessControl.DirectorySecurity
-$acl.SetOwner($sid)
-$acl.SetAccessRuleProtection($true, $false)
-$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-Set-Acl -LiteralPath $env:DEVECO_CREDENTIAL_DIRECTORY -AclObject $acl
-if ($env:DEVECO_CREDENTIAL_EXISTS -eq '1') {
-  $fileAcl = New-Object System.Security.AccessControl.FileSecurity
-  $fileAcl.SetOwner($sid)
-  $fileAcl.SetAccessRuleProtection($true, $false)
-  $fileAcl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
-  Set-Acl -LiteralPath $env:DEVECO_CREDENTIAL_FILE -AclObject $fileAcl
-}`;
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: { ...process.env, DEVECO_CREDENTIAL_DIRECTORY: directory, DEVECO_CREDENTIAL_FILE: file, DEVECO_CREDENTIAL_EXISTS: existing ? '1' : '0' },
-    stdio: 'ignore', timeout: 10_000, windowsHide: true,
+  const sid = currentUserId();
+  restrictWindowsAcl(directory, sid, true);
+  if (existing) restrictWindowsAcl(file, sid, false);
+}
+
+function restrictWindowsAcl(target, sid, directory) {
+  // Set an explicit current-user ACL; chmod does not restrict Windows readers.
+  // icacls rewrites only the DACL, which an unprivileged owner may always write.
+  // Set-Acl round-trips the whole descriptor and fails with a missing
+  // SeSecurityPrivilege on descriptors that carry audit rules.
+  const result = spawnSync(
+    'icacls.exe',
+    // Keep "/grant:r" and the ACE spec as separate arguments: icacls on
+    // Windows 11 24H2+ (build 26100) rejects the combined "/grant:r:Sid:perm"
+    // form with error 87; the documented syntax is space-separated.
+    [target, '/inheritance:r', '/grant:r', `*${sid}:${directory ? '(OI)(CI)F' : 'F'}`],
+    { windowsHide: true, timeout: 30_000, maxBuffer: 16_384, encoding: 'utf8' },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = [result.stderr, result.stdout].filter(Boolean).join(' ').trim();
+    throw new Error(
+      `Unable to restrict the Windows MasterGo pairing credential ACL: ${detail || result.error?.message || `exit ${result.status}`}`,
+    );
+  }
+}
+
+function currentUserId() {
+  const result = spawnSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], {
+    windowsHide: true,
+    timeout: 15_000,
+    encoding: 'utf8',
   });
-  if (result.error || result.status !== 0) throw new Error('Unable to protect local pairing credentials with Windows ACL; service not started');
+  const sid = result.stdout?.trim().split('\n').at(-1)?.split(',').at(-1)?.replaceAll('"', '').trim();
+  if (!sid?.startsWith('S-1-')) throw new Error('Unable to resolve the current Windows user SID');
+  return sid;
 }

@@ -133,7 +133,7 @@
 
 ## MasterGo 来源
 
-MasterGo 网页链接或桌面选区使用 designSource=mastergo；页面、工程、交互与数据策略复用公共预检。记录 acquisitionMethod=mastergo-link/mastergo-selection/mastergo-d2c、MasterGo mode=magic/vibe/community、serverName、documentId/nodeId 或待官方解析的短链接。先通过已有输入与工程探索补齐，缺少真实目标时一次澄清，不索取令牌。Full/Fast 目录、visualCalibration 配置和 Figma 相同；具体输入与首次连接见 mastergo/input-contract.md 和 mastergo/mcp-setup.md。
+MasterGo 网页链接或桌面选区使用 designSource=mastergo；页面、工程、交互与数据策略复用公共预检。顶层记录 acquisitionMethod=mastergo-link/mastergo-selection/mastergo-d2c；MasterGo 细节统一记录在 `mastergo` 块：`mode`=magic/vibe/community（混合取数 mode=magic，另以说明文字记录双通道分工）、`servers`（实际使用的连接名，混合取数含两个）、`documentId`/`nodeId`（或待官方解析的短链接），不使用其他块名。先通过已有输入与工程探索补齐，缺少真实目标时一次澄清，不索取令牌。Full/Fast 目录、visualCalibration 配置和 Figma 相同；具体输入与首次连接见 mastergo/input-contract.md 和 mastergo/mcp-setup.md。
 
 ## 蓝湖 Full/Fast 字段映射
 

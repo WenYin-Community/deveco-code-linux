@@ -8,7 +8,8 @@ const READ_TOOLS = new Set([
   "getDesignSections",
   "getDsl",
   "getD2c",
-  "getDesignSvgs",
+  "extractSvg",
+  "getPageLayers",
   "getMeta",
   "get_frontend_code",
   "get_selection_node",
@@ -121,6 +122,8 @@ function configureExportArguments(name, args, project, outputDir) {
   if (name === "get_frontend_code") {
     args.projectDir = project
     args.outDir = outputDir
+    // html is this skill's fixed intermediate format (the adapter converts it
+    // to ArkUI later); the framework is locked on purpose, not a missing option.
     args.frontendFramework = "html"
     args.writeToFile = true
     delete args.fileName
@@ -132,7 +135,7 @@ function configureExportArguments(name, args, project, outputDir) {
   ) {
     args.projectDir = project
   }
-  if (["getDsl", "getDesignSections", "getDesignSvgs", "getMeta"].includes(name)) args.format = "json"
+  if (["getDsl", "getDesignSections", "getMeta"].includes(name)) args.format = "json"
 }
 
 function containsCredentials(value) {

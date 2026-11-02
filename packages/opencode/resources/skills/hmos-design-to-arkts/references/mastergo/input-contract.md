@@ -13,7 +13,7 @@
   "identity": { "documentId": "123", "nodeId": "1:2" },
   "format": "html",
   "sourceFile": "product.html",
-  "responses": [{ "tool": "mcp__getD2c", "path": "mcp-response.json" }],
+  "responses": [{ "tool": "mcp__getD2c", "server": "mastergo-magic", "path": "mcp-response.json" }],
   "reference": { "path": "original.png", "scale": 1 },
   "recognition": { "path": "original.png", "scale": 1 },
   "assets": [{ "path": "images/product.png", "reference": "./images/product.png" }],
@@ -22,6 +22,7 @@
 ```
 
 - sourceFile / assets[].path / responses[].path / screenshot.path 相对 exportRoot，禁止越界与符号链接；文件非空，单文件 ≤10 MiB，总量 ≤100 MiB。exportRoot 必须在工程内，外部用户资源经明确提供后复制到 run 再导入。
+- responses 条目可带 `server`（来源连接名，与该响应 capture 配置中的 server 一致），导入器把来源原样记入契约 responses[].server 供溯源。混合取数时结构化 DSL 响应来自 Magic 连接、get_screenshot 截图响应来自 Vibe 连接，进入同一契约；mode 按转换权威输入选择（DSL 来自 Magic 用 magic，HTML/JSX 来自 Vibe 用 vibe）。官方来源判定锚定在结构化取数响应（getDesignSections/getDsl/getD2c）上，截图响应只作补充证据。Magic DSL 下载的原始素材以响应中的原 URL 作 assets[].reference。
 - format 为 html / jsx / dsl；社区模式单独使用 nodes。DSL 和节点结构保存为 JSON。不将 DSL、节点 JSON 或 HTML 改名 JSX 后冒充另一来源。
 - PNG recognition.scale 固定 1；reference.scale 为 1 或 2，两者尺寸必须对应同一逻辑画板；像素 ≤4000 万。源身份还需结合实际 MCP 返回内容人工核实，尺寸和哈希本身不能证明两张图来自同一节点。
 - assets.reference 是源文件里的实际资源引用（相对路径或完整 URL），映射到 assets.path 的原始文件。HTML 的 img/image src/href 和 CSS url() 自动检查；DSL 的资源引用由源分析填写 requiredAssetReferences。该字段不能为了通过校验写空，必须审计 DSL 中的图片/矢量/字体依赖。内联 data: 与 SVG fragment 不要求外部文件。

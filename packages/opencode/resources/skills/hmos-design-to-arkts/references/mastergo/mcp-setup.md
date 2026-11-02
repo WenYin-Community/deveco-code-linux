@@ -2,7 +2,7 @@
 
 先确认使用网页版、桌面客户端还是企业私有化版本。网页登录本身不等于已授权 Magic MCP。
 
-已有用户明确选择且可用的 MCP 时直接复用。首次接入默认依次尝试 Magic → Vibe → 社区插件：先引导配置 Magic 的个人访问令牌，并实际读取目标设计；Magic 不适用或无法完成目标取数时，再检查 MasterGo 桌面客户端及 Vibe 服务。仅使用网页版且没有可用桌面客户端时，跳过 Vibe。配置错误、服务未启动等问题先修复，不把工具列表可访问当作目标设计可读。两条官方通道均不适用或无法完成目标取数时，再说明原因并引导用户选择社区插件。Magic 的团队版要求不作为 Vibe 或全部官方 MCP 的统一门槛。社区插件继续沿用账号的文件权限和团队策略，不绕过权限限制。
+已有用户明确选择且可用的 MCP 时直接复用。首次接入默认 Magic+Vibe 混合取数：Magic 负责结构化 DSL 与原始素材（getDesignSections/getDsl、extractSvg、CDN 资源 URL），Vibe 补 1×/2× 渲染截图（混合模式下 Vibe 连接仅用于截图与连通性探针，HTML/JSX 导出属纯 Vibe 模式），两通道对同一节点互验。一条连接不可用时按降级路径执行：无 Vibe 本地服务则纯 Magic，截图由用户从同一画板导出 PNG；Magic 令牌或席位不可用则纯 Vibe，由 get_frontend_code 出 HTML 与资源；Magic 上游提供 exportRender 等位图导出工具后，截图直接由 Magic 获取，混合收敛为纯 Magic。两条官方通道均不适用或无法完成目标取数时，再说明原因并引导用户选择社区插件。配置错误、服务未启动等问题先修复，不把工具列表可访问当作目标设计可读。Magic 的团队版要求不作为 Vibe 或全部官方 MCP 的统一门槛。社区插件继续沿用账号的文件权限和团队策略，不绕过权限限制。
 
 ## 工作流调用方式：独立 skill 脚本
 
@@ -32,15 +32,21 @@ npm install --prefix "<runtime>" --save-exact @modelcontextprotocol/sdk@1.29.0
 node "<skillRoot>/scripts/mastergo-capture.mjs" --config "<capture-config.json>" --connection "<connection.json>" --runtime "<runtime>"
 ```
 
-脚本校验阶段、路径和只读规则后才建立连接；`tools` 返回实际服务中符合白名单的工具和 schema。允许 Magic 的 `getDesignSections`、`getDsl`、`getD2c`、`getDesignSvgs`、`getMeta`；Vibe 的 `get_frontend_code`、`get_selection_node`、`get_selection_code`、`get_screenshot`、`get_selection_image`、`get_variables`；社区的四个 `mastergo_api_*` 工具。使用实际工具名，兼容 `mcp_` / `mcp__` 前缀。
+脚本校验阶段、路径和只读规则后才建立连接；`tools` 返回实际服务中符合白名单的工具和 schema。允许 Magic 的 `getDesignSections`、`getDsl`、`getD2c`、`extractSvg`、`getPageLayers`、`getMeta`；Vibe 的 `get_frontend_code`、`get_selection_node`、`get_selection_code`、`get_screenshot`、`get_selection_image`、`get_variables`；社区的四个 `mastergo_api_*` 工具。白名单是脚本层各模式工具的并集；混合模式下 Vibe 连接的实际调用范围以 acquire.md §5 为准（仅 get_screenshot 与连通性探针）。使用实际工具名，兼容 `mcp_` / `mcp__` 前缀。`extractSvg` 按 `page` / `pageSize` 分页返回图标 SVG：先不带 `page` 调用取 `totalCount`，再以 `page=0…n` 逐页提取。`getPageLayers` 用于目标发现：用户只给 page_id 时枚举该页画板候选（详见 acquire.md 的实测限制）。
 
 每次读取将配置改为 `{operation:"read",server,runDir,tool,arguments}`，再运行同一命令。脚本一次完成参数归一化、连接、调用和原始响应落盘；stdout 返回 `requestPath`、`responsePath`、`sha256`、`outputDir`、`isError`，不输出完整设计数据。归一化请求和响应均以私有文件保存，不覆盖不同内容；错误响应保留但退出非零，不能作为成功设计输入。随后使用 `mastergo-source.mjs` 导入和 Controller 校验。
 
 脚本遵循命令执行权限，不复用 Code 内部 MCP 会话、MCP 单工具授权或插件钩子；不得把命令审批描述成 MCP 逐工具审批。用户明确禁止的服务、工具或数据访问同样不能通过脚本调用。只读限制由脚本及社区服务执行，脚本将证据输出限制在本次 run 内；命令执行本身不是操作系统级文件沙箱。每次命令创建独立客户端，在成功、失败或可处理的中断后关闭连接及其启动的 stdio 子进程；社区常驻服务和 MasterGo 插件仍由独立启动器管理，不随单次取数退出。
 
-## 默认优先：Magic MCP
+## Magic MCP：结构化 DSL 与原始素材
 
-官方 Magic 文档要求账号为团队版及以上、设计文件位于有访问权限的团队。还需要 Node.js 18+、npm 8+，以及个人设置 → 安全设置生成的个人访问令牌。令牌由用户保存在本机环境变量 `MG_MCP_TOKEN`，不要粘贴到聊天、工程或设计产物中。
+官方 Magic 文档要求团队版及以上的编辑席位或研发席位，设计文件位于有访问权限的团队。令牌正确但账号席位不足时，Magic 服务端返回错误码 10003；席位生效后同一令牌即可继续取数。还需要 Node.js 18+、npm 8+，以及个人设置 → 安全设置生成的个人访问令牌。令牌由用户保存在本机环境变量 `MG_MCP_TOKEN`，不要粘贴到聊天、工程或设计产物中。
+
+席位门槛速查：Magic 数据读取（getDesignSections、getDsl、extractSvg、getPageLayers、getMeta）= 团队版及以上的编辑席位或研发席位，席位不足返回 10003；D2C PRO 页面与「发送数据」插件（contentId 唯一来源）、getD2c = 企业版研发席位或编辑席位，且文档所在团队必须为企业版，门槛不符返回 10013（权限校验先于 contentId 校验）。遇到 10003/10013、找不到 D2C PRO 入口或「发送数据」按钮时，结论是席位/团队版本门槛而非配置错误：引导用户核对席位与团队版本，不反复重试配置、不猜测 contentId。
+
+令牌获取与配置引导：个人访问令牌在 MasterGo 网页的个人设置 → 安全设置 → 个人访问令牌区块新增并复制。判定令牌缺失、失效或席位不足（连接失败、鉴权错误或 10003）时，一次性给出完整引导：在上述页面新增个人访问令牌；按席位门槛速查核对席位与文档团队权限；把令牌保存到运行 Code 的本机环境变量 `MG_MCP_TOKEN`（connection.json 以 `{env:MG_MCP_TOKEN}` 引用，不粘贴到聊天、工程或设计产物）；再用同一 connection.json 重跑一次真实读取（如 `getMeta` 或目标画板的 `getDesignSections`）验证令牌生效——工具列表可访问不等于目标可读。引导一次到位，不反复重试或改猜其他配置；生成与生效的权威步骤以官方帮助页为准。
+
+`getDesignSections` / `getPageLayers` 读取服务端缓存，画布编辑后不即时反映：重定位节点后 DSL 仍返回旧坐标，新增画板不会出现在页面枚举中。编辑后的取数以 `get_screenshot` 截图校验为准；由此产生的 DSL↔截图不一致即缓存滞后，按 acquire.md §5 记录差异并与用户澄清，不以陈旧 DSL 否定当前画布。定位新增画板用其 nodeId（网页链接 layer_id）直连读取，不依赖页面枚举。
 
 在同一 runtime 安装固定官方包：
 
@@ -62,13 +68,15 @@ npm install --prefix "<runtime>" --save-exact @mastergo/magic-mcp@0.2.10
 
 使用安装包 package.json 的真实 bin 入口；本示例适用于固定 Magic 版本。用 Node 执行入口文件，避免 Windows 的 npx.cmd/shell 差异。环境变量由用户在运行 Code 的本机环境中设置，不传入命令行、capture 配置或设计产物。已有明确选择的官方连接优先复用其授权与安装目录；脚本仍独立建立客户端连接。
 
-## 第二选择：Vibe MCP
+## Vibe MCP：渲染截图与前端代码
 
-需要 MasterGo 客户端已启动、文件已打开且 MCP 连接启用，不需要个人令牌。官方 Vibe 文档的准备项未列出会员或团队版门槛；按实际客户端连接和工具读取结果判断可用性，不据此承诺所有账号均免费或可用。
+Vibe 可用性取决于 MasterGo 桌面客户端的本地服务：打开客户端，或保持后台运行（窗口关闭、Dock 图标仍在），且目标文件已打开、文件内 MasterGo MCP 处于连接状态，Vibe 即可用；从 Dock 完全退出后不可用，工具调用返回「获取失败: Network Error」。判定可用性用实现层探针：本地端口存活（默认 30678，被占用时自动切换，以客户端显示地址为准），或执行一次 `get_selection_node` 真实读取；`get_version` 由 vibe-mcp 适配器本地应答，本地服务停止时同样返回成功，不能作为探针。客户端主进程可能已退出而服务进程存活（后台运行态），不以进程状态判定可用性。用户当前在网页版还是客户端编辑与 Vibe 可用性无关，只按上述探针判定。不需要个人令牌。官方 Vibe 文档的准备项未列出会员或团队版门槛；按实际客户端连接和工具读取结果判断可用性，不据此承诺所有账号均免费或可用。
 
 在 runtime 安装 `@mastergo/vibe-mcp@1.0.31`，从安装包 package.json 的 bin 字段取得实际 JavaScript 入口；以 Node 执行该入口，并传入 `--url=http://localhost:30678`。connection.json 使用 `server: "mastergo-vibe"`、`type: "local"`、上述 command 数组、`enabled: true`，不需要令牌。不要猜入口文件名或改为执行 Windows `.cmd` 文件。
 
 本机端口可能变化，使用客户端显示的实际地址。官方帮助页中的旧工具名 `get_selection_code` / `get_selection_image` 在 1.0.31 已变为 `get_selection_node` / `get_frontend_code` / `get_screenshot`，必须先读取实际 tools schema，不能盲猜调用。
+
+`get_screenshot` 对同一节点的不同倍数写入同一 Server 路径（`~/.mgmcp/resources/screenshots/{fileId}/{nodeId}/`，文件名不含倍数后缀），后取的倍数覆盖先取的；按 2×→1× 顺序获取，或每取一个倍数立即复制进 run 的 export 目录。`get_frontend_code` 的 `frontendFramework` 为必选七选一（html/vue/react/wxml/angular/android/json）；capture 脚本固定传 `html` 是有意行为——html 是本 skill 的中间格式，由适配器锁定后转换为 ArkUI，不是遗漏的参数化。
 
 ## 用户选择的社区插件 MCP
 
@@ -113,7 +121,7 @@ Magic 的 `--url` 支持指定服务地址，但不证明任意私有版本兼�
 - https://mastergo.com/help/ai-features/vibe-mcp.html
 - https://github.com/mastergo-design/mastergo-magic-mcp
 
-本次实际通过 MCP tools/list 检查的包版本为 Magic 0.2.10、Vibe 1.0.31；官方 MCP 的真实账号设计取数、私有化联调及真实 Full 视觉评分验收尚未完成，不得将协议检查或自动化测试描述为这些验收已通过。
+本次实际核验的包版本为 Magic 0.2.10、Vibe 1.0.31，均通过 MCP tools/list 检查；Magic 0.2.10 的 12 个工具中除 `version_0_2_10` 外均以 `mcp__` 前缀注册。Magic 真实账号设计取数已于 2026-10-29 实测通过（getDsl、getDesignSections、getMeta，真实画板 documentId 207413499401404 / 画板 1:02）；`extractSvg` 两步分页于 2026-10-30 实测：0 图标画板确认分页语义（带 `page` 时含 `page` / `pageSize` / `hasMore`），4 图标画板（nodeId 40:02）确认条目形态 `{totalCount, count, svgs:[{name, id, svg}]}` 与映射规律——`svgs[].id` 为图标 FRAME（PATH 父容器）的 nodeId，与携带 `S{i}#0` 的 PATH 按遍历顺序 4/4 对齐；`getPageLayers` 以合成 page_id `M` 实测（缓存命中返回 layers 与 `source:"cache"`）。`getDesignSections` / `getPageLayers` 的服务端缓存行为（画布编辑后不即时反映）已于 2026-10-30 实测记录；token 设置页路径（个人设置 → 安全设置 → 个人访问令牌）于 2026-10-16 实拍核对。Vibe 的 `get_screenshot`、`get_frontend_code` 已在同一画板实测（1×/2× 截图落盘、HTML+图片资产+自动 1:1 截图导出、frontendReviewSession 协议）；Magic DSL 与 Vibe 截图的同节点组合取数及跨通道 sha256 一致性已组件级验证，混合通道的完整阶段 1 端到端验收已于 2026-10-30 通过独立 e2e（混合/降级/纯 Vibe 三用例，5/5 阶段、Gate 零 issue）。私有化联调及真实 Full 视觉评分验收尚未完成，不得将协议检查或自动化测试描述为这些验收已通过。
 
 ## 执行权限与错误处理
 

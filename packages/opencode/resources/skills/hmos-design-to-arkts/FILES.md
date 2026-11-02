@@ -76,7 +76,7 @@ references/capabilities/hmos-d2a-solution-design/INSTRUCTIONS.md
 references/capabilities/hmos-d2a-ui-reconstruction-score/INSTRUCTIONS.md
 
 # --- Evals (dev-time) ---
-# @note evals/evals.json 定义入口决策点校验用例（来源识别/双来源冲突/参数冲突/缺 node-id 澄清），开发态产物，运行时不加载
+# @note evals/evals.json 定义入口决策点校验用例（来源识别/双来源冲突/参数冲突/缺 node-id 澄清/sections+extractSvg 图标流程/10003 席位门槛 blocked），开发态产物，运行时不加载
 evals/evals.json
 
 # --- MasterGo Full/Fast ---

@@ -26,15 +26,26 @@ export async function capture(client, input, directory, signal) {
   if (input.operation === "tools")
     return { status: "available", server: input.server, tools: await listTools(client, signal) }
   const outputDir = await resolveOutputDir(directory, input.outputDir)
-  if (!input.tool || !(await listTools(client, signal)).some((tool) => tool.name === input.tool))
-    throw new Error("Select an available tool from the connected MCP server")
+  // An exact tool-name match takes priority over the prefix fallback: search the
+  // whole list for the exact name first, then compare names without the
+  // mcp_/mcp__ prefix so servers exposing prefixed tool names stay callable.
+  const requested = typeof input.tool === "string" ? input.tool : ""
+  if (!requested) throw new Error("Select an available tool from the connected MCP server")
+  const tools = await listTools(client, signal)
+  const tool =
+    tools.find((entry) => entry.name === requested) ??
+    tools.find((entry) => entry.name.replace(/^mcp__?/, "") === requested.replace(/^mcp__?/, ""))
+  if (!tool)
+    throw new Error(
+      `Select an available tool from the connected MCP server: ${tools.map((entry) => entry.name).join(", ")}`,
+    )
   signal?.throwIfAborted()
   await fs.mkdir(outputDir, { recursive: true })
   await resolveOutputDir(directory, outputDir)
   const request = { server: input.server, tool: input.tool, arguments: input.arguments ?? {} }
   const requestPath = path.join(outputDir, `mcp-${requestID(input)}-request.json`)
   await publishJson(requestPath, JSON.stringify(request, null, 2) + "\n")
-  const response = await client.callTool({ name: input.tool, arguments: input.arguments ?? {} }, undefined, {
+  const response = await client.callTool({ name: tool.name, arguments: input.arguments ?? {} }, undefined, {
     signal,
     timeout: 120_000,
   })

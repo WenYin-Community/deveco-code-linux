@@ -22,7 +22,7 @@ const EXTENSIONS = new Set(['.html', '.htm', '.jsx', '.json', '.css', '.png', '.
 const READ_TOOLS = new Set([
   'get_frontend_code', 'get_selection_node', 'get_selection_code', 'get_screenshot', 'get_selection_image',
   'get_variables', 'get_library_list', 'get_component_info', 'get_component_catalog', 'get_component_details',
-  'get_library_assets', 'getDsl', 'getDesignSections', 'getD2c', 'getDesignSvgs', 'getMeta',
+  'get_library_assets', 'getDsl', 'getDesignSections', 'getD2c', 'extractSvg', 'getPageLayers', 'getMeta',
   'mastergo_api_call',
 ]);
 
@@ -135,13 +135,21 @@ export function importMasterGoSource(config) {
   if (['dsl', 'nodes'].includes(config.format)) json(inside(exportRoot, config.sourceFile));
   const responses = config.responses.map((entry, index) => {
     requireValue(READ_TOOLS.has(toolName(entry.tool)), 'Only supported design-reading MCP tools belong in this workflow');
+    // Provenance is declarative: the connection name from the capture config that
+    // produced this response. Hybrid runs record Magic responses and Vibe
+    // screenshot responses side by side; the name is evidence, not access control.
+    requireValue(entry.server === undefined || (typeof entry.server === 'string' && entry.server.length > 0), 'Response provenance server must be a non-empty connection name');
     const body = json(inside(exportRoot, entry.path));
     requireValue(body && typeof body === 'object' && body.isError !== true && Array.isArray(body.content) && body.content.length > 0, 'MCP response is missing content or reports an error');
     requireValue(config.mode === 'community' || toolName(entry.tool) !== 'mastergo_api_call', 'Community evidence must retain its own mode');
-    return prepare(entry.path, `source/mastergo/mcp/response-${index + 1}.json`, { tool: entry.tool, ...(config.mode === 'community' ? { arguments: entry.arguments } : {}) });
+    return prepare(entry.path, `source/mastergo/mcp/response-${index + 1}.json`, { tool: entry.tool, server: entry.server, ...(config.mode === 'community' ? { arguments: entry.arguments } : {}) });
   });
   const names = responses.map((entry) => toolName(entry.tool));
   if (config.mode === 'community') validateCommunityAcquisition(config.responses, (entry) => json(inside(exportRoot, entry.path)), config.identity);
+  // Hybrid acquisition keeps the official-source determination anchored on the
+  // Magic structured-data tools. Screenshots may additionally come from the Vibe
+  // channel (get_screenshot responses recorded with their provenance server),
+  // so Vibe evidence rides along without ever satisfying this requirement.
   requireValue(config.mode === 'community' || (config.mode === 'vibe'
     ? names.some((name) => ['get_frontend_code', 'get_selection_node', 'get_selection_code'].includes(name))
     : names.some((name) => ['getDsl', 'getDesignSections', 'getD2c'].includes(name))), 'Missing official source acquisition response');
@@ -209,7 +217,11 @@ export function collectMasterGoInputIssues(runDir) {
     requireValue(contract.reference.path === 'source/mastergo/reference-screenshot.png' && contract.recognition.path === 'source/mastergo/component-recognition-screenshot.png', 'Unexpected screenshot paths');
     requireValue([1, 2].includes(contract.reference.scale) && contract.recognition.scale === 1 && contract.reference.width === contract.recognition.width * contract.reference.scale && contract.reference.height === contract.recognition.height * contract.reference.scale, 'Invalid screenshot scale mapping');
     requireValue(contract.responses.every((entry) => READ_TOOLS.has(toolName(entry.tool))), 'Unexpected MCP tool in the contract');
+    requireValue(contract.responses.every((entry) => entry.server === undefined || (typeof entry.server === 'string' && entry.server.length > 0)), 'Invalid response provenance server');
     const names = contract.responses.map((entry) => toolName(entry.tool));
+    // Same hybrid relaxation as the importer: the official-source determination
+    // stays anchored on the Magic structured-data tools; Vibe screenshot
+    // responses with their provenance server are supplemental evidence only.
     requireValue(contract.mode === 'community' || (contract.mode === 'vibe'
       ? names.some((name) => ['get_frontend_code', 'get_selection_node', 'get_selection_code'].includes(name))
       : names.some((name) => ['getDsl', 'getDesignSections', 'getD2c'].includes(name))), 'Missing official source acquisition response');
