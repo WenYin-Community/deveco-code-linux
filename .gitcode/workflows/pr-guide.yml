@@ -24,7 +24,7 @@ stages:
         name: 发布 PR 命令使用指南
         runs-on: [self-hosted, slave=slave_0]
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码
@@ -77,7 +77,7 @@ stages:
                 echo ''
                 echo '如对自动检查结果有异议，请联系维护者。'
                 echo ''
-                echo '详见[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。'
+                echo '详见[贡献指南](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。'
               } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
               echo "## PR 指南" >> "$ATOMGIT_STEP_SUMMARY"

@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         > [!IMPORTANT]
-        > 感谢提出建议！提交前请先 [搜索现有 Issue](https://gitcode.com/openharmony-sig/deveco-code/issues)，避免重复提交。
+        > 感谢提出建议！提交前请先 [搜索现有 Issue](https://atomgit.com/openharmony-sig/deveco-code/issues)，避免重复提交。
         > 请详细描述你的需求，以便我们理解你的想法。
 
   - type: textarea

@@ -28,7 +28,7 @@ stages:
         name: 检查并合入 PR
         runs-on: [self-hosted, slave=slave_0]
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           GITCODE_TYPE: pulls
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}

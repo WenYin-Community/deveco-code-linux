@@ -29,7 +29,7 @@ stages:
         name: scan-and-close
         runs-on: ubuntu-latest
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码

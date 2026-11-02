@@ -19,7 +19,7 @@ stages:
         name: 关闭超时 Issue 和 PR
         runs-on: ubuntu-latest
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码
@@ -90,7 +90,7 @@ stages:
                   echo "  Closing: compliance window expired ($KIND)"
 
                   {
-                    echo "此${KIND}已被自动关闭，因为未在 ${WINDOW_HOURS} 小时内按照我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
+                    echo "此${KIND}已被自动关闭，因为未在 ${WINDOW_HOURS} 小时内按照我们的[贡献指南](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)进行修改。"
                     echo ""
                     echo "欢迎按照规范重新提交${KIND}。"
                   } | GITCODE_TYPE=$TYPE bash .gitcode/scripts/gitcode-api.sh post-comment "$NUMBER" 2>/dev/null

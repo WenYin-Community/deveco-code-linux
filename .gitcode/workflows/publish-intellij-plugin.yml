@@ -217,7 +217,7 @@ jobs:
           echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 构建 | \`$BUILD_RESULT\` |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| Release 上传 | \`$UPLOAD_RESULT\` |" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| Release | [查看](https://gitcode.com/$OWNER/$REPO/releases/$PLUGIN_RELEASE_TAG) |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Release | [查看](https://atomgit.com/$OWNER/$REPO/releases/$PLUGIN_RELEASE_TAG) |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
           echo "### 安装包" >> "$ATOMGIT_STEP_SUMMARY"
           echo "" >> "$ATOMGIT_STEP_SUMMARY"

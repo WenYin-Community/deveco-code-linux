@@ -28,7 +28,7 @@ stages:
         name: 标题格式与关联 Issue
         runs-on: [self-hosted, slave=slave_0]
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
           COMMENT_BODY: ${{ atomgit.event.comment.body }}
@@ -108,7 +108,7 @@ stages:
                   echo '>'
                   echo '> 描述部分不超过 72 字符'
                   echo ''
-                  echo '详见[贡献指南 - PR 标题](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#pr-titles)。'
+                  echo '详见[贡献指南 - PR 标题](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#pr-titles)。'
                 } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
                 exit 1
@@ -139,7 +139,7 @@ stages:
                 echo '1. 创建一个 Issue 描述 Bug 或功能需求（如果尚不存在）'
                 echo '2. 在此 PR 描述的 `### Issue for this PR` 段落中填写 `Closes #<编号>`'
                 echo ''
-                echo '详见[贡献指南 - Issue 优先](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#issue-first-policy)。'
+                echo '详见[贡献指南 - Issue 优先](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md#issue-first-policy)。'
               } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
 
               exit 1
@@ -151,7 +151,7 @@ stages:
         name: PR 模板合规检查
         runs-on: [self-hosted, slave=slave_0]
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
           COMMENT_BODY: ${{ atomgit.event.comment.body }}
@@ -215,7 +215,7 @@ stages:
               HAS_CHECKLIST=$(echo "$BODY" | grep -q '### Checklist' && echo 1 || echo 0)
 
               if [ "$HAS_ISSUE_SEC" = 0 ] || [ "$HAS_TYPE" = 0 ] || [ "$HAS_WHAT" = 0 ] || [ "$HAS_VERIFY" = 0 ] || [ "$HAS_SCREENSHOTS" = 0 ] || [ "$HAS_CHECKLIST" = 0 ]; then
-                add_issue "PR 描述缺少必要的模板段落，请使用 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。"
+                add_issue "PR 描述缺少必要的模板段落，请使用 [PR 模板](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。"
               fi
 
               # 检查段落顺序
@@ -286,7 +286,7 @@ stages:
                 bash .gitcode/scripts/gitcode-api.sh add-label "$PR_NUMBER" waiting_on_author
                 bash .gitcode/scripts/gitcode-api.sh reset-test "$PR_NUMBER" || true
 
-                COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **3 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
+                COMMENT_BODY=$(printf '<!-- pr-compliance -->\n## ✅ PR 模板合规检查\n\n此 PR 未完全符合我们的[贡献指南](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)和 [PR 模板](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/.gitcode/pull_request_template.md)。\n\n**需要修复的问题：**\n%s\n\n⏰ 请在 **3 小时内**编辑此 PR 描述以解决上述问题，否则将被自动关闭。\n\n如果您认为此标记有误，请联系维护者。' "$ISSUES")
 
                 echo "$COMMENT_BODY" | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
                 exit 1

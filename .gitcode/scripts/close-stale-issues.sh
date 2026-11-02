@@ -138,7 +138,7 @@ for PAGE in $(seq 1 20); do
 
 **如果这是一个长期有效的跟踪项：** 给 Issue 加上 \`keep-open\` 标签即可跳过自动关闭。
 
-判断依据见[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。如有异议请联系维护者。
+判断依据见[贡献指南](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。如有异议请联系维护者。
 EOF
 )
       if ! printf '%s' "$COMMENT" | GITCODE_TYPE=issues bash "$API_SCRIPT" post-comment "$NUMBER" >/dev/null; then

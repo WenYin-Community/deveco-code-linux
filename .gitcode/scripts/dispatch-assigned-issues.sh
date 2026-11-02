@@ -1,5 +1,5 @@
 #!/bin/bash
-# dispatch-assigned-issues.sh — 把指派给指定负责人（默认 deveco-agent）的 Issue 转交给 Multica
+# dispatch-assigned-issues.sh — 把指派给指定负责人（默认 deveco-robot）的 Issue 转交给 Multica
 #
 # Issue 评论事件在平台上不可用，所以改成定时轮询。流程分两段：
 #   1. 收集：分页扫 open Issue，按负责人过滤，排掉 PR 条目和已派发过的（看标记评论），
@@ -10,7 +10,7 @@
 # 环境变量：
 #   GITCODE_API / GITCODE_REPO / GITCODE_TOKEN  由 workflow 注入
 #   MULTICA_WEBHOOK  Multica autopilot 的 webhook_url
-#   ASSIGNEE         负责人，默认 deveco-agent
+#   ASSIGNEE         负责人登录名，默认 deveco-robot（deveco-agent 是显示名，不能用于匹配）
 #   MAX_DISPATCH     单次最多派发数量，默认 10
 #   DRY_RUN          1/true 时只打印，不发请求
 
@@ -21,7 +21,8 @@ REPO="${GITCODE_REPO:?GITCODE_REPO not set}"
 TOKEN="${GITCODE_TOKEN:?GITCODE_TOKEN not set}"
 WEBHOOK="${MULTICA_WEBHOOK:?MULTICA_WEBHOOK not set}"
 
-ASSIGNEE="${ASSIGNEE:-deveco-agent}"
+# 按登录名（login）匹配：机器人账号登录名是 deveco-robot，界面显示名 deveco-agent 不能用于过滤
+ASSIGNEE="${ASSIGNEE:-deveco-robot}"
 MAX_DISPATCH="${MAX_DISPATCH:-10}"
 
 if ! [[ "$MAX_DISPATCH" =~ ^[0-9]+$ ]]; then
@@ -142,8 +143,8 @@ for ITEM in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
       number: .number,
       repository: {
         full_name: $repo,
-        html_url: ("https://gitcode.com/" + $repo),
-        clone_url: ("https://gitcode.com/" + $repo + ".git")
+        html_url: ("https://atomgit.com/" + $repo),
+        clone_url: ("https://atomgit.com/" + $repo + ".git")
       },
       issue: {
         iid: .number,

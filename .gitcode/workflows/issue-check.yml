@@ -28,7 +28,7 @@ stages:
         name: 合规检查与查重
         runs-on: ubuntu-latest
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码
@@ -211,7 +211,7 @@ stages:
 
               [不合规时:]
               <!-- issue-compliance -->
-              此 Issue 未完全符合我们的[贡献指南](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。
+              此 Issue 未完全符合我们的[贡献指南](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/CONTRIBUTING.md)。
 
               **需要修复的问题：**
               - [具体原因]
@@ -249,7 +249,7 @@ stages:
         name: 复查已编辑的不合规 Issue
         runs-on: ubuntu-latest
         env:
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
         steps:
           - name: 检出代码

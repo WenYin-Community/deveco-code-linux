@@ -22,7 +22,7 @@ stages:
         env:
           MULTICA_WEBHOOK: ${{ secrets.MULTICA_WEBHOOK_URL }}
           REPO: ${{ atomgit.repository }}
-          GITCODE_API: https://api.gitcode.com/api/v5
+          GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
           GITCODE_TYPE: pulls
           COMMENT_USER: ${{ atomgit.event.comment.user.login || atomgit.event.comment.user.username }}
@@ -79,7 +79,7 @@ stages:
                 PR_DATA=""
                 if [ -n "$GITCODE_TOKEN" ]; then
                   PR_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
-                    "https://api.gitcode.com/api/v5/repos/$REPO/pulls/$TARGET" \
+                    "https://atomgit.com/api/v5/repos/$REPO/pulls/$TARGET" \
                     | tr -d '\000-\010\013-\037' || true)
                 fi
                 if echo "$PR_DATA" | jq -e '.number' >/dev/null 2>&1; then
@@ -92,7 +92,7 @@ stages:
                       repository: {
                         full_name: .base.repo.full_name,
                         html_url: .base.repo.html_url,
-                        clone_url: ("https://gitcode.com/" + .base.repo.full_name + ".git")
+                        clone_url: ("https://atomgit.com/" + .base.repo.full_name + ".git")
                       },
                       pull_request: {
                         number: .number,
@@ -124,7 +124,7 @@ stages:
                 else
                   # /pulls 取不到时用 /issues 判断目标到底是不是 PR,避免把 Issue 当 PR 转发
                   TARGET_META=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
-                    "https://api.gitcode.com/api/v5/repos/$REPO/issues/$TARGET" \
+                    "https://atomgit.com/api/v5/repos/$REPO/issues/$TARGET" \
                     | tr -d '\000-\010\013-\037' || true)
                   if echo "$TARGET_META" | jq -e '.number' >/dev/null 2>&1 \
                     && ! echo "$TARGET_META" | jq -e '.pull_request' >/dev/null 2>&1; then
@@ -142,7 +142,7 @@ stages:
                 ISSUE_DATA=""
                 if [ -n "$GITCODE_TOKEN" ]; then
                   ISSUE_DATA=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
-                    "https://api.gitcode.com/api/v5/repos/$REPO/issues/$TARGET" \
+                    "https://atomgit.com/api/v5/repos/$REPO/issues/$TARGET" \
                     | tr -d '\000-\010\013-\037' || true)
                 fi
                 # issue_comment 事件在某些平台也会覆盖 PR 评论，这里用 pull_request 字段排除
@@ -159,8 +159,8 @@ stages:
                       number: .number,
                       repository: {
                         full_name: $repo,
-                        html_url: ("https://gitcode.com/" + $repo),
-                        clone_url: ("https://gitcode.com/" + $repo + ".git")
+                        html_url: ("https://atomgit.com/" + $repo),
+                        clone_url: ("https://atomgit.com/" + $repo + ".git")
                       },
                       issue: {
                         iid: .number,

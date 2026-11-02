@@ -85,7 +85,7 @@ jobs:
         run: |
           cd packages/opencode
           TAG="v${DEVECO_VERSION}"
-          API="https://api.gitcode.com/api/v5"
+          API="https://atomgit.com/api/v5"
           OWNER="${GITCODE_OWNER}"
           REPO="${GITCODE_REPO}"
           TOKEN="${{ secrets.RELEASE_TOKEN }}"
@@ -180,7 +180,7 @@ jobs:
           echo "" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 项目 | 值 |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "|------|------|" >> "$ATOMGIT_STEP_SUMMARY"
-          echo "| Release | [查看](https://gitcode.com/$OWNER/$REPO/releases/$TAG) |" >> "$ATOMGIT_STEP_SUMMARY"
+          echo "| Release | [查看](https://atomgit.com/$OWNER/$REPO/releases/$TAG) |" >> "$ATOMGIT_STEP_SUMMARY"
           echo "| 产物数 | $(ls dist/*.zip 2>/dev/null | wc -l) |" >> "$ATOMGIT_STEP_SUMMARY"
 
       - name: 同步 npmmirror
