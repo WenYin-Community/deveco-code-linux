@@ -24,12 +24,6 @@ export const MAX_DOCS_OUTPUT_LENGTH = 5_000
 
 type CreateTargetState = "missing" | "empty" | "non-empty" | "invalid"
 
-type CreateStaging = {
-  root: string
-  projectRoot: string
-  promotionTarget: string
-}
-
 type ProjectEntry = {
   relative: string
   kind: "directory" | "file"
@@ -228,37 +222,34 @@ async function executeCreate(args: string[], cwd: string, runner: CliRunner): Pr
   const forwarded = args.filter((arg) => arg !== "--merge")
   const appName = optionValue(args, "--app-name")
   if (!appName) return runner(["create", ...forwarded], cwd)
-  const target = path.resolve(cwd, optionValue(args, "--project-path") ?? appName)
+  const projectPath = optionValue(args, "--project-path")
+  const target = path.resolve(cwd, projectPath ?? appName)
   const state = await createTargetState(target)
   if (state === "invalid" || (state === "non-empty" && !merge)) return projectExists(target, merge)
+  if (state !== "non-empty") {
+    return runner(
+      ["create", ...(projectPath === undefined ? forwarded : setOption(forwarded, "--project-path", target))],
+      cwd,
+    )
+  }
 
-  const staging = await createStaging(target, state)
+  const staging = await fs.mkdtemp(path.join(path.dirname(target), `.${path.basename(target)}.deveco-create-`))
   try {
-    return await createStagedProject(forwarded, cwd, target, state, staging, runner)
+    await fs.chmod(staging, 0o700)
+    return await createStagedProject(forwarded, cwd, target, staging, runner)
   } finally {
-    await fs.rm(staging.root, { recursive: true, force: true }).catch(() => undefined)
+    await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
-async function createStagedProject(
-  args: string[],
-  cwd: string,
-  target: string,
-  state: CreateTargetState,
-  staging: CreateStaging,
-  runner: CliRunner,
-) {
+async function createStagedProject(args: string[], cwd: string, target: string, staging: string, runner: CliRunner) {
   const result = replaceCreatePath(
-    await runner(["create", ...setOption(args, "--project-path", staging.projectRoot)], cwd),
-    staging.projectRoot,
+    await runner(["create", ...setOption(args, "--project-path", staging)], cwd),
+    staging,
     target,
   )
   if (result.exitCode !== 0) return result
-  if (state !== "non-empty") {
-    if (!(await promoteProject(staging, target, state))) return projectExists(target, false)
-    return result
-  }
-  const conflicts = await mergeProject(staging.projectRoot, target)
+  const conflicts = await mergeProject(staging, target)
   if (conflicts.length > 0) return projectFileConflict(target, conflicts)
   return {
     ...result,
@@ -271,40 +262,6 @@ async function createTargetState(target: string): Promise<CreateTargetState> {
   if (!stat) return "missing"
   if (!stat.isDirectory()) return "invalid"
   return (await fs.readdir(target)).length === 0 ? "empty" : "non-empty"
-}
-
-async function createStaging(target: string, state: CreateTargetState): Promise<CreateStaging> {
-  if (state !== "missing") {
-    const root = await fs.mkdtemp(path.join(path.dirname(target), `.${path.basename(target)}.deveco-create-`))
-    await fs.chmod(root, 0o700)
-    return { root, projectRoot: root, promotionTarget: target }
-  }
-
-  const missing = await missingPath(target)
-  const root = await fs.mkdtemp(path.join(path.dirname(missing), `.${path.basename(missing)}.deveco-create-`))
-  const projectRoot = path.join(root, path.relative(missing, target))
-  await fs.chmod(root, 0o700)
-  await fs.mkdir(path.dirname(projectRoot), { recursive: true })
-  return { root, projectRoot, promotionTarget: missing }
-}
-
-async function missingPath(target: string): Promise<string> {
-  const parent = path.dirname(target)
-  const stat = await fs.lstat(parent).catch(() => undefined)
-  if (stat?.isDirectory()) return target
-  if (stat) throw new Error(`Project parent is not a directory: ${parent}`)
-  return missingPath(parent)
-}
-
-async function promoteProject(staging: CreateStaging, target: string, state: CreateTargetState) {
-  if (state === "missing" && (await fs.lstat(staging.promotionTarget).catch(() => undefined))) return false
-  if (state === "empty" && (await createTargetState(target)) !== "empty") return false
-
-  const mode = state === "empty" ? (await fs.stat(target)).mode & 0o777 : 0o777 & ~process.umask()
-  await fs.chmod(staging.root, mode)
-  if (state === "empty") await fs.rmdir(target)
-  await fs.rename(staging.root, staging.promotionTarget)
-  return true
 }
 
 async function mergeProject(source: string, target: string) {
@@ -499,7 +456,12 @@ async function executeBuild(args: string[], cwd: string, runner: CliRunner) {
   }
 }
 
-async function executeRun(args: string[], cwd: string, runner: CliRunner, dependencies: ProxyDependencies): Promise<CliResult> {
+async function executeRun(
+  args: string[],
+  cwd: string,
+  runner: CliRunner,
+  dependencies: ProxyDependencies,
+): Promise<CliResult> {
   const deviceList = await runner(["device", "list", "--format", "json"], cwd, { skipVersionCheck: true })
   if (deviceList.exitCode !== 0) return runner(args, cwd)
 
@@ -543,9 +505,7 @@ async function waitEmulatorReady(name: string, before: Device[]): Promise<string
   if (!home) return ""
   const hdc = hdcPath(home)
   if (!(await Bun.file(hdc).exists())) return ""
-  const known = new Set(
-    before.flatMap((device) => [device.serial, device.name]).filter((v): v is string => Boolean(v)),
-  )
+  const known = new Set(before.flatMap((device) => [device.serial, device.name]).filter((v): v is string => Boolean(v)))
   const deadline = Date.now() + EMULATOR_READY_TIMEOUT_MS
   while (Date.now() < deadline) {
     const fresh = (await probeHdcTargets(hdc, EMULATOR_READY_PROBE_TIMEOUT_MS)).find(

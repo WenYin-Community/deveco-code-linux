@@ -309,7 +309,7 @@ describe("devecocli proxy router", () => {
     expect(cli.calls).toEqual([])
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('"code": "PROJECT_EXISTS"')
-    expect(result.stderr).toContain(target)
+    expect(JSON.parse(result.stderr).details.targetRoot).toBe(target)
   })
 
   test("uses cwd/app-name for create conflict checks when project path is omitted", async () => {
@@ -323,42 +323,79 @@ describe("devecocli proxy router", () => {
     expect(result.exitCode).toBe(2)
   })
 
-  test("stages create beside an empty target directory before promoting it", async () => {
+  test.each([false, true])("passes create through for an empty working directory (merge=%s)", async (merge) => {
     await using tmp = await tmpdir()
     const target = path.join(tmp.path, "Demo")
     await fs.mkdir(target)
-    const args = ["create", "--project-path", target, "--app-name", "Demo"]
-    const cli = runner({})
-    const result = await executeDevecoCliProxy(args, tmp.path, cli.run)
+    const before = await fs.stat(target)
+    const args = ["create", "--project-path", ".", "--app-name", "Demo"]
+    const result = await executeDevecoCliProxy(merge ? [...args, "--merge"] : args, target, async (forwarded, cwd) => {
+      expect(forwarded).toEqual(["create", "--project-path", target, "--app-name", "Demo"])
+      expect(cwd).toBe(target)
+      expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
+      await Bun.write(path.join(cwd, "build-profile.json5"), "generated")
+      return { stdout: "native create output", stderr: "", exitCode: 0 }
+    })
 
-    expect(cli.calls).toHaveLength(1)
-    const staging = optionValue(cli.calls[0], "--project-path")
-    expect(staging).toStartWith(path.join(tmp.path, ".Demo.deveco-create-"))
-    expect(staging).not.toBe(target)
-    expect(await fs.readdir(target)).toEqual([])
+    expect((await fs.stat(target)).ino).toBe(before.ino)
+    expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("generated")
     expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
-    expect(result.exitCode).toBe(0)
+    expect(result).toEqual({ stdout: "native create output", stderr: "", exitCode: 0 })
   })
 
-  test("atomically promotes a staged project with missing parent directories", async () => {
+  test.each([false, true])("passes create through with missing parent directories (merge=%s)", async (merge) => {
     await using tmp = await tmpdir()
     const target = path.join(tmp.path, "workspace", "apps", "Demo")
-    const run = async (args: string[]) => {
-      const staging = optionValue(args, "--project-path")!
-      await fs.mkdir(staging, { recursive: true })
-      await Bun.write(path.join(staging, "build-profile.json5"), "generated")
-      return { stdout: `Project root: ${staging}\n`, stderr: "", exitCode: 0 }
-    }
-
+    const args = ["create", "--project-path", target, "--app-name", "Demo"]
     const result = await executeDevecoCliProxy(
-      ["create", "--project-path", target, "--app-name", "Demo"],
+      merge ? [...args, "--merge"] : args,
       tmp.path,
-      run,
+      async (forwarded, cwd) => {
+        expect(forwarded).toEqual(args)
+        expect(cwd).toBe(tmp.path)
+        expect(await fs.readdir(tmp.path)).toEqual([])
+        await fs.mkdir(target, { recursive: true })
+        await Bun.write(path.join(target, "build-profile.json5"), "generated")
+        return { stdout: `Project root: ${target}\n`, stderr: "", exitCode: 0 }
+      },
     )
 
     expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("generated")
     expect(await fs.readdir(tmp.path)).toEqual(["workspace"])
     expect(result.stdout).toBe(`Project root: ${target}\n`)
+  })
+
+  test.each([".", "./", ".\\", "./task3", ".\\task3"])(
+    "resolves an explicit relative create path: %s",
+    async (relative) => {
+      await using tmp = await tmpdir()
+      const target = path.resolve(tmp.path, relative)
+      const result = await executeDevecoCliProxy(
+        ["create", `--project-path=${relative}`, "--app-name", "Demo"],
+        tmp.path,
+        async (args, cwd) => {
+          expect(args).toEqual(["create", `--project-path=${target}`, "--app-name", "Demo"])
+          expect(cwd).toBe(tmp.path)
+          await fs.mkdir(target, { recursive: true })
+          await Bun.write(path.join(target, "build-profile.json5"), "generated")
+          return { stdout: `Project root: ${target}\n`, stderr: "", exitCode: 0 }
+        },
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(await Bun.file(path.join(target, "build-profile.json5")).text()).toBe("generated")
+    },
+  )
+
+  test.each([false, true])("preserves omitted project-path arguments (merge=%s)", async (merge) => {
+    await using tmp = await tmpdir()
+    const args = ["create", "--app-name", "Demo"]
+    const cli = runner({})
+    const result = await executeDevecoCliProxy(merge ? [...args, "--merge"] : args, tmp.path, cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result.exitCode).toBe(0)
+    expect(await fs.readdir(tmp.path)).toEqual([])
   })
 
   test("merges a generated project into a non-empty target without changing existing content", async () => {
@@ -377,8 +414,8 @@ describe("devecocli proxy router", () => {
     }
 
     const result = await executeDevecoCliProxy(
-      ["create", "--project-path", target, "--app-name", "Demo", "--merge"],
-      tmp.path,
+      ["create", "--project-path", ".", "--app-name", "Demo", "--merge"],
+      target,
       run,
     )
 
@@ -423,6 +460,8 @@ describe("devecocli proxy router", () => {
   test("cleans create staging when project generation fails", async () => {
     await using tmp = await tmpdir()
     const target = path.join(tmp.path, "Demo")
+    await fs.mkdir(target)
+    await Bun.write(path.join(target, "existing.txt"), "keep")
     const run = async (args: string[]) => {
       const staging = optionValue(args, "--project-path")!
       await Bun.write(path.join(staging, "partial.txt"), "partial")
@@ -430,14 +469,15 @@ describe("devecocli proxy router", () => {
     }
 
     const result = await executeDevecoCliProxy(
-      ["create", "--project-path", target, "--app-name", "Demo"],
+      ["create", "--project-path", target, "--app-name", "Demo", "--merge"],
       tmp.path,
       run,
     )
 
     expect(result.stderr).toBe(`Failed in ${target}\n`)
-    expect(await Bun.file(target).exists()).toBe(false)
-    expect(await fs.readdir(tmp.path)).toEqual([])
+    expect(await Bun.file(path.join(target, "existing.txt")).text()).toBe("keep")
+    expect(await fs.readdir(target)).toEqual(["existing.txt"])
+    expect(await fs.readdir(tmp.path)).toEqual(["Demo"])
   })
 
   test("adds the proxy merge option to create help", async () => {
