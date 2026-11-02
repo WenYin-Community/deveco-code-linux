@@ -50,9 +50,21 @@ stages:
                 echo "::error::TARGET 为空(无法从事件上下文解析 PR / Issue 编号)"
                 exit 1
               fi
-              # 优先用触发事件的评论内容判断，避免并发评论导致"最新评论"竞态；事件上下文缺失时回退到最新评论
-              COMMAND_BODY="${COMMENT_BODY:-$(GITCODE_TYPE=issues bash .gitcode/scripts/gitcode-api.sh list-comments "$TARGET" | jq -r 'sort_by(.created_at) | last | .body // ""')}"
-              TRIMMED=$(printf '%s' "$COMMAND_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+              # PR 与 Issue 的评论不是同一个端点，拿 PR 编号查 Issue 评论会 404
+              if [ -n "${{ atomgit.event.pull_request.number }}" ]; then
+                TARGET_TYPE=pulls
+              else
+                TARGET_TYPE=issues
+              fi
+
+              # 优先用触发事件的评论内容；事件上下文可能拿不到正文，此时回退到评论列表。
+              # 只挑命令评论，避免机器人的回复占据"最新一条"；查不到不报错，交给下面的命令判断
+              if [ -z "$COMMENT_BODY" ]; then
+                COMMENT_BODY=$(GITCODE_TYPE="$TARGET_TYPE" bash .gitcode/scripts/gitcode-api.sh list-comments "$TARGET" 2>/dev/null \
+                  | jq -r '[.[] | select((.body // "") | test("^\\s*/ai (review|issue fix)"))] | sort_by(.created_at) | last | .body // ""' 2>/dev/null || true)
+              fi
+              echo "target_type=$TARGET_TYPE body_len=${#COMMENT_BODY}"
+              TRIMMED=$(printf '%s' "$COMMENT_BODY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
               case "$TRIMMED" in
                 '/ai review'*) MODE=review ;;
                 '/ai issue fix'*) MODE=issue-fix ;;
