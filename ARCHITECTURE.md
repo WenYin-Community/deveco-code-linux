@@ -49,5 +49,3 @@ and the authoring convention.
 
 - [packages/opencode/AGENTS.md](packages/opencode/AGENTS.md)
 - [packages/app/AGENTS.md](packages/app/AGENTS.md)
-- [packages/desktop/AGENTS.md](packages/desktop/AGENTS.md)
-- [packages/desktop-electron/AGENTS.md](packages/desktop-electron/AGENTS.md)
