@@ -1082,6 +1082,18 @@ describe("ACP service sessions", () => {
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 4, totalTokens: 7 })
   })
 
+  it("unknown slash text falls through to a plain prompt", async () => {
+    const { service, prompts, commands } = makeService()
+    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
+
+    await Effect.runPromise(
+      service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "/sadfsaf" }] }),
+    )
+
+    expect(commands).toEqual([])
+    expect((prompts[0] as { parts?: unknown }).parts).toEqual([{ type: "text", text: "/sadfsaf" }])
+  })
+
   it("compact slash command calls summarize path", async () => {
     const { service, prompts, commands, summarizes } = makeService()
     const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))

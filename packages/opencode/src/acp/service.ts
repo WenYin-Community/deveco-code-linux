@@ -524,7 +524,17 @@ export function make(input: {
       const variant = current.variant ?? selectVariant(snapshot, selected)
       const modeId = current.modeId ?? (snapshot.availableModes.length > 0 ? snapshot.defaultModeID : undefined)
       const parts = promptContentToParts(params.prompt)
-      const command = detectSlashCommand(parts)
+      const detected = detectSlashCommand(parts)
+      // TUI validates the slash name against the live command list before
+      // delegating (packages/tui/src/component/prompt/index.tsx); an unknown
+      // "/text" is a plain prompt that happens to start with "/". Mirror that
+      // here so the model answers it instead of session.command failing with
+      // Command-not-found, which the client only sees as a generic service
+      // failure. "compact" skips validation: ACP summarizes it directly.
+      const command =
+        detected && detected.name !== "compact"
+          ? yield* knownSlashCommand(input.sdk, current.cwd, detected)
+          : detected
 
       if (!command) {
         const response = yield* request(
@@ -836,6 +846,16 @@ function detectSlashCommand(parts: ReturnType<typeof promptContentToParts>) {
   const [name, ...rest] = text.slice(1).split(/\s+/)
   if (!name) return
   return { name, args: rest.join(" ").trim() }
+}
+
+function knownSlashCommand(
+  sdk: OpencodeClient,
+  directory: string,
+  detected: NonNullable<ReturnType<typeof detectSlashCommand>>,
+) {
+  return request(() => sdk.command.list({ directory }, { throwOnError: true }), "command").pipe(
+    Effect.map((commands) => (commands.some((command) => command.name === detected.name) ? detected : undefined)),
+  )
 }
 
 function promptResponse(info: AssistantInfo, messageId: string | null | undefined, hasError = false): PromptResponse {
