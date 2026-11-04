@@ -50,6 +50,19 @@ function writeDevecoCliEntryMarker(installRoot) {
   fs.writeFileSync(marker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
 }
 
+function writeHomegraphEntryMarker(installRoot) {
+  try {
+    const hgRoot = path.dirname(require.resolve("homegraph/package.json"))
+    const entry = path.join(hgRoot, "dist", "bin", "homegraph.js")
+    if (!fs.existsSync(entry)) return
+    const marker = path.join(installRoot, "vendor", ".homegraph-entry")
+    fs.mkdirSync(path.dirname(marker), { recursive: true })
+    fs.writeFileSync(marker, `${entry}\n`, "utf8")
+  } catch {
+    // optional when homegraph is not a dependency of this install
+  }
+}
+
 function supportsAvx2() {
   if (arch !== "x64") return false
 
@@ -254,6 +267,7 @@ function verifyBinary() {
 
 function main() {
   writeDevecoCliEntryMarker(__dirname)
+  writeHomegraphEntryMarker(__dirname)
 
   for (const name of packageNames()) {
     try {

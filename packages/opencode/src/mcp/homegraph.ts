@@ -1,9 +1,8 @@
 /**
  * Built-in HomeGraph MCP wiring for DevEco Code.
  *
- * Single delivery: platform packages ship a complete `vendor/homegraph` tree
- * (curl / irm / npm platform optionalDeps). Resolve only a complete vendor tree —
- * no npm meta dependency / postinstall marker channel.
+ * Delivery mirrors `@deveco/deveco-cli`: npm meta `dependencies.homegraph` +
+ * postinstall `vendor/.homegraph-entry`; curl/irm uses `vendor/homegraph`.
  *
  * Inject policy:
  *   - `{ "homegraph": { "enabled": false } }` opts out — kept as a typed disabled
@@ -12,8 +11,7 @@
  *   - Otherwise inject when an entry resolves and Node ≥22 is available
  *
  * Build pin (packages/opencode/package.json `dependencies.homegraph`):
- *   exact `x.y.z` — used only to populate vendor at build time (with committed
- *   `script/homegraph-vendor-package-lock.json` for reproducible transitive deps).
+ *   exact `x.y.z` — vendor populate at build + published meta dependency.
  *
  * Defaults / disable (user-facing):
  *   - Product inject uses `--auto-init` and creates `.homegraph/` under the project
@@ -28,7 +26,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
-import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
+import { resolveInstallRoot } from "@opencode-ai/core/installation/vendor-path"
 import { Installation } from "@/installation"
 import { ConfigMCPV1 } from "@opencode-ai/core/v1/config/mcp"
 import { findDevEcoHome, nodePath } from "@/tool/lib/env"
@@ -116,22 +114,37 @@ function resolveDevNodeModulesEntry(opencodeRoot: string): string | undefined {
   return undefined
 }
 
-/** Resolve HomeGraph entry: vendor first, then package vendor/, then local bun install. */
+/**
+ * Packaged install root: marker (npm) then vendor (curl/irm).
+ * Mirrors `resolveInstalledDevecoCliEntry(installRoot)`.
+ */
+export function resolveInstalledHomegraphEntry(installRoot: string): string | undefined {
+  try {
+    const marker = path.join(installRoot, "vendor", ".homegraph-entry")
+    const entry = fs.readFileSync(marker, "utf8").trim()
+    if (path.isAbsolute(entry) && fs.existsSync(entry)) return path.resolve(entry)
+  } catch {
+    // fall through to vendor layout (curl/irm)
+  }
+  return completeVendorEntry(path.join(installRoot, "vendor", "homegraph"))
+}
+
+/** Resolve HomeGraph entry: npm marker → vendor → package vendor → local bun (CLI order). */
 export function resolveHomegraphEntry(): string | undefined {
   if (entryOverrideForTest) return entryOverrideForTest
 
   try {
-    const vendor = completeVendorEntry(path.join(resolveVendorDir(), "homegraph"))
-    if (vendor) return vendor
+    const installed = resolveInstalledHomegraphEntry(resolveInstallRoot())
+    if (installed) return installed
   } catch {
     // install-root resolution can fail in unusual runtimes; ignore
   }
 
   const opencodeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
-  const pkgVendor = completeVendorEntry(path.join(opencodeRoot, "vendor", "homegraph"))
-  if (pkgVendor) return pkgVendor
-
-  return resolveDevNodeModulesEntry(opencodeRoot)
+  return (
+    completeVendorEntry(path.join(opencodeRoot, "vendor", "homegraph")) ??
+    resolveDevNodeModulesEntry(opencodeRoot)
+  )
 }
 
 function parseNodeMajor(stdout: string): number | undefined {

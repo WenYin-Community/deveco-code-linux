@@ -51,6 +51,30 @@ describe("homegraph wiring", () => {
     expect(completeVendorEntry(incompleteVendorRoot)).toBeUndefined()
   })
 
+  test("resolveInstalledHomegraphEntry prefers marker over vendor", async () => {
+    const { resolveInstalledHomegraphEntry } = await import("../../src/mcp/homegraph")
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hg-marker-prefer-"))
+    const marked = path.join(installRoot, "marked-entry.js")
+    fs.writeFileSync(marked, "ok\n")
+    fs.mkdirSync(path.join(installRoot, "vendor"), { recursive: true })
+    fs.writeFileSync(path.join(installRoot, "vendor", ".homegraph-entry"), `${marked}\n`)
+    fs.cpSync(completeVendorRoot, path.join(installRoot, "vendor", "homegraph"), { recursive: true })
+    expect(resolveInstalledHomegraphEntry(installRoot)).toBe(path.resolve(marked))
+    fs.rmSync(installRoot, { recursive: true, force: true })
+  })
+
+  test("resolveInstalledHomegraphEntry falls back to vendor when marker path is missing", async () => {
+    const { resolveInstalledHomegraphEntry } = await import("../../src/mcp/homegraph")
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hg-marker-miss-"))
+    fs.mkdirSync(path.join(installRoot, "vendor"), { recursive: true })
+    fs.writeFileSync(path.join(installRoot, "vendor", ".homegraph-entry"), `${path.join(installRoot, "missing.js")}\n`)
+    fs.cpSync(completeVendorRoot, path.join(installRoot, "vendor", "homegraph"), { recursive: true })
+    expect(resolveInstalledHomegraphEntry(installRoot)).toBe(
+      path.resolve(installRoot, "vendor", "homegraph", "dist", "bin", "homegraph.js"),
+    )
+    fs.rmSync(installRoot, { recursive: true, force: true })
+  })
+
   test("isHomegraphOptOut detects enabled:false", async () => {
     const { isHomegraphOptOut } = await import("../../src/mcp/homegraph")
     expect(isHomegraphOptOut({ enabled: false })).toBe(true)

@@ -13,7 +13,7 @@ const registry = process.env.NPM_REGISTRY || "https://registry.npmjs.org"
 const token = process.env.NPM_TOKEN
 const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
 if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
-// Build-time pin only (vendor-only delivery). Exact x.y.z — not a published meta dep.
+// Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
 const homegraphVersion = pkg.dependencies.homegraph
 if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
 if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
@@ -102,7 +102,9 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       },
       dependencies: {
         "@deveco/deveco-cli": devecoCliVersion,
-        // HomeGraph is vendor-only inside platform packages (not a meta npm dep).
+        // npm installs: runtime prefers this package (postinstall marker). Platform
+        // vendor/homegraph remains for curl/irm zip (same split as @deveco/deveco-cli).
+        homegraph: homegraphVersion,
       },
     },
     null,
