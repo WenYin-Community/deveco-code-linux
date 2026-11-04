@@ -26,7 +26,7 @@ stages:
     jobs:
       check-standards:
         name: 标题格式与关联 Issue
-        runs-on: [self-hosted, slave=slave_0]
+        runs-on: [self-hosted, deveco_k8s]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -38,6 +38,9 @@ stages:
             with:
               fetch-depth: 1
               ref: ${{ atomgit.sha }}
+
+          - name: 确保 jq 可用
+            run: bash .gitcode/scripts/ensure-jq.sh
 
           - name: 检查标题与关联 Issue
             env:
@@ -149,7 +152,7 @@ stages:
     jobs:
       check-compliance:
         name: PR 模板合规检查
-        runs-on: [self-hosted, slave=slave_0]
+        runs-on: [self-hosted, deveco_k8s]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -161,6 +164,9 @@ stages:
             with:
               fetch-depth: 1
               ref: ${{ atomgit.sha }}
+
+          - name: 确保 jq 可用
+            run: bash .gitcode/scripts/ensure-jq.sh
 
           - name: 检查 PR 模板合规性
             env:

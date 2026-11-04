@@ -26,7 +26,7 @@ stages:
     jobs:
       auto-merge:
         name: 检查并合入 PR
-        runs-on: [self-hosted, slave=slave_0]
+        runs-on: [self-hosted, deveco_k8s]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -38,6 +38,9 @@ stages:
             uses: checkout
             with:
               fetch-depth: 1
+
+          - name: 确保 jq 可用
+            run: bash .gitcode/scripts/ensure-jq.sh
 
           - name: 检查 CI 状态并合入
             env:

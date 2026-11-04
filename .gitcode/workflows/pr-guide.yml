@@ -22,7 +22,7 @@ stages:
     jobs:
       post-guide:
         name: 发布 PR 命令使用指南
-        runs-on: [self-hosted, slave=slave_0]
+        runs-on: [self-hosted, deveco_k8s]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -32,6 +32,9 @@ stages:
             with:
               fetch-depth: 1
               ref: ${{ atomgit.sha }}
+
+          - name: 确保 jq 可用
+            run: bash .gitcode/scripts/ensure-jq.sh
 
           - name: 发布指南评论
             env:
