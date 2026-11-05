@@ -210,11 +210,29 @@ it.instance("dfx agent allows analysis scripts but denies code modification", ()
     expect(dfx?.description).toContain("Delegate to this agent")
     expect(dfx?.description).toContain("executor of the explicit /analyze command")
     expect(dfx?.description).toContain("dfx-reports/")
-    expect(dfx?.description).toContain("CppCrash")
-    expect(dfx?.description).toContain("ArkTS/TypeScript")
     expect(dfx?.description).toContain("pass the user's original request text verbatim")
-    expect(dfx?.description).toContain("when relaying its returned summary to the user, output it verbatim")
-    expect(dfx?.description).toContain("never rewrite its absolute report path as a relative path")
+    // SR1 v1.8 fusion: symptom-only delegation (device-side collection) and the
+    // repair-task routing claim (report-driven, main-agent execution; the
+    // description explicitly claims repair-intent requests and forbids
+    // self-handling so the main agent stops shortcutting to direct fixes).
+    expect(dfx?.description).toContain("diagnosis and repair-planning specialist")
+    expect(dfx?.description).toContain("whether the user asks for analysis or repair")
+    expect(dfx?.description).toContain("Do not handle these faults yourself")
+    // 加载即直执：skill 已加载则本会话直执，不再委派（双重加载防护，
+    // 实测回归：ses_ebc2bc406 加载 skill 后仍委派 dfx，子代理重复加载）
+    expect(dfx?.description).toContain("If the hmos-dfx-analyzer skill is already loaded in your session")
+    expect(dfx?.description).toContain("execute its analysis flow directly instead of delegating")
+    expect(dfx?.description).toContain("the subagent would only load it a second time")
+    expect(dfx?.description).toContain("the agent itself never edits source")
+    expect(dfx?.description).toContain("symptom descriptions alone and no log at all")
+    expect(dfx?.description).toContain("symptom descriptions alone and no log at all")
+    expect(dfx?.description).toContain("minimal-fix execution constraints")
+    expect(dfx?.description).toContain("ArkTS/TypeScript")
+    expect(dfx?.description).toContain("CRITICAL DELIVERY RULE")
+    expect(dfx?.description).toContain("MUST immediately relay the DFX summary")
+    expect(dfx?.description).toContain("the summary IS user-facing output")
+    expect(dfx?.description).toContain("never rewrite its absolute report path")
+    expect(dfx?.description).toContain("as a relative path")
     expect(dfx?.description).toContain("Do NOT delegate compile errors")
     expect(dfx?.description).toContain("raw HiLog streams")
     expect(dfx?.description).not.toContain("started exclusively via the /analyze command")
@@ -258,13 +276,14 @@ it.instance("dfx agent allows analysis scripts but denies code modification", ()
     }
 
     expect(evalPerm(dfx, "doom_loop")).toBe("ask")
-    // SR1 v1.6: only the dfx agent may load the DFX main skill. Main agents
-    // cannot self-load hmos-dfx-analyzer (they delegate via the task tool instead),
-    // which keeps DFX analysis inside the isolated sub-session.
+    // SR1 v1.8 variant 1b: the DFX main skill is loadable by every agent. In
+    // DevEco Code the main agent loads it through the skill channel and its
+    // routing preamble redirects to the dfx subagent; third-party hosts
+    // execute the skill directly (marketplace pure-skill form, FR-30).
     expect(Permission.evaluate("skill", "hmos-dfx-analyzer", dfx!.permission).action).toBe("allow")
     expect(Permission.evaluate("skill", "arkts-error-fixes", dfx!.permission).action).toBe("deny")
     const build = yield* load((svc) => svc.get("build"))
-    expect(Permission.evaluate("skill", "hmos-dfx-analyzer", build!.permission).action).toBe("deny")
+    expect(Permission.evaluate("skill", "hmos-dfx-analyzer", build!.permission).action).toBe("allow")
     expect(Permission.disabled(["edit", "write", "apply_patch"], dfx!.permission)).toEqual(
       new Set(["edit", "write", "apply_patch"]),
     )
@@ -286,6 +305,10 @@ it.instance("dfx agent allows analysis scripts but denies code modification", ()
     // delivery form.
     expect(dfx?.prompt).toContain("你始终运行在隔离子会话中")
     expect(dfx?.prompt).toContain("主 Agent 的自然语言委派")
+    // SR1 v1.8 fusion: symptom-only requests collect device-side evidence inside
+    // the sub-session, then must go through deterministic triage.
+    expect(dfx?.prompt).toContain("症状入口与采集流程")
+    expect(dfx?.prompt).toContain("不得按症状预设故障类型")
     expect(dfx?.prompt).toContain("会话内只回 markdown 格式简洁摘要")
     expect(dfx?.prompt).toContain("含下划线的标识符一律用行内代码包裹")
     expect(dfx?.prompt).toContain("export_report.py")

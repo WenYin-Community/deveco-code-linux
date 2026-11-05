@@ -325,7 +325,7 @@ function pickExcerpt(lines, anchor, bundle, processHint, limit) {
 
 export function buildNextActionText(report) {
   if (report.status === 'no_crash_signature') {
-    return 'Ask for a fuller crash log, a clearer repro, or optionally collect recent faultlogger or hilog evidence if needed.';
+    return 'No crash signature found. If the app stays alive with a blank page (white screen), switch to the white-screen source-first flow instead of asking for more crash logs. Otherwise ask for a fuller crash log or a clearer repro.';
   }
   if (report.suspectedFile !== '(not found)') {
     return `Inspect ${report.suspectedFile} first and make a minimal fix. Collect additional runtime evidence only if the current anchor is still too weak.`;

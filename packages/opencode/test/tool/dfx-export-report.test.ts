@@ -108,6 +108,22 @@ describe.skipIf(!hasPython)("hmos-dfx-analyzer export_report.py HTML 报告落�
     }
   })
 
+  test("white_screen 类型标签落盘（非崩溃型白屏报告）", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dfx-export-ws-"))
+    try {
+      const proc = spawnSync("python3", [SCRIPT, "--type", "white_screen", "--output-dir", dir], {
+        input: "# 白屏分析\n\n内容",
+        encoding: "utf-8",
+      })
+      expect(proc.status).toBe(0)
+      const printed = proc.stdout.trim()
+      expect(printed).toContain("dfx-report-white_screen-")
+      expect(fs.readFileSync(printed, "utf-8")).toContain("非崩溃型白屏（WhiteScreen）")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("样式唯一真值源在模板文件：同输入两次生成，样式字节一致（除时间戳）", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dfx-export-style-"))
     try {
@@ -177,6 +193,43 @@ describe.skipIf(!hasPython)("hmos-dfx-analyzer export_report.py HTML 报告落�
       expect(html).toContain("dfx-toc")
       // 代码块超一屏滚动：限高 + 滚动
       expect(html).toContain("max-height: 70vh")
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("宽表格横向滚动与转义竖线：滚动容器包裹表格，\\| 不再切断单元格", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dfx-export-wide-"))
+    try {
+      const md = [
+        "## 采样栈热点函数分析",
+        "",
+        "| 业务函数 | 出现次数 | 累计耗时(ms) | 说明 |",
+        "|---|---|---|---|",
+        "| at makeContent (entry\\|@douyin/awe_richtext\\|1.0.0\\|src/main/ets/components/b20/i46.ts:132:18) | 9/10 | 2700 | 富文本内容构建入口 |",
+        "| at measureTextSize (foundation/arkui/ace_engine/interfaces/napi/kits/measure/measure.js:27:1) | 9/10 | 2700 | 系统测量 NAPI |",
+        "",
+        "## 诊断汇总（批量合并报告）",
+        "",
+        "| 故障日志 | 类型 | 根因位置 |",
+        "|---|---|---|",
+        "| app_freeze-20261015-175046 | AppFreeze | i46.ts:132:18 |",
+      ].join("\n")
+      const proc = spawnSync("python3", [SCRIPT, "--type", "app_freeze", "--output-dir", dir], { input: md, encoding: "utf-8" })
+      expect(proc.status).toBe(0)
+      const html = fs.readFileSync(proc.stdout.trim(), "utf-8")
+      // 每张表格都包在横向滚动容器中：宽内容出滚动条，不再溢出遮盖右侧目录
+      expect(html).toContain('<div class="table-wrap"><table>')
+      expect(html).toContain("</table></div>")
+      expect((html.match(/<div class="table-wrap"><table>/g) ?? []).length).toBe(2)
+      expect(html).toContain(".table-wrap { overflow-x: auto")
+      // 打印态解除滚动裁剪并允许断行，避免打印丢内容
+      expect(html).toContain("overflow-wrap: anywhere")
+      // 转义竖线是单元格内文本，不参与分列：栈帧完整落在首列，行仍为 4 列
+      expect(html).toContain("<td>at makeContent (entry|@douyin/awe_richtext|1.0.0|src/main/ets/components/b20/i46.ts:132:18)</td>")
+      const firstRow = html.match(/<tr><td>at makeContent[\s\S]*?<\/tr>/)?.[0] ?? ""
+      expect((firstRow.match(/<td>/g) ?? []).length).toBe(4)
+      expect(html).not.toContain("<td>at makeContent (entry\\")
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
@@ -280,6 +333,65 @@ describe.skipIf(!hasPython)("hmos-dfx-analyzer export_report.py HTML 报告落�
       // h4 更深层不进目录
       expect(html).not.toContain("层小节</a>")
       expect(html).not.toContain('class="toc-3"')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("批量合并报告的目录适配：四级结构（h1+h2 组+h3 日志+h4 章节）收组与日志条目", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dfx-export-toc3-"))
+    try {
+      const md = [
+        "# 批量故障分析合并报告",
+        "",
+        "## 一、分诊摘要",
+        "",
+        "| # | 文件 | 类型 |",
+        "|---|---|---|",
+        "| 1 | appfreeze-a.log | AppFreeze |",
+        "| 2 | appfreeze-b.log | AppFreeze |",
+        "",
+        "## 二、AppFreeze 详细分析（2 份）",
+        "",
+        "### 日志 1：appfreeze-a.log",
+        "",
+        "分析内容。",
+        "",
+        "#### 三级根因定位",
+        "",
+        "根因内容。",
+        "",
+        "#### 证据链",
+        "",
+        "证据内容。",
+        "",
+        "### 日志 2：appfreeze-b.log",
+        "",
+        "分析内容。",
+        "",
+        "#### 三级根因定位",
+        "",
+        "根因内容。",
+      ].join("\n")
+      const proc = spawnSync("python3", [SCRIPT, "--type", "app_freeze", "--output-dir", dir], {
+        input: md,
+        encoding: "utf-8",
+      })
+      expect(proc.status).toBe(0)
+      const html = fs.readFileSync(proc.stdout.trim(), "utf-8")
+      const nav = html.match(/id="dfx-toc">([\s\S]*?)<\/nav>/)?.[1] ?? ""
+      // h2 类型组进目录（toc-1）
+      expect(nav).toContain("分诊摘要</a>")
+      expect(nav).toContain("AppFreeze 详细分析（2 份）</a>")
+      // h3 日志条目进目录（toc-2）——批量报告的核心导航目标
+      expect(nav).toContain("日志 1：appfreeze-a.log</a>")
+      expect(nav).toContain("日志 2：appfreeze-b.log</a>")
+      // h4 章节不进目录
+      expect(nav).not.toContain("三级根因定位</a>")
+      expect(nav).not.toContain("证据链</a>")
+      expect(nav).not.toContain('class="toc-3"')
+      // h1 标题不重复占目录位（标题已在报告头部）
+      expect(nav).not.toContain("批量故障分析合并报告</a>")
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

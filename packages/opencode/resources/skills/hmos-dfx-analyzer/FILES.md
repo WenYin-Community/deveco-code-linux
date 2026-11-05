@@ -3,6 +3,12 @@
 references/appfreeze/analyzer.md
 references/cppcrash/analyzer.md
 references/jscrash/analyzer.md
-scripts/identify_fault_log.py
+references/white-screen/analyzer.md
+scripts/collect/collect-hilog.mjs
+scripts/collect/jscrash-report.mjs
+scripts/collect/parse-jscrash-log.mjs
+scripts/collect/shared/deveco-cli.mjs
+scripts/collect/shared/jscrash-parse.mjs
+scripts/collect/shared/utils.mjs
 scripts/export_report.py
-scripts/report_template.html
+scripts/identify_fault_log.py

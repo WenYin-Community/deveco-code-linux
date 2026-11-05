@@ -17,7 +17,7 @@
 
 报告各小节与 SKILL.md 的分析步骤一一对应：
 时间一致性校验/整机资源 -> Step 2、3；EventHandler -> Step 4；
-线程堆栈 -> Step 5；binder -> Step 6、7；采样栈文件 -> Step 9。
+线程堆栈 -> Step 5；binder -> Step 6、7；采样栈文件 -> Step 8。
 """
 
 from pathlib import Path

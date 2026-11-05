@@ -3,7 +3,7 @@ import {
   buildCrashReport,
   buildNextActionText,
   formatCrashReportText,
-} from "../resources/skills/hmos-runtime-fix-skill/scripts/shared/jscrash-parse.mjs"
+} from "../resources/skills/hmos-dfx-analyzer/scripts/collect/shared/jscrash-parse.mjs"
 
 describe("jscrash-parse buildCrashReport", () => {
   describe("basic crash detection", () => {
@@ -184,10 +184,13 @@ Line 5: normal
 })
 
 describe("jscrash-parse buildNextActionText", () => {
-  test("suggests asking for more evidence when no crash signature", () => {
+  test("no crash signature diverts blank-alive cases to the white-screen flow instead of the log-retry loop", () => {
     const report = buildCrashReport("2024-01-01 12:00:00 INFO Application started successfully", "test", "default", "", "")
     const action = buildNextActionText(report)
-    expect(action).toContain("Ask for a fuller crash log")
+    expect(action).toContain("No crash signature found")
+    expect(action).toContain("switch to the white-screen source-first flow")
+    // 崩溃类症状仍按证据不足引导，但不再引导"再采一次日志"的循环
+    expect(action).toContain("ask for a fuller crash log or a clearer repro")
   })
 
   test("suggests inspecting suspected file when found", () => {

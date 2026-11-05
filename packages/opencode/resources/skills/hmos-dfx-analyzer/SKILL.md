@@ -1,14 +1,13 @@
 ---
 name: hmos-dfx-analyzer
 description: >
-  DFX 故障分析主 Skill：输入归一化、确定性故障分诊、候选仲裁、专项 Analyzer 路由与报告交付。
-  由 dfx subagent 在隔离子会话中加载执行（显式 /analyze 命令或主 Agent 自然语言委派两个入口），
-  也供第三方宿主直接加载。仅受理 AppFreeze、CppCrash、JSCrash 三类故障；一般编译错误、常规功能
-  开发、静态检查问题、HiLog 流水、内存泄漏/OOM/性能问题不适用。
+  DFX 故障分析主 Skill。当用户报告 HarmonyOS 应用故障——闪退/崩溃/白屏（含进程未退出的
+  非崩溃型白屏/空白页）/冻屏/卡死/无响应/ANR，CppCrash、JSCrash、AppFreeze，faultlog/崩溃日志
+  ——无论要求修复、分析还是仅描述症状，有日志与否，均加载本技能并按流程执行。一般编译错误、
+  常规功能开发、静态检查问题、HiLog 流水、内存泄漏/OOM/性能问题不适用。
 metadata:
-  package: dfx-agent-kit
-  version: 3.2.0
-  base: SR1 DFX 统一能力设计 v1.5 / 需求 v1.7
+  author: Huawei Reliability Technology Lab
+  version: 1.0.0
 ---
 
 # DFX 主 Skill：故障分诊与场景路由
@@ -18,17 +17,19 @@ Analyzer，并将 Analyzer 的最终产出作为报告主体交付。**你不自
 确定性识别脚本 `identify_fault_log.py` 完成，你只消费其结果。这条边界排除了你"拿到日志就开始分析"
 的默认倾向。
 
-## 适用范围（两条入口通用）
+## 适用范围
 
-本 Skill 在 dfx subagent 的隔离子会话中执行，有两个触发入口，流程规则完全一致（SR1 v1.7）：
+本 Skill 是会话无关的分析流程，任何加载方（主 Agent、dfx 子代理、第三方宿主）按同一套规则执行：
 
-- **显式 `/analyze` 命令**：命令在子会话中启动 dfx subagent，用户原话以 `<DFX_USER_ARGUMENTS>` 区块为唯一载体；
-- **主 Agent 自然语言委派**：主 Agent 识别 DFX 意图后经 Task 工具委派 dfx subagent（子会话），委派
-  prompt 即本轮分析输入（主 Agent 应原样转述用户原话与日志路径）。
+- **显式 `/analyze` 命令**：命令启动 dfx 子代理，用户原话以 `<DFX_USER_ARGUMENTS>` 区块为唯一载体；
+- **技能加载**（主 Agent 或第三方宿主）：当前轮用户消息即 L3 口述与修复意图的判断输入。
 
-无论哪个入口：加载本 Skill 前不得自行判读日志定类；分诊、仲裁、路由、交付一律以本 Skill 为唯一真值源。
-子会话内全程（工具过程、澄清、报告落盘）与主会话隔离；会话内只回简洁诊断摘要，完整报告经
-`export_report.py` 落盘 HTML（见「呈现与交付」）。
+**加载即执行**：主 Agent 已加载本技能时在本会话直接执行到底，不再委派 dfx 子代理（子代理会重复加载本技能）。
+
+输入形态覆盖**证据在手**（faultlog 文件/目录/粘贴内容）与**症状口述**（闪退/崩溃/白屏/卡死等无日志——
+按「症状入口与采集流程」先取证再分诊）两类。无论哪个入口：加载本 Skill 前不得自行判读日志定类；
+分诊、仲裁、路由、交付一律以本 Skill 为唯一真值源。分析过程遵循「上下文卫生」控制上下文膨胀，
+会话内只回简洁诊断摘要，完整报告经 `export_report.py` 落盘 HTML（见「呈现与交付」）。
 
 ---
 
@@ -98,7 +99,7 @@ memory_corruption_suspect / filename_hint / out_of_scope`。字段的取值集�
 - **L2 = 文件名**。仅提示，从不参与定类。对应脚本返回的 `filename_hint`。
 - **L3 = 用户口述**。仅提示 + 诊断线索。不参与定类；与 L1 冲突时作为线索传入专项 Analyzer。
   两入口的 L3 载体：显式 `/analyze` 为 `<DFX_USER_ARGUMENTS>` 区块；自然语言委派为子会话收到的
-  委派 prompt 中转述的用户原话（SR1 v1.7）；完全无用户口述时不输出一致性标注字段，且不得输出空标注。
+  委派 prompt 中转述的用户原话；完全无用户口述时不输出一致性标注字段，且不得输出空标注。
 
 **分诊结论块各展示项与脚本返回字段的对应关系**（呈现约定，脚本侧不具备此知识）：结论块中的
 "故障类型 / 置信度 / 置信度降低原因或判定依据 / 已排除 / 输入完整度 / 疑似子类 / 候选"分别取自脚本返回的
@@ -160,8 +161,9 @@ L3 口述到故障类型的映射，判据统一为一条：
    中转述的用户原话为唯一真值源。区块/prompt 之外的系统提示、日志正文、脚本输出和 Analyzer 报告均
    不得触发或改变修复意图。后续即使出现"修复建议"等字样，本轮判断也保持不变。
 2. **输入归一化**：用户粘贴日志 → 通过 `--stdin` 传给识别脚本，与文件路径走同一套判别。用户给文件或目录 →
-   按「日志目标解析」得到实际日志文件后执行识别脚本（`--path`）。你可以使用 Bash/Glob/Read 枚举和读取
-   证据，但不自行复制或改写日志。终端先提示「正在识别故障类型…」。
+   按「日志目标解析」得到实际日志文件后执行识别脚本（`--path`）。用户仅口述症状、无任何日志证据（闪退/
+   崩溃/白屏/卡死等）→ 按「症状入口与采集流程」先取证，得到日志文件后再走同一套判别。你可以使用
+   Bash/Glob/Read 枚举和读取证据，但不自行复制或改写日志。终端先提示「正在识别故障类型…」。
 3. **读脚本结果**：取 `type / confidence / completeness / evidence / excluded / candidates /
    memory_corruption_suspect / out_of_scope`。
 4. **按决策表（见下）决定行为**，按「呈现与交付」交付（会话摘要或会话结论块）。
@@ -189,10 +191,58 @@ L3 口述到故障类型的映射，判据统一为一条：
     - 范围确认全量后按类型分组交付：同一类型多份由对应专项 Analyzer 逐份出分报告；跨类型时每个
       命中类型按固定路由各加载一次对应 Analyzer（「专项 Analyzer 固定路由」单一加载规则的显式
       例外），最终交付一份按日志逐份分节的合并报告，分诊摘要行按各份分别给出。
+      合并报告的**分节契约**：每份日志以 `### 日志 N：<文件名>` 起节，**分节首行为该份的分诊结论行**
+      （折叠一行协议），其下**完整遵循该类型 Analyzer
+      输出格式章节**（章节编号、命名与顺序逐一对齐，标题层级移到日志小节之下）——三级根因定位、
+      证据链等契约章节逐份必备，不得省略或合并；分诊摘要表逐份携带单份协议三字段
+      `类型 / 输入完整度 / 置信度`（其余列可自选，三项不得缺）。
 7. **采样栈（增强日志）不计入独立日志**：对枚举出的候选文件逐一执行识别脚本后，`type=sample_stack`
    的文件不参与规则 6 的候选计数与范围确认（"多份日志"只统计 faultlog），按「配套证据归并与传递」
    归并到同事件的冻屏 faultlog；无冻屏 faultlog 可归并时，按「结果处置决策表」`sample_stack` 行
    索取主证据。
+
+### 症状入口与采集流程（无日志证据时）
+
+用户仅口述故障症状（闪退/崩溃/白屏/卡死等）且未提供任何日志时，先做**白屏存活判定**，再决定
+是否取证。进入采集的日志可能是三类故障中任一类，**必须过识别脚本定类，不得按症状预设故障类型**：
+
+0. **白屏存活判定**：症状为"页面空白但应用未退出/没闪退"（进程存活、界面空白，含冷启动白屏、
+   跳转后白屏、pop/clear 后白屏）时，**不进入设备侧采集**，直接加载
+   `references/white-screen/analyzer.md` 走非崩溃型白屏 source-first 分析（无 crash 日志是该
+   路径的常态而非证据不足，不得要求用户复现取日志或进入采集重试循环）。"白屏后退出/白屏闪退"
+   仍属崩溃类，照常走下述采集流程。
+1. **bundleName 读取**：读取工程 `AppScope/app.json5` 的 `app.bundleName` 精确值作为后续采集参数；
+   禁止从 `vendor`、模块目录名或 `com.example` 之类前缀猜测。
+2. **设备解析**：用户给了 `deviceId` 则全程使用；未给则先 `devecocli device list`——恰好一台直用；
+   多台用 `question` 请用户选择（选择前不采集）；无设备直接降级（见第 5 步）。
+3. **复现引导**：通过 `question` 请用户在选定设备上复现故障并确认；确认后拉取最新崩溃日志：
+   ```bash
+   devecocli log --crash --device <deviceId> --bundle-name <bundleName> > <临时日志文件>
+   ```
+4. **分诊**：对拉取到的日志文件执行识别脚本（`--path`），按既有决策表路由。采集到 CppCrash/
+   AppFreeze 时正常进入对应专项分析。
+5. **hilog 兜底**（仅 js_crash 域）：crash 日志拉取失败或证据不足时，用采集脚本落 hilog 快照并
+   提取崩溃锚点（hilog 流水不进识别脚本分诊，仅作解析锚点）：
+   ```bash
+   node "<skill-base>/scripts/collect/collect-hilog.mjs" --device-id <deviceId> --lines "4000" --output-dir <tempDir>
+   node "<skill-base>/scripts/collect/parse-jscrash-log.mjs" --log-file <hilogPath> --bundle-name <bundleName> --source hilog --include-text
+   ```
+   解析返回 `status: no_crash_signature` 时**不得据此判定运行时健康**：该状态只说明"hilog 里没有
+   崩溃签名"，对白屏类故障这正是常态。脚本 next-action 文本会建议"要更完整的崩溃日志"——若用户
+   症状为页面空白但进程未退出，**忽略该建议**，按第 7 步切换白屏路径；症状确属崩溃类的才继续按
+   证据不足处理。
+6. **降级路径**：无设备连接、用户无法复现或采集持续失败时，明确反馈"无法完成设备侧采集"，请用户
+   连接设备、复现后重试，或直接提供 faultlogger 目录下的日志文件；不得在无证据时按症状猜测定类。
+7. **采集无果切白屏路径**：crash 日志拉取为空、或 hilog/crash 解析返回 `status: no_crash_signature`、
+   且用户症状为页面空白但进程未退出时，不得据此判定运行时健康，
+   也不得进入"证据不足请重试"的死循环反复采集——`no_crash_signature` 对白屏类故障是常态而非
+   证据不足，直接切换到第 0 步的非崩溃型白屏 source-first 路径（`references/white-screen/analyzer.md`）。
+   仅在症状与白屏不符时才按降级路径反馈。
+
+采集脚本位于 `<skill-base>/scripts/collect/`：`jscrash-report.mjs`
+（无 `--log-text`/`--log-file` 参数时自动经 `devecocli log --crash` 拉取并解析）、`parse-jscrash-log.mjs`
+（本地日志/hilog 快照解析）、`collect-hilog.mjs`（hilog 快照落盘）。环境依赖 `node` 与 `devecocli`，
+缺失时按降级路径反馈，不阻塞纯证据路径（证据在手时不执行本节流程）。
 
 ---
 
@@ -293,6 +343,11 @@ L3 口述到故障类型的映射，判据统一为一条：
 | `cpp_crash` | `references/cppcrash/analyzer.md` |
 | `js_crash` | `references/jscrash/analyzer.md` |
 | `sample_stack` | 无（配套证据：索取 appfreeze/sysfreeze faultlog 后按 `app_freeze` 路由） |
+| `white_screen`（症状入口，非脚本判定） | `references/white-screen/analyzer.md`（source-first，无 faultlog 分诊） |
+
+> `white_screen` 不出自识别脚本：仅当「症状入口与采集流程」第 0/7 步判定为非崩溃型白屏
+> （进程存活、界面空白）时按症状路由，`分诊结论` 行的 `输入完整度` 固定为 `fragment`
+> （无日志证据、以源码不变式为锚点），报告 `--type white_screen`。
 
 分诊结论给出明确类型且决策表允许加载时：
 
@@ -300,7 +355,7 @@ L3 口述到故障类型的映射，判据统一为一条：
    用户口述或模型直觉改选。**例外**：批量场景经「日志目标解析」规则 6 确认全量且命中多个类型时，
    每个命中类型各加载一次对应 Analyzer，用于合并报告。
 2. **路由到 `app_freeze` 且本次分诊归并了采样栈（增强日志）时**，将采样栈文件的绝对路径随 faultlog
-   路径一并带入分析上下文（appfreeze Analyzer 的 Step 9 使用）。采样栈不改变路由、不参与入口断言。
+   路径一并带入分析上下文（appfreeze Analyzer 的 Step 8 使用）。采样栈不改变路由、不参与入口断言。
 3. 用 read 工具读取对应 `analyzer.md`；读取结果提示截断或要求继续 offset 时，**必须读取至 EOF 后才能
    开始分析**。
 4. `analyzer.md` 所在目录即该专项的 `ANALYZER_BASE_DIR`（Analyzer 正文中的 `<skill-root>`）。
@@ -317,10 +372,10 @@ L3 口述到故障类型的映射，判据统一为一条：
 ### 交付形态（强制，两入口通用）
 
 交付分两层：**会话内简洁摘要** + **完整 HTML 报告文件**。分析过程、日志引用与完整报告一律不进入
-会话输出，会话是主会话上下文的入口，必须保持简洁（SR1 v1.7 评审决策）。
+会话输出，会话是主会话上下文的入口，必须保持简洁。
 
 | 分诊结果 | 会话内交付 | HTML 报告 |
-|---|---|---|x
+|---|---|---|
 | 明确类型（单份或批量合并） | 简洁摘要（见下节钉板） | **必须生成**，报告路径写入摘要 |
 | `unknown` / 范围外 / 仅采样栈 / 冲突终止 | 直接输出对应结论块（见「分诊结论呈现」），不加载 Analyzer | 不生成 |
 
@@ -353,7 +408,7 @@ L3 口述到故障类型的映射，判据统一为一条：
 ```
 
 - 摘要即最终输出：`##` 标题、`**字段**` 粗体标签、故障基本信息两列表格与行内代码经主会话 markdown 渲染呈现；评测脚本按表格首列与 `**字段名**：` 解析；末尾转达指令行面向主 Agent，属固定协议内容；
-- **含下划线的标识符一律用行内代码包裹**（故障类型、事件名、包名、文件名、报告路径等）：行内代码不参与强调解析，规避流式渲染中词内下划线被误配成斜体（暗黄色残影，实测回归）；
+- **含下划线的标识符一律用行内代码包裹**（故障类型、事件名、包名、文件名、报告路径等）：行内代码不参与强调解析，规避流式渲染中词内下划线被误配成斜体；
 - 故障基本信息置于最前，以两列表格呈现（表头固定为 `项目 / 内容`），字段取自日志头部：故障时间（Timestamp）、故障进程（Pid / Module name）、故障事件（按类型取事件名/信号/错误类型）；**片段等证据缺失的字段对应表格行省略**，不得输出"未知"类占位；
 - `**分析报告**：` 后必须为 `export_report.py` 回显的**绝对路径**（行内代码包裹），禁止改写为相对路径（终端/IDE 依赖绝对路径直接打开文件）；
 - `**修复建议**` 只给方向性概括，完整修复建议（含源码 diff）在 HTML 报告中，不得在会话内贴出；
@@ -362,11 +417,15 @@ L3 口述到故障类型的映射，判据统一为一条：
 
 ### HTML 报告落盘（export_report.py）
 
-完整报告由确定性脚本写入本地文件，你不得用 edit/write 工具直接写报告文件：
+完整报告由确定性脚本写入本地文件，你不得用 edit/write 工具直接写报告文件。**报告正文优先写入
+临时文件并用 `--input` 文件参数传入**（脚本以 UTF-8 直读文件，不经过 shell 管道编码）：
 
 ```bash
-python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"] < <报告正文 markdown>
+python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"] --input "<报告正文.md>"
 ```
+
+bash 环境也可用 stdin 重定向 `< <报告正文 markdown>`。**Windows/PowerShell 禁用
+`Get-Content | python` 管道**——正文经 PowerShell 解码，`PYTHONIOENCODING` 管不到。
 
 - 报告正文经 stdin 传入，脚本写入 `<启动工程目录>/dfx-reports/dfx-report-<type>-<时间戳>.html`
   并在 stdout 回显绝对路径（输出目录即当前工作目录下的 `dfx-reports/`，无需另行指定；该目录为
@@ -374,8 +433,7 @@ python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"
 - 报告正文必须**严格遵循**被路由到的专项 Analyzer `analyzer.md` 输出格式章节（appfreeze 为「输出格式
   模板」，cppcrash / jscrash 为「输出格式要求」）定义的章节结构：章节编号、命名与顺序逐一对齐，不得
   自行重排、增删顶层章节或改名；分诊摘要行置于报告头部；**严禁新增模板之外的顶层章节**——尤其
-  "是否需要进一步分析"式的收尾提问、后续分析选项/勾选清单（实测回归：cppcrash 报告曾自行追加
-  `## 是否需要进一步分析` + 勾选清单）。报告是静态交付物，向用户的提问与后续选项属于会话行为，
+  "是否需要进一步分析"式的收尾提问、后续分析选项/勾选清单。报告是静态交付物，向用户的提问与后续选项属于会话行为，
   只能出现在会话摘要的受限说明或澄清流程中；证据局限、待补信息（如需符号文件、需复现验证）只能
   写入 Analyzer 模板已有的相应章节（补充说明、修复方向说明等），不得另立章节；
 - **交付路由规则由本节唯一承载（真值源）**：会话内只回摘要、报告正文落盘 HTML、export_report.py
@@ -385,6 +443,20 @@ python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"
 - 正文使用 markdown：代码块用围栏语法并标注语言（```ts / ```cpp 等，脚本负责语法高亮），修复建议的
   源码差异用 ```diff 围栏（脚本渲染增删行配色）；
 - 批量合并报告逐份分节写入同一份 HTML，文件名不冲突（脚本自动避免覆盖）。
+
+### 修复执行约束（仅 js_crash 报告）
+
+分诊结果为 `js_crash`（含崩溃型白屏）时，HTML 报告在 Analyzer 报告主体之后追加**修复执行约束**块。
+修复方案本身即 Analyzer 报告主体的「修复建议」章节（模式命中、可信度分级、源码级建议与 diff 均由
+analyzer 输出格式章节定义），**不重复产出**；主 Skill 追加的只有执行侧的边界、约束与范围声明：
+
+- **修复执行边界**：报告驱动、主 Agent 执行——dfx 子会话不改业务源码；主 Agent 执行修复时以报告
+  Analyzer 主体的「修复建议」章节为方案来源，按摘要「修复建议」行的方向定位、按报告细节落地；
+- **修复行为约束**（三条，主 Agent 执行修复时必须遵守）：①最小修复——只改崩溃路径涉及的文件，
+  禁止大范围重构；②禁止用重试、任意延迟或防御式重写替代根因修复；③涉及不熟悉的 `@ohos.*` /
+  `@kit.*` API 先查其约束再动手；
+- **范围声明**：修复承诺仅限 `js_crash`；`cpp_crash` / `app_freeze` 报告**不含**修复执行约束块；
+- 会话内摘要按「会话内摘要钉板」只带修复方向一行，完整方案经 HTML 报告查看。
 
 ### 语言约束（会话摘要与 HTML 报告同受约束）
 
@@ -538,3 +610,22 @@ python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"
   未执行时，**不得**把状态改写为"当前为只读模式""请手动将修复方案应用到代码"之类面向用户的自由
   发挥说明——为什么不能改、由谁来改属于职责分工事实，只能通过钉板的"未执行，由主 Agent 承接"和
   固定承接语句表达，不得请求用户自行修改代码。
+
+---
+
+## 配套文件清单
+
+技能根目录下的全部配套文件（路径相对技能根目录）：
+
+- references/appfreeze/analyzer.md
+- references/cppcrash/analyzer.md
+- references/jscrash/analyzer.md
+- references/white-screen/analyzer.md
+- scripts/collect/collect-hilog.mjs
+- scripts/collect/jscrash-report.mjs
+- scripts/collect/parse-jscrash-log.mjs
+- scripts/collect/shared/deveco-cli.mjs
+- scripts/collect/shared/jscrash-parse.mjs
+- scripts/collect/shared/utils.mjs
+- scripts/export_report.py
+- scripts/identify_fault_log.py

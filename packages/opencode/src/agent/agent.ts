@@ -137,12 +137,6 @@ export const layer = Layer.effect(
             "*.env.*": "ask",
             "*.env.example": "allow",
           },
-          // SR1 v1.6: DFX analysis always runs in the dfx subagent sub-session.
-          // Main agents cannot load the hmos-dfx-analyzer skill directly (they must
-          // delegate via the task tool); the dfx agent re-allows it below.
-          skill: {
-            "hmos-dfx-analyzer": "deny",
-          },
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
@@ -309,7 +303,7 @@ export const layer = Layer.effect(
           },
           dfx: {
             name: "dfx",
-            description: `HarmonyOS DFX fault diagnosis specialist running in an isolated sub-session. Delegate to this agent whenever the user reports HarmonyOS application faults — freezes (AppFreeze / ANR / 冻屏 / 卡死 / 无响应), native C/C++ crashes (CppCrash), or ArkTS/TypeScript runtime crashes (JSCrash / 闪退 / 崩溃 / 白屏退出) — together with FaultLog files, directories, or pasted log content. This agent is also the executor of the explicit /analyze command. When delegating, pass the user's original request text verbatim plus any log file paths; do not paraphrase or trim fault descriptions. It returns a concise diagnosis summary and writes the full analysis report (with code highlighting and source diffs) to dfx-reports/ under the project directory; when relaying its returned summary to the user, output it verbatim — do not add, drop or reformat its lines, and never rewrite its absolute report path as a relative path. Do NOT delegate compile errors, general feature development, static-check issues, raw HiLog streams, or performance problems (memory leaks / OOM).`,
+            description: `HarmonyOS DFX fault diagnosis and repair-planning specialist running in an isolated sub-session. Delegate to this agent when the user reports HarmonyOS application faults — freezes (AppFreeze / ANR / 冻屏 / 卡死 / 无响应), native C/C++ crashes (CppCrash), ArkTS/TypeScript runtime crashes (JSCrash / 闪退 / 崩溃 / 白屏退出), or non-crashing white screens (页面空白但进程未退出 / 空白页) — whether the user asks for analysis or repair, with FaultLog files, directories, pasted log content, or symptom descriptions alone and no log at all. If the hmos-dfx-analyzer skill is already loaded in your session, execute its analysis flow directly instead of delegating — the subagent would only load it a second time. Do not handle these faults yourself: its structured diagnosis (deterministic triage, root cause, target file:line) is the foundation that repair work should build on. This agent is also the executor of the explicit /analyze command. When delegating, pass the user's original request text verbatim plus any log file paths; do not paraphrase or trim fault descriptions. CRITICAL DELIVERY RULE: when the task result returns, you MUST immediately relay the DFX summary (the "## DFX 故障分析结论 block) verbatim to the user BEFORE doing any other work — the summary IS user-facing output, never absorb it as internal reference. Do not add, drop or reformat its lines, and never rewrite its absolute report path (under dfx-reports/ in the project directory) as a relative path. After relaying, for repair requests execute the repair following the summary's repair suggestions and minimal-fix execution constraints (the agent itself never edits source); for analysis requests, answer any follow-up questions. Do NOT delegate compile errors, general feature development, static-check issues, raw HiLog streams, or performance problems (memory leaks / OOM).`,
             permission: Permission.merge(
               defaults,
               Permission.fromConfig({

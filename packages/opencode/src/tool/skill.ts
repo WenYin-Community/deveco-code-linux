@@ -15,7 +15,6 @@ export const Parameters = Schema.Struct({
 
 const DevEcoRequiredSkills = new Set([
   "hmos-arkui-develop-skill",
-  "hmos-runtime-fix-skill",
 ])
 
 export const SkillTool = Tool.define(

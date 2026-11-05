@@ -16,7 +16,9 @@ same template plus the same markdown always renders the same style. The
 template also ships a fixed floating table of contents (right side, anchor
 links with active-section highlighting, hidden on narrow screens and in print)
 and caps code blocks at 70vh with scrollbars so oversized repair diffs stay
-browsable. This script only renders markdown to HTML body fragments:
+browsable. Every table is wrapped in a horizontal-scroll container so wide
+tables (stack frames, batch diagnosis summaries) never overflow the page and
+overlap the TOC. This script only renders markdown to HTML body fragments:
   - fenced code blocks with basic syntax highlighting (ts/ets/js/c/cpp/json/py)
   - fenced diff blocks with normalized +/-/@@ line coloring (file headers
     `--- a/x` / `+++ b/x` are tolerated and rendered neutrally so model-side
@@ -123,6 +125,24 @@ def render_code_block(code, lang):
 
 TASK_ITEM = re.compile(r"^\[([ xX])\]\s+")
 
+ESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def split_table_row(row):
+    """Split a markdown table row on unescaped pipes (GFM-style).
+
+    Cells legitimately containing ``|`` — stack frames like
+    ``at makeContent (entry\\|@bundle\\|1.0.0\\|src/...)`` — escape it as
+    ``\\|``; splitting on the raw pipe tore those frames into extra columns
+    and blew up the table width. Split first, then drop empty edge cells.
+    """
+    cells = ESCAPED_PIPE.split(row.strip())
+    if not cells[0].strip():
+        cells = cells[1:]
+    if cells and not cells[-1].strip():
+        cells = cells[:-1]
+    return [cell.strip().replace("\\|", "|") for cell in cells]
+
 
 def task_list_text(content):
     m = TASK_ITEM.match(content)
@@ -181,14 +201,14 @@ def render_markdown(md):
         elif stripped.startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|[\s:|-]+\|\s*$", lines[i + 1]):
             flush_para()
             flush_list()
-            header = [c.strip() for c in stripped.strip("|").split("|")]
+            header = split_table_row(stripped)
             i += 2
             rows = []
             while i < len(lines) and lines[i].strip().startswith("|"):
-                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                rows.append(split_table_row(lines[i]))
                 i += 1
             out.append(
-                "<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>"
+                '<div class="table-wrap"><table><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>'
                 % (
                     "".join("<th>%s</th>" % render_inline(c) for c in header),
                     "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % render_inline(c) for c in row) for row in rows),
@@ -253,6 +273,7 @@ TYPE_LABELS = {
     "js_crash": "ArkTS/JS 崩溃（JSCrash）",
     "app_freeze": "应用冻屏（AppFreeze）",
     "sample_stack": "采样栈（增强日志）",
+    "white_screen": "非崩溃型白屏（WhiteScreen）",
     "unknown": "无法判定",
 }
 
@@ -264,10 +285,18 @@ def build_toc(headings):
     h3 小节；jscrash 为 h2 标题 + h3 章节）。按绝对层级（如固定 h1/h2）会使 jscrash
     的 h3 章节整章无法进入目录；按"最浅两级"则对两种层级习惯都成立，更深层级
     （证据链步骤、修复建议简明标题等）保留锚点但不进目录。
+
+    批量合并报告例外（h1 + h2 类型组 + h3 日志分节 + h4 章节，共四级）：最浅两级
+    只会收录标题与类型组，逐份日志条目全部丢失——此时改收 h2/h3（类型组 + 日志），
+    h4 章节仍不进目录。
     """
     if not headings:
         return ""
-    kept_levels = sorted({level for level, _, _ in headings})[:2]
+    levels = sorted({level for level, _, _ in headings})
+    if levels[-1] >= 4:
+        kept_levels = [2, 3]
+    else:
+        kept_levels = levels[:2]
     depth_of = {level: index + 1 for index, level in enumerate(kept_levels)}
     items = ['<div class="toc-title">目录</div>']
     for level, text, heading_id in headings:

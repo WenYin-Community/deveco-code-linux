@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
-import { toErrorMessage, printKv } from "../resources/skills/hmos-runtime-fix-skill/scripts/shared/utils.mjs"
+import { toErrorMessage, printKv } from "../resources/skills/hmos-dfx-analyzer/scripts/collect/shared/utils.mjs"
 
 describe("utils toErrorMessage", () => {
   test("extracts message from Error instance", () => {

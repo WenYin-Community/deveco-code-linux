@@ -72,7 +72,7 @@ HEADER_MSG = re.compile(r"(?:^|\n)\s*MSG\s*(?::|=)", re.IGNORECASE)
 FREEZE_EVENT = re.compile(r"\b(THREAD_BLOCK_6S|APP_INPUT_BLOCK|LIFECYCLE_TIMEOUT)\b")
 THREAD_SECTION = re.compile(r"(?:^|\n)\s*(?:Tid|Name)\s*:")
 SIGNAL_REASON = re.compile(r"\b(SIGSEGV|SIGABRT|SIGBUS|SIGILL|SIGFPE|SIGPIPE|Signal)\b", re.IGNORECASE)
-JS_ERROR_REASON = re.compile(r"\b(TypeError|SyntaxError|RangeError|ReferenceError|EvalError|URIError|Error)\b")
+JS_ERROR_REASON = re.compile(r"\b(TypeError|SyntaxError|RangeError|ReferenceError|EvalError|URIError|BusinessError|Error)\b")
 HILOG_LINE = re.compile(r"^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+")
 ANDROID_LOGCAT = re.compile(r"^(-+\s+beginning\s+of\s+\w+\s+-+$|\[\s*\d+-\d+\s+\d+:\d+:\d+\.\d+\s+\d+:\d+\s+\w+/)")
 
