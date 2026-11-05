@@ -53,6 +53,12 @@
    `#NN pc` 格式帧，或 GWP-ASan 报告中的 `#N 0xADDR` 格式帧。两者皆无时停止分析并提示用户：
    "该 CppCrash 日志缺少 Native 调用栈信息，无法定位根因。请提供包含完整调用栈的 FaultLog。"
 
+7. **分诊上下文复用（分诊走 CLI 优先路径时）**
+   分诊优先路径（`devecocli log --crash --path "<日志文件>" --format json`）退出码 0 时，会话上下文中已有该命令输出的 `key-report` 故障摘要，可直接复用，不重复执行脚本提取：
+   - 可复用：`basic-info`（故障时间 / PID / 进程名 / 故障类型 / 故障原因 / `LastFatalMessage`（存在时））、故障线程原始栈帧（`threads` 的 `fault` 角色）、GWP-ASan 报告原文（`gwp-asan`，存在时）。
+   - 不覆盖、仍按步骤执行：其余线程栈、完整 Maps、HiLog（步骤一的回读条件；HiLog 提取见步骤四.6）、符号化与反汇编（步骤四.4——`key-report` 帧为日志原始帧，应用 so 裸偏移帧的行号定位仍由该流程产出）。
+   - `key-report` 只是提取摘要：证据链仍须从原始日志摘取佐证片段，不得以摘要替代原始日志引用。
+
 ### 步骤一：提取关键日志
 
 完整阅读脚本输出，并在以下情况回读原始日志：
@@ -104,6 +110,7 @@
 | `RenderService`、`OHOS::Rosen`、NativeWindow、BufferQueue | `references/render_service.md` |
 | `libv8_shared`、`libjsvm`、`OH_JSVM_*`、`DestroyEnv`、`HandleScope`、`openHandleScopes`、JSVM Fatal Error | `references/jsvm.md` |
 | `librosen_text`、FontCollection、Paragraph 文本对象 | `references/rosen_text.md` |
+| `libuv.so`、`uv_run`、`uv__io_poll`、`uv_async_send`、`uv_queue_work`、`uv_ffrt_work`、`uv_queue_done`、`uv_close`、`uv__async_io`、`uv__fs_work`、`uv_fs_sendfile` | `references/libuv.md` |
 | allocator/CFI/PAC/StackProtector/代码段异常等内存破坏特征 | `references/memory_corruption.md` |
 | `edata_heap_remove`、`emap_update_edata_state`；或故障地址以 `0x006b` / `0x6b6b` 开头且 `#00` 为 `/system/lib64/` 系统栈 | `references/memory_corruption_second_scene.md` |
 
@@ -219,7 +226,13 @@ python "<skill-root>/scripts/match_so.py" <so_name> <build_id> -d <search_dir>
 
 #### 6. HiLog
 
-日志含 `HiLog:` 且需要还原崩溃前业务时运行：
+日志含 `HiLog:` 且需要还原崩溃前业务时，优先用 CLI 提取（分诊已走 CLI 优先路径时该命令可直接复用）：
+
+```bash
+devecocli log --crash --path "<faultlog文件>" --format hilog
+```
+
+`devecocli` 不可用或提取失败时回退脚本：
 
 ```bash
 python "<skill-root>/scripts/extract_hilog.py" "<faultlog文件>"

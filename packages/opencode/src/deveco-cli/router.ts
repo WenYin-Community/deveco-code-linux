@@ -111,7 +111,7 @@ export const DEFAULT_LOG_TAIL = 2_000
 
 function enhanceLogArgs(args: string[]) {
   const hasWindow = args.some((arg) =>
-    ["--tail", "--from", "--to", "--follow", "--crash"].some(
+    ["--tail", "--from", "--to", "--follow", "--crash", "--stack", "--path"].some(
       (option) => arg === option || arg.startsWith(`${option}=`),
     ),
   )

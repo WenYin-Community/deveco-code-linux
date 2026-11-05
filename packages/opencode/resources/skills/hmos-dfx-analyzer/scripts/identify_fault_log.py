@@ -6,7 +6,7 @@ builtin tool. It inspects log content structure (never the filename, never the
 user's description) and prints a structured JSON verdict:
 
   {type, subtype, confidence, completeness, evidence, excluded, candidates,
-   memory_corruption_suspect, filename_hint, out_of_scope}
+   memory_corruption_suspect, out_of_scope}
 
 `type` is one of:
   - cpp_crash / js_crash / app_freeze : the three supported fault types
@@ -37,8 +37,8 @@ Contract (SR1 TR-FR-03/04):
     judged via head/tail structural sampling (256KB head + 256KB tail)
 
 Usage:
-  python3 identify_fault_log.py --path <faultlog-file> [--filename-hint NAME]
-  python3 identify_fault_log.py --stdin [--filename-hint NAME] < pasted.log
+  python3 identify_fault_log.py --path <faultlog-file>
+  python3 identify_fault_log.py --stdin < pasted.log
 """
 
 import argparse
@@ -335,7 +335,6 @@ def classify(sample):
             "evidence": [],
             "excluded": [],
             "candidates": [],
-            "filename_hint": "",
             "out_of_scope": out_of_scope,
         }
 
@@ -371,7 +370,6 @@ def classify(sample):
                 {"type": "app_freeze", "reason": "输入为采样栈(增强日志)：无冻屏事件名 / MSG 字段，需配套冻屏 faultlog 定类"},
             ],
             "candidates": [],
-            "filename_hint": "",
         }
 
     if not hits:
@@ -382,7 +380,6 @@ def classify(sample):
             "evidence": [],
             "excluded": build_excluded(hits, full, sample),
             "candidates": [],
-            "filename_hint": "",
         }
 
     return verdict_from_hits(hits, full, sample)
@@ -399,7 +396,6 @@ def verdict_from_hits(hits, full, sample):
             "evidence": hit["evidence"],
             "excluded": build_excluded(hits, full, sample),
             "candidates": [],
-            "filename_hint": "",
         }
         if hit["type"] == "cpp_crash":
             result["memory_corruption_suspect"] = detect_memory_corruption(sample, hit["type"])
@@ -409,7 +405,7 @@ def verdict_from_hits(hits, full, sample):
                 result["subtype"] = m.group(1)
         return result
 
-    # Multi-candidate. Fragment dual-stack (native + js) -> arbitrable, prefer cpp_crash.
+    # Multi-candidate. Fragment dual-stack (native + js) -> deterministic arbitration, prefer cpp_crash.
     types = set(h["type"] for h in hits)
     if "cpp_crash" in types and "js_crash" in types and not full:
         primary = next(h for h in hits if h["type"] == "cpp_crash")
@@ -421,10 +417,9 @@ def verdict_from_hits(hits, full, sample):
             "evidence": primary["evidence"],
             "excluded": build_excluded([primary, secondary], full, sample),
             "candidates": [
-                {"type": "js_crash", "confidence": "low", "evidence": secondary["evidence"], "arbitrable": True}
+                {"type": "js_crash", "confidence": "low", "evidence": secondary["evidence"]}
             ],
             "memory_corruption_suspect": detect_memory_corruption(sample, "cpp_crash"),
-            "filename_hint": "",
         }
 
     # Multi-candidate, no deterministic arbitration rule available -> clarification.
@@ -439,11 +434,9 @@ def verdict_from_hits(hits, full, sample):
                 "type": h["type"],
                 "confidence": confidence_for(h, full, False),
                 "evidence": h["evidence"],
-                "arbitrable": False,
             }
             for h in hits
         ],
-        "filename_hint": "",
     }
 
 
@@ -475,7 +468,6 @@ def run(args):
                 file=sys.stderr,
             )
             return 1
-        filename_hint = args.filename_hint or "pasted.log"
     else:
         filepath = args.path
         if not os.path.isfile(filepath):
@@ -491,10 +483,8 @@ def run(args):
             return 1
         with open(filepath, "rb") as f:
             data = f.read()
-        filename_hint = args.filename_hint or os.path.basename(filepath)
 
     result = classify(sample_bytes(data, SAMPLE_HEAD + SAMPLE_TAIL))
-    result["filename_hint"] = filename_hint
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -503,7 +493,6 @@ def main():
     parser = argparse.ArgumentParser(description="Deterministic HarmonyOS fault-log type identifier.")
     parser.add_argument("--path", help="Path to a HarmonyOS faultlog file")
     parser.add_argument("--stdin", action="store_true", help="Read pasted log content from stdin")
-    parser.add_argument("--filename-hint", help="L2 hint echoed back in the result; never used for classification")
     sys.exit(run(parser.parse_args()))
 
 

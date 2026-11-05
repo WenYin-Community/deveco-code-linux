@@ -526,6 +526,9 @@ describe("devecocli proxy router", () => {
       ["log", "--to", "30s"],
       ["log", "--follow"],
       ["log", "--crash"],
+      ["log", "--crash", "--path", "C:\\logs\\appfreeze-20260901120012"],
+      ["log", "--stack", "--path", "C:\\logs\\sample_stacks.txt"],
+      ["log", "--stack", "--path=C:\\logs\\sample_stacks.txt", "--format", "report"],
     ]
     const cli = runner(Object.fromEntries(args.map((item) => [item.join(" "), { stdout: "logs" }])))
 

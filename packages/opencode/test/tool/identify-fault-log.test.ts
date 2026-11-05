@@ -23,14 +23,13 @@ interface ClassifyResult {
   completeness: string
   evidence: string[]
   excluded: { type: string; reason: string }[]
-  candidates: { type: string; confidence: string; evidence: string[]; arbitrable: boolean }[]
+  candidates: { type: string; confidence: string; evidence: string[] }[]
   memory_corruption_suspect?: { suspected: boolean; confidence: string; evidence: string[] }
-  filename_hint: string
   out_of_scope?: { reason: string; detail: string }
 }
 
 function classify(sample: string): ClassifyResult {
-  const proc = spawnSync("python3", [SCRIPT, "--stdin", "--filename-hint", "fixture.log"], {
+  const proc = spawnSync("python3", [SCRIPT, "--stdin"], {
     input: sample,
     encoding: "utf-8",
   })
@@ -45,25 +44,18 @@ function classify(sample: string): ClassifyResult {
 
 type TypeBucket = "明确类型" | "unknown"
 type CandState = "empty" | "nonempty"
-type ArbState = "none" | "true" | "false"
 
 interface Signature {
   type: TypeBucket
   candidates: CandState
-  arbitrable: ArbState
   outOfScope: boolean
   concreteType: string
 }
 
 function signatureOf(result: ClassifyResult): Signature {
-  const candidates = result.candidates
-  const candState: CandState = candidates.length > 0 ? "nonempty" : "empty"
-  const anyArbitrableTrue = candidates.some((c) => c.arbitrable)
-  const arbState: ArbState = candState === "empty" ? "none" : anyArbitrableTrue ? "true" : "false"
   return {
     type: result.type === "unknown" ? "unknown" : "明确类型",
-    candidates: candState,
-    arbitrable: arbState,
+    candidates: result.candidates.length > 0 ? "nonempty" : "empty",
     outOfScope: Boolean(result.out_of_scope),
     concreteType: result.type,
   }
@@ -78,12 +70,12 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
       "07-30 12:00:00.456 123 2000 D APP bar",
       "07-30 12:00:01.000 123 2000 D APP baz",
     ].join("\n"),
-    expected: { type: "unknown", candidates: "empty", arbitrable: "none", outOfScope: true, concreteType: "unknown" },
+    expected: { type: "unknown", candidates: "empty", outOfScope: true, concreteType: "unknown" },
   },
   {
     name: "路径B 零命中且非范围外",
     sample: "some random note\nanother unrelated line",
-    expected: { type: "unknown", candidates: "empty", arbitrable: "none", outOfScope: false, concreteType: "unknown" },
+    expected: { type: "unknown", candidates: "empty", outOfScope: false, concreteType: "unknown" },
   },
   {
     name: "路径C 单命中 cpp_crash（完整）",
@@ -99,7 +91,6 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "empty",
-      arbitrable: "none",
       outOfScope: false,
       concreteType: "cpp_crash",
     },
@@ -118,7 +109,6 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "empty",
-      arbitrable: "none",
       outOfScope: false,
       concreteType: "js_crash",
     },
@@ -135,13 +125,12 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "empty",
-      arbitrable: "none",
       outOfScope: false,
       concreteType: "app_freeze",
     },
   },
   {
-    name: "路径D 片段双栈（cpp 主选 + js 次选 arbitrable=true）",
+    name: "路径D 片段双栈（cpp 主选 + js 次选候选）",
     sample: [
       "#00 pc 000000000000abcd main+8 (libfoo.so)",
       "#01 pc 000000000000abef bar+4 (libfoo.so)",
@@ -151,7 +140,6 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "nonempty",
-      arbitrable: "true",
       outOfScope: false,
       concreteType: "cpp_crash",
     },
@@ -171,7 +159,6 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "unknown",
       candidates: "nonempty",
-      arbitrable: "false",
       outOfScope: false,
       concreteType: "unknown",
     },
@@ -199,7 +186,6 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "empty",
-      arbitrable: "none",
       outOfScope: false,
       concreteType: "sample_stack",
     },
@@ -221,75 +207,29 @@ const fixtures: { name: string; sample: string; expected: Signature }[] = [
     expected: {
       type: "明确类型",
       candidates: "empty",
-      arbitrable: "none",
       outOfScope: false,
       concreteType: "app_freeze",
     },
   },
 ]
 
-// 主 Skill「结果处置决策表」声明的 7 行；reachable=false 表示主 Skill 已标注为不可达/当前不产生。
+// 主 Skill「结果处置决策表」声明的 5 个可达组合（type × candidates × out_of_scope）。
+// 候选仲裁维度已随 identify 契约清理移除：candidates 非空时按澄清流程处理。
 const decisionTable: {
   row: string
   type: TypeBucket
   candidates: CandState
-  arbitrable: ArbState
   outOfScope?: boolean
-  reachable: boolean
 }[] = [
-  { row: "1 明确/空/—", type: "明确类型", candidates: "empty", arbitrable: "none", outOfScope: false, reachable: true },
-  {
-    row: "2 明确/非空/true",
-    type: "明确类型",
-    candidates: "nonempty",
-    arbitrable: "true",
-    outOfScope: false,
-    reachable: true,
-  },
-  {
-    row: "3 明确/非空/false",
-    type: "明确类型",
-    candidates: "nonempty",
-    arbitrable: "false",
-    outOfScope: false,
-    reachable: false,
-  },
-  {
-    row: "4 unknown/非空/false",
-    type: "unknown",
-    candidates: "nonempty",
-    arbitrable: "false",
-    outOfScope: false,
-    reachable: true,
-  },
-  {
-    row: "5 unknown/非空/true",
-    type: "unknown",
-    candidates: "nonempty",
-    arbitrable: "true",
-    outOfScope: false,
-    reachable: false,
-  },
-  {
-    row: "6 unknown/空/有out_of_scope",
-    type: "unknown",
-    candidates: "empty",
-    arbitrable: "none",
-    outOfScope: true,
-    reachable: true,
-  },
-  {
-    row: "7 unknown/空/无out_of_scope",
-    type: "unknown",
-    candidates: "empty",
-    arbitrable: "none",
-    outOfScope: false,
-    reachable: true,
-  },
+  { row: "1 明确类型/candidates 空", type: "明确类型", candidates: "empty", outOfScope: false },
+  { row: "2 明确类型/candidates 非空（片段双栈仲裁）", type: "明确类型", candidates: "nonempty", outOfScope: false },
+  { row: "3 unknown/candidates 非空（多候选澄清）", type: "unknown", candidates: "nonempty", outOfScope: false },
+  { row: "4 unknown/candidates 空/有 out_of_scope", type: "unknown", candidates: "empty", outOfScope: true },
+  { row: "5 unknown/candidates 空/无 out_of_scope", type: "unknown", candidates: "empty", outOfScope: false },
 ]
 
-function sigKey(s: { type: TypeBucket; candidates: CandState; arbitrable: ArbState; outOfScope?: boolean }) {
-  return `${s.type}|${s.candidates}|${s.arbitrable}|${s.outOfScope ?? false}`
+function sigKey(s: { type: TypeBucket; candidates: CandState; outOfScope?: boolean }) {
+  return `${s.type}|${s.candidates}|${s.outOfScope ?? false}`
 }
 
 describe.skipIf(!hasPython)("identify_fault_log 决策表一致性检查（任务9）", () => {
@@ -305,46 +245,32 @@ describe.skipIf(!hasPython)("identify_fault_log 决策表一致性检查（任�
     })
   }
 
-  // 第二阶段：未覆盖检查——每个可达签名必须在决策表的可达行中有对应格。
+  // 第二阶段：未覆盖检查——每个可达签名必须在决策表中有对应行。
   test("未覆盖检查：脚本可达的每个签名组合均被决策表覆盖", () => {
-    const reachableRowKeys = new Set(decisionTable.filter((r) => r.reachable).map(sigKey))
+    const reachableRowKeys = new Set(decisionTable.map(sigKey))
     const missing: string[] = []
     for (const sig of reachableSigs) {
       const k = sigKey(sig)
       if (!reachableRowKeys.has(k)) {
-        missing.push(
-          `type=${sig.type} candidates=${sig.candidates} arbitrable=${sig.arbitrable} out_of_scope=${sig.outOfScope}`,
-        )
+        missing.push(`type=${sig.type} candidates=${sig.candidates} out_of_scope=${sig.outOfScope}`)
       }
     }
     expect(missing, `决策表存在未覆盖的脚本产出组合：\n${missing.join("\n")}`).toEqual([])
   })
 
-  // 第三阶段：死格检查——决策表每个可达行必须命中至少一个可达签名。
-  test("死格检查：决策表可达行均被脚本实际产出命中（无未声明的死格）", () => {
+  // 第三阶段：死格检查——决策表每行必须命中至少一个可达签名。
+  test("死格检查：决策表各行均被脚本实际产出命中（无未声明的死格）", () => {
     const reachableSigKeys = new Set(reachableSigs.map(sigKey))
     const dead: string[] = []
-    for (const row of decisionTable.filter((r) => r.reachable)) {
+    for (const row of decisionTable) {
       if (!reachableSigKeys.has(sigKey(row))) {
         dead.push(row.row)
       }
     }
-    expect(dead, `决策表以下可达行无脚本产出命中（死格）：\n${dead.join("\n")}`).toEqual([])
+    expect(dead, `决策表以下行无脚本产出命中（死格）：\n${dead.join("\n")}`).toEqual([])
   })
 
-  // 第四阶段：不可达行校验——主 Skill 标注为不可达/当前不产生的行，脚本确实不产出。
-  test("不可达校验：标注为不可达的决策表行确实不被脚本产出", () => {
-    const reachableSigKeys = new Set(reachableSigs.map(sigKey))
-    const violated: string[] = []
-    for (const row of decisionTable.filter((r) => !r.reachable)) {
-      if (reachableSigKeys.has(sigKey(row))) {
-        violated.push(`${row.row}（标注不可达但脚本实际产出该组合）`)
-      }
-    }
-    expect(violated, `以下行标注为不可达但脚本实际产出，需更新标注：\n${violated.join("\n")}`).toEqual([])
-  })
-
-  // 第五阶段：枚举覆盖——FaultType 每个取值至少被一个可达签名产出。
+  // 第四阶段：枚举覆盖——FaultType 每个取值至少被一个可达签名产出。
   test("枚举覆盖：type 取值集合每个值均被脚本实际产出", () => {
     const produced = new Set(reachableSigs.map((s) => s.concreteType))
     const enumValues = ["cpp_crash", "js_crash", "app_freeze", "sample_stack", "unknown"]

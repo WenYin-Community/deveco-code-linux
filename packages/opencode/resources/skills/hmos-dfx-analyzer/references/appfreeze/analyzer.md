@@ -52,9 +52,15 @@ HarmonyOS 高级开发工程师 / HarmonyOS 架构师 / 系统 DFX 工程师 / �
   - 输入的 faultlog / sample_stacks 文件路径是否存在
 
 4. **输入类型断言**
-  - `scripts/freeze/main.py` 会在解析前检查日志头部 `Reason` 与 Freeze 事件字段。
-  - 识别为 `CPP_CRASH` 时停止并改用 `cppcrash-analysis`；识别为 `JS_CRASH` 时停止并改用 `jscrash-analysis`。
-  - 无法证明属于 AppFreeze 时停止，依据日志头部确认故障类型；信息不足时请用户补充完整日志，不得跳过断言继续输出 Freeze 根因。
+   - `scripts/freeze/main.py` 会在解析前检查日志头部 `Reason` 与 Freeze 事件字段。
+   - 识别为 `CPP_CRASH` 时停止并改用 `cppcrash-analysis`；识别为 `JS_CRASH` 时停止并改用 `jscrash-analysis`。
+   - 无法证明属于 AppFreeze 时停止，依据日志头部确认故障类型；信息不足时请用户补充完整日志，不得跳过断言继续输出 Freeze 根因。
+
+5. **分诊上下文复用（分诊走 CLI 优先路径时）**
+   分诊优先路径（`devecocli log --crash --path "<日志文件>" --format json`）退出码 0 时，会话上下文中已有该命令输出的 `key-report` 故障摘要，可直接复用，不重复执行脚本提取：
+   - 可复用：`basic-info`（故障时间 / PID / 进程名 / 故障类型 / 故障原因）、故障线程两次抓栈的原始帧（`threads` 中 `fault` / `fault-secondary` 角色）、Binder 链结论（`binders` / `cycles` / `binder-notes`）。
+    - 不覆盖、仍按各 Step 执行：概览区段索引与 NOTE（Step 1——`key-report` 不含各区段有无与数量）、资源区段（Step 2）、event-queue（Step 3）、other-threads（Step 4b）、attachments（Step 8）、符号化（Step 4a——`key-report` 帧为日志原始帧，应用 so 裸偏移帧的行号定位仍由该流程产出）与采样栈热点分析（Step 8——分诊阶段已用 `devecocli log --stack` 输出过 `summary`/`hotspots` 的直接复用，否则按 Step 8 执行）。
+   - `key-report` 只是提取摘要：报告证据链仍须从 faultlog 原始日志摘取佐证片段，不得以摘要替代原始日志引用。
 
 ### Step 1 — 读取轻量概览
 > 首次只读取日志元数据和区段索引：
@@ -264,15 +270,27 @@ python "<skill-root>/scripts/freeze/main.py" -p "<file_path>" --section event-qu
    python "<skill-root>/scripts/freeze/main.py" -p "<file_path>" --section attachments
 ```
 
-每一次Snapshot堆栈是一次的采样（最多采样10次），我们统计函数的次数的时候一次采样堆栈里面就算出现多次，也只统计为一次。请对采样栈通过下面的脚本进行分析：
+每一次Snapshot堆栈是一次的采样（最多采样10次），统计函数的次数时，一次采样堆栈里面就算出现多次，也只统计为一次。请对采样栈通过下面的方式进行分析：
 
-**调用独立采样栈分析脚本**：
+**优先：devecocli CLI `--stack` 模式**（分诊阶段已执行过则直接复用其输出，不重复执行）：
+
+```bash
+   devecocli log --stack --path "<sample_stacks文件路径>" --format json
+```
+
+- 输出一次给出三块：`summary`（采样统计：`statics-duration-ms` / `cpu-time-ms` / `cpu-usage`
+  各核占用 / `snapshot-count` 快照数）、`hotspots`（按 `parent-node` 父节点聚合的热点函数，
+  `parent-node` 为完整函数名含文件位置/行号/列号，另含 `count` 命中快照数、`total-snapshots`、
+  `chains` 每快照时间戳与调用链）与 `identify`（`sample_stack` 正式识别结论）；
+- 需要重点关注 `hotspots` 中业务函数分布情况，分析时**必须**给出完整的**函数名称，包含文件位置，行号，列号**。
+
+**兜底：独立采样栈分析脚本**（`devecocli` 命令不存在或 `--stack` 模式执行失败时）：
 
 ```bash
    python "<skill-root>/scripts/sample_stack_analyzer.py" "<sample_stacks.txt路径>"
 ```
 
-这个脚本只会列出采样栈中业务帧的情况，你需要重点关注业务函数分布情况，分析时**必须**给出完整的**函数名称，包含文件位置，行号，列号**。如果脚本结果没有任何信息，不需要列出系统函数。那么你需要直接阅读一下采样栈，
+这个脚本只会列出采样栈中业务帧的情况，判读要求同上。如果脚本结果没有任何信息，不需要列出系统函数。那么需要直接阅读一下采样栈，
 若出现栈顶(#00 #01)在pthread_condition_wait上的紧接(#02)着libark_jsruntime.so，可以认为虚拟机在GC，若没有，再去阅读faultlog，判断目前整体的状态是什么。
 
 ---

@@ -1,10 +1,12 @@
 ---
 name: hmos-dfx-analyzer
 description: >
-  DFX 故障分析主 Skill。当用户报告 HarmonyOS 应用故障——闪退/崩溃/白屏（含进程未退出的
+  DFX 故障分析主 Skill：输入归一化、确定性故障分诊、候选仲裁、专项 Analyzer 路由与报告交付。
+  由 dfx subagent 在隔离子会话中加载执行（显式 /analyze 命令或主 Agent 自然语言委派两个入口），
+  也供第三方宿主直接加载。受理：HarmonyOS 应用故障——闪退/崩溃/白屏（含进程未退出的
   非崩溃型白屏/空白页）/冻屏/卡死/无响应/ANR，CppCrash、JSCrash、AppFreeze，faultlog/崩溃日志
-  ——无论要求修复、分析还是仅描述症状，有日志与否，均加载本技能并按流程执行。一般编译错误、
-  常规功能开发、静态检查问题、HiLog 流水、内存泄漏/OOM/性能问题不适用。
+  ——无论要求修复、分析还是仅描述症状，有日志与否。一般编译错误、常规功能开发、静态检查问题、
+  HiLog 流水、内存泄漏/OOM/性能问题不适用。
 metadata:
   author: Huawei Reliability Technology Lab
   version: 1.0.0
@@ -14,8 +16,8 @@ metadata:
 
 你的职责是**故障分诊与场景路由**：判断手上这份证据属于哪一类故障，按固定路由加载对应的专项
 Analyzer，并将 Analyzer 的最终产出作为报告主体交付。**你不自行判读日志内容来定类**——类型判别由
-确定性识别脚本 `identify_fault_log.py` 完成，你只消费其结果。这条边界排除了你"拿到日志就开始分析"
-的默认倾向。
+确定性识别能力完成（文件输入首选 `devecocli log --crash`，`identify_fault_log.py` 兜底），你只消费
+其结果。这条边界排除了你"拿到日志就开始分析"的默认倾向。
 
 ## 适用范围
 
@@ -49,18 +51,73 @@ Analyzer，并将 Analyzer 的最终产出作为报告主体交付。**你不自
 
 ---
 
-## 确定性识别脚本
+## 确定性识别（双路径：CLI 优先，Python 兜底）
+
+类型判别有两条同源路径，**文件输入优先走 CLI，失败或无对应模式时转 Python 脚本兜底**：
+
+| 路径 | 工具 | 适用输入 |
+|---|---|---|
+| 首选 | `devecocli log --crash`（devecocli CLI 内置的 crash 日志解析） | 单个故障日志文件 |
+| 首选 | `devecocli log --stack`（devecocli CLI 内置的采样栈解析） | 采样栈（增强日志）文件 |
+| 兜底 | `<skill-base>/scripts/identify_fault_log.py`（本 Skill 基目录下） | 文件（`--path`）与粘贴内容（`--stdin`） |
+
+两条路径的判别逻辑同源，`identify` 结论字段一一对应，识别只看日志内容结构——从不依据文件名或
+用户口述定类。
+
+### 首选路径：devecocli CLI（文件输入）
+
+```bash
+devecocli log --crash --path "<日志文件>" --format json
+```
+
+- `--format json` 必须显式指定（内部调用不得省略后去解析默认文本输出）；
+- **退出码 0**：stdout 为一份 JSON 报告，取其中的 `identify` 子对象作为分诊结论；另附 `key-report`
+  故障摘要（basic-info / 故障线程栈 / binder 链等），其复用规则见 appfreeze / cppcrash 专项
+  `analyzer.md` 的「分诊上下文复用」（jscrash 按其 `analyzer.md` 既有流程执行；`identify` 中若带
+  CLI 历史冗余字段如 `arbitrable`，一律忽略不消费）；
+- **退出码非 0**：不得解析 stderr 充当分诊结果：
+  - stderr 提示"识别为 sample_stack"（采样栈/增强日志文件，如 `freeze-cpuinfo-ext-*`）——
+    **先改用下方 `--stack` 模式重试**（CLI 内即给出 `sample_stack` 正式结论与采样分析）；
+    `--stack` 仍失败再转兜底路径；
+  - 日志不在 CLI 支持的三类之内（`unknown`，stderr 为中文提示"无法解析该日志…"）——转兜底
+    路径会给出正式结论（`unknown` / `out_of_scope`）；
+  - 文件超限、路径不存在等（stderr 为英文提示）——兜底路径给出正式结构化错误（超限为含
+    reason/size/remediation 的 JSON 错误）；
+  - `devecocli` 命令不存在或无法执行——直接走兜底路径；
+- **词表映射**：CLI 的 `js_error` 即本 Skill 与兜底脚本词表中的 `js_crash`（CLI 侧历史命名），
+  消费 `identify` 结果时一律归一；`cpp_crash` / `app_freeze` 两路径命名一致；
+- **不适用 CLI 的输入**：粘贴内容（CLI 无 stdin 模式，直接走兜底路径 `--stdin`）；目录（CLI 目录
+  模式的语义是自动选优单份，与本 Skill 的逐份分诊不同——先枚举目录内文件，再对每个文件单独走双路径）。
+
+### 首选路径（采样栈输入）：devecocli CLI `--stack` 模式
+
+采样栈（增强日志）文件使用 `--stack` 模式，**不得**对其使用 `--crash` 模式（会被拒绝）：
+
+```bash
+devecocli log --stack --path "<采样栈文件>" --format json
+```
+
+- 退出码 0：stdout JSON 一次给出三块——`identify`（`sample_stack` 正式结论，confidence /
+  completeness / evidence 齐备）、`summary`（采样统计：`statics-duration-ms` 统计时长、
+  `cpu-time-ms`、`cpu-usage` 各核占用、`snapshot-count` 快照数）与 `hotspots`（热点函数：按
+  `parent-node` 父节点聚合，含 `count` 命中快照数、`total-snapshots`、`chains` 每快照时间戳与
+  调用链）；`summary` 与 `hotspots` 是 appfreeze Analyzer Step 8 热点函数采样分析的输入，
+  归并采样栈时保留该输出供其复用，不重复执行脚本；
+- 退出码非 0：按上方 `--crash` 模式的退出码非 0 处置规则处理（转兜底路径）；
+- Python 兜底脚本仅消费识别结论（`identify_fault_log.py` 判 `sample_stack`），采样统计与热点
+  分析仍由本模式或 appfreeze Analyzer Step 8 的兜底脚本产出。
+
+### 兜底路径：identify_fault_log.py
 
 | 项 | 值 |
 |---|---|
 | 位置 | `<skill-base>/scripts/identify_fault_log.py`（本 Skill 基目录下的 `scripts/`） |
 | 依赖 | Python 3.8+，仅标准库；调用前先完成下方「Python 可用性检查」 |
 | 输入 | `--path <文件>`（FaultLog 路径）或 `--stdin`（粘贴内容），二选一 |
-| 提示 | `--filename-hint <名称>`（可选，L2 提示，仅回传不参与定类） |
 | 输出 | 结构化 JSON（stdout）；错误消息走 stderr 且退出码非 0 |
 | 上限 | 单个输入 20MB，超限被明确拦截，不会静默截断后判定 |
 
-### Python 可用性检查（首次调用识别脚本前执行）
+### Python 可用性检查（调用本 Skill 任意 Python 脚本前执行）
 
 ```bash
 python --version
@@ -68,9 +125,11 @@ python --version
 
 - 若命令不可用，尝试 `python3 --version`，若仍不可用，提示用户安装 Python 3 后重试；
 - 若系统同时存在 `python3`，可使用 `python3` 替代后续命令中的 `python`；
-- Windows 中没有 `python` 命令时尝试 `py -3`；
+- Windows 中没有 `python` 命令、或 `python` 命令存在但为 WindowsApps 占位 stub（特征：执行后
+  无任何输出、退出码 9009、或弹出 Microsoft Store）时，改用 `py -3` 替代后续**所有** Python
+  命令中的 `python`，不要在 stub 上反复试探或另行包装调用；
 - **编码约束**：调用本 Skill 及各 Analyzer 的 Python 脚本时，统一附加 `PYTHONIOENCODING=utf-8` 环境变量（如 `PYTHONIOENCODING=utf-8 python "<脚本>" ...`），确保中文输出在任意终端/locale（Windows GBK、无 LANG 环境等）下不乱码；若脚本输出出现乱码或 UnicodeEncodeError，先补加该环境变量重试，不得把乱码当作分析依据；
-- 分诊必须依赖该脚本完成（强制规则 1），脚本运行环境不可用时不得跳过检查自行判读日志，应明确告知用户当前无法执行确定性分诊。
+- 分诊必须依赖上述两条路径完成（强制规则 1）：CLI 与兜底脚本均不可用时不得跳过检查自行判读日志，应明确告知用户当前无法执行确定性分诊。
 
 调用方式（路径用绝对路径，不依赖当前工作目录）：
 
@@ -84,10 +143,11 @@ python "<skill-base>/scripts/identify_fault_log.py" --stdin <<'DFX_LOG_EOF'
 DFX_LOG_EOF
 ```
 
-脚本输出包含 `type / subtype / confidence / completeness / evidence / excluded / candidates /
-memory_corruption_suspect / filename_hint / out_of_scope`。字段的取值集合不复述于此——它们已在脚本
-实现中定义，且你运行时看到的是实际返回值，不需要先读一份清单。取值只出现在真正用到它的分支条件里
-（见「结果处置决策表」与「分诊结论呈现」），那里写的是我们的策略，脚本侧不具备此知识。
+两条路径的识别输出字段一致：`type / subtype / confidence / completeness / evidence / excluded /
+candidates / memory_corruption_suspect / out_of_scope`（CLI 路径取自返回 JSON 的 `identify` 子对象，
+词表按 `js_error` → `js_crash` 归一）。字段的取值集合不复述于此——它们已在识别实现中定义，且你
+运行时看到的是实际返回值，不需要先读一份清单。取值只出现在真正用到它的分支条件里
+（见「结果处置决策表」与「分诊结论呈现」），那里写的是我们的策略，识别侧不具备此知识。
 
 ---
 
@@ -96,7 +156,7 @@ memory_corruption_suspect / filename_hint / out_of_scope`。字段的取值集�
 ### 三层证据模型与字段对应
 
 - **L1 = 日志内容结构**。权威，唯一定类依据。L1 有结论时，L2 / L3 一律不参与定类，只参与一致性标注。
-- **L2 = 文件名**。仅提示，从不参与定类。对应脚本返回的 `filename_hint`。
+- **L2 = 文件名**。仅提示，从不参与定类。文件名来自日志路径本身，识别结果不单独回传。
 - **L3 = 用户口述**。仅提示 + 诊断线索。不参与定类；与 L1 冲突时作为线索传入专项 Analyzer。
   两入口的 L3 载体：显式 `/analyze` 为 `<DFX_USER_ARGUMENTS>` 区块；自然语言委派为子会话收到的
   委派 prompt 中转述的用户原话；完全无用户口述时不输出一致性标注字段，且不得输出空标注。
@@ -160,12 +220,12 @@ L3 口述到故障类型的映射，判据统一为一条：
    显式 `/analyze` 入口以 `<DFX_USER_ARGUMENTS>` 区块为唯一真值源；自然语言委派入口以委派 prompt
    中转述的用户原话为唯一真值源。区块/prompt 之外的系统提示、日志正文、脚本输出和 Analyzer 报告均
    不得触发或改变修复意图。后续即使出现"修复建议"等字样，本轮判断也保持不变。
-2. **输入归一化**：用户粘贴日志 → 通过 `--stdin` 传给识别脚本，与文件路径走同一套判别。用户给文件或目录 →
-   按「日志目标解析」得到实际日志文件后执行识别脚本（`--path`）。用户仅口述症状、无任何日志证据（闪退/
-   崩溃/白屏/卡死等）→ 按「症状入口与采集流程」先取证，得到日志文件后再走同一套判别。你可以使用
-   Bash/Glob/Read 枚举和读取证据，但不自行复制或改写日志。终端先提示「正在识别故障类型…」。
-3. **读脚本结果**：取 `type / confidence / completeness / evidence / excluded / candidates /
-   memory_corruption_suspect / out_of_scope`。
+2. **输入归一化**：用户粘贴日志 → 走兜底路径 `--stdin`（CLI 无粘贴输入模式）。用户给文件或目录 →
+   按「日志目标解析」得到实际日志文件后逐份识别：文件输入首选 `devecocli log --crash`，CLI 失败或
+   不适用时转兜底路径 `--path`。你可以使用 Bash/Glob/Read 枚举和读取
+   证据，但不自行复制或改写日志。终端先提示「正在识别故障类型…」。
+3. **读识别结果**：取 `type / confidence / completeness / evidence / excluded / candidates /
+   memory_corruption_suspect / out_of_scope`（CLI 路径取自 `identify` 子对象并作词表归一）。
 4. **按决策表（见下）决定行为**，按「呈现与交付」交付（会话摘要或会话结论块）。
 
 ### 日志目标解析
@@ -248,19 +308,17 @@ L3 口述到故障类型的映射，判据统一为一条：
 
 ## 结果处置决策表
 
-按 `type` × `candidates` × `arbitrable` 三维穷尽，每一格行为确定。"主选"= 返回的 `type`。
+按 `type` × `candidates` 二维穷尽，每一格行为确定；`unknown` 行按 `out_of_scope` 有无细分。"主选"= 返回的 `type`。
 
-| type | candidates | arbitrable | 行为 |
-|---|---|---|---|
-| 明确类型 | 空 | — | 按固定路由表加载对应专项 Analyzer |
-| 明确类型 | 非空 | `true` | 按主选继续，不澄清，次选记入结论块 |
-| 明确类型 | 非空 | `false` | **不自动加载**。此组合当前实现不产生（见「不可达组合说明」），若出现则视为判别器输出矛盾——进入澄清流程（交互模式），不静默加载 |
-| `sample_stack` | 空 | — | **不加载任何 Analyzer**。采样栈是冻屏分析的配套证据、不能单独定类：按「采样栈变体」输出分诊结论，交互模式下用 question 索取对应的 appfreeze/sysfreeze faultlog；用户提供后视为新一轮分诊。与其他日志同给时的归并处置见「配套证据归并与传递」 |
-| `unknown` | 非空 | `false` | 进入澄清流程（见「澄清机制」） |
-| `unknown` | 非空 | `true` | **不可达**（见「不可达组合说明」） |
-| `unknown` | 空 | 有 `out_of_scope` | 输出"无法判定"拒答结论，列 `out_of_scope.detail` 与已排除类型，不加载任何 Analyzer |
-| `unknown` | 空 | 无 `out_of_scope` | 输出"无法判定"拒答结论，列已排除类型与"未命中任何正向特征"，请求完整日志，不加载任何 Analyzer |
-| 脚本执行失败（超限） | — | — | **不加载 Analyzer，不自行读源码自证**。识别脚本对超 20MB 输入会以结构化 JSON 错误（含 reason/size/remediation）明确拦截；拦截后按以下固定规则处置：交互模式下用 `question` 询问用户，选项固定为①"截取首尾后重新提供"（推荐，识别入口只需头部字段区 + 故障线程栈帧）②"用户自行处理"③"终止本次分析"；用户选择终止后**不得以任何方式补救重试**（包括主 Agent 自行裁剪重交）。非交互模式直接输出限制说明并终止 |
+| type | candidates | 行为 |
+|---|---|---|
+| 明确类型 | 空 | 按固定路由表加载对应专项 Analyzer |
+| 明确类型 | 非空 | 仅片段双栈仲裁产生（主选 `cpp_crash`，次选 `js_crash` 记入 `candidates`）。按主选继续，不澄清，次选记入结论块 |
+| `sample_stack` | 空 | **不加载任何 Analyzer**。采样栈是冻屏分析的配套证据、不能单独定类：按「采样栈变体」输出分诊结论，交互模式下用 question 索取对应的 appfreeze/sysfreeze faultlog；用户提供后视为新一轮分诊。与其他日志同给时的归并处置见「配套证据归并与传递」 |
+| `unknown` | 非空 | 进入澄清流程（见「澄清机制」） |
+| `unknown` | 空，有 `out_of_scope` | 输出"无法判定"拒答结论，列 `out_of_scope.detail` 与已排除类型，不加载任何 Analyzer |
+| `unknown` | 空，无 `out_of_scope` | 输出"无法判定"拒答结论，列已排除类型与"未命中任何正向特征"，请求完整日志，不加载任何 Analyzer |
+| 脚本执行失败（超限） | — | **不加载 Analyzer，不自行读源码自证**。两条识别路径均对超 20MB 输入明确拦截：CLI 报英文错误并以非 0 退出（按双路径规则转兜底路径），兜底路径以结构化 JSON 错误（含 reason/size/remediation）拦截；拦截后按以下固定规则处置：交互模式下用 `question` 询问用户，选项固定为①"截取首尾后重新提供"（推荐，识别入口只需头部字段区 + 故障线程栈帧）②"用户自行处理"③"终止本次分析"；用户选择终止后**不得以任何方式补救重试**（包括主 Agent 自行裁剪重交）。非交互模式直接输出限制说明并终止 |
 
 > **存疑倾斜原则**：上表所有不确定格一律向"不加载 Analyzer、显式拒答 / 澄清"倾斜，不得兜底猜测类型。
 
@@ -278,7 +336,7 @@ L3 口述到故障类型的映射，判据统一为一条：
 | 场景 | 处置 |
 |---|---|
 | 仅采样栈，无任何 faultlog | 按决策表 `sample_stack` 行：不加载 Analyzer，按「采样栈变体」输出结论并索取 appfreeze/sysfreeze faultlog |
-| 采样栈 + `app_freeze` faultlog | 归并为同一分析单元：faultlog 为主证据按固定路由加载 appfreeze Analyzer，采样栈文件绝对路径作为配套证据随分诊结论带入分析上下文（其 Step 9 热点函数采样分析使用） |
+| 采样栈 + `app_freeze` faultlog | 归并为同一分析单元：faultlog 为主证据按固定路由加载 appfreeze Analyzer，采样栈文件绝对路径作为配套证据随分诊结论带入分析上下文（其 Step 8 热点函数采样分析使用） |
 | 采样栈 + 非冻屏类 faultlog（cpp_crash / js_crash） | 按主 faultlog 类型正常路由；披露"采样栈仅服务于冻屏分析，与该故障类型不配套"，不传入该 Analyzer |
 
 - 同事件对应关系按文件名判断：官方规格下同一次冻屏事件的 faultlog 与采样栈文件名后缀
@@ -288,22 +346,13 @@ L3 口述到故障类型的映射，判据统一为一条：
   说明对应关系。
 - 归并后在分诊摘要行之后追加一行：`配套证据：采样栈（增强日志）<路径>（用于热点函数采样分析）`。
 - 采样栈不参与定类、不参与任何 Analyzer 的入口断言，也不因存在而改变 faultlog 的分诊置信度；
-  其价值在 appfreeze Analyzer 的 Step 9 中兑现。
-
-### 不可达组合说明（从识别脚本实现确认）
-
-- **`unknown` + candidates 非空 + arbitrable=`true` 不可达**：脚本仅在"片段双栈"路径产生
-  `arbitrable=true` 的候选，该路径已把主选定为主选类型，`type` 恒非 `unknown`。所有 `type=unknown`
-  的多候选路径其候选 `arbitrable` 恒为 `false`。
-- **明确类型 + candidates 非空 + arbitrable=`false` 当前不产生**：唯一带候选的明确类型路径是
-  片段双栈，其候选恒为 `arbitrable=true`。若该组合出现，说明判别器行为偏离实现，按「结果处置决策表」视为矛盾、澄清。
+  其价值在 appfreeze Analyzer 的 Step 8 中兑现。
 
 ---
 
 ## 澄清机制（交互模式）
 
-**触发条件**（与决策表对齐）：`candidates` 非空，且不存在 `arbitrable=true` 的候选。
-即可达触发条件 = `type=unknown` + candidates 非空 + 全部 `arbitrable=false`。
+**触发条件**（与决策表对齐）：`type=unknown` 且 `candidates` 非空。
 
 载体为 CLI 对话：你提问即结束本轮，用户下一条消息即为回应，不存在"等待超时"分支。
 按回应内容分三类处置：
@@ -427,6 +476,9 @@ python "<skill-base>/scripts/export_report.py" --type <type> [--title "<标题>"
 bash 环境也可用 stdin 重定向 `< <报告正文 markdown>`。**Windows/PowerShell 禁用
 `Get-Content | python` 管道**——正文经 PowerShell 解码，`PYTHONIOENCODING` 管不到。
 
+- 调用前先完成上方「Python 可用性检查」；Windows 中 `python` 为 WindowsApps 占位 stub
+  （执行无输出/退出码 9009）时直接改用 `py -3 "<skill-base>/scripts/export_report.py" ...`，
+  不得在 stub 上反复试探后另行包装调用；
 - 报告正文经 stdin 传入，脚本写入 `<启动工程目录>/dfx-reports/dfx-report-<type>-<时间戳>.html`
   并在 stdout 回显绝对路径（输出目录即当前工作目录下的 `dfx-reports/`，无需另行指定；该目录为
   可见交付目录，建议用户将其加入 .gitignore 或按需清理）；
