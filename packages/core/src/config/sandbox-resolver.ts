@@ -46,28 +46,24 @@ export function mergeLayers(layers: LayeredSandboxConfig): SandboxConfig {
   } = { profiles: {} }
 
   for (const cfg of ordered) {
-    // S-MERGE-1: profile selection — highest layer wins
     if (cfg.profile !== undefined) result.profile = cfg.profile
-    // allowed_profiles — highest layer wins
     if (cfg.allowed_profiles !== undefined) result.allowed_profiles = [...cfg.allowed_profiles]
-    // network — highest layer wins
     if (cfg.network !== undefined) result.network = cfg.network
-
-    // S-MERGE-2: same-name profiles deep-merged across layers
-    if (cfg.profiles) {
-      for (const [id, def] of Object.entries(cfg.profiles)) {
-        const existing = result.profiles![id]
-        if (existing) {
-          result.profiles![id] = mergeProfileDefinitions(existing, toMutable(def))
-        } else {
-          result.profiles![id] = toMutable(def)
-        }
-      }
-    }
+    if (cfg.profiles) mergeProfilesInto(cfg.profiles, result.profiles!)
   }
 
   if (result.profiles && Object.keys(result.profiles).length === 0) delete result.profiles
   return result as SandboxConfig
+}
+
+function mergeProfilesInto(
+  profiles: Record<string, ProfileDefinition>,
+  target: Record<string, MutableProfileDefinition>,
+) {
+  for (const [id, def] of Object.entries(profiles)) {
+    const existing = target[id]
+    target[id] = existing ? mergeProfileDefinitions(existing, toMutable(def)) : toMutable(def)
+  }
 }
 
 function toMutable(def: ProfileDefinition): MutableProfileDefinition {
@@ -116,67 +112,65 @@ export function flattenProfile(
   id: string,
   profiles: Record<string, MutableProfileDefinition>,
 ): Effect.Effect<MutableProfileDefinition, SandboxConfigError> {
+  return resolveProfileChain(id, id, profiles, [])
+}
+
+function resolveProfileChain(
+  currentId: string,
+  rootId: string,
+  profiles: Record<string, MutableProfileDefinition>,
+  visited: string[],
+): Effect.Effect<MutableProfileDefinition, SandboxConfigError> {
   return Effect.gen(function* () {
-    const visited: string[] = []
+    if (visited.includes(currentId)) {
+      const chain = [...visited, currentId].join(" → ")
+      return yield* Effect.fail(
+        new SandboxConfigError({
+          rule: "V-EXT-2",
+          message: `extends chain cycle detected: ${chain}`,
+          path: currentId,
+        }),
+      )
+    }
+    visited.push(currentId)
 
-    function resolve(currentId: string): Effect.Effect<MutableProfileDefinition, SandboxConfigError> {
-      return Effect.gen(function* () {
-        // V-EXT-2: cycle detection
-        if (visited.includes(currentId)) {
-          const chain = [...visited, currentId].join(" → ")
-          return yield* Effect.fail(
-            new SandboxConfigError({
-              rule: "V-EXT-2",
-              message: `extends chain cycle detected: ${chain}`,
-              path: currentId,
-            }),
-          )
-        }
-        visited.push(currentId)
+    const builtin = yield* resolveBuiltin(currentId, rootId)
+    if (builtin) return builtin
 
-        // Built-in profiles: use equivalent definitions
-        if (isBuiltinProfile(currentId)) {
-          // V-EXT-3: full-access cannot be extended
-          if (currentId === "full-access") {
-            return yield* Effect.fail(
-              new SandboxConfigError({
-                rule: "V-EXT-3",
-                message: `extends: "full-access" is not allowed`,
-                path: id,
-              }),
-            )
-          }
-          return toMutable(BUILTIN_PROFILES[currentId])
-        }
-
-        // User-defined profile
-        const def = profiles[currentId]
-        if (!def) {
-          // V-EXT-1: reference to non-existent profile
-          return yield* Effect.fail(
-            new SandboxConfigError({
-              rule: "V-EXT-1",
-              message: `extends references non-existent profile: "${currentId}"`,
-              path: id,
-            }),
-          )
-        }
-
-        // No extends — return as-is
-        if (!def.extends) return { ...def }
-
-        // Recursively resolve parent
-        const parent = yield* resolve(def.extends)
-        // Note: visited is intentionally append-only for cycle detection.
-        // Each flattenProfile call creates a fresh visited array, so stale
-        // entries do not affect subsequent calls.
-
-        // Merge: parent as base, current as override
-        return mergeProfileDefinitions(parent, def)
-      })
+    const def = profiles[currentId]
+    if (!def) {
+      return yield* Effect.fail(
+        new SandboxConfigError({
+          rule: "V-EXT-1",
+          message: `extends references non-existent profile: "${currentId}"`,
+          path: rootId,
+        }),
+      )
     }
 
-    return yield* resolve(id)
+    if (!def.extends) return { ...def }
+
+    const parent = yield* resolveProfileChain(def.extends, rootId, profiles, visited)
+    return mergeProfileDefinitions(parent, def)
+  })
+}
+
+function resolveBuiltin(
+  currentId: string,
+  id: string,
+): Effect.Effect<MutableProfileDefinition | undefined, SandboxConfigError> {
+  return Effect.gen(function* () {
+    if (!isBuiltinProfile(currentId)) return undefined
+    if (currentId === "full-access") {
+      return yield* Effect.fail(
+        new SandboxConfigError({
+          rule: "V-EXT-3",
+          message: `extends: "full-access" is not allowed`,
+          path: id,
+        }),
+      )
+    }
+    return toMutable(BUILTIN_PROFILES[currentId])
   })
 }
 
@@ -207,112 +201,12 @@ function collectValidationErrors(merged: SandboxConfig): { errors: SandboxConfig
   const profiles = (merged.profiles ?? {}) as unknown as Record<string, MutableProfileDefinition>
 
   for (const [id, def] of Object.entries(profiles)) {
-    if (isBuiltinProfile(id)) {
-      errors.push(new SandboxConfigError({
-        rule: "V-NAME-1",
-        message: `profile id "${id}" collides with built-in profile name`,
-        path: `sandbox.profiles.${id}`,
-      }))
-    }
-    if (id.startsWith(":")) {
-      errors.push(new SandboxConfigError({
-        rule: "V-NAME-1",
-        message: `profile id "${id}" starts with ':' which is reserved for special paths`,
-        path: `sandbox.profiles.${id}`,
-      }))
-    }
-
-    // V-EXT-1/2/3: delegate to flattenProfile which checks all three rules.
-    // S20: runSyncExit so defects don't crash validation; convert to error.
-    if (def.extends) {
-      const exit = Effect.runSyncExit(flattenProfile(id, profiles).pipe(
-        Effect.map(() => null),
-        Effect.catchTag("ConfigV2.Sandbox.SandboxConfigError", (e) => Effect.succeed(e)),
-      ))
-      if (Exit.isSuccess(exit) && exit.value instanceof SandboxConfigError) {
-        errors.push(exit.value)
-      } else if (Exit.isFailure(exit)) {
-        errors.push(new SandboxConfigError({
-          rule: "V-EXT-1",
-          message: `extends resolution failed for profile "${id}"`,
-          path: `sandbox.profiles.${id}`,
-        }))
-      }
-    }
-
-    if (def.filesystem) {
-      for (const [pathKey, mode] of Object.entries(def.filesystem)) {
-        if (!isAbsolutePath(pathKey)) {
-          errors.push(new SandboxConfigError({
-            rule: "V-PATH-1",
-            message: `filesystem path "${pathKey}" in profile "${id}" is not an absolute path, home path (~/), or special path (:)`,
-            path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
-          }))
-        }
-
-        // V-GLOB-1: glob for read/write must be trailing /** only
-        if ((mode === "read" || mode === "write") && hasGlobChars(pathKey)) {
-          if (!isTrailingGlob(pathKey)) {
-            errors.push(new SandboxConfigError({
-              rule: "V-GLOB-1",
-              message: `glob in path "${pathKey}" for mode "${mode}" in profile "${id}" — read/write only allows trailing /**`,
-              path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
-            }))
-          }
-        }
-
-        // V-GLOB-2: glob in scoped sub-path of special path must be deny
-        const scoped = parseScopedSpecialPath(pathKey)
-        if (scoped && hasGlobChars(scoped.subPath) && mode !== "deny") {
-          errors.push(new SandboxConfigError({
-            rule: "V-GLOB-2",
-            message: `glob in scoped sub-path "${pathKey}" in profile "${id}" — glob in special path sub-paths must be deny`,
-            path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
-          }))
-        }
-
-        // V-NEST-1: scoped sub-paths not allowed for :tmpdir/:slash_tmp/:root
-        if (scoped && (scoped.special === ":tmpdir" || scoped.special === ":slash_tmp" || scoped.special === ":root")) {
-          errors.push(new SandboxConfigError({
-            rule: "V-NEST-1",
-            message: `scoped sub-path "${pathKey}" in profile "${id}" — :tmpdir, :slash_tmp, and :root do not support scoped sub-paths`,
-            path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
-          }))
-        }
-
-        // V-NEST-2: scoped sub-path must not contain . or .. components
-        if (scoped) {
-          const components = scoped.subPath.split("/")
-          for (const comp of components) {
-            if (comp === "." || comp === "..") {
-              errors.push(new SandboxConfigError({
-                rule: "V-NEST-2",
-                message: `scoped sub-path "${pathKey}" in profile "${id}" contains "." or ".." component`,
-                path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
-              }))
-              break
-            }
-          }
-        }
-
-        // W-1: unknown :xxx special path → warning (not blocking)
-        const specialMatch = pathKey.match(/^(:[a-z_]+)/)
-        if (specialMatch && !KNOWN_SPECIAL_PATHS.has(specialMatch[1])) {
-          warnings.push(`W-1: unknown special path "${specialMatch[1]}" in profile "${id}" — will be ignored`)
-        }
-
-        // W-3: :minimal = "write" → warning
-        if (pathKey === ":minimal" && mode === "write") {
-          warnings.push(`W-3: :minimal = "write" in profile "${id}" — write is no-op, equivalent to read`)
-        }
-      }
-    }
-
-    // W-2: filesystem empty or missing → warning
+    validateProfileName(id, errors)
+    validateExtends(id, def, profiles, errors)
+    if (def.filesystem) validateFilesystem(id, def.filesystem, errors, warnings)
     if (!def.filesystem || Object.keys(def.filesystem).length === 0) {
       warnings.push(`W-2: profile "${id}" has empty or missing filesystem — access remains restricted`)
     }
-
     if (def.network !== undefined && def.network.enabled === undefined) {
       errors.push(new SandboxConfigError({
         rule: "V-NET-1",
@@ -322,6 +216,138 @@ function collectValidationErrors(merged: SandboxConfig): { errors: SandboxConfig
     }
   }
 
+  validateTopLevelNetwork(merged, errors)
+  validateProfileSelection(merged, profiles, errors)
+
+  return { errors, warnings }
+}
+
+function validateProfileName(id: string, errors: SandboxConfigError[]) {
+  if (isBuiltinProfile(id)) {
+    errors.push(new SandboxConfigError({
+      rule: "V-NAME-1",
+      message: `profile id "${id}" collides with built-in profile name`,
+      path: `sandbox.profiles.${id}`,
+    }))
+  }
+  if (id.startsWith(":")) {
+    errors.push(new SandboxConfigError({
+      rule: "V-NAME-1",
+      message: `profile id "${id}" starts with ':' which is reserved for special paths`,
+      path: `sandbox.profiles.${id}`,
+    }))
+  }
+}
+
+function validateExtends(
+  id: string,
+  def: MutableProfileDefinition,
+  profiles: Record<string, MutableProfileDefinition>,
+  errors: SandboxConfigError[],
+) {
+  if (!def.extends) return
+  const exit = Effect.runSyncExit(flattenProfile(id, profiles).pipe(
+    Effect.map(() => null),
+    Effect.catchTag("ConfigV2.Sandbox.SandboxConfigError", (e) => Effect.succeed(e)),
+  ))
+  if (Exit.isSuccess(exit) && exit.value instanceof SandboxConfigError) {
+    errors.push(exit.value)
+  } else if (Exit.isFailure(exit)) {
+    errors.push(new SandboxConfigError({
+      rule: "V-EXT-1",
+      message: `extends resolution failed for profile "${id}"`,
+      path: `sandbox.profiles.${id}`,
+    }))
+  }
+}
+
+function validateFilesystem(
+  id: string,
+  filesystem: Record<string, string>,
+  errors: SandboxConfigError[],
+  warnings: string[],
+) {
+  for (const [pathKey, mode] of Object.entries(filesystem)) {
+    validatePathKey(id, pathKey, mode, errors, warnings)
+  }
+}
+
+function validatePathKey(
+  id: string,
+  pathKey: string,
+  mode: string,
+  errors: SandboxConfigError[],
+  warnings: string[],
+) {
+  if (!isAbsolutePath(pathKey)) {
+    errors.push(new SandboxConfigError({
+      rule: "V-PATH-1",
+      message: `filesystem path "${pathKey}" in profile "${id}" is not an absolute path, home path (~/), or special path (:)`,
+      path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
+    }))
+  }
+  validateGlobRule(id, pathKey, mode, errors)
+  const scoped = parseScopedSpecialPath(pathKey)
+  if (scoped) validateScopedSubPath(id, pathKey, mode, scoped, errors)
+  validateSpecialPathWarnings(id, pathKey, mode, warnings)
+}
+
+function validateGlobRule(id: string, pathKey: string, mode: string, errors: SandboxConfigError[]) {
+  if ((mode === "read" || mode === "write") && hasGlobChars(pathKey)) {
+    if (!isTrailingGlob(pathKey)) {
+      errors.push(new SandboxConfigError({
+        rule: "V-GLOB-1",
+        message: `glob in path "${pathKey}" for mode "${mode}" in profile "${id}" — read/write only allows trailing /**`,
+        path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
+      }))
+    }
+  }
+}
+
+function validateSpecialPathWarnings(id: string, pathKey: string, mode: string, warnings: string[]) {
+  const specialMatch = pathKey.match(/^(:[a-z_]+)/)
+  if (specialMatch && !KNOWN_SPECIAL_PATHS.has(specialMatch[1])) {
+    warnings.push(`W-1: unknown special path "${specialMatch[1]}" in profile "${id}" — will be ignored`)
+  }
+  if (pathKey === ":minimal" && mode === "write") {
+    warnings.push(`W-3: :minimal = "write" in profile "${id}" — write is no-op, equivalent to read`)
+  }
+}
+
+function validateScopedSubPath(
+  id: string,
+  pathKey: string,
+  mode: string,
+  scoped: { special: string; subPath: string },
+  errors: SandboxConfigError[],
+) {
+  if (hasGlobChars(scoped.subPath) && mode !== "deny") {
+    errors.push(new SandboxConfigError({
+      rule: "V-GLOB-2",
+      message: `glob in scoped sub-path "${pathKey}" in profile "${id}" — glob in special path sub-paths must be deny`,
+      path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
+    }))
+  }
+  if (scoped.special === ":tmpdir" || scoped.special === ":slash_tmp" || scoped.special === ":root") {
+    errors.push(new SandboxConfigError({
+      rule: "V-NEST-1",
+      message: `scoped sub-path "${pathKey}" in profile "${id}" — :tmpdir, :slash_tmp, and :root do not support scoped sub-paths`,
+      path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
+    }))
+  }
+  for (const comp of scoped.subPath.split("/")) {
+    if (comp === "." || comp === "..") {
+      errors.push(new SandboxConfigError({
+        rule: "V-NEST-2",
+        message: `scoped sub-path "${pathKey}" in profile "${id}" contains "." or ".." component`,
+        path: `sandbox.profiles.${id}.filesystem.${pathKey}`,
+      }))
+      break
+    }
+  }
+}
+
+function validateTopLevelNetwork(merged: SandboxConfig, errors: SandboxConfigError[]) {
   if (merged.network !== undefined && merged.network.enabled === undefined) {
     errors.push(new SandboxConfigError({
       rule: "V-NET-2",
@@ -329,7 +355,13 @@ function collectValidationErrors(merged: SandboxConfig): { errors: SandboxConfig
       path: `sandbox.network`,
     }))
   }
+}
 
+function validateProfileSelection(
+  merged: SandboxConfig,
+  profiles: Record<string, MutableProfileDefinition>,
+  errors: SandboxConfigError[],
+) {
   if (merged.profile !== undefined) {
     if (!isBuiltinProfile(merged.profile) && !profiles[merged.profile]) {
       errors.push(new SandboxConfigError({
@@ -339,7 +371,6 @@ function collectValidationErrors(merged: SandboxConfig): { errors: SandboxConfig
       }))
     }
   }
-
   if (merged.allowed_profiles && merged.profile !== undefined) {
     if (!merged.allowed_profiles.includes(merged.profile)) {
       errors.push(new SandboxConfigError({
@@ -349,10 +380,6 @@ function collectValidationErrors(merged: SandboxConfig): { errors: SandboxConfig
       }))
     }
   }
-
-  // W-* warnings are non-blocking — returned to caller for Effect.logWarning.
-  // Previously console.warn here, which leaked to TUI input window (C2/W2 fix).
-  return { errors, warnings }
 }
 
 // ─── Path validation helper (V-PATH-1) ──────────────────────
@@ -427,32 +454,22 @@ export function resolveProfile(
   layers: LayeredSandboxConfig,
 ): Effect.Effect<ResolvedProfile, SandboxConfigError> {
   return Effect.gen(function* () {
-    // 1. Merge layers
     const merged = mergeLayers(layers)
 
-    // 2. Validate (collect errors + warnings; emit warnings via Effect.logWarning
-    //    so they go through the Effect log channel instead of console.warn,
-    //    which would leak to the TUI input window — C2/W2 fix.)
     const { errors, warnings } = collectValidationErrors(merged)
-    for (const w of warnings) yield* Effect.logWarning(`[sandbox] ${w}`)
+    yield* logWarnings(warnings)
     if (errors.length > 0) yield* Effect.fail(errors[0])
 
-    // 3. Select
     const selection = resolveSelection(layers)
 
-    // 4. Flatten profile (resolve extends chain)
     const profiles = (merged.profiles ?? {}) as unknown as Record<string, MutableProfileDefinition>
     const flatDef = isBuiltinProfile(selection.profile_id)
       ? toMutable(BUILTIN_PROFILES[selection.profile_id])
       : yield* flattenProfile(selection.profile_id, profiles)
 
-    // 5. Resolve network switch (S-NET-4)
     const network_enabled = resolveNetworkSwitch(layers, flatDef as unknown as ProfileDefinition)
-
-    // 6. Collect workspace_roots
     const workspace_roots = flatDef.workspace_roots ?? []
 
-    // 7. Build resolved profile
     return {
       profile_id: selection.profile_id,
       filesystem: (flatDef.filesystem ?? {}) as Record<string, AccessMode>,
@@ -461,6 +478,12 @@ export function resolveProfile(
       is_implicit: selection.is_implicit,
       source_layer: selection.source_layer,
     } satisfies ResolvedProfile
+  })
+}
+
+function logWarnings(warnings: string[]): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    for (const w of warnings) yield* Effect.logWarning(`[sandbox] ${w}`)
   })
 }
 

@@ -8,7 +8,7 @@ import {
 } from "@opentui/core"
 import type { Binding } from "@opentui/keymap"
 import { useTheme, selectedForeground } from "../context/theme"
-import { entries, filter, flatMap, groupBy, pipe } from "remeda"
+import { entries, flatMap, groupBy, pipe } from "remeda"
 import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -38,6 +38,10 @@ export interface DialogSelectProps<T> {
   renderFilter?: boolean
   locked?: boolean
   preserveSelection?: boolean
+  // When true, the title bar (title + esc) is not rendered. Callers that
+  // render their own header (e.g. tabbed dialogs like /sandbox and /usage)
+  // use this to avoid a duplicate esc.
+  hideHeader?: boolean
   actions?: {
     command: string
     title: string
@@ -155,12 +159,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   const filtered = createMemo(() => {
-    if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
+    if (props.skipFilter || props.renderFilter === false) return props.options
     const needle = store.filter.toLowerCase()
-    const options = pipe(
-      props.options,
-      filter((x) => x.disabled !== true),
-    )
+    const options = props.options
     if (!needle) return options
 
     // prioritize title matches (weight: 2) over category matches (weight: 1).
@@ -354,6 +355,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     }
     const option = selected()
     if (!option) return
+    if (option.disabled) return
     option.onSelect?.(dialog)
     props.onSelect?.(option)
   }
@@ -559,17 +561,21 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   return (
     <box gap={1} paddingBottom={1} flexGrow={1}>
-      <box paddingLeft={4} paddingRight={4}>
-        <box flexDirection="row" justifyContent="space-between">
-          {props.titleView ?? (
-            <text fg={theme.text} attributes={TextAttributes.BOLD}>
-              {props.title}
+      <Show when={!props.hideHeader}>
+        <box paddingLeft={4} paddingRight={4}>
+          <box flexDirection="row" justifyContent="space-between">
+            {props.titleView ?? (
+              <text fg={theme.text} attributes={TextAttributes.BOLD}>
+                {props.title}
+              </text>
+            )}
+            <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+              {t("dialog.esc")}
             </text>
-          )}
-          <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
-            {t("dialog.esc")}
-          </text>
+          </box>
         </box>
+      </Show>
+      <box paddingLeft={4} paddingRight={4}>
         <Show when={props.renderFilter !== false}>
           <box paddingTop={1}>
             <input
@@ -652,6 +658,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           }}
                           onMouseUp={() => {
                             if (props.locked) return
+                            if (option.disabled) return
                             option.onSelect?.(dialog)
                             props.onSelect?.(option)
                           }}
@@ -697,6 +704,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               active={active()}
                               current={current()}
                               muted={actionFocused()}
+                              disabled={option.disabled}
                               gutter={option.gutter}
                             />
                           </box>
@@ -741,6 +749,7 @@ function Option(props: {
   active?: boolean
   current?: boolean
   muted?: boolean
+  disabled?: boolean
   footer?: JSX.Element | string
   titleWidth?: number
   truncateTitle?: boolean | "left"
@@ -750,6 +759,7 @@ function Option(props: {
   const { theme } = useTheme()
   const fg = selectedForeground(theme)
   const text = createMemo(() => {
+    if (props.disabled) return theme.textMuted
     if (props.active && !props.muted) return fg
     if (props.muted && (props.active || props.current)) return theme.textMuted
     if (props.current) return theme.primary

@@ -61,7 +61,7 @@ export const SandboxIoSpec = Schema.Struct({
 export type SandboxIoSpec = typeof SandboxIoSpec.Type
 
 /**
- * Permission profile: the resolved permission intent (sandbox-architecture.md §5).
+ * Permission profile: the resolved permission profile (sandbox-architecture.md §5).
  * Owned by LE-02 (config resolver), consumed by LE-05 (runtime).
  * Immutable per command.
  */
@@ -72,7 +72,7 @@ export const PermissionProfile = Schema.Struct({
   workspace_roots: Schema.Array(Schema.String),
 }).annotate({
   identifier: "Sandbox.PermissionProfile",
-  description: "Resolved permission intent: profile id, filesystem rules, network, workspace roots",
+  description: "Resolved permission profile: profile id, filesystem rules, network, workspace roots",
 })
 export type PermissionProfile = typeof PermissionProfile.Type
 
@@ -190,7 +190,6 @@ export type SandboxErrorTag =
 
 /**
  * Map a product-side error tag (§3.4.2) to platform-side code/phase.
- * Used when the context layer needs to surface config errors as SandboxError.
  */
 export function mapErrorTagToCodePhase(tag: SandboxErrorTag): {
   code: SandboxErrorCode
@@ -263,7 +262,7 @@ export function toNativeAccessMode(mode: AccessMode): NativeFileSystemAccessMode
   switch (mode) {
     case "read": return { type: "Read" }
     case "write": return { type: "Write" }
-    case "deny": return { type: "Deny" }
+    default: return { type: "Deny" }
   }
 }
 

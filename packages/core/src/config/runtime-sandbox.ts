@@ -20,10 +20,10 @@ export async function setRuntimeSandbox(config: SandboxConfig | undefined) {
     try {
       await unlink(fp)
     } catch (err) {
-      if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+      if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined
       console.warn(`[sandbox] Failed to clear runtime override:`, err instanceof Error ? err.message : String(err))
     }
-    return
+    return undefined
   }
   // Atomic write: temp file + rename (FR-UI-006).
   const tmpPath = `${fp}.${process.pid}.${Date.now()}.tmp`
@@ -47,7 +47,7 @@ export async function getRuntimeSandbox(): Promise<SandboxConfig | undefined> {
     return sandbox
   } catch (err) {
     // ENOENT is normal (no override set); other errors are diagnostic
-    if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined
     console.warn(`[sandbox] Failed to read runtime override:`, err instanceof Error ? err.message : String(err))
     return undefined
   }
@@ -59,7 +59,7 @@ export async function clearRuntimeSandbox() {
   try {
     await unlink(filepath())
   } catch (err) {
-    if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined
     console.warn(`[sandbox] Failed to clear runtime override on bootstrap:`, err instanceof Error ? err.message : String(err))
   }
 }

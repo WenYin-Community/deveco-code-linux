@@ -16,6 +16,7 @@ import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
 import { type SandboxConfig as CoreSandboxConfig, validateSandboxShape as validateSandboxConfigShape, BUILTIN_PROFILES } from "@opencode-ai/core/config/sandbox"
 import { setRuntimeSandbox, getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
 import { useProject } from "../context/project"
+import { setCurrentSandboxProfile } from "../context/sandbox-profile"
 
 // /sandbox dialog — tabbed UI (Mode / Custom)
 // Mode tab: built-in profiles + write status + status summary
@@ -42,6 +43,17 @@ function wrapNext<T>(list: readonly T[], current: T) {
   const index = list.indexOf(current)
   if (index === -1) return current
   return list[(index + 1) % list.length] ?? current
+}
+
+// Display name for a profile id. Built-in profiles use Title Case to match
+// the option list and other dialogs. Custom profile ids are shown as-is.
+export function profileDisplayName(profileId: string): string {
+  const builtin: Record<string, string> = {
+    "read-only": "Read-only",
+    "workspace": "Workspace",
+    "full-access": "Full-access",
+  }
+  return builtin[profileId] ?? profileId
 }
 
 // Sandbox config shape (mirrors ConfigSandbox.SandboxConfig)
@@ -86,22 +98,36 @@ async function readProjectSandboxProfile(projectDir: string | undefined): Promis
   const names = ["config.json", "deveco.json", "deveco.jsonc"]
   let dir = projectDir
   while (dir !== path.dirname(dir)) {
-    for (const name of names) {
-      for (const prefix of ["", ".deveco"]) {
-        try {
-          const filepath = path.join(dir, prefix, name)
-          const text = await readFile(filepath, "utf-8")
-          const errors: ParseError[] = []
-          const parsed = parse(text, errors, { allowTrailingComma: true }) as { sandbox?: SandboxConfig } | undefined
-          if (errors.length === 0 && parsed?.sandbox?.profile) {
-            return { profile: parsed.sandbox.profile, filepath }
-          }
-        } catch {
-          // file doesn't exist or unreadable
-        }
-      }
-    }
+    const found = await findSandboxInDir(dir, names)
+    if (found) return found
     dir = path.dirname(dir)
+  }
+  return undefined
+}
+
+async function findSandboxInDir(
+  dir: string,
+  names: string[],
+): Promise<{ profile: string; filepath: string } | undefined> {
+  for (const prefix of ["", ".deveco"]) {
+    for (const name of names) {
+      const found = await tryReadSandboxProfile(path.join(dir, prefix, name))
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+async function tryReadSandboxProfile(filepath: string): Promise<{ profile: string; filepath: string } | undefined> {
+  try {
+    const text = await readFile(filepath, "utf-8")
+    const errors: ParseError[] = []
+    const parsed = parse(text, errors, { allowTrailingComma: true }) as { sandbox?: SandboxConfig } | undefined
+    if (errors.length === 0 && parsed?.sandbox?.profile) {
+      return { profile: parsed.sandbox.profile, filepath }
+    }
+  } catch {
+    // file doesn't exist or unreadable
   }
   return undefined
 }
@@ -191,13 +217,13 @@ export function DialogSandbox() {
     if (projectResult) {
       setConfigSource("project")
       setProjectOverride(projectResult)
-      return
+      return undefined
     }
     setProjectOverride(undefined)
     const globalProfile = await readGlobalSandboxProfile()
     if (globalProfile) {
       setConfigSource("global")
-      return
+      return undefined
     }
     setConfigSource("default")
   }
@@ -273,15 +299,8 @@ export function DialogSandbox() {
   }
 
   async function selectProfile(profileId: string) {
-    // custom option: switch to custom tab, don't write config
-    if (profileId === "__custom__") {
-      setWriteStatus({ type: "idle" })
-      setActiveTab("custom")
-      return
-    }
-
     const reason = getDisableReason(profileId)
-    if (reason) return
+    if (reason) return undefined
 
     setWriteStatus({ type: "idle" })
 
@@ -290,6 +309,7 @@ export function DialogSandbox() {
       // FR-CFG-009 (S-SESS-1): inject runtime override so current session uses
       // the new profile immediately, without requiring a restart (S-MERGE-6).
       await setRuntimeSandbox({ profile: profileId })
+      setCurrentSandboxProfile(profileId)
       void refreshRuntimeOverride()
       void refreshConfigSource()
       // UI-12: if project layer declares a profile, show override hint
@@ -308,24 +328,19 @@ export function DialogSandbox() {
   const builtinOptions = createMemo<DialogSelectOption<string>[]>(() => {
     return [
       {
-        title: "read-only",
+        title: "Read-only",
         value: "read-only",
         description: t("dialog.sandbox.readonly_desc"),
       },
       {
-        title: "workspace",
+        title: "Workspace",
         value: "workspace",
         description: t("dialog.sandbox.workspace_desc"),
       },
       {
-        title: "full-access",
+        title: "Full-access",
         value: "full-access",
         description: t("dialog.sandbox.full_access_desc"),
-      },
-      {
-        title: t("dialog.sandbox.custom"),
-        value: "__custom__",
-        description: t("dialog.sandbox.custom_desc"),
       },
     ]
   })
@@ -345,22 +360,12 @@ export function DialogSandbox() {
 
   const customOptions = createMemo<DialogSelectOption<string>[]>(() =>
     customProfiles().map((p) => {
-      const details: string[] = []
-      if (p.extends) details.push(`${t("dialog.sandbox.custom_extends")}: ${p.extends}`)
-      if (p.description) details.push(`${t("dialog.sandbox.custom_description")}: ${p.description}`)
-      if (p.workspace_roots?.length)
-        details.push(`${t("dialog.sandbox.custom_workspace_roots")}: ${p.workspace_roots.join(", ")}`)
-      if (p.filesystem) {
-        const fsEntries = Object.entries(p.filesystem).map(([k, v]) => `${k}=${v}`)
-        details.push(`${t("dialog.sandbox.custom_filesystem")}: ${fsEntries.join(", ")}`)
-      }
-      if (p.network)
-        details.push(`${t("dialog.sandbox.custom_network")}: ${p.network.enabled ? t("dialog.sandbox.on") : t("dialog.sandbox.off")}`)
+      const disableReason = getDisableReason(p.id)
       return {
         title: p.id,
         value: p.id,
-        description: p.extends ? `${t("dialog.sandbox.custom_extends")}: ${p.extends}` : undefined,
-        details,
+        description: p.extends ? `extends: ${p.extends}` : p.description,
+        disabled: !!disableReason,
       }
     }),
   )
@@ -395,7 +400,9 @@ export function DialogSandbox() {
 
   return (
     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
-      {/* Title bar */}
+      {/* Title bar — esc rendered here (matches dialog-usage tabbed layout).
+        DialogSelect below renders its own esc too; we pass titleView={<></>}
+        and the inner title bar collapses, so only this outer esc shows. */}
       <box flexDirection="row" justifyContent="space-between">
         <text fg={TAB_BG} attributes={TextAttributes.BOLD}>
           {t("dialog.sandbox.title")}
@@ -449,11 +456,12 @@ export function DialogSandbox() {
             {/* Built-in profiles list */}
             <DialogSelect
               title=""
+              hideHeader
               options={builtinOptions()}
               current={
                 ["read-only", "workspace", "full-access"].includes(effectiveProfile().id)
                   ? effectiveProfile().id
-                  : "__custom__"
+                  : undefined
               }
               skipFilter
               renderFilter={false}
@@ -467,7 +475,7 @@ export function DialogSandbox() {
                   </text>
                   {/* Status summary */}
                   <text fg={theme.text}>
-                    {t("dialog.sandbox.status_profile")}: {effectiveProfile().id}
+                    {t("dialog.sandbox.status_profile")}: {profileDisplayName(effectiveProfile().id)}
                     {effectiveProfile().isImplicit ? ` (${t("dialog.sandbox.implicit")})` : ""}
                   </text>
                   <text fg={theme.textMuted}>
@@ -488,6 +496,23 @@ export function DialogSandbox() {
 
         <Match when={activeTab() === "custom"}>
           <box flexDirection="column" gap={1}>
+            {/* Write status — same as Mode tab */}
+            <Show when={writeStatus().type === "success"}>
+              <text fg={theme.success}>
+                {t("dialog.sandbox.write_success")}: {writeStatus().path}
+              </text>
+              <Show when={writeStatus().projectOverride}>
+                <text fg={theme.warning}>
+                  {t("dialog.sandbox.project_override_hint", { path: writeStatus().projectOverride!.filepath })}
+                </text>
+              </Show>
+            </Show>
+            <Show when={writeStatus().type === "error"}>
+              <text fg={theme.error}>
+                {t("dialog.sandbox.write_error")}: {writeStatus().error}
+              </text>
+            </Show>
+
             {/* Validation errors */}
             <Show when={validationErrors().length > 0}>
               <box flexDirection="column" gap={0}>
@@ -514,11 +539,12 @@ export function DialogSandbox() {
             >
               <DialogSelect
                 title=""
+                hideHeader
                 options={customOptions()}
                 current={effectiveProfile().id}
-                onSelect={() => {
-                  // Custom tab is read-only: profiles are viewed, not selected.
-                  // Use keyboard up/down to browse.
+                onSelect={(opt) => {
+                  if (opt.disabled) return
+                  void selectProfile(opt.value)
                 }}
                 footer={
                   <box flexDirection="column" gap={0}>

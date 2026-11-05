@@ -69,73 +69,67 @@ export function validateSandboxShape(raw: unknown): SandboxConfig | undefined {
   if (!raw || typeof raw !== "object") return undefined
   const obj = raw as Record<string, unknown>
 
-  // S-MERGE-5: reject unknown keys at top level
   const knownTopKeys = new Set(["profile", "profiles", "allowed_profiles", "network"])
-  const knownNetKeys = new Set(["enabled"])
-  const knownProfileKeys = new Set(["description", "extends", "workspace_roots", "filesystem", "network"])
   for (const key of Object.keys(obj)) {
     if (!knownTopKeys.has(key)) return undefined
   }
 
-  // profile must be string if present
   if (obj.profile !== undefined && typeof obj.profile !== "string") return undefined
 
-  // allowed_profiles must be string[] if present
   if (obj.allowed_profiles !== undefined) {
     if (!Array.isArray(obj.allowed_profiles)) return undefined
     if (!obj.allowed_profiles.every((v) => typeof v === "string")) return undefined
   }
 
-  // network must be { enabled: boolean } if present
-  if (obj.network !== undefined) {
-    if (typeof obj.network !== "object" || obj.network === null) return undefined
-    const net = obj.network as Record<string, unknown>
-    // S-MERGE-5: reject unknown keys in network
-    for (const key of Object.keys(net)) {
-      if (!knownNetKeys.has(key)) return undefined
-    }
-    if (typeof net.enabled !== "boolean") return undefined
-  }
+  if (obj.network !== undefined && !validateNetwork(obj.network)) return undefined
 
-  // profiles must be Record<string, ProfileDefinition> if present
   if (obj.profiles !== undefined) {
     if (typeof obj.profiles !== "object" || obj.profiles === null) return undefined
     for (const [, val] of Object.entries(obj.profiles as Record<string, unknown>)) {
-      if (!val || typeof val !== "object") return undefined
-      const p = val as Record<string, unknown>
-      // S-MERGE-5: reject unknown keys in profile definition
-      for (const key of Object.keys(p)) {
-        if (!knownProfileKeys.has(key)) return undefined
-      }
-      // description must be string if present
-      if (p.description !== undefined && typeof p.description !== "string") return undefined
-      // extends must be string if present
-      if (p.extends !== undefined && typeof p.extends !== "string") return undefined
-      // workspace_roots must be string[] if present
-      if (p.workspace_roots !== undefined) {
-        if (!Array.isArray(p.workspace_roots) || !p.workspace_roots.every((v) => typeof v === "string")) return undefined
-      }
-      // network inside profile must be { enabled: boolean } if present
-      if (p.network !== undefined) {
-        if (typeof p.network !== "object" || p.network === null) return undefined
-        const pnet = p.network as Record<string, unknown>
-        // S-MERGE-5: reject unknown keys in profile network
-        for (const key of Object.keys(pnet)) {
-          if (!knownNetKeys.has(key)) return undefined
-        }
-        if (typeof pnet.enabled !== "boolean") return undefined
-      }
-      // filesystem must be Record<string, string> if present
-      if (p.filesystem !== undefined) {
-        if (typeof p.filesystem !== "object" || p.filesystem === null) return undefined
-        for (const v of Object.values(p.filesystem as Record<string, unknown>)) {
-          if (v !== "read" && v !== "write" && v !== "deny") return undefined
-        }
-      }
+      if (!validateProfileDefinition(val)) return undefined
     }
   }
 
   return obj as SandboxConfig
+}
+
+const knownNetKeys = new Set(["enabled"])
+const knownProfileKeys = new Set(["description", "extends", "workspace_roots", "filesystem", "network"])
+
+function validateNetwork(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null) return false
+  const net = raw as Record<string, unknown>
+  for (const key of Object.keys(net)) {
+    if (!knownNetKeys.has(key)) return false
+  }
+  return typeof net.enabled === "boolean"
+}
+
+function validateProfileDefinition(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false
+  const p = raw as Record<string, unknown>
+  for (const key of Object.keys(p)) {
+    if (!knownProfileKeys.has(key)) return false
+  }
+  if (p.description !== undefined && typeof p.description !== "string") return false
+  if (p.extends !== undefined && typeof p.extends !== "string") return false
+  if (p.workspace_roots !== undefined && !validateWorkspaceRoots(p.workspace_roots)) return false
+  if (p.network !== undefined && !validateNetwork(p.network)) return false
+  if (p.filesystem !== undefined && !validateFilesystemField(p.filesystem)) return false
+  return true
+}
+
+function validateWorkspaceRoots(value: unknown): boolean {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) return false
+  return true
+}
+
+function validateFilesystemField(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false
+  for (const v of Object.values(value as Record<string, unknown>)) {
+    if (v !== "read" && v !== "write" && v !== "deny") return false
+  }
+  return true
 }
 
 // ─── Built-in Profile IDs ────────────────────────────────────

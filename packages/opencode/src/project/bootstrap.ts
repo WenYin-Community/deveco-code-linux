@@ -22,19 +22,24 @@ function collectDescendants(pid: number): number[] {
   const pids: number[] = []
   const queue = [pid]
   for (let index = 0; index < queue.length; index++) {
-    const current = queue[index]
-    try {
-      const text = execSync(`pgrep -P ${current}`, { encoding: "utf-8", timeout: 2000 })
-      for (const tok of text.split("\n")) {
-        const cpid = parseInt(tok, 10)
-        if (!isNaN(cpid) && !pids.includes(cpid)) {
-          pids.push(cpid)
-          queue.push(cpid)
-        }
+    const children = collectChildPids(queue[index])
+    for (const cpid of children) {
+      if (!pids.includes(cpid)) {
+        pids.push(cpid)
+        queue.push(cpid)
       }
-    } catch {}
+    }
   }
   return pids
+}
+
+function collectChildPids(pid: number): number[] {
+  try {
+    const text = execSync(`pgrep -P ${pid}`, { encoding: "utf-8", timeout: 2000 })
+    return text.split("\n").map((tok) => parseInt(tok, 10)).filter((cpid) => !isNaN(cpid))
+  } catch {
+    return []
+  }
 }
 
 export { Service } from "./bootstrap-service"

@@ -138,6 +138,10 @@ type ShellRunState = {
   sandboxError?: string
   requestId?: string
   sandboxStartTime?: number
+  hostEnforcement?: string
+  // Effective profile info, for sandbox-denial hint in shell_metadata
+  sandboxProfileId?: string
+  sandboxNetworkEnabled?: boolean
 }
 
 const resolveWasm = (asset: string) => {
@@ -630,10 +634,10 @@ export const ShellTool = Tool.define(
       // per-command), so it won't pollute the TUI input window repeatedly.
       if (errors.length) {
         console.warn(`[sandbox] JSONC parse errors in config: ${JSON.stringify(errors)}`)
-        return
+        return undefined
       }
       const sandbox = (parsed as Record<string, unknown>)?.sandbox
-      if (!sandbox || typeof sandbox !== "object") return
+      if (!sandbox || typeof sandbox !== "object") return undefined
       // S-MERGE-5: strict shape validation — reject type mismatches before casting
       return ConfigSandbox.validateSandboxShape(sandbox)
     }
@@ -643,11 +647,11 @@ export const ShellTool = Tool.define(
       try {
         text = await readFile(filepath, "utf-8")
       } catch (err) {
-        if (err instanceof Error && "code" in err && err.code === "ENOENT") return
+        if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined
         console.warn(`[sandbox] Failed to read config file ${filepath}:`, err instanceof Error ? err.message : String(err))
-        return
+        return undefined
       }
-      if (!text) return
+      if (!text) return undefined
       return extractSandbox(text)
     }
 
@@ -669,16 +673,19 @@ export const ShellTool = Tool.define(
     function findProjectConfig(startDir: string): string | undefined {
       let dir = startDir
       while (dir !== path.dirname(dir)) {
-        for (const name of configFilenames) {
-          const candidate = path.join(dir, name)
-          if (existsSync(candidate)) return candidate
-        }
-        for (const name of configFilenames) {
-          const candidate = path.join(dir, ".deveco", name)
-          if (existsSync(candidate)) return candidate
-        }
+        const found = findConfigInDir(dir) ?? findConfigInDir(path.join(dir, ".deveco"))
+        if (found) return found
         dir = path.dirname(dir)
       }
+      return undefined
+    }
+
+    function findConfigInDir(dir: string): string | undefined {
+      for (const name of configFilenames) {
+        const candidate = path.join(dir, name)
+        if (existsSync(candidate)) return candidate
+      }
+      return undefined
     }
 
     function findGlobalConfig(): string | undefined {
@@ -686,7 +693,25 @@ export const ShellTool = Tool.define(
         const candidate = path.join(Global.Path.config, name)
         if (existsSync(candidate)) return candidate
       }
+      return undefined
     }
+
+    // FR-CFG-009: resolve runtime layer from env vars when no session override exists.
+    // Checks DEVECO_CONFIG_CONTENT (inline JSON) then DEVECO_CONFIG (file path).
+    const resolveRuntimeEnvLayer = Effect.fn("ShellTool.resolveRuntimeEnvLayer")(
+      function* () {
+        const envContent = process.env.DEVECO_CONFIG_CONTENT
+        if (envContent) {
+          const parsed = extractSandbox(envContent)
+          if (parsed) return parsed
+        }
+        const envConfigPath = process.env.DEVECO_CONFIG
+        if (envConfigPath) {
+          return yield* Effect.promise(() => readSandboxConfig(envConfigPath))
+        }
+        return undefined
+      },
+    )
 
     const resolveSandboxProfile = Effect.fn("ShellTool.resolveSandboxProfile")(function* (cwd: string, agentSandbox?: ConfigSandbox.SandboxConfig) {
       const layers: SandboxResolver.LayeredSandboxConfig = {}
@@ -719,18 +744,7 @@ export const ShellTool = Tool.define(
       if (sessionOverride) {
         layers.runtime = sessionOverride
       } else {
-        const envContent = process.env.DEVECO_CONFIG_CONTENT
-        if (envContent) {
-          const parsed = extractSandbox(envContent)
-          if (parsed) layers.runtime = parsed
-        }
-        if (!layers.runtime) {
-          const envConfigPath = process.env.DEVECO_CONFIG
-          if (envConfigPath) {
-            const parsed = yield* Effect.promise(() => readSandboxConfig(envConfigPath))
-            if (parsed) layers.runtime = parsed
-          }
-        }
+        layers.runtime = yield* resolveRuntimeEnvLayer()
       }
 
       return yield* resolveSandboxAndMapError(layers)
@@ -790,9 +804,15 @@ export const ShellTool = Tool.define(
           }),
         )
         // Native prepare requires at least one workspace root (the cwd).
-        profile = resolvedProfile.workspace_roots.length === 0
-          ? { ...resolvedProfile, workspace_roots: [input.cwd] }
-          : resolvedProfile
+        // full-access bypasses sandbox-exec entirely.
+        profile = resolvedProfile.profile_id === "full-access"
+          ? resolvedProfile
+          : resolvedProfile.workspace_roots.length === 0
+            ? { ...resolvedProfile, workspace_roots: [input.cwd] }
+            : resolvedProfile
+        // Save effective profile info to state for sandbox-denial hint in shell_metadata.
+        state.sandboxProfileId = profile.profile_id
+        state.sandboxNetworkEnabled = profile.network_enabled
       }
 
       let spawnCmd = cmd(input.shell, input.command, input.cwd, input.env)
@@ -908,6 +928,33 @@ export const ShellTool = Tool.define(
       return null
     })
 
+    // Heuristic detection of sandbox policy denials based on stderr content
+    // and the effective profile. Used to append a explanatory hint to
+    // shell_metadata so users/agents understand the failure was likely
+    // caused by the sandbox (not by the command itself or host permissions).
+    //
+    // Not 100% precise: "permission denied" can also come from the regular
+    // filesystem. We only claim "likely" in the hint text.
+    function detectSandboxDenial(stderr: string, profileId?: string, networkEnabled?: boolean): "file" | "network" | null {
+      if (!profileId || profileId === "full-access") return null
+      // Seatbelt write/exit denials appear as "operation not permitted".
+      if (/operation not permitted/i.test(stderr)) return "file"
+      // Network blocked by sandbox profile.
+      if (!networkEnabled && /connection refused|network unreachable|could not resolve host|network is down/i.test(stderr)) return "network"
+      // read-only profile rejects every write, so permission denied on writes
+      // is almost certainly the sandbox.
+      if (profileId === "read-only" && /permission denied/i.test(stderr)) return "file"
+      return null
+    }
+
+    function sandboxHintMessage(denial: "file" | "network", profileId: string, networkEnabled: boolean): string {
+      const base = `[SANDBOX] profile=${profileId}, network=${networkEnabled ? "on" : "off"} — 此操作可能被沙箱策略阻止。`
+      if (denial === "network") {
+        return `${base}当前沙箱网络已关闭，请使用 webfetch 工具访问网络，或切换到 workspace/full-access profile。`
+      }
+      return `${base}请使用 write 工具进行文件操作，或切换到 workspace/full-access profile。`
+    }
+
     const finishShell = Effect.fn("ShellTool.finishShell")(function* (
       input: ShellRunInput,
       ctx: Tool.Context,
@@ -916,6 +963,14 @@ export const ShellTool = Tool.define(
       code: number | null,
     ) {
       const events = yield* Effect.promise(() => readDevecoCliEvents(input.devecoCliEventFile))
+      const raw = state.list.map((item) => item.text).join("")
+      // Compute sandbox denial hint once; reused in both meta (LLM) and UI output.
+      const denial = (code !== null && code !== 0 && state.sandboxProfileId)
+        ? detectSandboxDenial(raw, state.sandboxProfileId, state.sandboxNetworkEnabled)
+        : null
+      const sandboxHint = denial
+        ? sandboxHintMessage(denial, state.sandboxProfileId!, state.sandboxNetworkEnabled ?? false)
+        : ""
       const meta = [
         ...(state.expired
           ? [
@@ -925,8 +980,11 @@ export const ShellTool = Tool.define(
         ...(state.sandboxError
           ? [`Sandbox blocked the command: ${state.sandboxError}`]
           : state.aborted ? ["User aborted the command"] : []),
+        // Sandbox denial hint: when the command exited non-zero and stderr
+        // matches sandbox denial patterns under an applied profile, append an
+        // explanation so users/agents can understand the cause.
+        ...(sandboxHint ? [sandboxHint] : []),
       ]
-      const raw = state.list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       state.cut ||= end.cut
       if (!state.file && end.cut) state.file = yield* trunc.write(raw)
@@ -938,10 +996,15 @@ export const ShellTool = Tool.define(
         (end.text || "(no output)") +
         metadata +
         updateSessionCwdFromDevecoCliEvents(events, input.cwd, ctx.sessionID)
+      // UI display: replace <shell_metadata> block with single-line [SANDBOX] hint
+      // so users see a concise, structured prefix per industry logging conventions.
+      const metadataOutput = preview(output.includes("<shell_metadata>") && sandboxHint
+        ? output.replace(/<shell_metadata>[\s\S]*?<\/shell_metadata>/, sandboxHint)
+        : output)
       return {
         title: input.description,
         metadata: {
-          output: state.last || preview(output),
+          output: metadataOutput,
           exit: code,
           description: input.description,
           truncated: state.cut,

@@ -35,6 +35,8 @@ import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
+import { profileDisplayName } from "../dialog-sandbox"
+import { currentSandboxProfile } from "../../context/sandbox-profile"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -224,6 +226,12 @@ export function Prompt(props: PromptProps) {
       .catch((error) => failSubmit(error, input.sessionID))
   }
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const sandboxProfile = createMemo(() => {
+    const override = currentSandboxProfile()
+    if (override) return override
+    const cfg = sync.data.config as { sandbox?: { profile?: string } }
+    return cfg?.sandbox?.profile ?? "full-access"
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -1766,6 +1774,8 @@ export function Prompt(props: PromptProps) {
                       <text fg={fadeColor(highlight(), agentMetaAlpha())}>
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
+                      <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>·</text>
+                      <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>{profileDisplayName(sandboxProfile())}</text>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>
                           <text fg={fadeColor(theme.textMuted, modelMetaAlpha())}>·</text>

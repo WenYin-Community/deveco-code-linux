@@ -115,6 +115,35 @@ function loadNativeFromBunfs() {
  *  build-identity.json cross-check, and native getBuildIdentityJson() check. */
 function loadNativeFromFilesystem() {
     const selected = packageName();
+    const { packageVersion, packageRoot } = resolvePackageManifests(selected);
+    const addonPath = tryRealpath(resolve(packageRoot, "sandbox.node"));
+    if (!inside(packageRoot, addonPath) || !lstatSync(addonPath).isFile()) {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module is outside its platform package");
+    }
+    const metadataPath = tryRealpath(resolve(packageRoot, "build-identity.json"));
+    if (!inside(packageRoot, metadataPath) || !lstatSync(metadataPath).isFile()) {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox build metadata is outside its platform package");
+    }
+    const staged = JSON.parse(readFileSync(metadataPath, "utf8"));
+    const digest = createHash("sha256").update(readFileSync(addonPath)).digest("hex");
+    if (!verifyStagedIdentity(staged, packageVersion, digest)) {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox artifact digest or staged identity does not match");
+    }
+    const native = require(addonPath);
+    if (typeof native.getBuildIdentityJson !== "function" || typeof native.SandboxRuntime !== "function") {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module exports are invalid");
+    }
+    const identity = parseIdentity(native.getBuildIdentityJson());
+    if (!verifyHostIdentity(identity, packageVersion)) {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module identity does not match the current host");
+    }
+    if (!verifyIdentityMatch(identity, staged)) {
+        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox runtime identity does not match staged metadata");
+    }
+    return native;
+}
+
+function resolvePackageManifests(selected) {
     const wrapperManifestPath = tryRealpath(require.resolve(`${PACKAGE_NAME}/package.json`));
     const wrapperManifest = JSON.parse(readFileSync(wrapperManifestPath, "utf8"));
     if (wrapperManifest.name !== PACKAGE_NAME || typeof wrapperManifest.version !== "string" || wrapperManifest.version.length === 0) {
@@ -127,44 +156,32 @@ function loadNativeFromFilesystem() {
     if (manifest.name !== selected || manifest.version !== packageVersion) {
         throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox package identity does not match the wrapper");
     }
-    const addonPath = tryRealpath(resolve(packageRoot, "sandbox.node"));
-    if (!inside(packageRoot, addonPath) || !lstatSync(addonPath).isFile()) {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module is outside its platform package");
-    }
-    const metadataPath = tryRealpath(resolve(packageRoot, "build-identity.json"));
-    if (!inside(packageRoot, metadataPath) || !lstatSync(metadataPath).isFile()) {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox build metadata is outside its platform package");
-    }
-    const staged = JSON.parse(readFileSync(metadataPath, "utf8"));
-    const digest = createHash("sha256").update(readFileSync(addonPath)).digest("hex");
-    if (staged.package_version !== packageVersion ||
-        staged.contract_generation !== CONTRACT_GENERATION ||
-        staged.target_os !== process.platform ||
-        staged.target_arch !== process.arch ||
-        staged.napi_baseline !== NAPI_BASELINE ||
-        staged.sha256 !== digest) {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox artifact digest or staged identity does not match");
-    }
-    const native = require(addonPath);
-    if (typeof native.getBuildIdentityJson !== "function" || typeof native.SandboxRuntime !== "function") {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module exports are invalid");
-    }
-    const identity = parseIdentity(native.getBuildIdentityJson());
-    if (identity.package_version !== packageVersion ||
-        identity.contract_generation !== CONTRACT_GENERATION ||
-        identity.target_os !== process.platform ||
-        identity.target_arch !== process.arch ||
-        identity.napi_baseline !== NAPI_BASELINE) {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox module identity does not match the current host");
-    }
-    if (identity.package_version !== staged.package_version ||
-        identity.contract_generation !== staged.contract_generation ||
-        identity.target_os !== staged.target_os ||
-        identity.target_arch !== staged.target_arch ||
-        identity.napi_baseline !== staged.napi_baseline) {
-        throw new SandboxError("SandboxExecutableIntegrityFailed", "Configuration", "Native sandbox runtime identity does not match staged metadata");
-    }
-    return native;
+    return { wrapperManifest, packageVersion, packageRoot, manifest };
+}
+
+function verifyStagedIdentity(staged, packageVersion, digest) {
+    return staged.package_version === packageVersion &&
+        staged.contract_generation === CONTRACT_GENERATION &&
+        staged.target_os === process.platform &&
+        staged.target_arch === process.arch &&
+        staged.napi_baseline === NAPI_BASELINE &&
+        staged.sha256 === digest;
+}
+
+function verifyHostIdentity(identity, packageVersion) {
+    return identity.package_version === packageVersion &&
+        identity.contract_generation === CONTRACT_GENERATION &&
+        identity.target_os === process.platform &&
+        identity.target_arch === process.arch &&
+        identity.napi_baseline === NAPI_BASELINE;
+}
+
+function verifyIdentityMatch(identity, staged) {
+    return identity.package_version === staged.package_version &&
+        identity.contract_generation === staged.contract_generation &&
+        identity.target_os === staged.target_os &&
+        identity.target_arch === staged.target_arch &&
+        identity.napi_baseline === staged.napi_baseline;
 }
 export function loadNative() {
     try {

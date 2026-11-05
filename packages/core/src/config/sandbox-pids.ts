@@ -48,20 +48,32 @@ export async function clearStaleSandboxPids(
     if (!file.endsWith(".json")) continue
     const owner = Number.parseInt(file.slice(0, -5), 10)
     if (!Number.isFinite(owner)) continue
-    // Owner still alive (self or another running deveco) — do not touch.
     if (isAlive(owner)) continue
-    // Owner has exited — clean up its orphaned processes.
-    const pids = await readPids(path.join(dir(), file))
-    for (const pid of pids) {
-      if (!isAlive(pid)) continue
-      const descendantPids = await killDescendants(pid).catch(() => [] as number[])
-      for (const dpid of descendantPids) {
-        try { process.kill(dpid, "SIGTERM") } catch {}
-      }
-      try { process.kill(pid, "SIGTERM") } catch {}
-    }
+    await clearOrphanedPids(path.join(dir(), file), killDescendants)
     try { await unlink(path.join(dir(), file)) } catch {}
   }
+}
+
+async function clearOrphanedPids(
+  filepath: string,
+  killDescendants: (pid: number) => Promise<number[]>,
+) {
+  const pids = await readPids(filepath)
+  for (const pid of pids) {
+    if (!isAlive(pid)) continue
+    await killPidAndDescendants(pid, killDescendants)
+  }
+}
+
+async function killPidAndDescendants(
+  pid: number,
+  killDescendants: (pid: number) => Promise<number[]>,
+) {
+  const descendantPids = await killDescendants(pid).catch(() => [] as number[])
+  for (const dpid of descendantPids) {
+    try { process.kill(dpid, "SIGTERM") } catch {}
+  }
+  try { process.kill(pid, "SIGTERM") } catch {}
 }
 
 function isAlive(pid: number): boolean {
