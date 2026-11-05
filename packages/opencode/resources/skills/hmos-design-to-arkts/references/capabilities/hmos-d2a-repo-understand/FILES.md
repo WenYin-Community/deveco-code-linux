@@ -2,7 +2,7 @@
 # Lines starting with # are comments; empty lines are ignored
 # @note lines add informational annotations to skill_files
 
-# @note 仓库结构理解能力（Pixso/Figma 阶段3）：INSTRUCTIONS.md 是能力入口指令，由入口 skill 的能力注册表调度
+# @note 仓库结构理解能力（Pixso 阶段 3）：INSTRUCTIONS.md 是能力入口指令，由入口 skill 的能力注册表调度
 INSTRUCTIONS.md
 
 # --- Methodology ---

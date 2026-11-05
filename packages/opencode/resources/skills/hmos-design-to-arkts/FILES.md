@@ -12,11 +12,12 @@ scripts/pixso-arkts/pixso-arkts.js
 scripts/pixso-arkts/call-pixso-arkts.mjs
 
 # --- Entry-level references ---
-# @note runtime-contract.md 定义 Controller 状态机与恢复协议；requirement-clarification.md 定义需求预检字段映射与澄清文档规范；design-doc-auto-recovery.md 是 design-doc.md 缺失时的自动恢复指令；mcp-dependency.md 是 Pixso/Figma 路径的 MCP 依赖检查指引（检查方法、判定与安装引导）
+# @note runtime-contract.md 定义 Controller 状态机与恢复协议；requirement-clarification.md 定义需求预检字段映射与澄清文档规范；design-doc-auto-recovery.md 是 design-doc.md 缺失时的自动恢复指令；mcp-dependency.md 是 Pixso/Figma 路径的 MCP 依赖检查指引（检查方法、判定与安装引导）；repo-context.md 是 Pixso 阶段 3 的工程理解产物契约（stage2/repo-context.json 的 16 键 schema 与 Controller 校验口径）
 references/runtime-contract.md
 references/requirement-clarification.md
 references/design-doc-auto-recovery.md
 references/mcp-dependency.md
+references/repo-context.md
 
 # --- Stage catalogs ---
 # @note catalog JSON 是阶段→stage 文件的映射（instructionPath、requiresConfirmation 等）；选定来源与 variant 后由 Controller 读取对应 catalog
@@ -63,7 +64,7 @@ references/figma/fast/stages/03-complete-interaction-logic.md
 references/figma/fast/stages/04-quality-and-build.md
 references/figma/fast/stages/05-summary.md
 
-# --- Capability INSTRUCTIONS.md (10, dispatch targets of the 能力注册表 in SKILL.md) ---
+# --- Capability INSTRUCTIONS.md (dispatch targets of the 能力注册表 in SKILL.md; the MasterGo and Lanhu capabilities register in their own sections below) ---
 # @note 每个能力的完整文件清单见其能力目录下的 FILES.md（references/capabilities/<能力名>/FILES.md）
 references/capabilities/hmos-d2a-arkts-logic-completer/INSTRUCTIONS.md
 references/capabilities/hmos-d2a-arkui-component-best-practices/INSTRUCTIONS.md

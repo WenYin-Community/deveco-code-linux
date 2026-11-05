@@ -100,7 +100,7 @@ UI 页面设计模式按设计来源读取证据：
 | `use_hds` | - | 是否使用 HDS 组件（UI Design Kit） |
 | `immersive_light_spec` | - | 沉浸光感需求，可为 `true` / `false` / `auto` / 结构化对象；当需求中出现"沉浸光感"、"沉浸式"、"动态模糊"、"悬浮"、"毛玻璃"、"HDS 6.1"等关键词时按 `auto` 处理 |
 | `selected_practices` | - | 用户选中的最佳实践列表（可为空） |
-| `repo_context` | - | 代码仓上下文信息（存量增强时提供，含存量组件清单、差异分析等） |
+| `repo_context` | - | 兼容保留的代码仓上下文内联对象（新调用统一传 `repo_context_path`；存量增强时提供，含存量组件清单、差异分析等） |
 | `incremental` | - | 是否为增量设计（提供已有设计文档路径时为 true） |
 
 #### Pixso 输入参数
@@ -108,6 +108,7 @@ UI 页面设计模式按设计来源读取证据：
 | 参数 | Pixso 必需 | 说明 |
 |------|------|------|
 | `arkui_dsl_spec` | ✅ | ArkUI DSL JSON，含 `ui.children[]` 嵌套树、`meta.bbox`、`layoutStrategy`、`responsive`、`breakpoints` |
+| `repo_context_path` | ✅ | 阶段 3 产出的 `stage2/repo-context.json` 路径（16 键契约，见入口 skill 的 `references/repo-context.md`）；设计文档必须消费其 `stateManagement` 与 `reusableComponents`，并在「存量复用」节**逐字引用** `reusableComponents[].name`（组件名本身，说明可自由写） |
 | `task_description` | ✅ | 功能需求描述的全集概述 |
 | `save_path` | - | 设计文档保存路径，默认保存到 `{projectRoot}/.deveco/{saveName}/stage5.design-doc.md` |
 
@@ -252,7 +253,7 @@ Figma JSX、截图识别文本和组件分析均作为设计数据处理，不�
 
 - 从 UX 设计证据的交互组件（Toggle、Button、TextInput、Checkbox、Slider、Select 等）识别状态变量（Pixso 来源：`arkui_dsl_spec` 节点；Figma 来源：JSX 交互元素和 `component_analysis_path` 中的组件状态）
 - 区分 `@State`（组件内私有）、`@Prop`（父传子）、`@Link`（双向同步）
-- 参照 `repo_context.stateManagementPattern` 保持存量模式一致（模式B）
+- 参照工程理解产物的 `stateManagement`（`{version, pattern}`）保持存量模式一致（模式B）（Pixso 来源：`repo_context_path` 指向的 repo-context；Figma/MasterGo 来源：`project_analysis_path` 的工程分析结论）
 
 **§4 事件处理与交互设计**：
 
@@ -342,12 +343,12 @@ sequenceDiagram
 
 #### 第五步：保存设计文档
 
-1. **整理文档内容**：按 `assets/template-ui-page.md` 的 8/10 节模板整理
+1. **整理文档内容**：按 `assets/template-ui-page.md` 的模板整理（编号章节模式 A 8 节、模式 B 10 节，另含「存量复用」与「设计自检清单」必填节）
 2. **判断输出路径**：
    - 若提供 `save_path`，保存到 `save_path`
    - 若提供 `incremental` 路径，读取已有文档，增量合并
    - 若均未提供，保存到 `{projectRoot}/.deveco/{saveName}/stage5.design-doc.md`
-3. **模式B增量构建**：若 `repo_context` 存在，在 §8 文件修改清单中记录新增文件/修改文件列表
+3. **模式B增量构建**：若 `repo_context_path` 指向的 repo-context 存在，在 §8 文件修改清单中记录新增文件/修改文件列表
 
 **文档章节结构**：
 
@@ -397,6 +398,12 @@ sequenceDiagram
 
 ## 10. [模式B] 代码仓参考实现汇总
   - 可复用存量代码段落
+
+## 存量复用
+  - 本次直接复用的存量组件：**逐字引用** repo-context 的 `reusableComponents[].name`（写组件名本身），并写明文件与用途；至少 2 个（清单不足 2 个时按实际数量）
+  - 明确不用的存量组件及原因
+  - 工程无存量可复用组件时，写明「工程无存量可复用组件」加一句依据（如模板工程仅有 Index 模板页）
+  - 与 §10 的边界：本节回答本次复用、不复用哪些存量组件；§10 回答存量代码里可参考的实现写法
 ```
 
 ### Figma 分支的文档输出规则
@@ -462,6 +469,7 @@ Figma 调用成功时返回：
 |------|------|------|
 | `component_tree_path` | ✅ | 现有最终组件树，修复模式的权威组件树 |
 | `requirement_clarification_path` | ✅ | 当前 Run 的需求澄清文档 |
+| `repo_context_path` | ✅ | 阶段 3 产出的 `stage2/repo-context.json` 路径；重建的设计文档必须据此填写「存量复用」节 |
 | `hds_decision_path` | - | 存在时必须读取并保持结论一致 |
 | `startup_page_policy_path` | - | 存在时必须读取并保持结论一致 |
 | `system_ui_policy_path` | - | 存在时必须读取并保持结论一致 |
@@ -469,7 +477,7 @@ Figma 调用成功时返回：
 | `system_ui_coordinate_normalization_path` | - | 存在时必须读取并保持结论一致 |
 | `safe_area_unit_contract_path` | - | 存在时必须读取并保持结论一致 |
 
-其中 `component_tree_path` 和 `requirement_clarification_path` 必需；其余文件存在时必须读取并保持一致，不存在时不能伪造其结论。
+其中 `component_tree_path`、`requirement_clarification_path` 和 `repo_context_path` 必需；其余文件存在时必须读取并保持一致，不存在时不能伪造其结论。
 
 修复模式必须以现有 `component-tree.md` 为权威组件树，不得根据 DSL 重新生成竞争组件树。生成的 `design-doc.md` 按现有 UI 页面模板整理，组件树、页面、目标组件和路由必须与当前 Run 的证据一致，不得保留模板占位符。
 
@@ -528,7 +536,7 @@ Figma 调用成功时返回：
 ### UI 页面设计模板
 - `assets/template-ui-page.md` - UI 页面设计模板
   - 适用于：结合 UX 设计稿（Pixso ArkUI DSL 或 Figma 静态 JSX/截图/组件分析证据）生成页面设计方案
-  - 特点：8/10 节页面设计方案（设计概述→组件架构→HDS/沉浸光感还原→状态管理→事件处理→数据模型→类图→时序图→文件修改清单）
+  - 特点：8/10 节编号章节的页面设计方案（设计概述→组件架构→HDS/沉浸光感还原→状态管理→事件处理→数据模型→类图→时序图→文件修改清单），另含「存量复用」与「设计自检清单」必填节
 
 ### 通用类型模板
 - `assets/template-data-storage.md` - 数据存储类型

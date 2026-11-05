@@ -40,7 +40,7 @@
 
 加载能力 `hmos-d2a-repo-understand`（注册表 → references/capabilities/hmos-d2a-repo-understand/INSTRUCTIONS.md），并完整执行，输入阶段 1 实例解绑 DSL、阶段 2 已集成代码、资源 manifest、构建报告和当前项目源码。
 
-工程分析完成后，更新 `<designToArktsRunDir>/requirement-clarification.json` 中由规范分配给阶段 3 的 `targetModule` 字段，保持其他字段不变：不得覆盖预检用户选择和阶段 1 已补全的字段，也不得改写 `startupPagePolicy.userOverride`。启动页现状分析继续写入本阶段原有的 `<designToArktsRunDir>/stage3-repo-understand-report.json`/`.md`。
+工程分析完成后，更新 `<designToArktsRunDir>/requirement-clarification.json` 中由规范分配给阶段 3 的 `targetModule` 字段，保持其他字段不变：不得覆盖预检用户选择和阶段 1 已补全的字段，也不得改写 `startupPagePolicy.userOverride`。启动页现状分析继续写入本阶段原有的 `<designToArktsRunDir>/stage3-repo-understand-report.json`/`.md`；并按 `references/repo-context.md` 契约，从十部分报告提炼 16 键机器产物写入 `<designToArktsRunDir>/stage2/repo-context.json`（`stage2\` 是产物目录语义，与阶段号解耦，不属于阶段 2 专属）。
 
 如果 `hmos-d2a-repo-understand` 不存在、不可用或无法读取其 `INSTRUCTIONS.md`/必要 references，必须暂停阶段 3 并询问用户如何处理，明确说明缺失能力、阶段和影响；不得通过 `task`/`general` 子 agent 的普通仓库探索能力、文件搜索、代码审查、手写总结或主 agent 自行理解来替代。
 
@@ -83,9 +83,10 @@ prompt: 见下方任务模板
 1. 向 ledger 追加 invoked 条目：`{ "capability": "hmos-d2a-repo-understand", "status": "invoked" }`；条目 JSON 键固定为 "capability"，不得改用其他字段名。ledger 文件整体为 JSON 数组（每项一条调用记录，禁止 `entries` 等对象包裹；文件不存在时先创建 `[]` 再追加）。
 2. 加载能力 `hmos-d2a-repo-understand`（注册表 → references/capabilities/hmos-d2a-repo-understand/INSTRUCTIONS.md），并完整执行。
 3. 分析 UI、路由、逻辑、数据、资源、构建命令、阶段 2 集成位置。
-4. 输出 repo_context 和差异分析。
+4. 输出工程理解结论（repo_context）和差异分析。
 5. 写入 <designToArktsRunDir>/stage3-repo-understand-report.json 和 .md。
-6. 更新 ledger。
+6. 按 `references/repo-context.md` 的 16 键 schema 与十部分↔键位映射，从十部分报告提炼 JSON，写入 <designToArktsRunDir>/stage2/repo-context.json：每个结论带 `path:line` 证据（相对工程根），工程根与 inputs-manifest 顶层 projectRootPath 一致，判不出的项写入 uncertainties，禁止编造。
+7. 更新 ledger。
 
 职责边界：`<designToArktsRunDir>/requirement-clarification.json` 不在本子任务范围内，不得创建、修改或删除该文件；阶段 3 负责的 `targetModule` 字段由父 Agent 依据你的工程分析报告（工程结构、阶段 2 代码写入位置、后续代码组织建议）补全。
 ```
@@ -94,12 +95,14 @@ prompt: 见下方任务模板
 
 - `<designToArktsRunDir>/stage3-repo-understand-report.json`
 - `<designToArktsRunDir>/stage3-repo-understand-report.md`
+- `<designToArktsRunDir>/stage2/repo-context.json`
 
 ## 完成条件
 
 ### 通过条件
 
 - `stage3-repo-understand-report.json` 和 `stage3-repo-understand-report.md` 均存在且可解析。
+- `stage2/repo-context.json` 存在、可解析，且通过 Controller 的 repo-context 断言（16 键齐全、子键非空、`stateManagement.evidence` 带 `path:line`、工程根与阶段 1 实测一致）。
 - `requirement-clarification.json` 中阶段 3 负责的 `targetModule` 已补全，且预检字段和阶段 1 字段未被覆盖。
 - `capability-invocation-ledger.json` 中有 `hmos-d2a-repo-understand` 的 `completed` 调用证据。
 - 报告覆盖工程结构、入口、路由、状态管理、数据模型、资源目录、构建命令、阶段 2 代码写入位置、差异分析、启动页现状和后续代码组织建议。

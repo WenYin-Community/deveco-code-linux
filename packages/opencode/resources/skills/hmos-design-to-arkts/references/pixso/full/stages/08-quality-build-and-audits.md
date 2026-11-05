@@ -266,7 +266,7 @@ prompt: 见下方任务模板
 - hds_decision_path
 - system_ui_policy_path
 - viewport_boundary_spec_path
-- repo_understand_report_path
+- repo_context_path
 - requirement_clarification_path
 - stage4_selected_practices_path
 - stage6_implementation_report_path

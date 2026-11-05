@@ -171,6 +171,7 @@ MasterGo Full 的确认和续跑沿用相同 Controller 语义，使用独立 `h
 - Figma Fast catalog：`references/figma/stage-catalog-fast.json`
 - Figma 阶段目录：`references/figma/full/stages/`、`references/figma/fast/stages/`
 - 需求澄清文档规范：`references/requirement-clarification.md`
+- Pixso 工程理解产物契约（repo-context.json 的 16 键 schema 与 Controller 校验口径）：`references/repo-context.md`
 - MCP 依赖检查指引：`references/mcp-dependency.md`
 - MasterGo MCP 配置：`references/mastergo/mcp-setup.md`
 - MasterGo 输入、资源和恢复：`references/mastergo/input-contract.md`

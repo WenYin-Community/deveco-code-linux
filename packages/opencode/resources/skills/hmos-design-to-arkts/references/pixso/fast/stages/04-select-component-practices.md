@@ -29,7 +29,7 @@
 
 - dsl_path
 - stage2_integrated_code_paths
-- repo_understand_report_path
+- repo_context_path
 - requirement_clarification_path
 - image_assets_manifest_path
 - ledger_path
@@ -59,10 +59,12 @@ prompt: 见下方任务模板
 输入：
 - dsl_path
 - stage2_integrated_code_paths
-- repo_understand_report_path
+- repo_context_path
 - requirement_clarification_path
 - image_assets_manifest_path
 - ledger_path
+
+读取 `repo_context_path` 指向的 `stage2/repo-context.json` 与 `<designToArktsFastRunDir>/stage3-repo-understand-report.md`（十部分报告）时，必读 routing（十部分之二、架构约束）与存量组件（十部分之五、当前代码仓相关代码、5.2 已实现组件清单）。
 
 步骤：
 1. 向 ledger 追加 hmos-d2a-arkui-component-best-practices invoked 条目。

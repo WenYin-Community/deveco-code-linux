@@ -16,6 +16,7 @@ function readJsonFile(path) {
 }
 
 const DESIGN_DOC_RECOVERY_REQUEST = 'design-doc-recovery-request.json';
+const REPO_CONTEXT_JSON = 'stage2/repo-context.json';
 
 const VALID_MODES = new Set(['init', 'status', 'stage-start', 'confirm', 'stage-complete', 'reacquire']);
 const VALID_DECISIONS = new Set(['request', 'accepted', 'revision-requested']);
@@ -1584,7 +1585,7 @@ function missingParseableJsonInputs(runDir, relativePaths) {
 function pixsoRestoreDocumentInputIssues(runDir) {
   return [
     ...missingNonEmptyInputs(runDir, ['component-tree.md']),
-    ...missingParseableJsonInputs(runDir, ['requirement-clarification.json']),
+    ...missingParseableJsonInputs(runDir, ['requirement-clarification.json', REPO_CONTEXT_JSON]),
     ...pixsoDslIssues(runDir),
     ...missingParseableJsonInputs(runDir, [
       'hds-decision.json',
@@ -1606,7 +1607,8 @@ function pixsoUpstreamInputIssues(runDir) {
     ...missingParseableJsonInputs(runDir, [
       'stage2/image-assets-manifest.json',
       'stage3-repo-understand-report.json',
-      'stage4-selected-practices.json'
+      'stage4-selected-practices.json',
+      REPO_CONTEXT_JSON
     ])
   ];
   const generatedDir = runDirRelativePath(runDir, 'stage2/generated');
@@ -1893,7 +1895,8 @@ function designDocRecoveryInputPaths(runDir, catalog, strategy) {
       'viewport-boundary-spec.json',
       'system-ui-coordinate-normalization.json',
       'safe-area-unit-contract.json',
-      'inputs-manifest.json'
+      'inputs-manifest.json',
+      REPO_CONTEXT_JSON
     ];
   }
   if (designSource === 'figma') {
@@ -1914,7 +1917,8 @@ function designDocRecoveryInputPaths(runDir, catalog, strategy) {
     'inputs-manifest.json',
     'stage2/image-assets-manifest.json',
     'stage3-repo-understand-report.json',
-    'stage4-selected-practices.json'
+    'stage4-selected-practices.json',
+    REPO_CONTEXT_JSON
   ];
 }
 
@@ -2382,6 +2386,350 @@ function successfulBuild(build) {
     typeof build?.command === 'string' && Number.isFinite(Date.parse(build?.completedAt));
 }
 
+// --- repo-context (shared engineering-understanding contract) ---------------
+// Contract: references/repo-context.md. Both collectors are live-only: they are
+// mounted from stage-complete --result passed so completed-stage replays of
+// runs predating this rule keep working (same policy as the ledger rule below).
+
+const REPO_CONTEXT_REQUIRED_KEYS = [
+  'projectRootPath',
+  'projectType',
+  'entryChain',
+  'routing',
+  'stateManagement',
+  'dataModel',
+  'resources',
+  'buildCommands',
+  'existingComponents',
+  'reusableComponents',
+  'startupPage',
+  'differences',
+  'uncertainties',
+  'evidence'
+];
+const REPO_CONTEXT_NON_EMPTY_SUBKEYS = [
+  ['entryChain', 'indexFile'],
+  ['entryChain', 'entryAbilityFile'],
+  ['entryChain', 'mainPagesFile'],
+  ['entryChain', 'loadContent'],
+  ['routing', 'registrationMode'],
+  ['routing', 'registrationFile'],
+  ['resources', 'mediaDir'],
+  ['resources', 'prefix'],
+  ['resources', 'colorFile'],
+  ['resources', 'stringFile'],
+  ['resources', 'floatFile'],
+  ['buildCommands', 'check'],
+  ['buildCommands', 'build']
+];
+// Exact heading lines locked by the repo-understand capability's
+// references/methodology/output-format.md; the 七点五/七点六/七点七 addenda
+// are optional and intentionally absent from the required set.
+const PIXSO_REPO_UNDERSTAND_PARTS = [
+  '## 一、项目信息',
+  '## 二、架构约束',
+  '## 三、命名规范',
+  '## 四、代码风格',
+  '## 五、当前代码仓相关代码',
+  '## 六、需要补充实现的部分',
+  '## 七、差异分析摘要',
+  '## 八、约束规则',
+  '## 九、禁止事项',
+  '## 十、代码生成行为规范'
+];
+const PIXSO_COMPONENT_LIST_ANCHOR = '### 5.2 已实现组件清单';
+const DESIGN_DOC_REUSE_ANCHOR = '## 存量复用';
+// A component name is an identifier: descriptions belong in useFor / kind.
+const BARE_COMPONENT_NAME = /^[^\s@（）()\[\]{}<>,;:]+$/;
+// Unfilled output-format.md placeholders look like {existingComponentsList}.
+const TEMPLATE_PLACEHOLDER_PATTERN = /\{[a-zA-Z][a-zA-Z0-9]*\}/;
+
+function markdownSection(md, anchor) {
+  const lines = md.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === anchor);
+  if (start === -1) return null;
+  // End at the next heading of the anchor's own level or higher so legitimate
+  // subsections stay inside the extracted section.
+  const anchorLevel = /^#+/.exec(anchor)?.[0].length ?? 6;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => {
+    const heading = /^(#{1,6})\s/.exec(line.trim());
+    return heading !== null && heading[1].length <= anchorLevel;
+  });
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n');
+}
+
+// Component names are identifiers; require identifier boundaries so a lookup
+// for List is not satisfied by WaterFlowList.
+function containsIdentifier(text, name) {
+  return new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(name)}(?![A-Za-z0-9_])`).test(text);
+}
+
+// A repo-context path field: relative to the project root, never escaping it.
+// Drive-relative Windows paths ("D:dir\file") are neither isAbsolute nor
+// containable, so they are rejected explicitly.
+function repoContextProjectFile(projectRoot, value) {
+  if (typeof value !== 'string' || value.length === 0 || isAbsolute(value) || /^[A-Za-z]:/.test(value)) return null;
+  const path = resolve(projectRoot, value);
+  const rel = relative(projectRoot, path);
+  const firstSegment = rel.split(/[\\/]/)[0];
+  if (firstSegment === '' || firstSegment === '..' || isAbsolute(rel)) return null;
+  return path;
+}
+
+function repoContextNames(items) {
+  return [...new Set((Array.isArray(items) ? items : [])
+    .map((item) => (item !== null && typeof item === 'object' && typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : null))
+    .filter((name) => name !== null))];
+}
+
+// JSON.parse happily yields null, scalars and arrays; both collectors need a
+// plain object, and a legal JSON null document must fail as a structured
+// issue rather than crash on property access or silently pass.
+function readRepoContext(path) {
+  if (!isParseableJsonFile(path)) {
+    return { issues: [`${REPO_CONTEXT_JSON} is missing or not parseable`] };
+  }
+  try {
+    const parsed = readJsonFile(path);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { issues: [`${REPO_CONTEXT_JSON} must be a JSON object`] };
+    }
+    return { context: parsed };
+  } catch {
+    return { issues: [`${REPO_CONTEXT_JSON} is missing or not parseable`] };
+  }
+}
+
+// Assertion numbering follows references/repo-context.md §4. Assertions 3, 5
+// and 7a need the project root, so they run after the manifest lookup; the
+// MD-form checks (6, 7b) do not depend on it and keep reporting when the
+// manifest itself is unusable.
+function collectRepoContextIssues(runDir, designSource) {
+  const issues = [];
+  const parsed = readRepoContext(runDirRelativePath(runDir, REPO_CONTEXT_JSON));
+  if (parsed.issues !== undefined) {
+    return parsed.issues;
+  }
+  const context = parsed.context;
+
+  // 1. identity
+  if (context.schemaVersion !== 1) {
+    issues.push(`${REPO_CONTEXT_JSON} schemaVersion must be 1`);
+  }
+  if (context.designSource !== designSource) {
+    issues.push(`${REPO_CONTEXT_JSON} designSource must be ${designSource}, got ${JSON.stringify(context.designSource)}`);
+  }
+
+  // 2. the remaining 14 top-level keys plus the non-empty subkeys
+  for (const key of REPO_CONTEXT_REQUIRED_KEYS) {
+    if (context[key] === undefined) {
+      issues.push(`${REPO_CONTEXT_JSON} is missing required key: ${key}`);
+    }
+  }
+  for (const [key, subkey] of REPO_CONTEXT_NON_EMPTY_SUBKEYS) {
+    if (!isNonEmptyBoundedString(context?.[key]?.[subkey], 2048)) {
+      issues.push(`${REPO_CONTEXT_JSON} ${key}.${subkey} must be a non-empty string`);
+    }
+  }
+  if (!['v1', 'v2'].includes(context?.stateManagement?.version)) {
+    issues.push(`${REPO_CONTEXT_JSON} stateManagement.version must be v1 or v2`);
+  }
+  if (!isNonEmptyBoundedString(context?.stateManagement?.pattern, 2048)) {
+    issues.push(`${REPO_CONTEXT_JSON} stateManagement.pattern must be a non-empty string`);
+  }
+  if (!isNonEmptyBoundedString(context?.stateManagement?.evidence, 2048)) {
+    issues.push(`${REPO_CONTEXT_JSON} stateManagement.evidence must be a non-empty string`);
+  }
+  if (!['template', 'existing'].includes(context?.projectType)) {
+    issues.push(`${REPO_CONTEXT_JSON} projectType must be template or existing`);
+  }
+  if (context?.routing !== undefined && !Array.isArray(context.routing.existingRoutes)) {
+    issues.push(`${REPO_CONTEXT_JSON} routing.existingRoutes must be an array`);
+  }
+  if (context?.dataModel !== undefined && !Array.isArray(context.dataModel.existing)) {
+    issues.push(`${REPO_CONTEXT_JSON} dataModel.existing must be an array`);
+  }
+  if (!isNonEmptyBoundedString(context?.startupPage?.before, 2048)) {
+    issues.push(`${REPO_CONTEXT_JSON} startupPage.before must be a non-empty string`);
+  }
+  if (context?.startupPage !== undefined && !Array.isArray(context.startupPage.evidenceFiles)) {
+    issues.push(`${REPO_CONTEXT_JSON} startupPage.evidenceFiles must be an array`);
+  }
+  if (context?.evidence !== undefined && !Array.isArray(context.evidence.filesRead)) {
+    issues.push(`${REPO_CONTEXT_JSON} evidence.filesRead must be an array`);
+  }
+  const generatedAt = typeof context?.evidence?.generatedAt === 'string' ? context.evidence.generatedAt.trim() : '';
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(generatedAt)) {
+    issues.push(`${REPO_CONTEXT_JSON} evidence.generatedAt must be an ISO-8601 timestamp with seconds and an explicit zone (Z or numeric offset)`);
+  } else if (/T\d{2}:\d{2}:00(\.0+)?(Z|[+-]\d{2}:\d{2})$/.test(generatedAt)) {
+    // A whole-minute timestamp is the signature of a hand-written clock
+    // reading; an honest clock reading has roughly a 1/60000 chance of
+    // hitting it and can simply re-read the clock.
+    issues.push(`${REPO_CONTEXT_JSON} evidence.generatedAt must come from the system clock; whole-minute timestamps are rejected`);
+  }
+
+  // 4. every component/difference conclusion names its subject and evidence
+  for (const [key, subjectKey] of [['existingComponents', 'name'], ['reusableComponents', 'name'], ['differences', 'target']]) {
+    if (context[key] === undefined) continue;
+    if (!Array.isArray(context[key])) {
+      issues.push(`${REPO_CONTEXT_JSON} ${key} must be an array`);
+      continue;
+    }
+    context[key].forEach((item, index) => {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+        issues.push(`${REPO_CONTEXT_JSON} ${key}[${index}] must be an object`);
+        return;
+      }
+      if (!isNonEmptyBoundedString(item[subjectKey], 512)) {
+        issues.push(`${REPO_CONTEXT_JSON} ${key}[${index}].${subjectKey} must be a non-empty string`);
+      } else if (subjectKey === 'name' && !BARE_COMPONENT_NAME.test(item.name.trim())) {
+        // Component labels like "Index@route host" make the design document's
+        // verbatim reference arbitrary, so names stay identifiers.
+        issues.push(`${REPO_CONTEXT_JSON} ${key}[${index}].name must be a bare component identifier (no description, "@", brackets or punctuation)`);
+      }
+      if (!isNonEmptyBoundedString(item.evidence, 2048)) {
+        issues.push(`${REPO_CONTEXT_JSON} ${key}[${index}].evidence must be a non-empty string`);
+      }
+    });
+  }
+
+  // 6 + 7b. pixso: the ten-part MD is the capability's product; the JSON is
+  // distilled from it, so both must exist and agree.
+  const mdPath = runDirRelativePath(runDir, 'stage3-repo-understand-report.md');
+  if (!isNonEmptyFile(mdPath)) {
+    issues.push('stage3-repo-understand-report.md is missing or empty');
+    return issues;
+  }
+  let md;
+  try {
+    md = readFileSync(mdPath, 'utf8');
+  } catch {
+    issues.push('stage3-repo-understand-report.md is missing or unreadable');
+    return issues;
+  }
+  const lines = md.replace(/^\uFEFF/, '').split(/\r?\n/).map((line) => line.trim());
+  for (const heading of PIXSO_REPO_UNDERSTAND_PARTS) {
+    if (!lines.includes(heading)) {
+      issues.push(`stage3-repo-understand-report.md is missing the required part heading: ${heading}`);
+    }
+  }
+  if (TEMPLATE_PLACEHOLDER_PATTERN.test(md)) {
+    issues.push('stage3-repo-understand-report.md still contains unfilled template placeholders like {existingComponentsList}');
+  }
+  for (const heading of PIXSO_REPO_UNDERSTAND_PARTS) {
+    const index = lines.indexOf(heading);
+    if (index === -1) continue;
+    const nextPart = lines.findIndex((line, i) => i > index && /^##\s/.test(line));
+    const end = nextPart === -1 ? lines.length : nextPart;
+    const hasBody = lines.slice(index + 1, end).some((line) => line.length > 0 && !/^#{1,6}\s/.test(line));
+    if (!hasBody) {
+      issues.push(`stage3-repo-understand-report.md part has no content: ${heading}`);
+    }
+  }
+  const componentList = markdownSection(md, PIXSO_COMPONENT_LIST_ANCHOR);
+  const existingNames = repoContextNames(context.existingComponents);
+  if (componentList === null) {
+    issues.push(`stage3-repo-understand-report.md is missing the ${PIXSO_COMPONENT_LIST_ANCHOR} section`);
+  } else if (componentList.split(/\r?\n/).every((line) => line.trim().length === 0 || /^#{1,6}\s/.test(line.trim()))) {
+    issues.push(`stage3-repo-understand-report.md ${PIXSO_COMPONENT_LIST_ANCHOR} section is empty`);
+  } else if (existingNames.length > 0 && !existingNames.some((name) => containsIdentifier(componentList, name))) {
+    issues.push(`${REPO_CONTEXT_JSON} existingComponents has no overlap with the ${PIXSO_COMPONENT_LIST_ANCHOR} list`);
+  }
+
+  // 5. the project root must match what stage 1 actually measured. A missing,
+  // unparseable or non-object manifest is a structured issue, never a silent
+  // skip: a legal JSON null document would otherwise disable every
+  // root-dependent check below.
+  const manifestIssues = [];
+  const manifest = readJsonOrNull(join(runDir, 'inputs-manifest.json'), 'inputs manifest', manifestIssues);
+  const manifestObject = manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest) ? manifest : null;
+  if (manifestObject === null && manifestIssues.length === 0) {
+    manifestIssues.push('inputs manifest must be a JSON object');
+  }
+  issues.push(...manifestIssues);
+  const projectRoot = manifestObject === null
+    ? null
+    : resolveLockedProjectRoot(runDir, manifestObject.projectRootPath, 'inputs manifest projectRootPath', issues);
+  const declaredRoot = context.projectRootPath === undefined
+    ? null
+    : resolveLockedProjectRoot(runDir, context.projectRootPath, `${REPO_CONTEXT_JSON} projectRootPath`, issues);
+  if (projectRoot !== null && declaredRoot !== null && realpathSync(declaredRoot) !== realpathSync(projectRoot)) {
+    issues.push(`${REPO_CONTEXT_JSON} projectRootPath must match the inputs manifest projectRootPath`);
+  }
+  if (projectRoot === null) {
+    return issues;
+  }
+
+  // 3. stateManagement.evidence is path:line inside the project
+  const stateEvidence = typeof context.stateManagement?.evidence === 'string' ? context.stateManagement.evidence.trim() : '';
+  const stateEvidenceMatch = /^(\S+):(\d+)$/.exec(stateEvidence);
+  const stateEvidenceFile = stateEvidenceMatch === null ? null : repoContextProjectFile(projectRoot, stateEvidenceMatch[1]);
+  if (stateEvidenceMatch === null) {
+    issues.push(`${REPO_CONTEXT_JSON} stateManagement.evidence must be path:line`);
+  } else if (stateEvidenceFile === null || !existsSync(stateEvidenceFile) || !statSync(stateEvidenceFile).isFile()) {
+    issues.push(`${REPO_CONTEXT_JSON} stateManagement.evidence path does not exist inside the project: ${stateEvidenceMatch[1]}`);
+  }
+
+  // 7a. every filesRead entry is a real project file
+  if (Array.isArray(context.evidence?.filesRead)) {
+    for (const value of context.evidence.filesRead) {
+      const file = repoContextProjectFile(projectRoot, value);
+      if (file === null || !existsSync(file) || !statSync(file).isFile()) {
+        issues.push(`${REPO_CONTEXT_JSON} evidence.filesRead entry does not exist inside the project: ${JSON.stringify(value)}`);
+      }
+    }
+  }
+  return issues;
+}
+
+// The design document must consume the repo-context reuse conclusions (live-only).
+// Known limitation: pixso has no confirmation snapshot for stages 3/5, so
+// repo-context.json is trusted as-is between the two stages; only design-doc
+// recovery events freeze it (recovery input hashes). The 存量复用 wording
+// check is a floor, not a forgery detector: it rejects missing sections,
+// missing statements and bare statements without a reason.
+function collectRepoContextConsumptionIssues(runDir) {
+  const designDocPath = runDirRelativePath(runDir, 'design-doc.md');
+  if (!isNonEmptyFile(designDocPath)) {
+    return []; // a missing design-doc is reported and recovered elsewhere
+  }
+  const parsed = readRepoContext(runDirRelativePath(runDir, REPO_CONTEXT_JSON));
+  if (parsed.issues !== undefined) {
+    return parsed.issues;
+  }
+  let designDoc;
+  try {
+    designDoc = readFileSync(designDocPath, 'utf8');
+  } catch {
+    return ['design-doc.md is missing or unreadable'];
+  }
+  const reusableNames = repoContextNames(parsed.context.reusableComponents);
+  const section = markdownSection(designDoc, DESIGN_DOC_REUSE_ANCHOR);
+  if (section === null) {
+    return [`design-doc.md is missing the ${DESIGN_DOC_REUSE_ANCHOR} section`];
+  }
+  if (reusableNames.length > 0) {
+    // A non-empty reuse list must be consumed, bounded by what actually exists.
+    const required = Math.min(2, reusableNames.length);
+    const referenced = reusableNames.filter((name) => containsIdentifier(section, name));
+    if (referenced.length < required) {
+      return [`design-doc.md ${DESIGN_DOC_REUSE_ANCHOR} section must reference at least ${required} reusable component(s) from ${REPO_CONTEXT_JSON} (available: ${reusableNames.join(', ')})`];
+    }
+    return [];
+  }
+  // An empty reuse list is legitimate (template projects); drifting through it is not.
+  const bodyLength = section
+    .split(/\r?\n/)
+    .filter((line) => !/^#{1,6}\s/.test(line.trim()))
+    .join('')
+    .trim().length;
+  if (!/无存量可复用|无可用存量/.test(section) || bodyLength < 30) {
+    return [`design-doc.md ${DESIGN_DOC_REUSE_ANCHOR} section must state that the project has no reusable components, with a one-line reason (e.g. template project with only the Index page)`];
+  }
+  return [];
+}
+
 function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
   const issues = [];
   const designSource = catalog.designSource ?? 'pixso';
@@ -2414,6 +2762,12 @@ function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
       const audit = readJsonOrNull(join(runDir, 'stage4-quality-audit.json'), 'Lanhu Full quality audit', issues);
       if (!successfulBuild(audit?.build)) issues.push('Lanhu Full quality audit must record a successful final build');
     }
+  }
+  if (designSource === 'pixso' && stage === 3 && ctx.live === true) {
+    issues.push(...collectRepoContextIssues(runDir, designSource));
+  }
+  if (designSource === 'pixso' && stage === 5 && ctx.live === true) {
+    issues.push(...collectRepoContextConsumptionIssues(runDir));
   }
   if (designSource === 'figma' && stage === 1) {
     issues.push(...collectFigmaStage1EvidenceIssues(runDir, catalog, ctx));

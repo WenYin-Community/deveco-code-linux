@@ -189,7 +189,7 @@ passed 流程：
 2. 校验 `requestedStage === currentStage`（或进入幂等重放判断）。
 3. 拒绝 `blocked`、`completed` 以及 passed 专属的 `awaiting_confirmation` 状态。
 4. 需要确认的阶段必须已经记录在 `confirmedStages`；该确认要求仅约束通过。
-5. 执行阶段特有确定性校验：Pixso Full 阶段 9 视觉校准证据、Figma Full 阶段 5 视觉校准证据；所有来源的阶段 1 必须存在合法需求澄清证据（见下）。
+5. 执行阶段特有确定性校验：Pixso Full 阶段 9 视觉校准证据、Figma Full 阶段 5 视觉校准证据；所有来源的阶段 1 必须存在合法需求澄清证据（见下）；Pixso 阶段 3 现场完成时必须存在通过 repo-context 断言的 `stage2/repo-context.json`，Pixso 阶段 5 现场完成时 `design-doc.md` 必须包含与 repo-context 一致的存量复用结论（契约见 [repo-context.md](repo-context.md)；两者均为 live-only，已完成阶段的重放不追溯）。
 6. 构造 canonical passed Gate 并写入。
 7. Figma 阶段 2 passed 时，由 Controller 在 Gate 之后、state 推进之前原子更新 run-index 当前记录（见 [Figma run-index 语义](#figma-run-index-语义)）。
 8. 推进 `completedStages/currentStage/status`。

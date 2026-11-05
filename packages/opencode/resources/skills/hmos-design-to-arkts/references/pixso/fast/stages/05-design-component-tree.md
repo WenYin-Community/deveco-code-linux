@@ -33,7 +33,7 @@
 
 - 阶段 1 实例解绑 DSL 和参考截图。
 - 阶段 2 pixso-arkts 代码、`.imageIds.json`、`.raw.json`、`.result.json`、运行 manifest、图片资源 manifest、集成报告和构建报告。
-- 阶段 3 repo-understand 报告。
+- 阶段 3 repo-understand 报告（`<designToArktsFastRunDir>/stage3-repo-understand-report.md`），以及按 `repo_context_path` 读取的 `stage2/repo-context.json` 的 routing 与存量组件结论（十部分之二、架构约束；五、当前代码仓相关代码）。
 - 需求澄清文档（requirement-clarification.json）。
 - 阶段 4 最佳实践选择。
 
@@ -41,7 +41,7 @@
 
 阶段 5 是以下实现规则的唯一设计来源。阶段 6～8 必须读取本阶段机器产物执行和验证，不得重新选择、弱化或改写这些规则。发现契约与项目现实冲突时，必须保持当前 currentStage，按当前阶段允许的返工范围修正前序实现或业务产物；如果必须改变已生成组件树或核心契约，则阻塞当前阶段并报告，不得自动返回阶段 5、修改 workflow-state.json 或重新调用旧阶段 stage-start。
 
-设计文档必须包含页面目标、用户意图、输入证据路径、组件树结构图（内嵌 layoutStrategy+responsive）、页面层级与 Navigation 架构、DSL 组件树与阶段 2 ArkTS 骨架组件树与最终目标组件树对照、阶段 2 产物承接计划（保留、调整、删除、补全项）、响应式布局策略、状态/事件/数据模型/mock 数据/真实数据边界、mock-only 系统 UI 处理（状态栏、信号、电量、系统手势条、设备外壳只作为设计参照，不得作为应用自绘元素）、文件修改清单和风险。
+设计文档必须包含页面目标、用户意图、输入证据路径、组件树结构图（内嵌 layoutStrategy+responsive）、页面层级与 Navigation 架构、DSL 组件树与阶段 2 ArkTS 骨架组件树与最终目标组件树对照、阶段 2 产物承接计划（保留、调整、删除、补全项）、响应式布局策略、状态/事件/数据模型/mock 数据/真实数据边界、mock-only 系统 UI 处理（状态栏、信号、电量、系统手势条、设备外壳只作为设计参照，不得作为应用自绘元素）、文件修改清单、存量复用结论（复用、不复用的存量组件及依据，见「存量复用」节）和风险。
 
 此外，设计文档必须包含以下按主题组织的契约块。每条机制只在本块详细解释一次；后续阶段引用该产物时不重复定义。字段名保持不变。
 
@@ -148,7 +148,7 @@ prompt: 见下方任务模板
 - stage2_result_paths
 - image_assets_manifest_path
 - stage2_build_report_path
-- repo_understand_report_path
+- repo_context_path
 - requirement_clarification_path
 - stage4_selected_practices_path
 - hds_usage_preference
@@ -206,6 +206,14 @@ workflow.mjs --mode stage-complete --run-dir <runDir> --stage 5 --result blocked
 ```
 
 Gate 由 Controller 自动生成。不得自行创建、修改或覆盖 stage gate。
+
+### repo-context 消费断言不达标时
+
+`stage-complete --run-dir <runDir> --stage 5 --result passed` 可能因 `design-doc.md` 的「存量复用」节不合规被拒（缺节、未逐字引用 `reusableComponents[].name`、或空清单未写依据）。处理规则：
+
+- 停在阶段 5，重新调用 `hmos-d2a-solution-design` 修订 `design-doc.md`（ledger 按同一次能力调用记录），使其逐字引用本 run `stage2/repo-context.json` 中 `reusableComponents[].name` 的组件名；
+- **禁止主 Agent 手写、手改或补造 `design-doc.md`**——唯一写入者是 `hmos-d2a-solution-design`；
+- 修订完成后重新执行 `stage-complete --result passed`，不得修改 `workflow-state.json`，不得跳过阶段。
 
 ### 允许返工范围
 
