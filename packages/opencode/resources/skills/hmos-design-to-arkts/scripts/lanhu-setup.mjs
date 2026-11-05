@@ -45,11 +45,55 @@ export async function ready(target) {
     .then(JSON.parse)
     .catch(() => undefined)
   if (receipt?.commit !== COMMIT || receipt?.patch !== PATCH.id) return false
-  await safeManagedPath(target.python)
+  if (!(await interpreterReady(target.python))) return false
   return fs
-    .access(target.python)
-    .then(async () => sha256(await fs.readFile(path.join(target.source, PATCH.file))) === PATCH.patchedSha256)
+    .readFile(path.join(target.source, PATCH.file))
+    .then((source) => sha256(source) === PATCH.patchedSha256)
     .catch(() => false)
+}
+
+// uv links venv/bin/python to its managed interpreter, so only that one file may be a
+// symlink: the venv directory and the interpreter's real location stay locked down.
+export async function interpreterReady(python) {
+  const target = path.resolve(python)
+  try {
+    await safeManagedPath(path.dirname(target))
+    const info = await fs.lstat(target).catch((error) => {
+      if (error.code !== "ENOENT") throw error
+    })
+    if (!info) return false
+    if (!info.isFile() && !info.isSymbolicLink()) return false
+    const real = info.isSymbolicLink() ? await fs.realpath(target) : target
+    if (!(await fs.stat(real)).isFile()) return false
+    if (info.isSymbolicLink() && !(await interpreterAllowed(real))) return false
+    return fs
+      .access(real, fs.constants.X_OK)
+      .then(() => true)
+      .catch(() => false)
+  } catch {
+    // ready() gates status, login and reinstall; a rejected interpreter has to read as
+    // missing so install can repair it, instead of aborting every command with a throw.
+    return false
+  }
+}
+
+async function interpreterAllowed(real) {
+  // Resolve the allowlist root as well: a symlinked XDG_DATA_HOME or
+  // UV_PYTHON_INSTALL_DIR still has to match the resolved interpreter path.
+  const root = await fs.realpath(uvPythonRoot())
+  const relative = path.relative(root, real)
+  if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) return false
+  await safeManagedPath(real)
+  if (process.platform === "win32") return true
+  const info = await fs.lstat(root)
+  return info.uid === process.getuid() && (info.mode & 0o022) === 0
+}
+
+function uvPythonRoot() {
+  if (process.env.UV_PYTHON_INSTALL_DIR) return path.resolve(process.env.UV_PYTHON_INSTALL_DIR)
+  if (process.platform === "win32")
+    return path.resolve(process.env.APPDATA || path.join(homedir(), "AppData", "Roaming"), "uv", "data", "python")
+  return path.resolve(process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"), "uv", "python")
 }
 
 export function patch(source) {
@@ -125,7 +169,14 @@ export async function install(target, runtime, signal) {
       "--managed-python",
       path.dirname(path.dirname(target.python)),
     ],
-    { cwd: target.root, signal, timeout: 600_000, label: "Python installation" },
+    {
+      cwd: target.root,
+      signal,
+      timeout: 600_000,
+      label: "Python installation",
+      // Pin the same interpreter root that ready() accepts.
+      env: { ...process.env, UV_PYTHON_INSTALL_DIR: uvPythonRoot() },
+    },
   )
   await runCommand(
     uv,
