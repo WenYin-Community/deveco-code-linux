@@ -8,7 +8,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import type { ExtractionConfig, SkillConfig } from './types'
+import type { ExtractionConfig, SkillConfig, MemoryHeader } from './types'
 import { DEFAULT_EXTRACTION_CONFIG, DEFAULT_SKILL_CONFIG } from './types'
 import { MemoryStorage } from './storage'
 import {
@@ -29,6 +29,7 @@ import type { ExtractionAgentContext } from './extractionAgent'
 import { getLockFilePath, readConsolidationLock, isLockStale } from '../autoDream/consolidationLock'
 import { DEFAULT_AUTO_DREAM_CONFIG } from './types'
 import { SkillStorage } from '../skills/storage'
+import type { SkillHeader } from '../skills/types'
 import { buildCombinedReviewPrompt, buildSkillReviewPrompt } from '../skills/prompts'
 import {
   getExtractionLockPath,
@@ -171,38 +172,46 @@ async function fetchSessionMessages(sessionID: string): Promise<FetchMessagesRes
   if (!initializedClient) {
     return { messages: [], error: 'client_not_initialized' }
   }
-  
+
   try {
     const result = await initializedClient.session.messages({
       path: { id: sessionID }
     })
-    
+
     if (result.error || !result.data) {
-      const err = result.error as { name?: string; data?: { name?: string } } | undefined
-      const errorName = err?.name
-      const errorDataName = err?.data?.name
-      
-      if (errorName === 'NotFoundError' || errorDataName === 'NotFoundError') {
-        logger.warn('[AutoMemoryExtraction]', 'Session not found:', sessionID)
-        return { messages: [], error: 'session_not_found', isNotFound: true }
-      }
-      
-      logger.error('[AutoMemoryExtraction]', 'Failed to fetch messages:', result.error)
-      return { messages: [], error: String(result.error) }
+      return handleFetchError(result.error, sessionID)
     }
-    
+
     return { messages: result.data }
   } catch (error) {
-    const errorName = (error as { name?: string })?.name
-    
-    if (errorName === 'NotFoundError') {
-      logger.warn('[AutoMemoryExtraction]', 'Session not found (catch):', sessionID)
-      return { messages: [], error: 'session_not_found', isNotFound: true }
-    }
-    
-    logger.error('[AutoMemoryExtraction]', 'Error fetching messages:', error)
-    return { messages: [], error: String(error) }
+    return handleFetchException(error, sessionID)
   }
+}
+
+function handleFetchError(error: unknown, sessionID: string): FetchMessagesResult {
+  const err = error as { name?: string; data?: { name?: string } } | undefined
+  const errorName = err?.name
+  const errorDataName = err?.data?.name
+
+  if (errorName === 'NotFoundError' || errorDataName === 'NotFoundError') {
+    logger.warn('[AutoMemoryExtraction]', 'Session not found:', sessionID)
+    return { messages: [], error: 'session_not_found', isNotFound: true }
+  }
+
+  logger.error('[AutoMemoryExtraction]', 'Failed to fetch messages:', error)
+  return { messages: [], error: String(error) }
+}
+
+function handleFetchException(error: unknown, sessionID: string): FetchMessagesResult {
+  const errorName = (error as { name?: string })?.name
+
+  if (errorName === 'NotFoundError') {
+    logger.warn('[AutoMemoryExtraction]', 'Session not found (catch):', sessionID)
+    return { messages: [], error: 'session_not_found', isNotFound: true }
+  }
+
+  logger.error('[AutoMemoryExtraction]', 'Error fetching messages:', error)
+  return { messages: [], error: String(error) }
 }
 
 export async function executeExtraction(
@@ -212,103 +221,42 @@ export async function executeExtraction(
     success: false,
     extractionRan: false,
   }
-  
+
   const storage = context.storage || initializedStorage
 
   logger.info('[AutoMemoryExtraction]', 'executeExtraction STARTED — sessionID:', context.sessionID, 'memoryRoot:', context.memoryRoot, 'thresholdState:', JSON.stringify(getThresholdState()), 'skipThrottle:', context.skipThrottle)
 
   try {
-    if (!isExtractionInitialized()) {
-      result.skipReason = "extraction_not_initialized"
-      logger.warn('[AutoMemoryExtraction]', 'SKIP: extraction not initialized')
+    const precheckSkip = await checkExtractionPreconditions(context)
+    if (precheckSkip) {
+      result.skipReason = precheckSkip
       return result
     }
 
-    if (getThresholdState().inProgress) {
-      const extractionLockedNow = await isExtractionLocked(context.memoryRoot)
-      logger.info('[AutoMemoryExtraction]', 'inProgress=true — extractionLockedNow:', extractionLockedNow)
-      if (extractionLockedNow) {
-        result.skipReason = "extraction_in_progress"
-        logger.info('[AutoMemoryExtraction]', 'SKIP: extraction in progress (lock held)')
-        return result
-      } else {
-        updateThresholdState({ ...getThresholdState(), inProgress: false })
-        logger.info('[AutoMemoryExtraction]', 'Flag auto-reset: lock not found, inProgress → false')
-      }
-    }
-
-    const consolidationLockPath = getLockFilePath(context.memoryRoot)
-    const existingLock = await readConsolidationLock(consolidationLockPath)
-
-    if (existingLock) {
-      const lockStaleMs = DEFAULT_AUTO_DREAM_CONFIG.lockStaleMs
-      const lockIsStale = isLockStale(existingLock, lockStaleMs)
-
-      if (!lockIsStale) {
-        result.skipReason = "auto_dream_consolidation_running"
-        logger.info('[AutoMemoryExtraction]', 'SKIP: auto dream consolidation running')
-        return result
-      }
-      logger.info('[AutoMemoryExtraction]', 'Consolidation lock stale, proceeding')
-    }
-    
-    const fetchResult = await fetchSessionMessages(context.sessionID)
-    
-    if (fetchResult.isNotFound) {
-      result.skipReason = 'session_not_found'
-      return result
-    }
-    
-    if (fetchResult.error && fetchResult.messages.length === 0) {
-      result.skipReason = 'failed_to_fetch_messages'
-      result.error = fetchResult.error
-      return result
-    }
-    
-    const messages = fetchResult.messages
-    if (messages.length === 0) {
-      result.skipReason = 'no_messages'
-      return result
-    }
-    
-    const thresholdState = getThresholdState()
-    const skillThresholdMet = initializedSkillConfig.autoTrigger && thresholdState.skill_iters_since_review >= initializedSkillConfig.skillReviewInterval
-    // Respect throttle + minMessages via shouldTriggerExtraction (replaces hardcoded true).
-    // skipThrottle bypasses for manual triggers (e.g. /extract).
-    const triggerCheck = shouldTriggerExtraction(
-      thresholdState,
-      initializedConfig,
-      messages.length,
-      initializedSkillConfig,
-    )
-    const memoryThresholdMet = context.skipThrottle || triggerCheck.shouldTrigger
-    if (!memoryThresholdMet && !skillThresholdMet) {
-      result.skipReason = triggerCheck.reason || 'threshold_not_met'
-      logger.info('[AutoMemoryExtraction]', 'SKIP:', result.skipReason, '(turnsSinceLast:', thresholdState.turnsSinceLastExtraction, '/ throttle:', initializedConfig.throttle, ', msgs:', messages.length, '/ min:', initializedConfig.minMessages, ')')
+    const fetched = await fetchMessagesOrSkip(context)
+    if (fetched.skipReason) {
+      result.skipReason = fetched.skipReason
+      if (fetched.error) result.error = fetched.error
       return result
     }
 
-    const memoryEnabled = initializedConfig.enabled
-    const skillEnabled = initializedSkillConfig.enabled
-    
-    const reviewMode = determineReviewMode(memoryThresholdMet, skillThresholdMet, memoryEnabled, skillEnabled)
-    
-    if (!reviewMode) {
-      result.skipReason = "no_valid_review_mode"
+    const mode = determineModeOrSkip(context, fetched.messages.length)
+    if (mode.skipReason) {
+      result.skipReason = mode.skipReason
       return result
     }
-    
+    const reviewMode = mode.reviewMode!
     result.reviewMode = reviewMode
-    
+
     const lockPath = getExtractionLockPath(context.memoryRoot)
     const acquired = await tryAcquireExtractionLock(context.memoryRoot, context.sessionID)
     if (!acquired) {
       result.skipReason = "extraction_lock_failed"
       return result
     }
-    
+
     updateThresholdState(markExtractionStarted(getThresholdState()))
-    
+
     const reviewModeLabels: Record<ReviewMode, string> = {
       'combined': '记忆+技能',
       'skill-only': '技能',
@@ -320,7 +268,7 @@ export async function executeExtraction(
       'Auto Memory',
       2000
     )
-    
+
     if (!storage) {
       logger.warn('[AutoMemoryExtraction]', 'Storage not initialized, cannot list existing memories')
       result.skipReason = "storage_not_initialized"
@@ -335,28 +283,9 @@ export async function executeExtraction(
     const existingSkills = initializedSkillStorage 
       ? await initializedSkillStorage.list() 
       : []
-    
-    let prompt: string
-    
-    if (reviewMode === 'combined') {
-      const memoriesList = existingMemories.map(m => `- ${m.name}: ${m.description}`).join('\n')
-      const skillsList = existingSkills.map(s => `- ${s.name}: ${s.description}`).join('\n')
-      prompt = buildCombinedReviewPrompt(memoriesList, skillsList, lockPath)
-    } else if (reviewMode === 'skill-only') {
-      const skillsList = existingSkills.map(s => `- ${s.name}: ${s.description}`).join('\n')
-      prompt = buildSkillReviewPrompt(skillsList, lockPath)
-    } else {
-      const promptContext: ExtractionPromptContext = {
-        currentMemories: existingMemories,
-        sessionID: context.sessionID,
-        projectID: context.projectID,
-        memoryRoot: context.memoryRoot,
-        cursorMessageId: getThresholdState().lastExtractionMessageUuid,
-      }
-      const promptResult = buildExtractionPrompt(promptContext, lockPath)
-      prompt = promptResult.prompt
-    }
-    
+
+    const prompt = buildReviewPrompt(reviewMode, existingMemories, existingSkills, lockPath, context)
+
     const agentContext: ExtractionAgentContext = {
       client: initializedClient!,
       sessionID: context.sessionID,
@@ -375,21 +304,21 @@ export async function executeExtraction(
     }
 
     // Store last message UUID as cursor for incremental extraction
-    const lastMsg = messages[messages.length - 1] as { info?: { id?: string } } | undefined
+    const lastMsg = fetched.messages[fetched.messages.length - 1] as { info?: { id?: string } } | undefined
     if (lastMsg?.info?.id) {
       updateThresholdState({ ...getThresholdState(), pendingLastMessageUuid: lastMsg.info.id })
     }
 
     const agentResult = await runExtractionAgent(agentContext)
-    
+
     result.extractionRan = true
     result.success = agentResult.success
-    
+
     if (!agentResult.success) {
       await releaseExtractionLock(context.memoryRoot)
       updateThresholdState({ ...getThresholdState(), inProgress: false })
       result.error = agentResult.error
-      
+
       await showToast(
         `提取启动失败: ${agentResult.error || '未知错误'}`,
         'error',
@@ -398,23 +327,130 @@ export async function executeExtraction(
       )
       return result
     }
-    
+
     if (reviewMode === 'combined' || reviewMode === 'skill-only') {
       updateThresholdState(resetExtractionSkillCounter(getThresholdState()))
     }
-    
+
     logger.info('[AutoMemoryExtraction]', 'Extraction agent launched (fire-and-forget)')
     return result
-    
+
   } catch (error) {
     result.error = error instanceof Error ? error.message : "Unknown error"
-    
+
     await releaseExtractionLock(context.memoryRoot)
     updateThresholdState({ ...getThresholdState(), inProgress: false })
-    
+
     logger.error('[AutoMemoryExtraction]', 'Error:', result.error)
     return result
   }
+}
+
+async function checkExtractionPreconditions(context: ExtractionRunnerContext): Promise<string | null> {
+  if (!isExtractionInitialized()) {
+    logger.warn('[AutoMemoryExtraction]', 'SKIP: extraction not initialized')
+    return "extraction_not_initialized"
+  }
+
+  if (getThresholdState().inProgress) {
+    const extractionLockedNow = await isExtractionLocked(context.memoryRoot)
+    logger.info('[AutoMemoryExtraction]', 'inProgress=true — extractionLockedNow:', extractionLockedNow)
+    if (extractionLockedNow) {
+      logger.info('[AutoMemoryExtraction]', 'SKIP: extraction in progress (lock held)')
+      return "extraction_in_progress"
+    }
+    updateThresholdState({ ...getThresholdState(), inProgress: false })
+    logger.info('[AutoMemoryExtraction]', 'Flag auto-reset: lock not found, inProgress → false')
+  }
+
+  const consolidationLockPath = getLockFilePath(context.memoryRoot)
+  const existingLock = await readConsolidationLock(consolidationLockPath)
+
+  if (existingLock) {
+    const lockIsStale = isLockStale(existingLock, DEFAULT_AUTO_DREAM_CONFIG.lockStaleMs)
+    if (!lockIsStale) {
+      logger.info('[AutoMemoryExtraction]', 'SKIP: auto dream consolidation running')
+      return "auto_dream_consolidation_running"
+    }
+    logger.info('[AutoMemoryExtraction]', 'Consolidation lock stale, proceeding')
+  }
+
+  return null
+}
+
+async function fetchMessagesOrSkip(context: ExtractionRunnerContext): Promise<{ messages: unknown[]; skipReason?: string; error?: string }> {
+  const fetchResult = await fetchSessionMessages(context.sessionID)
+
+  if (fetchResult.isNotFound) {
+    return { messages: [], skipReason: 'session_not_found' }
+  }
+
+  if (fetchResult.error && fetchResult.messages.length === 0) {
+    return { messages: [], skipReason: 'failed_to_fetch_messages', error: fetchResult.error }
+  }
+
+  if (fetchResult.messages.length === 0) {
+    return { messages: [], skipReason: 'no_messages' }
+  }
+
+  return { messages: fetchResult.messages }
+}
+
+function determineModeOrSkip(context: ExtractionRunnerContext, messagesLength: number): { reviewMode: ReviewMode | null; skipReason?: string } {
+  const thresholdState = getThresholdState()
+  const skillThresholdMet = initializedSkillConfig.autoTrigger && thresholdState.skill_iters_since_review >= initializedSkillConfig.skillReviewInterval
+  // Respect throttle + minMessages via shouldTriggerExtraction (replaces hardcoded true).
+  // skipThrottle bypasses for manual triggers (e.g. /extract).
+  const triggerCheck = shouldTriggerExtraction(
+    thresholdState,
+    initializedConfig,
+    messagesLength,
+    initializedSkillConfig,
+  )
+  const memoryThresholdMet = context.skipThrottle || triggerCheck.shouldTrigger
+  if (!memoryThresholdMet && !skillThresholdMet) {
+    const skipReason = triggerCheck.reason || 'threshold_not_met'
+    logger.info('[AutoMemoryExtraction]', 'SKIP:', skipReason, '(turnsSinceLast:', thresholdState.turnsSinceLastExtraction, '/ throttle:', initializedConfig.throttle, ', msgs:', messagesLength, '/ min:', initializedConfig.minMessages, ')')
+    return { reviewMode: null, skipReason }
+  }
+
+  const memoryEnabled = initializedConfig.enabled
+  const skillEnabled = initializedSkillConfig.enabled
+  const reviewMode = determineReviewMode(memoryThresholdMet, skillThresholdMet, memoryEnabled, skillEnabled)
+
+  if (!reviewMode) {
+    return { reviewMode: null, skipReason: "no_valid_review_mode" }
+  }
+
+  return { reviewMode }
+}
+
+function buildReviewPrompt(
+  reviewMode: ReviewMode,
+  existingMemories: MemoryHeader[],
+  existingSkills: SkillHeader[],
+  lockPath: string,
+  context: ExtractionRunnerContext,
+): string {
+  if (reviewMode === 'combined') {
+    const memoriesList = existingMemories.map(m => `- ${m.name}: ${m.description}`).join('\n')
+    const skillsList = existingSkills.map(s => `- ${s.name}: ${s.description}`).join('\n')
+    return buildCombinedReviewPrompt(memoriesList, skillsList, lockPath)
+  }
+
+  if (reviewMode === 'skill-only') {
+    const skillsList = existingSkills.map(s => `- ${s.name}: ${s.description}`).join('\n')
+    return buildSkillReviewPrompt(skillsList, lockPath)
+  }
+
+  const promptContext: ExtractionPromptContext = {
+    currentMemories: existingMemories,
+    sessionID: context.sessionID,
+    projectID: context.projectID,
+    memoryRoot: context.memoryRoot,
+    cursorMessageId: getThresholdState().lastExtractionMessageUuid,
+  }
+  return buildExtractionPrompt(promptContext, lockPath).prompt
 }
 
 export function getExtractionRunner():

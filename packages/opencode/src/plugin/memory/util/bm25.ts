@@ -51,32 +51,30 @@ export class BM25 {
     const queryTerms = tokenize(query)
     if (queryTerms.length === 0 || this.N === 0) return documents.map(() => 0)
 
-    const results: number[] = []
-    for (let i = 0; i < this.corpus.length; i++) {
-      const docTokens = this.corpus[i]
-      const docLen = docTokens.length
+    return this.corpus.map((docTokens) => this.scoreDocument(docTokens, queryTerms))
+  }
 
-      const termFreqs = new Map<string, number>()
-      for (const t of docTokens) {
-        termFreqs.set(t, (termFreqs.get(t) || 0) + 1)
-      }
+  private scoreDocument(docTokens: string[], queryTerms: string[]): number {
+    const docLen = docTokens.length
 
-      let docScore = 0
-      for (const term of queryTerms) {
-        const tf = termFreqs.get(term) || 0
-        if (tf === 0) continue
-
-        const df = this.docFreqs.get(term) || 0
-        const idf = Math.log((this.N - df + 0.5) / (df + 0.5) + 1)
-
-        const tfNorm = (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * (docLen / this.avgDocLen)))
-
-        docScore += idf * tfNorm
-      }
-
-      results.push(docScore)
+    const termFreqs = new Map<string, number>()
+    for (const t of docTokens) {
+      termFreqs.set(t, (termFreqs.get(t) || 0) + 1)
     }
 
-    return results
+    let docScore = 0
+    for (const term of queryTerms) {
+      const tf = termFreqs.get(term) || 0
+      if (tf === 0) continue
+
+      const df = this.docFreqs.get(term) || 0
+      const idf = Math.log((this.N - df + 0.5) / (df + 0.5) + 1)
+
+      const tfNorm = (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * (docLen / this.avgDocLen)))
+
+      docScore += idf * tfNorm
+    }
+
+    return docScore
   }
 }

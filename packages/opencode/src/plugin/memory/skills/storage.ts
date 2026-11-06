@@ -134,22 +134,11 @@ export class SkillStorage implements SkillStorageInterface {
     const headers: SkillHeader[] = []
 
     try {
-      // If category specified, list only that category
       if (category) {
-        const validation = validateCategoryName(category)
-        if (!validation.valid) {
-          return []
-        }
+        if (!validateCategoryName(category).valid) return []
         await this.listCategory(category, headers)
       } else {
-        // List all categories
-        const categories = await fs.readdir(this.skillsRoot)
-        for (const cat of categories) {
-          const catValidation = validateCategoryName(cat)
-          if (catValidation.valid) {
-            await this.listCategory(cat, headers)
-          }
-        }
+        await this.listAllCategories(headers)
       }
     } catch {
       // Skills root doesn't exist yet
@@ -162,48 +151,55 @@ export class SkillStorage implements SkillStorageInterface {
     return headers
   }
 
+  private async listAllCategories(headers: SkillHeader[]): Promise<void> {
+    const categories = await fs.readdir(this.skillsRoot)
+    for (const cat of categories) {
+      if (validateCategoryName(cat).valid) {
+        await this.listCategory(cat, headers)
+      }
+    }
+  }
+
   /**
    * List skills in a specific category
    */
   private async listCategory(category: string, headers: SkillHeader[]): Promise<void> {
     const categoryPath = getCategoryPath(category)
-    
+
     try {
       const skillDirs = await fs.readdir(categoryPath)
-      
-      for (const skillName of skillDirs) {
-        const validation = validateSkillName(skillName)
-        if (!validation.valid) {
-          continue
-        }
 
-        const skillPath = getSkillPath(category, skillName)
-        
-        try {
-          const content = await fs.readFile(skillPath, 'utf-8')
-          const parsed = parseSkillFrontmatter(content)
-          
-          if (parsed) {
-            const stats = await fs.stat(skillPath)
-            headers.push({
-              name: parsed.metadata.name,
-              description: parsed.metadata.description,
-              platforms: parsed.metadata.platforms,
-              slashCommand: parsed.metadata.slashCommand,
-              created: parsed.metadata.created,
-              updated: parsed.metadata.updated,
-              category,
-              filepath: skillPath,
-              mtime: stats.mtimeMs,
-            })
-          }
-        } catch {
-          // SKILL.md doesn't exist or can't be read
-          continue
-        }
+      for (const skillName of skillDirs) {
+        if (!validateSkillName(skillName).valid) continue
+        await this.loadSkill(category, skillName, headers)
       }
     } catch {
       // Category directory doesn't exist
+    }
+  }
+
+  private async loadSkill(category: string, skillName: string, headers: SkillHeader[]): Promise<void> {
+    const skillPath = getSkillPath(category, skillName)
+
+    try {
+      const content = await fs.readFile(skillPath, 'utf-8')
+      const parsed = parseSkillFrontmatter(content)
+      if (!parsed) return
+
+      const stats = await fs.stat(skillPath)
+      headers.push({
+        name: parsed.metadata.name,
+        description: parsed.metadata.description,
+        platforms: parsed.metadata.platforms,
+        slashCommand: parsed.metadata.slashCommand,
+        created: parsed.metadata.created,
+        updated: parsed.metadata.updated,
+        category,
+        filepath: skillPath,
+        mtime: stats.mtimeMs,
+      })
+    } catch {
+      // SKILL.md doesn't exist or can't be read
     }
   }
 

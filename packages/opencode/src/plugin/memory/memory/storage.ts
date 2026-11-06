@@ -236,6 +236,17 @@ export class MemoryStorage {
     const content = await this.readEntrypoint()
     if (!content) return []
 
+    const headers = await Promise.all(
+      this.parseIndexEntries(content).map((entry) => this.readEntryHeader(entry)),
+    )
+
+    // Sort by modification time, newest first
+    headers.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+
+    return headers
+  }
+
+  private parseIndexEntries(content: string): { name: string; filename: string; description: string }[] {
     const lines = content.split("\n")
 
     // Find the "## Memories" section and collect entries
@@ -262,28 +273,20 @@ export class MemoryStorage {
       }
     }
 
-    // Parallel frontmatter reads
-    const results = await Promise.all(
-      entries.map(async (entry) => {
-        const filepath = path.join(this.memoryPath, entry.filename)
-        const header = await readFrontmatter(filepath)
-        if (header) return header
-        // Fallback: create header from parsed info with unknown type
-        return {
-          name: entry.name,
-          description: entry.description,
-          type: "project" as const,
-          filepath,
-        }
-      })
-    )
+    return entries
+  }
 
-    const headers = results.filter((h): h is MemoryHeader => h !== null)
-
-    // Sort by modification time, newest first
-    headers.sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
-
-    return headers
+  private async readEntryHeader(entry: { name: string; filename: string; description: string }): Promise<MemoryHeader> {
+    const filepath = path.join(this.memoryPath, entry.filename)
+    const header = await readFrontmatter(filepath)
+    if (header) return header
+    // Fallback: create header from parsed info with unknown type
+    return {
+      name: entry.name,
+      description: entry.description,
+      type: "project" as const,
+      filepath,
+    }
   }
 
   /**
@@ -514,7 +517,7 @@ export function truncateEntrypointContent(
   const sorted = [...memories].sort((a, b) => {
     const priorityA = config.typePriority[a.type] || 0
     const priorityB = config.typePriority[b.type] || 0
-    return priorityB - priorityA  // Higher priority first
+    return priorityB - priorityA // Higher priority first
   })
   
   // Step 2: Truncate individual items and collect results

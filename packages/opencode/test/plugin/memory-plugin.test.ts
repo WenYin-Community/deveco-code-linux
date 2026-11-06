@@ -60,7 +60,7 @@ describe("memory plugin integration", () => {
           "skill-view",
         ])
 
-        // NL-trigger intent is documented in tool descriptions and guidance
+        // NL-trigger phrases are documented in tool descriptions and guidance
         expect(tools["dream-trigger"]!.description).toContain("整理记忆")
         expect(tools["skill-review-trigger"]!.description).toContain("提取技能")
         expect(SLASH_COMMANDS_GUIDANCE).toContain("/dream-force")

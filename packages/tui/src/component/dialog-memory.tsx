@@ -35,7 +35,7 @@ async function confirmDelete(
   } catch (error) {
     deps.toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
   }
-  done()
+  return done()
 }
 
 /** `current` is the option value to put the cursor on, used to come back from a memory view. */

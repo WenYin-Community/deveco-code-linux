@@ -402,7 +402,7 @@ export const layer = Layer.effect(
         const global = Object.keys(authEnv).length ? yield* loadGlobal(authEnv) : yield* getGlobal()
         yield* merge(Global.Path.config, global, "global")
 
-        // Surface invalid memory-config.json at startup; the memory plugin's loader
+        // Report invalid memory-config.json at startup; the memory plugin's loader
         // would otherwise swallow parse errors and silently fall back to defaults.
         const memoryConfigPath = path.join(Global.Path.config, "memory-config.json")
         const memoryConfigText = yield* readConfigFile(memoryConfigPath)

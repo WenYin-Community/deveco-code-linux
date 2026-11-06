@@ -43,6 +43,20 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
 
   const dir = Memory.memoryDir({}, { data: root, config: path.join(root, "config"), directory: root })
   await mkdir(dir, { recursive: true })
+  await writeTestMemories(dir)
+
+  const providers = await loadMemoryProviders()
+
+  const app = await testRender(() => <MemoryHarness root={root} state={state} clipboard={clipboard} providers={providers} />, { width, height, kittyKeyboard: true })
+  return {
+    app,
+    frame: () => app.captureCharFrame(),
+    config: path.join(root, "config", "memory-config.json"),
+    dir,
+  }
+}
+
+async function writeTestMemories(dir: string) {
   await writeFile(
     path.join(dir, "cache.md"),
     memory("Cache dir", "Use one shared cache dir", CACHE_STAMP, "Store caches under `.cache/deveco`.\n"),
@@ -69,7 +83,9 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
       "",
     ].join("\n"),
   )
+}
 
+async function loadMemoryProviders() {
   const [
     { DialogProvider, useDialog },
     { I18nProvider },
@@ -94,6 +110,43 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
     import("../../../src/keymap"),
   ])
 
+  return {
+    DialogProvider,
+    useDialog,
+    I18nProvider,
+    KVProvider,
+    SDKProvider,
+    ThemeProvider,
+    TuiConfigProvider,
+    ToastProvider,
+    ProjectProvider,
+    DialogMemory,
+    OpencodeKeymapProvider,
+    registerOpencodeKeymap,
+  }
+}
+
+function MemoryHarness({ root, state, clipboard, providers }: {
+  root: string
+  state: string
+  clipboard?: ClipboardService
+  providers: Awaited<ReturnType<typeof loadMemoryProviders>>
+}) {
+  const {
+    DialogProvider,
+    useDialog,
+    I18nProvider,
+    KVProvider,
+    SDKProvider,
+    ThemeProvider,
+    TuiConfigProvider,
+    ToastProvider,
+    ProjectProvider,
+    DialogMemory,
+    OpencodeKeymapProvider,
+    registerOpencodeKeymap,
+  } = providers
+
   // Same as app.tsx: the command puts the dialog on the dialog stack, which is
   // what activates the modal keymap mode the dialog actions are bound in.
   function Launcher() {
@@ -102,57 +155,47 @@ async function mountMemory(root: string, height = 40, width = 120, clipboard?: C
     return null
   }
 
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    const resolvedConfig = createTuiResolvedConfig({ keybinds: {}, leader_timeout: 1000 })
-    const off = registerOpencodeKeymap(keymap, renderer, resolvedConfig)
-    onCleanup(off)
+  const renderer = useRenderer()
+  const keymap = createDefaultOpenTuiKeymap(renderer)
+  const resolvedConfig = createTuiResolvedConfig({ keybinds: {}, leader_timeout: 1000 })
+  const off = registerOpencodeKeymap(keymap, renderer, resolvedConfig)
+  onCleanup(off)
 
-    return (
-      <TestTuiContexts directory={root} paths={{ home: root, data: root, config: path.join(root, "config"), state, worktree: root }}>
-        <OpencodeKeymapProvider keymap={keymap}>
-          <TuiConfigProvider config={resolvedConfig}>
-            <KVProvider>
-              <I18nProvider>
-                <ThemeProvider mode="dark">
-                  <ToastProvider>
-                    <SDKProvider
-                      url="http://test"
-                      directory={root}
-                      events={eventSource()}
-                      fetch={
-                        (async () =>
-                          new Response("{}", {
-                            headers: { "content-type": "application/json" },
-                          })) as unknown as typeof fetch
-                      }
-                    >
-                      <ProjectProvider>
-                        <ClipboardProvider value={clipboard}>
-                          <DialogProvider>
-                            <Launcher />
-                          </DialogProvider>
-                        </ClipboardProvider>
-                      </ProjectProvider>
-                    </SDKProvider>
-                  </ToastProvider>
-                </ThemeProvider>
-              </I18nProvider>
-            </KVProvider>
-          </TuiConfigProvider>
-        </OpencodeKeymapProvider>
-      </TestTuiContexts>
-    )
-  }
-
-  const app = await testRender(() => <Harness />, { width, height, kittyKeyboard: true })
-  return {
-    app,
-    frame: () => app.captureCharFrame(),
-    config: path.join(root, "config", "memory-config.json"),
-    dir,
-  }
+  return (
+    <TestTuiContexts directory={root} paths={{ home: root, data: root, config: path.join(root, "config"), state, worktree: root }}>
+      <OpencodeKeymapProvider keymap={keymap}>
+        <TuiConfigProvider config={resolvedConfig}>
+          <KVProvider>
+            <I18nProvider>
+              <ThemeProvider mode="dark">
+                <ToastProvider>
+                  <SDKProvider
+                    url="http://test"
+                    directory={root}
+                    events={eventSource()}
+                    fetch={
+                      (async () =>
+                        new Response("{}", {
+                          headers: { "content-type": "application/json" },
+                        })) as unknown as typeof fetch
+                    }
+                  >
+                    <ProjectProvider>
+                      <ClipboardProvider value={clipboard}>
+                        <DialogProvider>
+                          <Launcher />
+                        </DialogProvider>
+                      </ClipboardProvider>
+                    </ProjectProvider>
+                  </SDKProvider>
+                </ToastProvider>
+              </ThemeProvider>
+            </I18nProvider>
+          </KVProvider>
+        </TuiConfigProvider>
+      </OpencodeKeymapProvider>
+    </TestTuiContexts>
+  )
 }
 
 // Fixed stamps so the list and the metadata rows can be asserted without depending on the clock.

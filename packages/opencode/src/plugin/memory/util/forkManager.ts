@@ -148,7 +148,7 @@ export async function createForkedChildSession(
       await client.session.update({
         path: { id: childID },
         body: { title },
-      } as any)
+      })
     } catch (e) {
       logger.warn('[ForkManager]', `Failed to set ${agentKey} title (non-fatal):`, e)
     }

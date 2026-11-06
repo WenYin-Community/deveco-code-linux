@@ -1111,7 +1111,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         if (expiryNotice) output += expiryNotice;
                         await showPendingExpiryToast(state);
                         const sid = ctx.sessionID || 'default';
-                        const visibleRecallEnabled = state.memoryRecallConfig.visibleRecall && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall);
+                        const visibleRecallEnabled =
+                            state.memoryRecallConfig.visibleRecall &&
+                            (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall);
                         return {
                             title: visibleRecallEnabled ? '💡 Memory search: ' + query : 'Memory search: ' + query,
                             output: output,

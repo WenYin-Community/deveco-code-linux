@@ -252,8 +252,8 @@ export const DEFAULT_AUTO_DREAM_CONFIG: AutoDreamConfig = {
   enabled: true,
   minHours: 24,
   minSessions: 2,
-  lockStaleMs: 1800000,  // 30 minutes
-  extractionTimeoutMs: 900000,  // 15 minutes (900 seconds)
+  lockStaleMs: 1800000, // 30 minutes
+  extractionTimeoutMs: 900000, // 15 minutes (900 seconds)
 }
 
 // Consolidation lock file structure

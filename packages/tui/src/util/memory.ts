@@ -131,7 +131,7 @@ export async function readConfig(scope: Scope) {
  * Write a toggle to the user-level file; there is no project-level memory config anymore.
  * Patches the existing file text in place so comments, formatting, and other keys are preserved.
  * If the file does not exist, a new one is created.
- * Throws when the existing file is not valid JSONC so the caller can surface the error instead of
+ * Throws when the existing file is not valid JSONC so the caller can report the error instead of
  * silently writing back corrupt content.
  */
 export async function writeSetting(scope: Scope, setting: Setting, value: boolean) {

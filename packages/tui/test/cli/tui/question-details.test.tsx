@@ -35,11 +35,7 @@ async function until(check: () => boolean, describe: string, timeout = 2000) {
   }
 }
 
-async function mountQuestion(root: string, clipboard?: ClipboardService, details?: string, height = 30) {
-  const state = path.join(root, "state")
-  await mkdir(state, { recursive: true })
-  await Bun.write(path.join(state, "kv.json"), "{}")
-
+async function loadQuestionProviders() {
   const [
     { DialogProvider },
     { I18nProvider },
@@ -61,6 +57,16 @@ async function mountQuestion(root: string, clipboard?: ClipboardService, details
     import("../../../src/routes/session/question"),
     import("../../../src/keymap"),
   ])
+
+  return { DialogProvider, I18nProvider, KVProvider, SDKProvider, ThemeProvider, TuiConfigProvider, ToastProvider, QuestionPrompt, OpencodeKeymapProvider, registerOpencodeKeymap }
+}
+
+async function mountQuestion(root: string, clipboard?: ClipboardService, details?: string, height = 30) {
+  const state = path.join(root, "state")
+  await mkdir(state, { recursive: true })
+  await Bun.write(path.join(state, "kv.json"), "{}")
+
+  const { DialogProvider, I18nProvider, KVProvider, SDKProvider, ThemeProvider, TuiConfigProvider, ToastProvider, QuestionPrompt, OpencodeKeymapProvider, registerOpencodeKeymap } = await loadQuestionProviders()
 
   function Harness() {
     const renderer = useRenderer()

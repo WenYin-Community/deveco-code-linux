@@ -8,7 +8,7 @@ import { MemoryStorage, truncateEntrypointContent, estimateTokens } from "./stor
 import { formatMemoryManifest } from "../util/path"
 import { logger } from "../util/logger"
 import { BM25 } from "../util/bm25"
-import { SemanticSelectionExecutor } from "./semanticSelection"
+import { SemanticSelectionExecutor, type SelectionResult } from "./semanticSelection"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 
 export interface RetrievalOptions {
@@ -142,32 +142,41 @@ export class EnhancedMemoryRetrieval {
       const executor = new SemanticSelectionExecutor(this.client, this.semanticConfig, sessionID)
       const semanticResults = await executor.select(query, manifest, limit)
 
-      const merged = new Map<string, RelevantMemory>()
-      
-      for (const r of keywordResults) {
-        merged.set(r.name, { ...r, relevance: (r.relevance || 0) * 0.5 })
-      }
-      
-      for (const sr of semanticResults) {
-        const existing = merged.get(sr.name)
-        if (existing) {
-          merged.set(sr.name, { ...existing, relevance: sr.relevance })
-        } else {
-          const header = headers.find(h => h.name === sr.name)
-          if (header) {
-            const preview = previews?.get(sr.name) || ''
-            merged.set(sr.name, { ...header, relevance: sr.relevance, contentPreview: preview.slice(0, 200) })
-          }
-        }
-      }
-
-      return Array.from(merged.values())
+      return this.mergeSemanticResults(keywordResults, semanticResults, headers, previews)
         .sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
         .slice(0, limit)
     } catch (error) {
       logger.warn('[EnhancedRetrieval]', 'Hybrid selection semantic failed, using keyword only:', error)
       return keywordResults.slice(0, limit)
     }
+  }
+
+  private mergeSemanticResults(
+    keywordResults: RelevantMemory[],
+    semanticResults: SelectionResult[],
+    headers: MemoryHeader[],
+    previews?: Map<string, string>,
+  ): RelevantMemory[] {
+    const merged = new Map<string, RelevantMemory>()
+
+    for (const r of keywordResults) {
+      merged.set(r.name, { ...r, relevance: (r.relevance || 0) * 0.5 })
+    }
+
+    for (const sr of semanticResults) {
+      const existing = merged.get(sr.name)
+      if (existing) {
+        merged.set(sr.name, { ...existing, relevance: sr.relevance })
+      } else {
+        const header = headers.find(h => h.name === sr.name)
+        if (header) {
+          const preview = previews?.get(sr.name) || ''
+          merged.set(sr.name, { ...header, relevance: sr.relevance, contentPreview: preview.slice(0, 200) })
+        }
+      }
+    }
+
+    return Array.from(merged.values())
   }
 
   /**
@@ -228,9 +237,32 @@ export class EnhancedMemoryRetrieval {
    * Get memories formatted for injection
    * Uses smart truncation instead of hard limit when truncation.enabled
    */
-  async getMemoriesForPrompt(query?: string, limit?: number, sessionID?: string): Promise<{ index: string; content: string; truncated: boolean; count: number }> {
-    // Merge truncation config with defaults
-    const truncationConfig: TruncationConfig = {
+  async getMemoriesForPrompt(
+    query?: string,
+    limit?: number,
+    sessionID?: string,
+  ): Promise<{ index: string; content: string; truncated: boolean; count: number }> {
+    const truncationConfig = this.mergeTruncationConfig()
+    const effectiveLimit = limit ?? (truncationConfig.enabled ? undefined : 5)
+
+    const relevantHeaders = await this.selectRelevantHeaders(query, effectiveLimit, truncationConfig, sessionID)
+    const memories = await this.loadMemories(relevantHeaders)
+
+    const { truncatedMemories, wasTruncated } = this.applyTruncation(memories, truncationConfig, effectiveLimit)
+
+    const index = truncatedMemories
+      .map((m) => `- **${m.header.type}**: ${m.header.name} — ${m.header.description}`)
+      .join("\n")
+
+    const content = truncatedMemories
+      .map((m) => `### ${m.header.name} (${m.header.type})\n\n${m.content}`)
+      .join("\n\n---\n\n")
+
+    return { index, content, truncated: wasTruncated, count: truncatedMemories.length }
+  }
+
+  private mergeTruncationConfig(): TruncationConfig {
+    return {
       ...DEFAULT_TRUNCATION_CONFIG,
       ...this.config.truncation,
       typePriority: {
@@ -242,62 +274,60 @@ export class EnhancedMemoryRetrieval {
         ...this.config.truncation?.estimateRatio,
       },
     }
-    const effectiveLimit = limit ?? (truncationConfig.enabled ? undefined : 5)
-    
-    let relevantHeaders: MemoryHeader[]
-    
+  }
+
+  private async selectRelevantHeaders(
+    query: string | undefined,
+    effectiveLimit: number | undefined,
+    truncationConfig: TruncationConfig,
+    sessionID?: string,
+  ): Promise<MemoryHeader[]> {
     if (query) {
       // Use relevance sorting when query provided
-      relevantHeaders = await this.findRelevant(query, { limit: effectiveLimit ?? 100, sessionID })
-    } else {
-      // Use type priority sorting when no query
-      const allHeaders = await this.storage.list()
-      if (truncationConfig.enabled) {
-        // Sort by type priority (highest first)
-        relevantHeaders = allHeaders.sort((a, b) => {
-          const priorityA = truncationConfig.typePriority[a.type] || 0
-          const priorityB = truncationConfig.typePriority[b.type] || 0
-          // Higher priority first, then by recency
-          if (priorityB !== priorityA) return priorityB - priorityA
-          return (b.mtime || 0) - (a.mtime || 0)
-        })
-      } else {
-        // Legacy: use most recent
-        relevantHeaders = allHeaders.slice(0, effectiveLimit ?? 5)
+      return this.findRelevant(query, { limit: effectiveLimit ?? 100, sessionID })
+    }
+
+    // Use type priority sorting when no query
+    const allHeaders = await this.storage.list()
+    if (truncationConfig.enabled) {
+      // Sort by type priority (highest first)
+      return allHeaders.sort((a, b) => {
+        const priorityA = truncationConfig.typePriority[a.type] || 0
+        const priorityB = truncationConfig.typePriority[b.type] || 0
+        // Higher priority first, then by recency
+        if (priorityB !== priorityA) return priorityB - priorityA
+        return (b.mtime || 0) - (a.mtime || 0)
+      })
+    }
+
+    // Legacy: use most recent
+    return allHeaders.slice(0, effectiveLimit ?? 5)
+  }
+
+  private applyTruncation(
+    memories: Memory[],
+    truncationConfig: TruncationConfig,
+    effectiveLimit: number | undefined,
+  ): { truncatedMemories: { header: MemoryHeader; content: string; tokens: number; truncated: boolean }[]; wasTruncated: boolean } {
+    if (truncationConfig.enabled) {
+      const truncatedMemories = truncateEntrypointContent(memories, truncationConfig)
+      return {
+        truncatedMemories,
+        wasTruncated: truncatedMemories.some((m) => m.truncated) || truncatedMemories.length < memories.length,
       }
     }
-    
-    // Load full content
-    const memories = await this.loadMemories(relevantHeaders)
-    
-    // Apply truncation if enabled
-    let truncatedMemories: { header: MemoryHeader; content: string; tokens: number; truncated: boolean }[]
-    let wasTruncated = false
-    
-    if (truncationConfig.enabled) {
-      truncatedMemories = truncateEntrypointContent(memories, truncationConfig)
-      wasTruncated = truncatedMemories.some((m) => m.truncated) || truncatedMemories.length < memories.length
-    } else {
-      // Legacy: no truncation, just use first N
-      const sliced = memories.slice(0, effectiveLimit ?? 5)
-      truncatedMemories = sliced.map((m) => ({
+
+    // Legacy: no truncation, just use first N
+    const sliced = memories.slice(0, effectiveLimit ?? 5)
+    return {
+      truncatedMemories: sliced.map((m) => ({
         header: m,
         content: m.content,
         tokens: estimateTokens(m.content, truncationConfig),
         truncated: false,
-      }))
+      })),
+      wasTruncated: false,
     }
-    
-    // Build index and content strings
-    const index = truncatedMemories
-      .map((m) => `- **${m.header.type}**: ${m.header.name} — ${m.header.description}`)
-      .join("\n")
-    
-    const content = truncatedMemories
-      .map((m) => `### ${m.header.name} (${m.header.type})\n\n${m.content}`)
-      .join("\n\n---\n\n")
-    
-    return { index, content, truncated: wasTruncated, count: truncatedMemories.length }
   }
 
   /**

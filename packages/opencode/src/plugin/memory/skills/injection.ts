@@ -33,9 +33,9 @@ const DEFAULT_SKILL_INJECTION_CONFIG: SkillInjectionConfig = {
  * Result from skill injection
  */
 interface SkillInjectionResult {
-  systemPrompt?: string  // Skills list section for system prompt
-  context?: string       // Full skill context for compaction
-  skillsLoaded: number   // Number of skills included
+  systemPrompt?: string // Skills list section for system prompt
+  context?: string // Full skill context for compaction
+  skillsLoaded: number // Number of skills included
 }
 
 /**

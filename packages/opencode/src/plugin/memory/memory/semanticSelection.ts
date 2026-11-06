@@ -71,28 +71,41 @@ export class SemanticSelectionExecutor {
     }
   }
 
-private async forkSession(): Promise<string | undefined> {
+  private async forkSession(): Promise<string | undefined> {
     if (!this.parentSessionID) {
       logger.warn('[SemanticSelection]', 'No parent session ID for fork')
       return undefined
     }
 
+    if (!(await this.parentSessionAvailable())) return undefined
+
+    return this.createAndVerifySession()
+  }
+
+  private async parentSessionAvailable(): Promise<boolean> {
+    const parentSessionID = this.parentSessionID
+    if (!parentSessionID) return false
+
     try {
-      const checkResult = await this.client.session.get({ path: { id: this.parentSessionID } })
+      const checkResult = await this.client.session.get({ path: { id: parentSessionID } })
       if (checkResult.error) {
         if (isNotFoundError(checkResult.error)) {
-          logger.warn('[SemanticSelection]', 'Parent session not found, cannot fork:', this.parentSessionID)
-          return undefined
+          logger.warn('[SemanticSelection]', 'Parent session not found, cannot fork:', parentSessionID)
+          return false
         }
         logger.warn('[SemanticSelection]', 'Parent session check error:', checkResult.error)
       }
+      return true
     } catch (error) {
       if (isNotFoundError(error)) {
-        logger.warn('[SemanticSelection]', 'Parent session not found (catch), cannot fork:', this.parentSessionID)
-        return undefined
+        logger.warn('[SemanticSelection]', 'Parent session not found (catch), cannot fork:', parentSessionID)
+        return false
       }
+      return true
     }
+  }
 
+  private async createAndVerifySession(): Promise<string | undefined> {
     try {
       // Use session.create (not session.fork) — semantic selection only needs
       // the query and manifest (already in the prompt), not the parent's
@@ -140,7 +153,7 @@ private async forkSession(): Promise<string | undefined> {
       }
       return undefined
     }
-}
+  }
 
   private async sendPrompt(sessionID: string, prompt: string): Promise<string> {
     const timeoutMs = this.config.timeoutMs
