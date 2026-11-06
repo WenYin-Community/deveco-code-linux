@@ -476,6 +476,12 @@ export function validateOperation(
 
       return { _tag: "valid" }
     }
+    case "bugreport": {
+      if (operation.localPath) {
+        return validateLocalOutput(operation.localPath, ctx)
+      }
+      return { _tag: "valid" }
+    }
     default:
       return { _tag: "valid" }
   }

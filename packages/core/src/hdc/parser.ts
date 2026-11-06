@@ -1,4 +1,5 @@
 import type { HdcOperation } from "./operation"
+import { HARD_DENY_SHELL_COMMANDS, HARD_DENY_SHELL_PREFIXES } from "./product-policy"
 
 // ─── Supported HDC versions (SR1 §1.4) ─────────────────────
 // Requirement: "HDC 3.2.0c 和目标发布版本". Enforce a minimum
@@ -161,7 +162,15 @@ export function parse(argv: readonly string[], hdcVersion: string): ParseResult 
     case "format":
       return { _tag: "success", operation: { kind: "firmwareMutation", command } }
 
+    // Firmware mutation binary variants (mkfs.ext4, updater, flashcp, etc.)
+    // Uses shared constants from product-policy.ts to avoid duplication.
     default:
+      if (
+        HARD_DENY_SHELL_COMMANDS.has(command) ||
+        HARD_DENY_SHELL_PREFIXES.some((p) => command.startsWith(p))
+      ) {
+        return { _tag: "success", operation: { kind: "firmwareMutation", command } }
+      }
       return { _tag: "success", operation: { kind: "unclassified", originalArgv: [...commandArgs] } }
   }
 }

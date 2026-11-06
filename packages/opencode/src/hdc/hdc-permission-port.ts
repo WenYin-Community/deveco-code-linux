@@ -6,6 +6,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Permission, Event, AskTimedOutError } from "@/permission"
+import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Config } from "@/config/config"
 
 // ─── IF-03: HdcPermissionPort → opencode V1 permission stack ──
@@ -16,11 +17,14 @@ import { Config } from "@/config/config"
 // implement; this layer is the opencode-side equivalent.
 //
 // Contract (SEC2 AR-SEC2-006/007):
-// - evaluate: productDefault=allow returns allow without prompting
-//   (allow-class operations never open the approval UI). For
-//   productDefault=ask it runs the V1 ask with a 30s approval
-//   window; the ask blocks until reply, mirroring the SR1 shim
-//   flow. Outcomes map:
+// - evaluate: checks user config rules first (AR-SEC2-006 §1/§4/§5).
+//   * Config rule deny  → deny + permission_config (no prompt)
+//   * Config rule allow → allow + permission_config (no prompt)
+//   * Config rule ask   → prompt user (even if productDefault=allow)
+//   * No config rule + productDefault=allow → allow + product_default (no prompt)
+//   * No config rule + productDefault=ask → prompt user
+//   For ask results, runs the V1 ask with a 30s approval window;
+//   the ask blocks until reply, mirroring the SR1 shim flow.
 //   * ask blocked then reply once   → allow + one_time_approval
 //   * reply always                 → allow + saved_permission (the V1
 //     `always` reply already committed the rule to the in-memory
@@ -37,9 +41,7 @@ import { Config } from "@/config/config"
 // Ruleset: loaded from user config (deveco.jsonc permission field).
 // AR-SEC2-006 §1 requires HDC Guard to reuse the system Permission
 // configuration entry, so user-configured rules like "hdc:shell": "deny"
-// must be checked. Product-default allow operations skip prompting
-// when no deny rule matches, but deny rules from config are always
-// enforced (AR-SEC2-006 §4/§5).
+// or "hdc:query": "ask" are always checked before productDefault.
 
 const APPROVAL_TIMEOUT_MS = 30_000
 
@@ -68,13 +70,15 @@ export const HdcPermissionPortV1Layer = Layer.effect(
 
         // Check config rules first (AR-SEC2-006 §1/§4/§5).
         // V1 evaluate() returns {action: "ask"} when no rule matches,
-        // but productDefault determines the baseline behavior:
-        // - productDefault=allow + no deny rule → allow (no prompt)
-        // - productDefault=allow + deny rule → deny
-        // - productDefault=ask → prompt regardless
-        // - productDefault=deny → deny (shouldn't reach here, guard handles deny+ceiling=deny)
-        const rule = Permission.evaluate(request.action, request.resource, ruleset)
-        if (rule.action === "deny") {
+        // but we need to distinguish "config rule matched and said ask"
+        // from "no rule matched (fallback ask)".
+        // - Config rule matched (deny/allow/ask): honor it
+        // - No rule matched: use productDefault (allow→allow, ask→prompt)
+        const matchedRule = ruleset.findLast(
+          (r) => Wildcard.match(request.action, r.permission) && Wildcard.match(request.resource, r.pattern),
+        )
+
+        if (matchedRule?.action === "deny") {
           yield* Effect.logInfo("hdc_permission_evaluated", {
             action: request.action,
             pattern: request.resource,
@@ -89,7 +93,7 @@ export const HdcPermissionPortV1Layer = Layer.effect(
             needsApproval: false,
           }
         }
-        if (rule.action === "allow") {
+        if (matchedRule?.action === "allow") {
           yield* Effect.logInfo("hdc_permission_evaluated", {
             action: request.action,
             pattern: request.resource,
@@ -104,8 +108,8 @@ export const HdcPermissionPortV1Layer = Layer.effect(
             needsApproval: false,
           }
         }
-        // rule.action === "ask": check productDefault
-        if (request.productDefault === "allow") {
+        // matchedRule?.action === "ask" OR no rule matched (undefined)
+        if (!matchedRule && request.productDefault === "allow") {
           yield* Effect.logInfo("hdc_permission_evaluated", {
             action: request.action,
             pattern: request.resource,
@@ -121,7 +125,7 @@ export const HdcPermissionPortV1Layer = Layer.effect(
           }
         }
 
-        // productDefault === "ask": prompt user for approval
+        // Config rule said "ask" or productDefault === "ask": prompt user for approval
         const id = PermissionV1.ID.ascending()
         repliedCache.delete(id)
         const sessionID = SessionSchema.ID.descending(request.sessionID)

@@ -20,7 +20,8 @@ export const HARD_DENY_KINDS: ReadonlySet<string> = new Set([
 // (e.g. `hdc shell mount -o remount,rw /`). These must hard-deny
 // exactly like their top-level `hdc mount` counterparts; leaving
 // them as unclassified shell would downgrade them to an ask.
-const HARD_DENY_SHELL_COMMANDS: ReadonlySet<string> = new Set([
+// Also used by parser.ts for top-level hdc command variants.
+export const HARD_DENY_SHELL_COMMANDS: ReadonlySet<string> = new Set([
   "mount",
   "dd",
   "mkfs",
@@ -29,7 +30,23 @@ const HARD_DENY_SHELL_COMMANDS: ReadonlySet<string> = new Set([
   "format",
   "sideload",
   "update",
+  "updater",       // OHOS updater binary (hdc shell updater -u ...)
+  "flashcp",       // flashcp: raw flash write
+  "flash_erase",   // flash_erase: erase MTD partition
+  "flash_unlock",  // flash_unlock: unlock flash for writing
+  "nandwrite",     // nandwrite: write to NAND
+  "nanddump",      // nanddump: dump NAND
+  "erase_mmc",     // erase_mmc: erase eMMC partition
 ])
+
+// Prefix match for commands with filesystem-type suffixes or subcommand separators
+// e.g. "mkfs." matches "mkfs.ext4", "mkfs.f2fs"; "flash_" matches "flash_erase"
+export const HARD_DENY_SHELL_PREFIXES: readonly string[] = [
+  "mkfs.",
+  "flash_",
+  "erase_",
+  "nand",
+]
 
 // System bundle prefixes — uninstall of these is product hard deny (SR2 §2.1)
 const SYSTEM_BUNDLE_PREFIXES: readonly string[] = [
@@ -47,7 +64,9 @@ export function isHardDeny(operation: HdcOperation): boolean {
   // Shell-wrapped firmware mutation (hdc shell mount/dd/...) is hard
   // deny too — the device-facing command is what matters.
   if (operation.kind === "shell" && operation.deviceArgv.length > 0) {
-    if (HARD_DENY_SHELL_COMMANDS.has(operation.deviceArgv[0])) return true
+    const cmd = operation.deviceArgv[0]
+    if (HARD_DENY_SHELL_COMMANDS.has(cmd)) return true
+    if (HARD_DENY_SHELL_PREFIXES.some((prefix) => cmd.startsWith(prefix))) return true
   }
   // System bundle uninstall (via hdc uninstall or shell bm uninstall) is hard deny
   if (operation.kind === "uninstall" && operation.bundleName) {
