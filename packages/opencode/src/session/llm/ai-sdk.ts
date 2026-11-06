@@ -18,8 +18,24 @@ export function adapterState() {
   }
 }
 
-function finishReason(value: string | undefined): FinishReason {
-  return Schema.is(FinishReason)(value) ? value : "unknown"
+// Returns the mapped reason plus, when the value was not one we recognize, the
+// most specific original we can still see.
+//
+// `value` is the AI SDK's already-normalized word, which flattens two very
+// different situations into the same `other`: a gateway that sent a
+// non-standard finish_reason, and a stream that ended without sending one at
+// all (the SDK seeds its finish reason to `other` and only overwrites it when a
+// chunk carries the field). `raw` is the provider's untouched string, which the
+// SDK keeps alongside as `rawFinishReason` and is undefined in the second case.
+//
+// Preferring `raw` is what makes a truncated stream legible: the 0904 task12
+// turn recorded providerFinishReason "other" and nothing else, so a 598s think
+// cut off by an upstream timeout was indistinguishable from a gateway with
+// unusual vocabulary. Falling back to `value` keeps that "the provider told us
+// nothing" case marked rather than dropping it to null.
+function finishReason(value: string | undefined, raw: string | undefined) {
+  if (Schema.is(FinishReason)(value)) return { reason: value, raw: undefined }
+  return { reason: "unknown" as const, raw: raw ?? value }
 }
 
 function providerMetadata(value: unknown): ProviderMetadata | undefined {
@@ -101,7 +117,7 @@ export function toLLMEvents(
         return [
           LLMEvent.stepFinish({
             index: state.step++,
-            reason: finishReason(event.finishReason),
+            ...finishReason(event.finishReason, event.rawFinishReason),
             usage: usage(event.usage),
             providerMetadata: metadata,
           }),
@@ -112,7 +128,7 @@ export function toLLMEvents(
       return Effect.sync(() => {
         const events = [
           LLMEvent.finish({
-            reason: finishReason(event.finishReason),
+            ...finishReason(event.finishReason, event.rawFinishReason),
             usage: usage(event.totalUsage),
             providerMetadata: "providerMetadata" in event ? providerMetadata(event.providerMetadata) : undefined,
           }),

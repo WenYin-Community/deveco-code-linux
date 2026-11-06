@@ -10,7 +10,13 @@
     "token_usage_cache_bust": "! Likely cache bust: {{count}} fewer cached tokens than the previous step",
     "token_usage_tool_call": "→ {{tool}} {{input}}",
     "jump_to_latest": "Jump to latest",
-    "jump_to_earliest": "Jump to earliest"
+    "jump_to_earliest": "Jump to earliest",
+    "error_reasoning_limit": "Model reasoning reached the per-turn output limit. Increase the output token limit or split the request into smaller tasks.",
+    "error_reasoning_limit_after_recovery": "Model reasoning reached the per-turn output limit after one automatic recovery. Increase the output token limit or split the request into smaller tasks.",
+    "error_output_limit": "Model output reached the token limit. Send “continue” to resume from the current progress.",
+    "error_output_limit_after_recovery": "Model output reached the token limit after one automatic recovery. Send “continue” to resume from the current progress.",
+    "error_response_interrupted": "The model response ended unexpectedly. Send “continue” to retry from the current progress.",
+    "error_response_interrupted_after_recovery": "The model response ended unexpectedly after one automatic recovery. Send “continue” to retry from the current progress."
   },
   "btw": {
     "title": "By the way",

@@ -34,10 +34,15 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ToolOutput, Usage, type LLMEvent } from "@opencode-ai/llm"
 
 const DOOM_LOOP_THRESHOLD = 3
-export type Result = "compact" | "stop" | "continue"
+export type Result = "compact" | "stop" | "continue" | { type: "output_length"; compaction: boolean }
 
 export interface Handle {
   readonly message: SessionV1.Assistant
+  readonly failOutputLength: (
+    attempts: number,
+    message: string,
+    cause?: "reasoning_limit" | "output_limit",
+  ) => Effect.Effect<void>
   readonly updateToolCall: (
     toolCallID: string,
     update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
@@ -114,6 +119,7 @@ export const layer = Layer.effect(
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
       const initialSnapshot = yield* snapshot.track()
+      let finishedV2AssistantMessageID: SessionMessage.ID | undefined
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -719,15 +725,41 @@ export const layer = Layer.effect(
                   snapshot: completedSnapshot,
                   timestamp: DateTime.makeUnsafe(Date.now()),
                 })
+                finishedV2AssistantMessageID = ctx.v2AssistantMessageID
                 ctx.v2AssistantMessageID = undefined
               }
             }
             ctx.assistantMessage.finish = value.reason
+            // Only set when the provider's own reason did not map onto the
+            // enum, so a stored value always means "the mapping lost something".
+            if (value.raw !== undefined) ctx.assistantMessage.providerFinishReason = value.raw
+            // Warn whenever the turn ended on "unknown", which is the only
+            // mapped value that carries no information about why. That covers an
+            // unrecognized provider string (raw present), the AI SDK reporting
+            // its own "unknown", and a missing reason - the three cases that were
+            // indistinguishable after the fact. Every recognized reason,
+            // including ordinary "stop" and "tool-calls", stays silent.
+            //
+            // Logged here rather than at the two mapping sites because this is
+            // the one place covering both runtimes that has session and model
+            // context. How faithful `raw` is still depends on the runtime: the
+            // AI SDK collapses a gateway's own wording to "other" before the
+            // adapter sees it, while the native protocols keep it verbatim.
+            if (value.reason === "unknown")
+              yield* Effect.logWarning("finish reason mapped", {
+                "session.id": ctx.sessionID,
+                messageID: ctx.assistantMessage.id,
+                "llm.provider": ctx.model.providerID,
+                "llm.model": ctx.model.id,
+                raw: value.raw ?? null,
+                mapped: value.reason,
+              })
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
             yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.reason,
+              providerFinishReason: value.raw,
               snapshot: completedSnapshot,
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
@@ -1060,8 +1092,11 @@ export const layer = Layer.effect(
             yield* exitQueue.exit(ctx.sessionID, ctx.model.id).pipe(Effect.forkIn(scope), Effect.ignore)
           }
 
-          if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
+          if (ctx.assistantMessage.finish === "length") {
+            return { type: "output_length", compaction: ctx.needsCompaction } as const
+          }
+          if (ctx.needsCompaction) return "compact"
           return "continue"
         })
       })
@@ -1070,6 +1105,33 @@ export const layer = Layer.effect(
         get message() {
           return ctx.assistantMessage
         },
+        failOutputLength: Effect.fn("SessionProcessor.failOutputLength")(function* (
+          attempts: number,
+          message: string,
+          cause?: "reasoning_limit" | "output_limit",
+        ) {
+          ctx.assistantMessage.error = new SessionV1.OutputLengthError({
+            type: "output_length",
+            message,
+            attempts,
+            cause,
+          }).toObject()
+          // Step.Ended already persisted finish=length and usage. Failure must
+          // refer to that same V2 message, not start a new mirrored assistant.
+          if (finishedV2AssistantMessageID) {
+            yield* events.publish(SessionEvent.Step.Failed, {
+              sessionID: ctx.sessionID,
+              assistantMessageID: finishedV2AssistantMessageID,
+              error: { type: "output_length", message, attempts },
+              timestamp: DateTime.makeUnsafe(Date.now()),
+            })
+          }
+          yield* session.updateMessage(ctx.assistantMessage)
+          yield* events.publish(Session.Event.Error, {
+            sessionID: ctx.sessionID,
+            error: ctx.assistantMessage.error,
+          })
+        }),
         updateToolCall,
         completeToolCall,
         process,

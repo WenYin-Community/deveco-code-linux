@@ -531,6 +531,46 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("keeps a gateway's unrecognized finish reason as raw", () =>
+    Effect.gen(function* () {
+      // GLM and similar gateways report reasons like "sensitive" that no
+      // protocol recognizes. They map to "unknown", so without the raw value an
+      // empty turn is unattributable after the fact.
+      const body = sseEvents(
+        { choices: [{ delta: { content: "Hello" } }] },
+        { choices: [{ delta: {}, finish_reason: "sensitive" }] },
+      )
+
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toMatchObject([
+        { type: "step-start", index: 0 },
+        { type: "text-start", id: "text-0" },
+        { type: "text-delta", id: "text-0", text: "Hello" },
+        { type: "text-end", id: "text-0" },
+        { type: "step-finish", index: 0, reason: "unknown", raw: "sensitive" },
+        { type: "finish", reason: "unknown", raw: "sensitive" },
+      ])
+    }),
+  )
+
+  it.effect("leaves raw unset when the finish reason maps cleanly", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { choices: [{ delta: { content: "Hello" } }] },
+        { choices: [{ delta: {}, finish_reason: "content_filter" }] },
+      )
+
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      // A stored raw value must always mean "the mapping lost something", so a
+      // recognized reason like content_filter records nothing.
+      const finish = response.events.find((event) => event.type === "finish")
+      expect(finish).toMatchObject({ reason: "content-filter" })
+      expect(finish && "raw" in finish ? finish.raw : undefined).toBeUndefined()
+    }),
+  )
+
   it.effect("assembles streamed tool call input", () =>
     Effect.gen(function* () {
       const body = sseEvents(

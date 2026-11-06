@@ -36,6 +36,7 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { InlineInput } from "@opencode-ai/ui/inline-input"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { SessionRetry } from "@opencode-ai/ui/session-retry"
+import { turnRecoveryFailureMessage } from "@opencode-ai/ui/session-error-message"
 import { ScrollView } from "@opencode-ai/ui/scroll-view"
 import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { TextField } from "@opencode-ai/ui/text-field"
@@ -1159,7 +1160,7 @@ export function MessageTimeline(props: {
           <TimelineRowFrame row={errorRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
               <Card variant="error" class="error-card">
-                {errorRow().text}
+                {errorRow().recovery ? turnRecoveryFailureMessage(errorRow().recovery!, language.t) : errorRow().text}
               </Card>
             </div>
           </TimelineRowFrame>

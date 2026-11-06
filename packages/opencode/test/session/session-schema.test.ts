@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 const info = {
   id: SessionID.descending(),
@@ -28,6 +29,16 @@ const info = {
 } satisfies Session.Info
 
 describe("Session schema", () => {
+  test("output length errors require recovery details", () => {
+    const decode = Schema.decodeUnknownSync(SessionV1.OutputLengthError.EffectSchema)
+    expect(() => decode({ name: "MessageOutputLengthError", data: {} })).toThrow()
+    expect(
+      decode({
+        name: "MessageOutputLengthError",
+        data: { type: "output_length", message: "exhausted", attempts: 1, cause: "reasoning_limit" },
+      }).data,
+    ).toEqual({ type: "output_length", message: "exhausted", attempts: 1, cause: "reasoning_limit" })
+  })
   test("encodes undefined optional session fields as omitted keys", () => {
     const encoded = Schema.encodeUnknownSync(Session.Info)(info) as Record<string, unknown>
 

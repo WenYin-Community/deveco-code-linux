@@ -33,6 +33,7 @@ import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
+import { TurnRecovery } from "./turn-recovery"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
@@ -80,12 +81,6 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
-
-function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
-  // cleanup() marks abandoned tool_use blocks this way after retries/aborts.
-  // They are not pending work and must not trigger an assistant-prefill request.
-  return part.state.status === "error" && part.state.metadata?.interrupted === true
-}
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -225,7 +220,8 @@ export const layer = Layer.effect(
 
       const canonical = yield* canonicalPath(filepath)
       const allowed = [filepath, canonical].some(
-        (target) => Permission.evaluate("external_directory", externalDirectoryPattern(target), ...rulesets).action === "allow",
+        (target) =>
+          Permission.evaluate("external_directory", externalDirectoryPattern(target), ...rulesets).action === "allow",
       )
       if (allowed) return canonical
       return yield* Effect.die(new Error(`File attachment path is outside the allowed roots: ${filepath}`))
@@ -1267,7 +1263,19 @@ export const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        // Recovery quota belongs to this drain and survives its internal compactions.
+        const recovery = TurnRecovery.create()
+        const recoveryServices = {
+          sessionID,
+          sessions,
+          events,
+          status,
+          compaction,
+          database,
+          experimentalEventSystem: flags.experimentalEventSystem,
+        }
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        yield* TurnRecovery.started(sessionID)
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1281,37 +1289,16 @@ export const layer = Layer.effect(
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
-          const lastAssistantMsg = msgs.findLast(
-            (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
-          )
-          // Some providers return "stop" even when the assistant message contains
-          // tool calls. Keep the loop running so tool results can be sent back to
-          // the model, but ignore cleanup-marked interrupted orphans.
-          const hasToolCalls =
-            lastAssistantMsg?.parts.some(
-              (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
-            ) ?? false
-
+          TurnRecovery.observe(recovery, lastUser, msgs)
           if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastAssistant.parentID === lastUser.id
-          ) {
-            const orphan = lastAssistantMsg?.parts.find(
-              (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
-            )
-            if (orphan) {
-              yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
-                "session.id": sessionID,
-                messageID: lastAssistant.id,
-                tool: orphan.tool,
-                callID: orphan.callID,
-              })
-            }
-            yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
-            break
-          }
+            yield* TurnRecovery.shouldStop(recovery, {
+              sessionID,
+              user: lastUser,
+              assistant: lastAssistant,
+              messages: msgs,
+              step,
+            })
+          ) break
 
           step++
           if (step === 1)
@@ -1375,7 +1362,8 @@ export const layer = Layer.effect(
             throw error
           }
           const maxSteps = agent.steps ?? Infinity
-          const isLastStep = step >= maxSteps
+          // Compaction consumes loop iterations, not agent provider steps.
+          const isLastStep = TurnRecovery.nextStep(recovery, maxSteps)
           msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
@@ -1461,6 +1449,18 @@ export const layer = Layer.effect(
             const system = [...env, ...instructions, ...(skills ? [skills] : []), TURN_TAG_SYSTEM_NOTE]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            const turn = {
+              services: recoveryServices,
+              state: recovery,
+              user: lastUser,
+              handle,
+              recovering: recovery.pending,
+              isLastStep,
+              maxSteps,
+              step,
+              model,
+            }
+            yield* TurnRecovery.resume(turn)
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1471,54 +1471,19 @@ export const layer = Layer.effect(
               messages: [
                 ...modelMsgs,
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
+                ...TurnRecovery.messages(recovery),
               ],
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
-            if (structured !== undefined) {
-              handle.message.structured = structured
-              handle.message.finish = handle.message.finish ?? "stop"
-              yield* sessions.updateMessage(handle.message)
-              return "break" as const
-            }
-
-            const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
-            if (finished && !handle.message.error) {
-              // Surface any content-filter finish (e.g. Anthropic stop_reason:
-              // refusal) as an error. These turns may have produced no visible
-              // output at all — previously the session went idle silently — or
-              // partial text that was cut off by the provider's filter.
-              if (handle.message.finish === "content-filter") {
-                handle.message.error = new SessionV1.ContentFilterError({
-                  message: "The response was blocked by the provider's content filter",
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
-                return "break" as const
-              }
-              if (format.type === "json_schema") {
-                handle.message.error = new SessionV1.StructuredOutputError({
-                  message: "Model did not produce structured output",
-                  retries: 0,
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                return "break" as const
-              }
-            }
-
-            if (result === "stop") return "break" as const
-            if (result === "compact") {
-              yield* compaction.create({
-                sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
-                auto: true,
-                overflow: !handle.message.finish,
-              })
-            }
-            return "continue" as const
+            return yield* TurnRecovery.settle({
+              ...turn,
+              result,
+              structured,
+              structuredFormat: format.type === "json_schema",
+            })
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),

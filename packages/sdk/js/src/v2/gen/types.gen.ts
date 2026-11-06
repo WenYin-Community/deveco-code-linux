@@ -291,7 +291,10 @@ export type UnknownError1 = {
 export type MessageOutputLengthError = {
   name: "MessageOutputLengthError"
   data: {
-    [key: string]: unknown
+    type: "output_length"
+    message: string
+    attempts: number
+    cause?: "reasoning_limit" | "output_limit"
   }
 }
 
@@ -322,6 +325,17 @@ export type ContentFilterError = {
   name: "ContentFilterError"
   data: {
     message: string
+  }
+}
+
+export type EmptyCompletionError = {
+  name: "EmptyCompletionError"
+  data: {
+    message: string
+    type: "empty_unknown"
+    attempts: number
+    cause: "response_interrupted"
+    providerFinishReason?: string
   }
 }
 
@@ -373,6 +387,7 @@ export type AssistantMessage = {
     | StructuredOutputError
     | ContextOverflowError
     | ContentFilterError
+    | EmptyCompletionError
     | QueueError
     | ModelServiceRateLimitError
     | ApiError
@@ -400,6 +415,7 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
+  providerFinishReason?: string
 }
 
 export type Message = UserMessage | AssistantMessage
@@ -588,6 +604,7 @@ export type StepFinishPart = {
   messageID: string
   type: "step-finish"
   reason: string
+  providerFinishReason?: string
   snapshot?: string
   cost: number
   tokens: {
@@ -1027,7 +1044,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           assistantMessageID: string
-          error: SessionErrorUnknown
+          error: SessionErrorUnknown | SessionErrorOutputLength
         }
       }
     | {
@@ -1291,6 +1308,7 @@ export type GlobalEvent = {
             | StructuredOutputError
             | ContextOverflowError
             | ContentFilterError
+            | EmptyCompletionError
             | QueueError
             | ModelServiceRateLimitError
             | ApiError
@@ -3113,6 +3131,12 @@ export type SessionErrorUnknown = {
   message: string
 }
 
+export type SessionErrorOutputLength = {
+  type: "output_length"
+  message: string
+  attempts: number
+}
+
 export type ToolTextContent = {
   type: "text"
   text: string
@@ -3553,7 +3577,7 @@ export type SyncEventSessionNextStepFailed = {
       timestamp: number
       sessionID: string
       assistantMessageID: string
-      error: SessionErrorUnknown
+      error: SessionErrorUnknown | SessionErrorOutputLength
     }
   }
 }
@@ -4166,7 +4190,7 @@ export type SessionMessageAssistant = {
       write: number
     }
   }
-  error?: SessionErrorUnknown
+  error?: SessionErrorUnknown | SessionErrorOutputLength
 }
 
 export type SessionMessageCompaction = {
@@ -4746,7 +4770,7 @@ export type EventSessionNextStepFailed = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
-    error: SessionErrorUnknown
+    error: SessionErrorUnknown | SessionErrorOutputLength
   }
 }
 
@@ -5030,6 +5054,7 @@ export type EventSessionError = {
       | StructuredOutputError
       | ContextOverflowError
       | ContentFilterError
+      | EmptyCompletionError
       | QueueError1
       | ModelServiceRateLimitError
       | ApiError

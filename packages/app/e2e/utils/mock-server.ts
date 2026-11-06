@@ -11,6 +11,11 @@ const emptyList = new Set([
   "/vcs/diff",
 ])
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp", "/session/status"])
+const agreement = { accepted: true, upload: { state: "uploaded", revision: "test" } }
+const agreementRoutes = {
+  "/global/product-agreement": agreement,
+  "/global/product-agreement/retry": agreement,
+}
 
 export interface MockServerConfig {
   provider: unknown
@@ -26,6 +31,7 @@ export interface MockServerConfig {
 
 export async function mockOpenCodeServer(page: Page, config: MockServerConfig) {
   const staticRoutes: Record<string, unknown> = {
+    ...agreementRoutes,
     "/provider": config.provider,
     "/path": {
       state: config.directory,

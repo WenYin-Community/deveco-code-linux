@@ -27,7 +27,12 @@ export const PartID = Schema.String.check(Schema.isStartsWith("prt")).pipe(
 )
 export type PartID = typeof PartID.Type
 
-export const OutputLengthError = NamedError.create("MessageOutputLengthError", {})
+export const OutputLengthError = NamedError.create("MessageOutputLengthError", {
+  type: Schema.Literal("output_length"),
+  message: Schema.String,
+  attempts: NonNegativeInt,
+  cause: Schema.optional(Schema.Literals(["reasoning_limit", "output_limit"])),
+})
 
 export const AuthError = NamedError.create("ProviderAuthError", {
   providerID: Schema.String,
@@ -54,6 +59,17 @@ export const ContextOverflowError = NamedError.create("ContextOverflowError", {
 })
 export const ContentFilterError = NamedError.create("ContentFilterError", {
   message: Schema.String,
+})
+// A turn that ended with no finish reason and produced nothing did no work:
+// the stream stopped mid-thought. Surfacing it keeps the session from going
+// idle as if the request had been satisfied. Carries the provider's raw finish
+// reason so the mapping loss is diagnosable from the message alone.
+export const EmptyCompletionError = NamedError.create("EmptyCompletionError", {
+  message: Schema.String,
+  type: Schema.Literal("empty_unknown"),
+  attempts: NonNegativeInt,
+  cause: Schema.Literal("response_interrupted"),
+  providerFinishReason: Schema.optional(Schema.String),
 })
 // Queue polling error types
 export const QueueError = NamedError.create("QueueError", {
@@ -273,6 +289,7 @@ export const StepFinishPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("step-finish"),
   reason: Schema.String,
+  providerFinishReason: Schema.optional(Schema.String),
   snapshot: Schema.optional(Schema.String),
   cost: Schema.Finite,
   tokens: Schema.Struct({
@@ -439,6 +456,7 @@ const AssistantErrorSchema = Schema.Union([
   StructuredOutputError.EffectSchema,
   ContextOverflowError.EffectSchema,
   ContentFilterError.EffectSchema,
+  EmptyCompletionError.EffectSchema,
   QueueError.EffectSchema,
   ModelServiceRateLimitError.EffectSchema,
   APIError.EffectSchema,
@@ -533,6 +551,9 @@ export const Assistant = Schema.Struct({
   structured: Schema.optional(Schema.Any),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),
+  // Provider's own finish reason, before it was mapped onto the FinishReason
+  // enum. Observation only: loop semantics read `finish`.
+  providerFinishReason: Schema.optional(Schema.String),
 }).annotate({ identifier: "AssistantMessage" })
 export type Assistant = Omit<Types.DeepMutable<Schema.Schema.Type<typeof Assistant>>, "error"> & {
   error?: AssistantError

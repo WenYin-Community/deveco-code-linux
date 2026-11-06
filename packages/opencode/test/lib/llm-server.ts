@@ -5,7 +5,7 @@ import * as HttpServer from "effect/unstable/http/HttpServer"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { ServeError } from "effect/unstable/http/HttpServerError"
 
-export type Usage = { input: number; output: number }
+export type Usage = { input: number; output: number; reasoning?: number }
 
 type Line = Record<string, unknown>
 
@@ -64,6 +64,7 @@ function tokens(input?: Usage) {
     prompt_tokens: input.input,
     completion_tokens: input.output,
     total_tokens: input.input + input.output,
+    ...(input.reasoning === undefined ? {} : { completion_tokens_details: { reasoning_tokens: input.reasoning } }),
   }
 }
 
@@ -502,6 +503,23 @@ export class Reply {
     return this
   }
 
+  /** Finish with a reason no protocol recognizes, which maps to "unknown". */
+  unknownFinish() {
+    this.#finish = "surprise"
+    this.#hang = false
+    this.#error = undefined
+    this.#reset = false
+    return this
+  }
+
+  length() {
+    this.#finish = "length"
+    this.#hang = false
+    this.#error = undefined
+    this.#reset = false
+    return this
+  }
+
   toolCalls() {
     this.#finish = "tool_calls"
     this.#hang = false
@@ -522,6 +540,19 @@ export class Reply {
     const args = JSON.stringify(input)
     const size = Math.max(1, Math.floor(args.length / 2))
     this.#tail = [...this.#tail, toolStartLine(id, name), toolArgsLine(args.slice(0, size))]
+    return this
+  }
+
+  // The stream ends cleanly without ever sending a finish_reason: no hang, no
+  // error, no reset. This is the 0904 task12 shape, where an upstream gateway
+  // cut a long response at its own timeout, and it is distinct from hang() (the
+  // socket stays open) and streamError() (the SDK sees a failure). The AI SDK
+  // reports its own seeded "other" here, with rawFinishReason undefined.
+  truncated() {
+    this.#finish = undefined
+    this.#hang = false
+    this.#error = undefined
+    this.#reset = false
     return this
   }
 

@@ -1913,7 +1913,12 @@ describe("session.message-v2.fromError (additional branches)", () => {
   })
 
   test("returns OutputLengthError as-is", () => {
-    const err = new SessionV1.OutputLengthError({}).toObject() as InstanceType<typeof SessionV1.OutputLengthError>
+    const err = new SessionV1.OutputLengthError({
+      type: "output_length",
+      message: "Model output reached the token limit",
+      attempts: 1,
+      cause: "output_limit",
+    }).toObject() as InstanceType<typeof SessionV1.OutputLengthError>
     const result = MessageV2.fromError(err, { providerID })
     expect(SessionV1.OutputLengthError.isInstance(result)).toBe(true)
   })

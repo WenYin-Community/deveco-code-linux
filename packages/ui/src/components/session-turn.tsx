@@ -25,6 +25,7 @@ import { TextReveal } from "./text-reveal"
 import { createAutoScroll } from "../hooks"
 import { useI18n } from "../context/i18n"
 import { normalize } from "./session-diff"
+import { turnRecoveryFailure, turnRecoveryFailureMessage } from "./session-error-message"
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -315,7 +316,10 @@ export function SessionTurn(
     return undefined
   })
   const errorText = createMemo(() => {
-    const msg = error()?.data?.message
+    const current = error()
+    const failure = turnRecoveryFailure(current)
+    if (failure) return turnRecoveryFailureMessage(failure, i18n.t)
+    const msg = current?.data?.message
     if (typeof msg === "string") return unwrap(msg)
     if (msg === undefined || msg === null) return ""
     // oxlint-disable-next-line no-base-to-string -- msg is unknown from error data, coercion is intentional

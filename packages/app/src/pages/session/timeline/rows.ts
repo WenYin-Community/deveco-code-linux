@@ -1,6 +1,7 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
 import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@opencode-ai/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@opencode-ai/ui/message-part"
+import { turnRecoveryFailure, type TurnRecoveryFailure } from "@opencode-ai/ui/session-error-message"
 import { Data, Equal } from "effect"
 
 export type SummaryDiff = SnapshotFileDiff & { file: string }
@@ -26,7 +27,7 @@ export type TimelineRowMap = {
   Thinking: { userMessageID: string; reasoningHeading?: string }
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
-  Error: { userMessageID: string; text: string }
+  Error: { userMessageID: string; text: string; recovery?: TurnRecoveryFailure }
 }
 
 export namespace TimelineRow {
@@ -60,6 +61,7 @@ export namespace TimelineRow {
   export class Error extends Data.TaggedClass("Error")<{
     userMessageID: string
     text: string
+    recovery?: TurnRecoveryFailure
   }> {}
   export class Retry extends Data.TaggedClass("Retry")<{
     userMessageID: string
@@ -227,19 +229,20 @@ export namespace Timeline {
       )
     }
 
-    if (error) {
-      const data = error.data?.message
-      rows.push(
-        new TimelineRow.Error({
-          userMessageID: userMessage.id,
-          text: unwrapErrorMessage(
-            typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
-          ),
-        }),
-      )
-    }
+    if (error) rows.push(errorRow(userMessage.id, error))
 
     return rows
+  }
+
+  function errorRow(userMessageID: string, error: NonNullable<AssistantMessage["error"]>) {
+    const data = error.data?.message
+    return new TimelineRow.Error({
+      userMessageID,
+      recovery: turnRecoveryFailure(error),
+      text: unwrapErrorMessage(
+        typeof data === "string" ? data : data === undefined || data === null ? "" : String(data),
+      ),
+    })
   }
 
   function isSummaryDiff(value: SnapshotFileDiff): value is SummaryDiff {

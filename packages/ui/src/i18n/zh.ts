@@ -49,6 +49,16 @@ export const dict = {
   "ui.sessionTurn.retry.geminiHot": "gemini 当前过载",
   "ui.sessionTurn.error.freeUsageExceeded": "免费使用额度已用完",
   "ui.sessionTurn.error.addCredits": "添加积分",
+  "ui.sessionTurn.error.reasoning_limit":
+    "本轮思考达到输出上限，任务未能完成。建议提高单次输出上限，或将任务拆分为更小步骤后继续。",
+  "ui.sessionTurn.error.reasoning_limitAfterRecovery":
+    "本轮思考达到输出上限，自动恢复后仍未完成。建议提高单次输出上限，或将任务拆分为更小步骤后继续。",
+  "ui.sessionTurn.error.output_limit": "模型输出达到长度上限。输入“继续”可从当前进度接着完成。",
+  "ui.sessionTurn.error.output_limitAfterRecovery":
+    "模型输出达到长度上限，自动恢复后仍未完成。输入“继续”可从当前进度接着完成。",
+  "ui.sessionTurn.error.response_interrupted": "模型响应意外中断。输入“继续”可从当前进度重试。",
+  "ui.sessionTurn.error.response_interruptedAfterRecovery":
+    "模型响应意外中断，自动恢复后仍未完成。输入“继续”可从当前进度重试。",
 
   "dialog.usageExceeded.freeTier.title": "免费额度已用完",
   "dialog.usageExceeded.freeTier.description": "订阅 OpenCode Go，可靠地使用最佳开源模型，每月 $5 起。",

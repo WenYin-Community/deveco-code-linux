@@ -448,6 +448,10 @@ export const layer = Layer.effect(
         yield* session.updateMessage(processor.message)
         return "stop"
       }
+      if (typeof result === "object") {
+        yield* processor.failOutputLength(0, "Compaction output reached the token limit; checkpoint is incomplete")
+        return "stop"
+      }
 
       if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
         yield* session.updatePart({
@@ -478,6 +482,9 @@ export const layer = Layer.effect(
                 : part
             yield* session.updatePart({
               ...replayPart,
+              ...(replayPart.type === "text"
+                ? { metadata: { ...("metadata" in replayPart ? replayPart.metadata : {}), compaction_replay: true } }
+                : {}),
               id: PartID.ascending(),
               messageID: replayMsg.id,
               sessionID: input.sessionID,

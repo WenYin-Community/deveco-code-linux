@@ -10,7 +10,13 @@
     "token_usage_cache_bust": "! 可能缓存失效：比上一步骤少了 {{count}} 个缓存 token",
     "token_usage_tool_call": "→ {{tool}} {{input}}",
     "jump_to_latest": "跳转到最新",
-    "jump_to_earliest": "跳转到最早"
+    "jump_to_earliest": "跳转到最早",
+    "error_reasoning_limit": "本轮思考达到输出上限，任务未能完成。建议提高单次输出上限，或将任务拆分为更小步骤后继续。",
+    "error_reasoning_limit_after_recovery": "本轮思考达到输出上限，自动恢复后仍未完成。建议提高单次输出上限，或将任务拆分为更小步骤后继续。",
+    "error_output_limit": "模型输出达到长度上限。输入“继续”可从当前进度接着完成。",
+    "error_output_limit_after_recovery": "模型输出达到长度上限，自动恢复后仍未完成。输入“继续”可从当前进度接着完成。",
+    "error_response_interrupted": "模型响应意外中断。输入“继续”可从当前进度重试。",
+    "error_response_interrupted_after_recovery": "模型响应意外中断，自动恢复后仍未完成。输入“继续”可从当前进度重试。"
   },
   "btw": {
     "title": "顺带一问",

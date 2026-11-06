@@ -82,6 +82,7 @@ export const finish = (
   events: LLMEvent[],
   input: {
     readonly reason: FinishReason
+    readonly raw?: string
     readonly usage?: Usage
     readonly providerMetadata?: ProviderMetadata
   },
@@ -91,6 +92,7 @@ export const finish = (
     LLMEvent.stepFinish({
       index: 0,
       reason: input.reason,
+      raw: input.raw,
       usage: input.usage,
       providerMetadata: input.providerMetadata,
     }),

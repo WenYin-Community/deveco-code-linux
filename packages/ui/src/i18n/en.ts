@@ -52,6 +52,18 @@ export const dict: Record<string, string> = {
   "ui.sessionTurn.retry.geminiHot": "gemini is way too hot right now",
   "ui.sessionTurn.error.freeUsageExceeded": "Free usage exceeded",
   "ui.sessionTurn.error.addCredits": "Add credits",
+  "ui.sessionTurn.error.reasoning_limit":
+    "Model reasoning reached the per-turn output limit. Increase the output token limit or split the request into smaller tasks.",
+  "ui.sessionTurn.error.reasoning_limitAfterRecovery":
+    "Model reasoning reached the per-turn output limit after one automatic recovery. Increase the output token limit or split the request into smaller tasks.",
+  "ui.sessionTurn.error.output_limit":
+    'Model output reached the token limit. Send "continue" to resume from the current progress.',
+  "ui.sessionTurn.error.output_limitAfterRecovery":
+    'Model output reached the token limit after one automatic recovery. Send "continue" to resume from the current progress.',
+  "ui.sessionTurn.error.response_interrupted":
+    'The model response ended unexpectedly. Send "continue" to retry from the current progress.',
+  "ui.sessionTurn.error.response_interruptedAfterRecovery":
+    'The model response ended unexpectedly after one automatic recovery. Send "continue" to retry from the current progress.',
 
   "dialog.usageExceeded.freeTier.title": "Free limit reached",
   "dialog.usageExceeded.freeTier.description":

@@ -48,6 +48,20 @@ export const UnknownError = Schema.Struct({
 })
 export type UnknownError = typeof UnknownError.Type
 
+export const OutputLengthError = Schema.Struct({
+  type: Schema.Literal("output_length"),
+  message: Schema.String,
+  attempts: NonNegativeInt,
+}).annotate({
+  identifier: "Session.Error.OutputLength",
+})
+export type OutputLengthError = typeof OutputLengthError.Type
+
+export const StepError = Schema.Union([UnknownError, OutputLengthError], { mode: "oneOf" }).pipe(
+  Schema.toTaggedUnion("type"),
+)
+export type StepError = typeof StepError.Type
+
 export const AgentSwitched = EventV2.define({
   type: "session.next.agent.switched",
   ...options,
@@ -218,7 +232,7 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
-      error: UnknownError,
+      error: StepError,
     },
   })
   export type Failed = typeof Failed.Type

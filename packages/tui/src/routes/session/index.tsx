@@ -39,6 +39,7 @@ import type {
   DebugStatePart,
   StepFinishPart,
 } from "@opencode-ai/sdk/v2"
+import { SessionError } from "./session-error"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -1803,21 +1804,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </text>
         </box>
       </Show>
-      <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
-        <box
-          ref={(el: BoxRenderable) => alwaysSeparate.add(el)}
-          border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          marginTop={1}
-          backgroundColor={theme.backgroundPanel}
-          customBorderChars={SplitBorder.customBorderChars}
-          borderColor={theme.error}
-        >
-          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
-        </box>
-      </Show>
+      <SessionError error={props.message.error} onCreate={(element) => alwaysSeparate.add(element)} />
       {(() => {
         const queueMsg = createMemo(() => {
           if (!props.last) return undefined

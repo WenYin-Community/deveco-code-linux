@@ -184,6 +184,9 @@ export const StepFinish = Schema.Struct({
   type: Schema.tag("step-finish"),
   index: Schema.Number,
   reason: FinishReason,
+  // Provider's finish reason as received, kept whenever it did not map onto
+  // FinishReason. Without it an "unknown" is unattributable after the fact.
+  raw: Schema.optional(Schema.String),
   usage: Schema.optional(Usage),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.StepFinish" })
@@ -192,6 +195,7 @@ export type StepFinish = Schema.Schema.Type<typeof StepFinish>
 export const Finish = Schema.Struct({
   type: Schema.tag("finish"),
   reason: FinishReason,
+  raw: Schema.optional(Schema.String),
   usage: Schema.optional(Usage),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.Finish" })

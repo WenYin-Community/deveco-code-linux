@@ -220,7 +220,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.step.failed": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.completed = event.data.timestamp
-          draft.finish = "error"
+          draft.finish = failureFinish(event.data.error)
           draft.error = event.data.error
         })
       },
@@ -384,6 +384,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
     })
   })
+}
+
+function failureFinish(error: SessionEvent.StepError) {
+  return error.type === "output_length" ? "length" : "error"
 }
 
 export * as SessionMessageUpdater from "./message-updater"

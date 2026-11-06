@@ -24,8 +24,10 @@ import { Deferred, Duration, Effect, Layer, Queue, Scope, Stream } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcess } from "effect/unstable/process"
 import { readdirSync } from "node:fs"
+import { symlink } from "node:fs/promises"
 import path from "node:path"
 import { PRODUCT_AGREEMENT_VERSION } from "../../src/cli/deveco-product-agreement"
+import pluginPkg from "../../../plugin/package.json"
 import { TestLLMServer } from "./llm-server"
 import { testProviderConfig } from "./test-provider"
 import { it } from "./effect"
@@ -84,6 +86,9 @@ export function isolatedEnv(
     DEVECO_DISABLE_AUTOCOMPACT: "1",
     DEVECO_DISABLE_MODELS_FETCH: "1",
     DEVECO_AUTH_CONTENT: "{}",
+    // Do not inherit test/preload.ts's :memory: database: child processes
+    // must share durable state for run -> export acceptance checks.
+    DEVECO_DB: path.join(home, "deveco.db"),
     ...(reactNodeModules ? { NODE_PATH: reactNodeModules } : {}),
   }
 }
@@ -226,6 +231,25 @@ export function withCliFixture<A, E>(
       ),
     )
 
+    // PURE skips plugin discovery, but Config still starts npm.install. Seed
+    // its real local dependency + lock so run/export never race a background
+    // registry install (particularly after a nonzero CLI exit).
+    const configDir = path.join(home, ".config/deveco")
+    const dependencies = { "@opencode-ai/plugin": pluginPkg.version }
+    yield* fs.ensureDir(path.join(configDir, "node_modules/@opencode-ai"))
+    yield* Effect.promise(() =>
+      symlink(
+        path.resolve(opencodeRoot, "../plugin"),
+        path.join(configDir, "node_modules/@opencode-ai/plugin"),
+        process.platform === "win32" ? "junction" : "dir",
+      ),
+    )
+    yield* fs.writeWithDirs(path.join(configDir, "package.json"), JSON.stringify({ private: true, dependencies }))
+    yield* fs.writeWithDirs(
+      path.join(configDir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: { "": { dependencies } } }),
+    )
+
     const configJson = JSON.stringify(testProviderConfig(llm.url))
     const env = isolatedEnv(home, configJson)
 
@@ -236,12 +260,19 @@ export function withCliFixture<A, E>(
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
       // ignore; ChildProcess.make defaults to pipe, so we set it explicitly.
-      const command = ChildProcess.make(process.execPath, ["run", "--conditions=browser", cliEntry, ...args], {
-        cwd: opts?.cwd ?? home,
-        env: { ...env, ...opts?.env },
-        extendEnv: true,
-        stdin: "ignore",
-      })
+      // Run the same acceptance cases against a distributable or a pre-fix
+      // negative control when an explicit binary path is supplied.
+      const binary = process.env.DEVECO_TEST_BINARY
+      const command = ChildProcess.make(
+        binary ?? process.execPath,
+        binary ? args : ["run", "--conditions=browser", cliEntry, ...args],
+        {
+          cwd: opts?.cwd ?? home,
+          env: { ...env, ...opts?.env },
+          extendEnv: true,
+          stdin: "ignore",
+        },
+      )
       // Pass timeout to appProc.run rather than wrapping with
       // Effect.timeoutOrElse externally: AppProcess.run is itself scoped, so
       // its built-in timeout triggers the acquireRelease kill finalizer

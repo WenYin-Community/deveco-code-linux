@@ -163,6 +163,7 @@ interface ParserState {
   readonly toolCallEvents: ReadonlyArray<LLMEvent>
   readonly usage?: Usage
   readonly finishReason?: FinishReason
+  readonly finishReasonRaw?: string
   readonly lifecycle: Lifecycle.State
 }
 
@@ -367,12 +368,15 @@ const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMR
 // Streaming parsers are small state machines: every event returns a new state
 // plus the common `LLMEvent`s produced by that event. Tool calls are accumulated
 // because OpenAI streams JSON arguments across multiple deltas.
-const mapFinishReason = (reason: string | null | undefined): FinishReason => {
-  if (reason === "stop") return "stop"
-  if (reason === "length") return "length"
-  if (reason === "content_filter") return "content-filter"
-  if (reason === "function_call" || reason === "tool_calls") return "tool-calls"
-  return "unknown"
+// Returns the mapped reason plus, when the provider's value was not one we
+// recognize, the original string. Gateways report non-standard reasons like
+// "sensitive" that would otherwise vanish into "unknown".
+const mapFinishReason = (reason: string | null | undefined) => {
+  if (reason === "stop") return { reason: "stop" as const, raw: undefined }
+  if (reason === "length") return { reason: "length" as const, raw: undefined }
+  if (reason === "content_filter") return { reason: "content-filter" as const, raw: undefined }
+  if (reason === "function_call" || reason === "tool_calls") return { reason: "tool-calls" as const, raw: undefined }
+  return { reason: "unknown" as const, raw: reason ?? undefined }
 }
 
 // OpenAI Chat reports `prompt_tokens` (inclusive total) with a
@@ -401,7 +405,9 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     const events: LLMEvent[] = []
     const usage = mapUsage(event.usage) ?? state.usage
     const choice = event.choices[0]
-    const finishReason = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : state.finishReason
+    const mapped = choice?.finish_reason ? mapFinishReason(choice.finish_reason) : undefined
+    const finishReason = mapped?.reason ?? state.finishReason
+    const finishReasonRaw = mapped ? mapped.raw : state.finishReasonRaw
     const delta = choice?.delta
     const toolDeltas = delta?.tool_calls ?? []
     let tools = state.tools
@@ -440,6 +446,7 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
         toolCallEvents: finished?.events ?? state.toolCallEvents,
         usage,
         finishReason,
+        finishReasonRaw,
         lifecycle,
       },
       events,
@@ -452,7 +459,7 @@ const finishEvents = (state: ParserState): ReadonlyArray<LLMEvent> => {
   const reason = state.finishReason === "stop" && hasToolCalls ? "tool-calls" : state.finishReason
   const lifecycle = state.toolCallEvents.length ? Lifecycle.stepStart(state.lifecycle, events) : state.lifecycle
   events.push(...state.toolCallEvents)
-  if (reason) Lifecycle.finish(lifecycle, events, { reason, usage: state.usage })
+  if (reason) Lifecycle.finish(lifecycle, events, { reason, raw: state.finishReasonRaw, usage: state.usage })
   return events
 }
 
