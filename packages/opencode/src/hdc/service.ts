@@ -292,22 +292,23 @@ export async function handleGuardRequest(ctx: HdcIpcServer.HdcRequestContext): P
     }
 
     // Allow: bind the original argv (§7.4) and run.
+    // Stdin is intentionally NOT forwarded to the spawned hdc: every
+    // approvable operation is a one-shot command whose full device-side
+    // effect is visible in the approval prompt, and bridging stdin would
+    // let piped content act on the device invisibly to the approval
+    // (`echo reboot | hdc shell sh`). Bare interactive `hdc shell` is
+    // already rejected (capability_unsupported), so the executor spawns
+    // with stdin "ignore" and any stdin frames from the shim are dropped.
     state.failureStage = "execution"
     if (decision.approvalResult === "allow_once" || decision.approvalResult === "always_allow") {
       state.approvalResult = "approved"
     }
-    const stdinBridge = HdcExecutor.createStdinSink()
-    ctx.attachStdin({
-      onStdin: (chunk) => stdinBridge.sink.write(chunk),
-      onStdinEnd: () => stdinBridge.sink.end(),
-    })
     const code = await HdcExecutor.execHdc({
       argv: request.argv,
       cwd: request.cwd,
       signal: ctx.signal,
       onStdout: ctx.emitStdout,
       onStderr: ctx.emitStderr,
-      stdinBridge,
     })
     publishTelemetry(RequestFinished, {
       requestID,

@@ -174,15 +174,31 @@ export function categoryOf(op: HdcOperation): OperationCategory {
       if (isShellReadonly(op.deviceArgv)) return "device_readonly"
       if (isShellParamSet(op.deviceArgv)) return "param_change"
       if (isShellFileChange(op.deviceArgv)) return "device_file_change"
-      if (isShellAppControl(op.deviceArgv)) return "app_lifecycle"
+      if (isShellAppControl(op.deviceArgv)) {
+        // Mirror the appControl branch below: shell-wrapped aa start
+        // is install_start (widenable to allow); other app-control
+        // commands stay app_lifecycle. Normally the parser lifts
+        // aa start/stop/force-stop into appControl kind, so this is
+        // a defensive fallback for raw shell operations.
+        if (op.deviceArgv[0] === "aa" && op.deviceArgv[1] === "start") return "install_start"
+        return "app_lifecycle"
+      }
       if (isShellSystemState(op.deviceArgv)) return "system_state"
       return "unclassified"
     case "hilog":
-      return "device_readonly"
+      // -r clears the device log buffer and -w writes log files onto the
+      // device; either flag makes the command destructive and approval-
+      // gated instead of silently auto-allowed as a read (audit finding,
+      // 2026-11-04). Plain log reading stays device_readonly.
+      return hasDestructiveHilogFlag(op.args) ? "device_file_change" : "device_readonly"
     case "install":
       return "install_start"
     case "appControl":
-      return "app_lifecycle"
+      // aa start pairs with install in the install_start category
+      // (SR2 §2.3: install/aa start widen to allow, Always-allow
+      // eligible — FR-APPROVAL-101). force-stop/stop stay
+      // app_lifecycle (ceiling ask, one-shot approval only).
+      return op.action === "aa start" ? "install_start" : "app_lifecycle"
     case "fileSend":
     case "fileRecv":
       return "file_transfer"
@@ -218,8 +234,15 @@ function isShellReadonly(argv: readonly string[]): boolean {
   if (cmd === "ls") return true
   if (cmd === "cat") return true
   if (cmd === "dumpsys") return true
-  if (cmd === "hilog") return true
+  if (cmd === "hilog") return !hasDestructiveHilogFlag(argv.slice(1))
   return false
+}
+
+// hilog flags that make a nominally "read" command destructive: -r clears
+// the device log buffer, -w writes log files onto the device. Either flag
+// anywhere in the args disqualifies device_readonly (silent auto-allow).
+function hasDestructiveHilogFlag(args: readonly string[]): boolean {
+  return args.includes("-r") || args.includes("-w")
 }
 
 function isShellParamSet(argv: readonly string[]): boolean {

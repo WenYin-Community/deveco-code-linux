@@ -193,6 +193,17 @@ describe("SEC2-004/007: canAlwaysAllow (§3)", () => {
     expect(canAlwaysAllow(mk({ kind: "install", packagePath: "/app.hap" }))).toBe(true)
   })
 
+  // 验证: aa start (install_start, ceiling=allow) 提供 Always allow
+  // (SR2 §2.3 / FR-APPROVAL-101; TC-15: 此前误归 app_lifecycle 导致缺失)
+  it("aa start (ceiling=allow) → true", () => {
+    expect(canAlwaysAllow(mk({ kind: "appControl", action: "aa start", bundleName: "com.example.app" }))).toBe(true)
+  })
+
+  // 验证: aa force-stop (app_lifecycle, ceiling=ask) 不提供 Always allow
+  it("aa force-stop (ceiling=ask) → false", () => {
+    expect(canAlwaysAllow(mk({ kind: "appControl", action: "aa force-stop", bundleName: "com.example.app" }))).toBe(false)
+  })
+
   // 验证: uninstall (ceiling=ask) 不允许持久化 → canAlwaysAllow=false
   it("uninstall (ceiling=ask) → false", () => {
     expect(canAlwaysAllow(mk({ kind: "uninstall", bundleName: "com.example" }))).toBe(false)

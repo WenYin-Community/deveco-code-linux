@@ -129,6 +129,17 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     }
   })
 
+  // 验证: bugreport 输出越界 workspace 时直接拒绝 (local_path_denied),
+  // 不进入 ask — bugreport 是 Always allow 候选, 越界输出不可被审批持久化
+  it("bugreport outside workspace rejected before ask", async () => {
+    const allowLayer = makeFakeLayer({ effect: "allow", policySource: "saved_permission", approvalResult: "not_required", needsApproval: false })
+    const decision = await runGuard(makeRequest(["bugreport", "/tmp/leak.zip"]), trustedCtx, allowLayer)
+    expect(decision.kind).toBe("deny")
+    if (decision.kind === "deny") {
+      expect(decision.reasonCode).toBe("local_path_denied")
+    }
+  })
+
   // 验证: 已知策略先于兜底 — version/help 命中已知 allow 策略, 不进入 unclassified 兜底
   it("known policy before fallback — version/help is allow with allow Permission", async () => {
     const allowLayer = makeFakeLayer({ effect: "allow", policySource: "saved_permission", approvalResult: "not_required", needsApproval: false })
@@ -148,7 +159,8 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
 
   // 验证: 用户显式批准 (allow_once) 后, ask-ceiling 操作 (app_lifecycle) 可执行 —
   // ceiling 压缩的是未经审批的自动 allow, 不应把用户已批准的请求压回 deny
-  it("allow_once approval executes an ask-ceiling operation (aa start)", async () => {
+  // (aa start 已修正为 install_start/allow-ceiling, ask-ceiling 覆盖改用 force-stop)
+  it("allow_once approval executes an ask-ceiling operation (aa force-stop)", async () => {
     const approveLayer = Layer.succeed(HdcPermissionPort, {
       evaluate: () =>
         Effect.succeed({
@@ -166,7 +178,7 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
           needsApproval: false,
         }),
     })
-    const decision = await runGuard(makeRequest(["shell", "aa", "start", "-b", "com.example.app", "-a", "EntryAbility"]), trustedCtx, approveLayer)
+    const decision = await runGuard(makeRequest(["shell", "aa", "force-stop", "-b", "com.example.app"]), trustedCtx, approveLayer)
     expect(decision.kind).toBe("allow")
     if (decision.kind === "allow") {
       expect(decision.approvalResult).toBe("allow_once")
@@ -198,6 +210,35 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     if (decision.kind === "allow") {
       expect(decision.approvalResult).toBe("allow_once")
     }
+  })
+
+  // 验证: permRequest.canAlwaysAllow — aa start (install_start, ceiling=allow)
+  // 为 true (TC-15: 审批弹窗须提供 Always allow); aa force-stop 保持 false。
+  // 此前 aa start 误归 app_lifecycle 导致只有 Allow once。
+  it("aa start passes canAlwaysAllow=true, force-stop false", async () => {
+    const seen: boolean[] = []
+    const captureLayer = Layer.succeed(HdcPermissionPort, {
+      evaluate: (req: { canAlwaysAllow: boolean }) =>
+        Effect.sync(() => {
+          seen.push(req.canAlwaysAllow)
+          return {
+            effect: "deny" as const,
+            policySource: "product_default" as const,
+            approvalResult: "denied" as const,
+            needsApproval: false,
+          }
+        }),
+      awaitApproval: () =>
+        Effect.succeed({
+          effect: "deny" as const,
+          policySource: "product_default" as const,
+          approvalResult: "denied" as const,
+          needsApproval: false,
+        }),
+    })
+    await runGuard(makeRequest(["shell", "aa", "start", "-b", "com.example.app", "-a", "EntryAbility"]), trustedCtx, captureLayer)
+    await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, captureLayer)
+    expect(seen).toEqual([true, false])
   })
 })
 
@@ -250,6 +291,17 @@ describe("SEC2-005: Non-policy failures does not enter fallback (§4)", () => {
   // 验证: 裸交互式 shell 进入 capability_unsupported, 不进入兜底 ask
   it("capability_unsupported → failClosed, not ask", async () => {
     const decision = await runGuard(makeRequest(["shell"]), trustedCtx)
+    expect(decision.kind).toBe("deny")
+    if (decision.kind === "deny") {
+      expect(decision.reasonCode).toBe("capability_unsupported")
+      expect(decision.isPolicyDeny).toBe(false)
+    }
+  })
+
+  // 验证: 交互式解释器 (`hdc shell sh`, 无 -c) 同样 capability_unsupported
+  // fail closed, 不进入可批准的 ask (批准后设备进程挂起残留, TC-41)
+  it("interactive interpreter → failClosed capability_unsupported, not ask", async () => {
+    const decision = await runGuard(makeRequest(["shell", "sh"]), trustedCtx)
     expect(decision.kind).toBe("deny")
     if (decision.kind === "deny") {
       expect(decision.reasonCode).toBe("capability_unsupported")

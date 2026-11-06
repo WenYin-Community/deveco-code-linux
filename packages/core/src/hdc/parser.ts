@@ -198,6 +198,22 @@ function isCompoundShellToken(token: string): boolean {
   return SHELL_METACHARACTERS.test(token) || token.includes("$(")
 }
 
+// Interactive shell interpreters: without `-c` they open a REPL that
+// reads the device channel's stdin indefinitely. Host-side stdin is
+// intentionally not forwarded (service.ts), and the real hdc never
+// translates a local stdin EOF into a remote stdin close, so an
+// approved `hdc shell sh` hangs with a residual process on the
+// device (macOS verification 2026-11-05, TC-41). They are not
+// one-shot commands — reject at parse time like bare `hdc shell`.
+const INTERACTIVE_INTERPRETERS = new Set(["sh", "ash", "bash", "dash", "ksh", "mksh", "zsh"])
+
+function isInteractiveInterpreter(deviceArgv: readonly string[]): boolean {
+  if (deviceArgv.includes("-c")) return false
+  const head = deviceArgv[0]
+  const name = head.includes("/") ? head.slice(head.lastIndexOf("/") + 1) : head
+  return INTERACTIVE_INTERPRETERS.has(name)
+}
+
 function parseShell(argv: readonly string[]): ParseResult {
   // hdc shell [options] [command...]
   // -t <device> target device
@@ -226,6 +242,17 @@ function parseShell(argv: readonly string[]): ParseResult {
     return {
       _tag: "capability_unsupported",
       reason: "bare interactive hdc shell requires PTY which is not supported by current channel",
+    }
+  }
+
+  // Interactive shell interpreter without -c (`hdc shell sh`) is not a
+  // one-shot command: stdin is not forwarded and the real hdc never
+  // delivers a remote stdin EOF, so it would hang on the device with a
+  // residual process (TC-41). Reject at parse time like bare `hdc shell`.
+  if (isInteractiveInterpreter(deviceArgv)) {
+    return {
+      _tag: "capability_unsupported",
+      reason: `interactive device shell '${deviceArgv[0]}' is not a one-shot command: stdin is not forwarded, so it would hang on the device`,
     }
   }
 

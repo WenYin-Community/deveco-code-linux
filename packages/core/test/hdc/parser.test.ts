@@ -115,6 +115,31 @@ describe("SEC2-001: Bare interactive shell → capability_unsupported (§5)", ()
     expect(result._tag).toBe("capability_unsupported")
   })
 
+  // 验证: 无 -c 的交互式解释器 (`hdc shell sh`) 不是一次性命令 —
+  // 宿主 stdin 不透传, 真实 hdc 不向设备端转发 stdin EOF,
+  // 批准后设备进程等输入永久挂起并残留 (TC-41, macOS 验证 2026-11-05),
+  // 解析期拒绝, 同裸 hdc shell
+  it("interactive interpreter without -c returns capability_unsupported", () => {
+    const result = parse(["shell", "sh"], V)
+    expect(result._tag).toBe("capability_unsupported")
+  })
+
+  // 验证: 其他解释器 (bash/ash) 与路径前缀形式 (/bin/sh) 同样拒绝
+  it("other interpreters and path-prefixed forms are rejected", () => {
+    expect(parse(["shell", "bash"], V)._tag).toBe("capability_unsupported")
+    expect(parse(["shell", "ash"], V)._tag).toBe("capability_unsupported")
+    expect(parse(["shell", "/bin/sh"], V)._tag).toBe("capability_unsupported")
+  })
+
+  // 验证: `sh -c <命令>` 是一次性命令, 仍可解析 (走 shell/unclassified 策略)
+  it("sh -c one-shot command still parses", () => {
+    const result = parse(["shell", "sh", "-c", "echo hi"], V)
+    expect(result._tag).toBe("success")
+    if (result._tag === "success") {
+      expect(result.operation.kind).toBe("shell")
+    }
+  })
+
   // 验证: capability_unsupported 不是 policy deny (是非策略失败, isPolicyDeny=false)
   it("capability_unsupported is not a policy deny (§5)", () => {
     const result = parse(["shell"], V)
@@ -433,9 +458,18 @@ describe("SEC2-001/004: categoryOf mapping", () => {
     expect(categoryOf(op)).toBe("device_file_change")
   })
 
-  // 验证: shell aa start (应用启动) → app_lifecycle
-  it("shell aa start → app_lifecycle", () => {
-    const op: HdcOperation = { kind: "shell", deviceArgv: ["aa", "start", "-b", "com.example"], interactive: false }
+  // 验证: shell aa start (应用启动) → install_start (SR2 §2.3: 可放宽到
+  // allow, Always allow 候选 — 与 install 同组; 此前误归 app_lifecycle 导致
+  // 审批弹窗缺失 Always allow, TC-15)
+  it("shell aa start → install_start", () => {
+    const op: HdcOperation = { kind: "appControl", action: "aa start", bundleName: "com.example" }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("install_start")
+  })
+
+  // 验证: aa force-stop / aa stop 仍为 app_lifecycle (上限 ask, 不提供 Always allow)
+  it("aa force-stop → app_lifecycle", () => {
+    const op: HdcOperation = { kind: "appControl", action: "aa force-stop", bundleName: "com.example" }
     const { categoryOf } = require("../../src/hdc/operation")
     expect(categoryOf(op)).toBe("app_lifecycle")
   })
@@ -532,6 +566,36 @@ describe("SEC2-001/004: categoryOf mapping", () => {
   // 验证: hilog (日志查询) → device_readonly
   it("hilog → device_readonly", () => {
     const op: HdcOperation = { kind: "hilog", args: ["-v"] }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("device_readonly")
+  })
+
+  // 验证: hilog -r (清设备日志缓冲) / -w (设备端写日志文件) 是破坏性
+  // flag, 不能静默按 device_readonly 放行, 归 device_file_change 需审批
+  // (审计发现 2026-11-04)
+  it("hilog -r → device_file_change", () => {
+    const op: HdcOperation = { kind: "hilog", args: ["-r"] }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("device_file_change")
+  })
+
+  it("hilog -w → device_file_change", () => {
+    const op: HdcOperation = { kind: "hilog", args: ["-w", "start", "-f", "/data/logs/x"] }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("device_file_change")
+  })
+
+  // 验证: shell hilog -r (shell 包装的清日志) 不再被 isShellReadonly
+  // 误归 device_readonly, 落 unclassified 走审批
+  it("shell hilog -r → unclassified (需审批)", () => {
+    const op: HdcOperation = { kind: "shell", deviceArgv: ["hilog", "-r"], interactive: false }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("unclassified")
+  })
+
+  // 验证: shell hilog (普通日志读取) 保持 device_readonly 静默放行
+  it("shell hilog → device_readonly", () => {
+    const op: HdcOperation = { kind: "shell", deviceArgv: ["hilog", "-v"], interactive: false }
     const { categoryOf } = require("../../src/hdc/operation")
     expect(categoryOf(op)).toBe("device_readonly")
   })

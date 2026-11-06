@@ -1,17 +1,18 @@
 # HDC 守卫功能测试指南（SR1 + SR2 + AR-SEC1/SEC2 联合）
 
 > 适用对象：测试同事（需求沟通 + 测试方法）
-> 文档版本：2026-10-27（合并需求侧 SEC2 验证文档后的统一验收指南）
+> 文档版本：2026-11-04（合并 2026-11-04 系统性审计修复用例：stdin 透传封堵 TC-41、hilog 破坏性 flag TC-42、bugreport 输出边界 TC-40）
 > **权威需求文档**：`D:\Code\文档\hdc_guard_sr1.md`（DEVECO-SR-HDC-01 v3.0，基础策略网关）
 > 　＋ `D:\Code\文档\hdc_guard_sr2.md`（DEVECO-SR-HDC-02，高级操作/持久允许/复杂调用）
 > 　＋ `D:\Code\文档\hdc_guard_sec1_ars.md` / `hdc_guard_sec2_ars.md`（架构分配 AR：SEC1 接入与执行、SEC2 判断域）
 > **需求侧 SEC2 验证文档**：`hdc_guard_sec_sr2.md`（同事提供）——其用例与 Permission 配置说明已合并进本文（对照表见附录 C）
-> **构建版本**：`feat-OBP/261017` 分支 r3 构建（`*-host-r3` 包，向开发团队获取；macOS 主机防绕过验收 2026-10-27 通过）
-> **自动化基线**：9 条 live-e2e 全绿（`packages/opencode/test/live-e2e/cases/hdc-guard-*.case.ts`）；hdc 单测 opencode 77 pass / core 260 pass / 0 fail（`packages/opencode/test/hdc/` + `packages/core/test/hdc/`）；host-enforcement 单测 13 pass；审批可访问性单测 4 pass（`packages/tui/test/cli/tui/permission-accessibility.test.tsx`）
+> **构建版本**：`feat-OBP/261017` 分支 r3 构建（`*-host-r3` 包，向开发团队获取；macOS 主机防绕过验收 2026-10-27 通过）；最新修复验证包 `0.0.0-feat-OBP/261017-202611040341`（含 stdin 透传封堵、hilog 破坏性 flag 审批，见 TC-41/TC-42）
+> **自动化基线**：9 条 live-e2e 全绿（`packages/opencode/test/live-e2e/cases/hdc-guard-*.case.ts`）；hdc 单测 core 300 pass / opencode 64 pass（Windows 实测，unix-only 用例 14 skip）/ 0 fail（`packages/opencode/test/hdc/` + `packages/core/test/hdc/`）；host-enforcement 单测 13 pass；审批可访问性单测 4 pass（`packages/tui/test/cli/tui/permission-accessibility.test.tsx`）
 
 > **对齐说明**：SR2 判断域（AR-SEC2-001~008）与 SEC1 接入/执行 AR 已合并落地。期望 reason code 为 SEC2 21 码（见附录 A.1；2026-10-24 TBD 冻结后新增 `param_readonly`/`param_not_allowed`）。本文档用例预期以 SR1 v3.0 + SR2 + AR 为权威依据，与当前实现行为一致。
 
 > **验证状态总览（2026-10-27）**：SR1/SR2/AR-SEC1/AR-SEC2 **全部实现并验证**——live-e2e 9 条全绿；SR1 手动验收（Windows 模拟器门3 5/5 + macOS 全绿）完成；**macOS 主机防绕过（FR-HOST-101 / AR-HDC-SEC1-007）验收通过**（r3 双场景 + full-access 豁免 + M8 模拟器实调，报告 `hdc-guard-host-enforcement-acceptance-summary.md`）；Windows r3 E2E 通过。待办：真机 M8 补测、兼容性矩阵（NFR-COMP）另行安排、需求侧按本文执行一轮正式验收回执。证据索引见附录 D。
+> **2026-11-04 系统性审计修复**：stdin 透传绕过封堵（TC-41）、hilog 破坏性 flag 恢复审批（TC-42）、bugreport 输出边界补齐（TC-40）已交付（单测全绿）；端到端验收按 `202611040341` 包执行（见附录 D.2 #7）。
 
 ---
 
@@ -36,7 +37,7 @@ Deveco Code 的 Agent 通过 bash 工具（受控 shell）执行 `hdc` 命令时
 | 类别 | 操作 | 决策 |
 |---|---|---|
 | 基础查询（非设备） | `version` / `help` / `list targets` / discover | **allow**（真实执行，无审批） |
-| 基础查询（设备只读） | `shell getprop` / `shell param get` / ps / ls / cat / dumpsys / hilog | **allow**（真实执行，无审批；保持真实 HDC 目标选择语义，不注入 `-t`） |
+| 基础查询（设备只读） | `shell getprop` / `shell param get` / ps / ls / cat / dumpsys / hilog（**不含** `-r`/`-w` 破坏性 flag；含则升 ask，见 TC-42） | **allow**（真实执行，无审批；保持真实 HDC 目标选择语义，不注入 `-t`） |
 | 基础变更 | `install` / `shell aa start` / `file send` / `file recv` | **ask**（对象校验通过后逐次确认） |
 | 产品硬拒绝 | mount、dd、mkfs、flash、erase、format、sideload、update（含 `shell` 包装）、系统 bundle 卸载 | **hard deny**（用户确认与配置均不可放行） |
 | 未分类操作 | 不在已知策略中的 option/subcommand | 一次性 ask（SR2 §2.2 兜底，不持久 allow） |
@@ -177,7 +178,7 @@ Deveco Code 的 Agent 通过 bash 工具（受控 shell）执行 `hdc` 命令时
 
 - 所有用例**必须经受控入口**执行：在 deveco 会话中通过 **bash 工具**跑 hdc 命令（bash 工具 = 受控 shell，HDC 守卫入口）。**不要**在系统终端直接调真实 hdc 测守卫。
 - 拒绝时受控 shell 在 stderr 输出 `[hdc-guard] reason_code=<码> message=<...>` 且退出码 1。
-- 放行时行为与直接调真实 hdc 一致（stdout/stderr/退出码）。
+- 放行时行为与直接调真实 hdc 一致（stdout/stderr/退出码）；**例外：stdin 一律不透传**——设备进程 stdin 为 ignore，管道 stdin 读到 EOF 即退出（见 TC-41），所有可批准操作均为一次性命令、无交互 stdin 需求。
 - 配置文件/缓存清理用后即还原。
 - **ask 类用例前置检查**：确认全局与项目配置中无 `permission` 通配放行规则（尤其 `"*": "allow"`）。此类规则会使命名空间内上限为 allow 的操作（install / file send / file recv / aa start / bugreport）被 `permission_config` 直接放行、**不弹审批**，导致 ask 类用例（TC-07~TC-09、TC-17~TC-18 等）"未弹窗即成功"——日志特征为 `policySource=permission_config` 而非 `product_default`。检查点：`~/.config/deveco/deveco.json(c)`、工程内 `deveco.json(c)` / `.deveco/deveco.json`（详见附录 B.2 通配符陷阱）。
 
@@ -207,7 +208,7 @@ Deveco Code 的 Agent 通过 bash 工具（受控 shell）执行 `hdc` 命令时
 | `approvalResult=not_required` / `allow_once` / `always_allow` / `timeout` | 审批结果 | finished 事件 |
 | `asking id=per_` + `metadata.*` | 审批请求字段：`metadata.operationType` / `targetAppOrPath` / `targetDevice` / `risk` / `reason` / `command` / `productDefault` / `productCeiling` | ask 弹窗触发时 |
 | `pattern=` | Permission resource 匹配串（脱敏后，如 `device:127.0.0.1:5555/bundle:com.example.sr1e2e`） | 规则评估时 |
-| `hdc_permission_evaluated` | Permission 评估完成 | 进入 Permission 的请求 |
+| `hdc_permission_evaluated` | Permission 评估完成；用户点「拒绝」时该行 `reason=approval_denied`（L3 修复，与 CLI 返回一致） | 进入 Permission 的请求 |
 | `hdc_host_enforcement ... canaries=...` | 主机防绕过 canary 结果（macOS，TC-34） | 会话内首条受保护命令 |
 | `sandbox_request_finished ... host_enforcement=...` | 主机防绕过命令级打点（macOS，TC-34） | 每条沙箱受保护命令 |
 
@@ -322,6 +323,22 @@ hdc list
 **预期结果**：
 - 各命令 `reason_code=invalid_request`，退出码 1
 - 设备无任何操作（含设备重启，核验：`hdc shell uptime` 数值未归零）
+
+**H1 复合 shell 对照矩阵**（全部应 `invalid_request`，均不弹审批、不执行）：
+
+| 命令 | 预期 |
+|---|---|
+| `hdc shell "echo pwn; reboot"` | invalid_request（H1 原复现） |
+| `hdc shell "echo a && reboot"` | invalid_request |
+| `hdc shell "echo a \| reboot"` | invalid_request |
+| `hdc shell "echo $(reboot)"` | invalid_request |
+| `hdc shell "echo \`reboot\`"` | invalid_request |
+| `hdc shell "(reboot)"` | invalid_request |
+| `hdc shell "echo x > /system/f"` | invalid_request |
+| `hdc shell echo a ";" reboot`（分离分号） | invalid_request |
+| `hdc -t`（缺操作数） | invalid_request（原为 target_device_ambiguous，L1 修正） |
+
+**非回归**（应保持原行为）：`hdc shell reboot` → `hard_denied`（不弹窗）；`hdc shell "reboot"`（引号单词）→ `hard_denied`（不弹窗）；`hdc shell echo hello` → 正常放行。
 
 ---
 
@@ -467,8 +484,10 @@ hdc shell aa start -b com.not.exists -a X
 ```
 
 **预期结果**：
-- 一致 bundle：弹审批（**提供 Always allow**），批准后启动成功；拒绝则不启动
+- 一致 bundle：弹审批（**提供 Always allow**，TC-15 修复：`aa start` 归入 `install_start` 上限 allow，SR2 §2.3 / FR-APPROVAL-101；此前误归 `app_lifecycle` 上限 ask、只有 Allow once / Reject 两项），批准后启动成功；拒绝则不启动
+- 选 **Always allow** → 展示将保存的匹配范围（`device:<设备>/bundle:<工程bundle>`）→ 确认后启动成功；**同一 bundle 再执行一次**：不弹窗直接启动成功（saved permission 放行，日志 `policySource=saved_permission`，审计 `action=allow`，当次无审批）
 - 未知 bundle：`reason_code=bundle_not_allowed`，未启动
+- 对照：`hdc shell aa force-stop <工程bundle名>` 弹窗仍只有 **Allow once / Reject**（上限 ask，不提供 Always allow）
 
 ---
 
@@ -592,6 +611,8 @@ hdc install 工程目录\app.hap
    - Windows：`%LOCALAPPDATA%\deveco\state\hdc-guard-audit.jsonl`（默认 `C:\Users\<你>\AppData\Local\deveco\state\`）
    - macOS：`~/.local/state/deveco/hdc-guard-audit.jsonl`
 3. 核对审计内容（**注意**：审计文件只含 allow / ask-approved / ask-rejected / ask-timeout 四类，`hdc_request_started`/`hdc_request_finished` 是遥测事件，不在审计文件中；事件配对需通过遥测打点侧查看，字段含 `requestID`/`policyDecision`/`approvalResult`/`executionResult`/`failureStage`/`durationMs`）
+4. **审计 action 语义**（L3 修复，§2.3-2）：执行一条 ask 类命令（如 `hdc shell mkdir /data/local/tmp/audit-probe`）弹窗选「总是允许」→ 执行成功；**同一命令再执行一次**（当次不弹窗，saved permission 直接放行）；核对两条记录——第 1 次（用户点了总是允许）`action=ask-approved`，第 2 次（saved 放行、无审批）`action=allow`（原为 ask-approved；决策链路以 `approvalPrompted` 字段区分）
+5. **deny 落点日志**（L3 修复，§2.3-3）：再触发一次 ask 类命令，弹窗选「拒绝」；查看 `deveco.log` 中对应 `hdc_permission_evaluated` 行，`reason=approval_denied`（原为 unknown_error，与 CLI 返回一致）；同时核对审计文件该条 `action=ask-rejected`
 
 **预期结果**：
 - 审计仅出现 allow、ask-approved、ask-rejected、ask-timeout 四条记录（非审批类拒绝不审计），含 requestID/callID/op/argv/action
@@ -675,6 +696,15 @@ hdc shell rm /data/local/tmp/sr1-test.txt
 hdc shell chmod 644 /data/local/tmp/sr1-test.txt
 hdc shell aa force-stop com.example.sr1e2e
 ```
+
+> **force-stop 位置参数（L3'，Windows 验证发现）**：真实 hdc 的 `aa force-stop` 使用**位置参数**语法（不同于 `aa start`/`aa stop` 需 `-b`）。parser 仅为 force-stop 提取位置参数 bundle：
+>
+> | 命令 | 预期 |
+> |---|---|
+> | `hdc shell aa force-stop <工程bundle>`（位置参数） | ask → 批准后执行（修复点：原误判 `bundle_not_allowed`） |
+> | `hdc shell aa force-stop -b <工程bundle>`（`-b` 形式） | ask → 批准后执行（非回归） |
+> | `hdc shell aa force-stop com.android.settings`（非工程 bundle） | `bundle_not_allowed`（越界仍拒） |
+> | `hdc shell aa stop <工程bundle>`（位置参数） | `bundle_not_allowed`（真实 hdc `aa stop` 需 `-b`，不误提取） |
 
 **预期结果**：
 - 各命令触发对应类别的审批（ask：param set / bugreport / tconn / fport / rport / rm / chmod / force-stop），审批界面展示操作类型与风险
@@ -912,6 +942,81 @@ hdc list targets
 
 ---
 
+### TC-40：bugreport 输出边界校验（2026-11-04 修复）
+
+**测试目标**：验证 bugreport 输出路径越界工作区时直接拒绝（`local_path_denied`，审批前 fail closed）。修复前 `validateOperation` 无 bugreport 分支，输出路径零校验——越界也进 ask 且可 Always allow 持久化；现补齐 §1.2「输出范围校验通过…其他 deny」：工作区外输出直接拒绝（不弹审批）；裸 `hdc bugreport` 输出落 executor cwd（工作区根，界内）正常弹审批；界内路径走与 file recv 相同的输出校验（边界 + symlink/父目录）。
+
+**测试输入**（经 bash 工具；mac 用 `/tmp/leak.zip` 等工作区外路径）：
+```
+hdc bugreport C:\temp\leak.zip
+hdc bugreport
+hdc bugreport .\report.zip
+```
+
+**预期结果**：
+
+| 命令 | 预期 |
+|---|---|
+| `hdc bugreport <工作区外路径>` | **直接拒绝**（`reason_code=local_path_denied`），退出码 1，不弹审批 |
+| 裸 `hdc bugreport` | 正常弹审批（输出落 executor cwd = 工作区根，界内），批准后生成 |
+| `hdc bugreport ./report.zip`（界内路径） | 弹审批，批准后生成 |
+
+---
+
+### TC-41：stdin 透传封堵 — 管道命令不在设备执行（2026-11-04 系统性审计修复，必测）
+
+**测试目标**：验证审批放行后宿主**不向设备进程透传管道 stdin**。审计发现：修复前宿主把管道 stdin 无条件透传给设备端进程，`echo <任意命令> | hdc shell sh` 中 `sh` 只弹一个「影响未知」的 ask（弹窗不显示管道内容），批准后管道里的命令会在设备上真实执行（演示：管道喂 `reboot` 会重启设备）。现 stdin 一律不透传；裸交互 `hdc shell` 本就被拒（`capability_unsupported`，无 PTY），所有可批准操作均为一次性命令、无 stdin 需求。
+
+**202611040341 包实测结果（2026-11-05）**：核心封堵**通过**——stdin 未透传，`pwned-from-stdin` 未在设备执行；但「批准后设备端 sh 读 EOF 即退出」预期**不符**——设备端 `sh` 挂起并残留（真实 hdc 不会把宿主侧 stdin EOF 转发为设备端 stdin 关闭），残留进程经 `hdc shell kill -9`（走一次 ask 审批后执行）清理。**根因**：无 `-c` 的交互式解释器不是一次性命令，批准后必然挂起残留。
+
+**修复（2026-11-05）**：解析期直接拒绝交互式解释器——`hdc shell sh` / `bash` / `ash` / `/bin/sh` 等无 `-c` 的解释器命令一律 `capability_unsupported`（不弹审批、不执行、无设备残留），与裸 `hdc shell` 同族；`sh -c <命令>`（一次性）仍正常解析走策略。
+
+**测试输入**（一条命令，含管道）：
+```
+echo "echo pwned-from-stdin" | hdc shell sh
+```
+
+**预期结果**（2026-11-05 修复后的构建 `0.0.0-feat-OBP/261017-202611050230`）：
+
+| 命令 | 预期 |
+|---|---|
+| `echo "echo pwned-from-stdin" \| hdc shell sh` | **直接拒绝**（`reason_code=capability_unsupported`），不弹审批、不执行、无设备残留 |
+| `echo "echo pwned" \| hdc shell bash`（及 `ash` / `/bin/sh` 等） | 同上（无 `-c` 解释器一律拒绝） |
+| `hdc shell sh -c "echo hi"`（一次性） | 走正常解析/审批（非回归） |
+| `hdc shell echo hello` | 正常执行（非回归：一次性命令不受影响） |
+
+**202611050230 包实测结果（2026-11-05 回归，全部通过）**：
+
+| 核对项 | 结果 |
+|---|---|
+| `echo "echo pwned-from-stdin" \| hdc shell sh` | `capability_unsupported`，无弹窗、不执行 ✓ |
+| `echo "echo pwned" \| hdc shell bash` | `capability_unsupported` ✓ |
+| `hdc shell sh -c "echo hi"`（非回归） | 输出 hi ✓ |
+| `hdc shell echo hello`（非回归） | 输出 hello ✓ |
+| 设备残留核验 | `ps -ef` 过滤无 sh/bash 残留进程 ✓ |
+
+上一轮缺陷（审批后设备端 sh 挂起残留）确认已由解析期拒绝彻底解决：管道 stdin 注入路径在解析期即封堵，一次性命令（`sh -c`、`echo`）不受影响。
+
+> 202611040341 及更早包：`hdc shell sh` 会弹 ask，批准后设备端 sh 挂起残留（本节实测记录），属已知缺陷；`0.0.0-feat-OBP/261017-202611050230` 起按上表新预期，已回归通过（见上）。
+
+---
+
+### TC-42：hilog 破坏性 flag 恢复审批（2026-11-04 系统性审计修复，必测）
+
+**测试目标**：验证含 `-r`（**清空设备日志缓冲**）/`-w`（设备端写日志文件）的 hilog 命令不再按只读类（device_readonly）**静默放行**——破坏性操作无任何审批提示；现含 `-r`/`-w` 的 hilog 恢复 ask 审批（顶层归 device_file_change、shell 包装落 unclassified），普通日志读取仍静默放行。
+
+**测试输入**（经 bash 工具）：
+
+| 命令 | 预期 |
+|---|---|
+| `hdc hilog -r`（清日志缓冲） | 弹审批（ask），批准后执行；**不再静默清空** |
+| `hdc shell hilog -r`（shell 包装） | 弹审批（ask），批准后执行 |
+| `hdc hilog -w start -f /data/local/tmp/logs` | 弹审批（ask） |
+| `hdc hilog`（普通读取） | 静默放行（非回归，readonly 仍 allow） |
+| `hdc hilog -v time`（带只读 flag） | 静默放行（非回归） |
+
+---
+
 ## 附录 A：规则速查表
 
 ### A.1 SEC2 21 reason codes
@@ -921,13 +1026,13 @@ hdc list targets
 | `guard_unavailable` | 守卫/受控通道不可用、伪造 token、未注册会话（fail closed） |
 | `protocol_incompatible` | 协议版本不匹配、peer PID 不存在/非法（握手失败 fail closed） |
 | `runtime_incompatible` | HDC 版本低于支持下限 3.2.0c |
-| `capability_unsupported` | 声明协议外能力（握手失败 fail closed）；裸 `hdc shell` PTY 不支持 |
+| `capability_unsupported` | 声明协议外能力（握手失败 fail closed）；裸 `hdc shell` PTY 不支持；无 `-c` 的交互式解释器（`hdc shell sh`/`bash`/`/bin/sh` 等，非一次性命令，stdin 不透传会挂起残留，TC-41） |
 | `invalid_request` | 结构不可解析：元字符/缺操作数/复合 shell，不可可靠分词 |
 | `hard_denied` | 产品硬拒绝：flash/mount/dd/mkfs/erase/format/sideload/update（含 shell 包装）、系统 bundle 卸载、product_default=deny 系统状态（reboot/shutdown/poweroff/smode/tmode/daemon/boot，含 shell 包装） |
 | `bundle_not_allowed` | 未知 bundle、伪装 .hap（install/aa start） |
 | `param_readonly` | `param set` 命中只读前缀（`const.`/`ro.`/`ohos.boot.`），直接拒绝不询问 |
 | `param_not_allowed` | `param set` 不在 allowlist（`persist.sys.hilog.`/`debug.`/`persist.ace.darkmode`/`persist.sys.font_scale`/`persist.sys.font_wght_scale`），fail closed |
-| `local_path_denied` | 本机路径越界工作区（file send/recv） |
+| `local_path_denied` | 本机路径越界工作区（file send/recv；bugreport 输出路径越界，TC-40） |
 | `device_path_denied` | 设备路径越界允许目录、`..`/规范化失败 |
 | `endpoint_not_allowed` | tconn/fport 端点不在 allowlist |
 | `target_device_ambiguous` | 多设备缺 `-t`（不自动选第一台） |
@@ -944,8 +1049,8 @@ hdc list targets
 
 | 决策 | 行为 | 对应操作 |
 |---|---|---|
-| allow | 直接执行，无审批 | `version`/`help`/`list targets`/discover；shell 只读查询（getprop/param get/ps/ls/cat/dumpsys/hilog） |
-| ask | 弹审批，逐次确认（超时 30s） | `install`、`file send`、`file recv`、`shell aa start`、非系统 bundle `uninstall`/`aa force-stop`、shell 可写（rm/chmod/chown/mkdir/rmdir）、`param set`（仅 allowlist 内 5 前缀；只读前缀与非白名单直接拒绝）、`bugreport`、`tconn`、`fport`/`rport`、未分类操作（frobnicate 等） |
+| allow | 直接执行，无审批 | `version`/`help`/`list targets`/discover；shell 只读查询（getprop/param get/ps/ls/cat/dumpsys/hilog——hilog 不含 `-r`/`-w` 破坏性 flag，含则升 ask，TC-42） |
+| ask | 弹审批，逐次确认（超时 30s） | `install`、`file send`、`file recv`、`shell aa start`、非系统 bundle `uninstall`/`aa force-stop`（含位置参数形式）、shell 可写（rm/chmod/chown/mkdir/rmdir）、`hilog` 含 `-r`/`-w`（顶层 device_file_change / shell 包装 unclassified，TC-42）、`param set`（仅 allowlist 内 5 前缀；只读前缀与非白名单直接拒绝）、`bugreport`（输出界内，TC-40）、`tconn`、`fport`/`rport`、未分类操作（frobnicate 等） |
 | deny | 直接拒绝（product_default=deny，不可放宽） | 系统状态（smode/tmode/daemon/reboot/boot/shutdown/poweroff，含 `hdc shell` 包装形式） |
 | hard deny | 用户确认与配置均不可放行 | 固件变更（mount/dd/mkfs/flash/erase/format/sideload/update，含 shell 包装）、系统 bundle 卸载（`com.android.*`/`ohos.*`） |
 
@@ -966,6 +1071,8 @@ hdc list targets
 | Always allow | 仅上限为 allow 的操作提供；展示保存范围后创建系统 saved permission；可在 permission 管理入口查看/删除 |
 | 审批界面信息 | 操作类型 / 目标对象 / 目标设备 / 风险级别（含"影响未知"提示，未分类） |
 | 审计文件 | `<state>/hdc-guard-audit.jsonl`，仅 allow、ask-approved、ask-rejected、ask-timeout 四类 |
+| 审计 action 语义（L3 修复） | 本次审批通过的执行记 `ask-approved`；saved permission 放行的重复执行（当次无审批）记 `allow`（决策链路 `approvalPrompted` 字段区分）；用户拒绝记 `ask-rejected` |
+| deny 落点日志（L3 修复） | 用户点「拒绝」时 `hdc_permission_evaluated` 行 `reason=approval_denied`（与 CLI 返回一致，原为 unknown_error） |
 | 审计字段 | requestID / callID / op / argv / action |
 | 脱敏要求 | 不含完整 argv、凭据、环境变量、用户绝对路径、文件内容、设备序列号 |
 
@@ -999,6 +1106,9 @@ hdc list targets
 | TC-32 | （registry.test.ts 自动化） | — |
 | TC-34 | （macOS 主机防绕过，见 `hdc-guard-host-enforcement-acceptance.md`） | 验收汇总 2026-10-27 通过 |
 | TC-35~TC-39 | （需求侧 SEC2 用例，见附录 C） | — |
+| TC-40 | （guard.test.ts / validators.test.ts 自动化） | — |
+| TC-41 | （service.test.ts / executor.test.ts / parser.test.ts / guard.test.ts 自动化） | — |
+| TC-42 | （parser.test.ts 自动化） | — |
 
 ---
 
@@ -1037,6 +1147,9 @@ hdc list targets
 | TC-37 Permission 配置规则生效 | ☐ 通过 ☐ 失败 | |
 | TC-38 productCeiling 上限约束 | ☐ 通过 ☐ 失败 | |
 | TC-39 非设备操作不虚构 targetDevice | ☐ 通过 ☐ 失败 | |
+| TC-40 bugreport 输出边界（越界直接拒 / 裸命令 ask） | ☐ 通过 ☐ 失败 | |
+| TC-41 stdin 断供（管道命令不执行） | ☐ 通过 ☐ 失败 | 批准后是否出现 pwned-from-stdin：否/是 |
+| TC-42 hilog -r 恢复 ask / 普通 hilog 静默 | ☐ 通过 ☐ 失败 | |
 
 ---
 
@@ -1138,6 +1251,9 @@ HDC permission 规则挂在顶层 `permission` 键下，与 `read`/`edit`/`bash`
 | 1 | 真机 M8 补测（本轮仅模拟器 `127.0.0.1:5555`） | 接真机后按 TC-34 场景 B / M8 补测，预期同模拟器 |
 | 2 | 兼容性矩阵（NFR-COMP-001/101） | 另行安排 |
 | 3 | 需求侧正式验收回执 | 测试同事按本文（TC-01~39）执行一轮并回执 |
-| 4 | network-off 沙箱内 guard UDS 不可达（场景 A 边界） | 已文档化；上游 C7 暂缓（2026-10-27 决策，`hdc-guard-fr-host-101-gap.md` §2.4） |
+| 4 | network-off 沙箱内 guard UDS 不可达（场景 A 边界） | 已文档化；上游 C7 暂缓（2026-10-27 决策，`hdc-guard-fr-host-101-gap.md` §2.4）。**2026-11-05 macOS 验证实测命中**：workspace 沙箱下 `hdc list targets` 报 `guard_unavailable`（UDS `ECONNREFUSED`，日志 `trusted_exec:skipped`），切 full-access/network-on 后恢复——macOS 指南 §3 已补配置注意事项 |
 | 5 | 命令级失败 error_message 回写打点（验收汇总 §5.1 建议） | 登记后续改进，不影响验收 |
 | 6 | PTY / 交互式终端 | 范围外（不支持） |
+| 7 | 2026-11-04 系统性审计修复端到端验收（stdin 透传封堵 TC-41、hilog 破坏性 flag TC-42、bugreport 输出边界 TC-40；另含 force-stop 位置参数 L3'、L3 审计/日志语义、TC-15 aa start Always allow 等此前修复的现场回归） | 单测全绿（parser/guard/validators/service/executor）；macOS 端到端按 `0.0.0-feat-OBP/261017-202611040341` 包执行：**TC-41 核心封堵通过，但「EOF 即退出」不符**（设备端 sh 挂起残留，真实 hdc 不转发宿主 stdin EOF；经 `hdc shell kill -9` ask 审批后清理）→ 2026-11-05 修复：无 `-c` 交互式解释器解析期拒绝（`capability_unsupported`，见 TC-41），修复构建 `0.0.0-feat-OBP/261017-202611050230` 已产出（macOS 指南场景 L 已更新为新预期），待回归；其余场景（E~M）回执待收 |
+| 8 | TC-41 修复回归（无 `-c` 交互式解释器解析期拒绝） | macOS 按 `0.0.0-feat-OBP/261017-202611050230` 包回归（2026-11-05）：**全部通过**——`hdc shell sh`/`bash` 管道注入 `capability_unsupported` 直接拒绝、`sh -c`/`echo` 非回归正常、`ps -ef` 核验无设备残留；上一轮「审批后 sh 挂起残留」缺陷确认彻底解决（见 TC-41） |
+| 9 | 202611050230 修复包 macOS 端到端回执（场景 E~M） | 2026-11-05 回执：**TC-15（J：aa start Always allow + saved 放行）、TC-22（H：L3 审计/日志语义）、TC-40（K：bugreport 输出边界）、TC-42（M：hilog 破坏性 flag）连同 TC-41（L）全部确认解决**；场景 E/F/G/I（H1/L1、L2、M1、L3'）现场回归回执仍待收 |

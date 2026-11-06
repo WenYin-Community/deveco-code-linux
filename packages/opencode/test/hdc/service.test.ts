@@ -190,5 +190,42 @@ describe("hdc guard service", () => {
         await fs.rm(home, { recursive: true, force: true })
       }
     })
+
+    // Regression (2026-11-04 audit): bridging stdin on the allow path let
+    // piped content act on the device invisibly to the approval prompt
+    // (`echo reboot | hdc shell sh`). Approved operations are one-shot
+    // commands; the service must never attach a stdin consumer, so the
+    // executor spawns with stdin "ignore" and stdin frames are dropped.
+    test.skipIf(!isUnix)("does not bridge stdin to the spawned hdc on the allow path", async () => {
+      const home = await fakeHome({ hdc: true })
+      process.env.DEVECO_HOME = home
+      registerSession(SESSION, process.cwd())
+      decideResult = allow(
+        { kind: "shell", deviceArgv: ["getprop", "ro.build.version"], interactive: false },
+        { selection: "implicit-single", displayLabel: "fake-device-1", permissionResource: "fake-device-1" },
+        "product_default",
+        "not_required",
+      )
+      try {
+        let attached = false
+        const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "hdc-service-nostdin-"))
+        const code = await HdcService.handleGuardRequest({
+          request: { v: HdcProtocol.PROTOCOL_VERSION, token: "t".repeat(64), sessionID: SESSION, pid: process.pid, caps: [...HdcProtocol.PROTOCOL_CAPS], cwd, argv: ["shell", "getprop", "ro.build.version"] },
+          emitStdout: () => {},
+          emitStderr: () => {},
+          attachStdin: () => {
+            attached = true
+          },
+          signal: new AbortController().signal,
+        })
+        expect(code).toBe(0)
+        expect(attached).toBe(false)
+        await fs.rm(cwd, { recursive: true, force: true })
+      } finally {
+        unregisterSession(SESSION)
+        delete process.env.DEVECO_HOME
+        await fs.rm(home, { recursive: true, force: true })
+      }
+    })
   })
 })

@@ -8,7 +8,9 @@ import type { PermissionEffect } from "./decision"
 
 // Product policy version (for audit/telemetry, consumed by SEC1 via HdcGuardTrustedContext)
 // Increment when strategy matrix (hard deny / ceiling / canAlwaysAllow) changes.
-export const PRODUCT_POLICY_VERSION = "1.0.0"
+// 1.1.0: aa start reclassified install_start (ceiling allow, Always-allow
+// eligible per SR2 §2.3 / FR-APPROVAL-101); force-stop/stop remain ask-ceiling.
+export const PRODUCT_POLICY_VERSION = "1.1.0"
 
 // ─── Hard deny commands ────────────────────────────────────
 // These are matched first and produce an irreversible hard deny.

@@ -536,6 +536,38 @@ describe("SEC2-002: Operation-level validation (§5)", () => {
     expect(result._tag).toBe("invalid")
   })
 
+  // 验证: bugreport 输出路径越出 workspace 时被直接拒绝 (非 ask;
+  // §1.2 "输出范围校验通过…其他 deny" — bugreport 是 Always allow 候选,
+  // 未校验的越界输出可能被持久放行)
+  it("bugreport with outside output path rejected (local_path_denied)", () => {
+    const op: HdcOperation = { kind: "bugreport", localPath: "/tmp/leak.zip" }
+    const result = validateOperation(op, request, trustedCtx)
+    expect(result._tag).toBe("invalid")
+    if (result._tag === "invalid") {
+      expect(result.reasonCode).toBe("local_path_denied")
+    }
+  })
+
+  // 验证: 裸 `hdc bugreport` (无输出路径) 通过校验 — 输出落在 executor cwd
+  // 即 workspace 根, 界内
+  it("bare bugreport without output path passes", () => {
+    const op: HdcOperation = { kind: "bugreport", localPath: undefined }
+    expect(validateOperation(op, request, trustedCtx)._tag).toBe("valid")
+  })
+
+  // 验证: bugreport 输出到 workspace 内真实目录通过校验
+  it("bugreport with in-workspace output path passes", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hdc-op-test-"))
+    const tmpTrustedCtx = { ...trustedCtx, workspaceRoot: tmpDir, projectBundles: ["com.example.app"] }
+    const tmpRequest = { cwd: tmpDir }
+    try {
+      const op: HdcOperation = { kind: "bugreport", localPath: path.join(tmpDir, "report.zip") }
+      expect(validateOperation(op, tmpRequest, tmpTrustedCtx)._tag).toBe("valid")
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
   // 验证: uninstall 系统 bundle 在 Step 4 也会被拒 (不在项目 bundle 列表; Step 3 isHardDeny 已先拒绝)
   it("uninstall with system bundle rejected by validateOperation (not a project bundle)", () => {
     const op: HdcOperation = { kind: "uninstall", bundleName: "com.android.settings" }
