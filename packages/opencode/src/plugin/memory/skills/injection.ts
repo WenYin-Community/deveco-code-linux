@@ -19,8 +19,8 @@ import type { SkillHeader } from './types'
  */
 interface SkillInjectionConfig {
   enabled: boolean
-  maxSkillsInPrompt?: number  // Limit skills shown in system prompt
-  includeCompactionContext?: boolean  // Include skills in compaction
+  maxSkillsInPrompt?: number // Limit skills shown in system prompt
+  includeCompactionContext?: boolean // Include skills in compaction
 }
 
 const DEFAULT_SKILL_INJECTION_CONFIG: SkillInjectionConfig = {

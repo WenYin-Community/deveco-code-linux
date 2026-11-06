@@ -1053,7 +1053,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         const action = existing ? 'updated' : 'created';
                         const sid = ctx.sessionID || 'default';
                         state.memoryToolUsedThisTurn.add(sid);
-                        const visibleWriteEnabled = state.memoryRecallConfig.visibleWrite && (!isSubagentSession(sid) || state.subagentHooksConfig.visibleWrite);
+                        const visibleWriteEnabled =
+                            state.memoryRecallConfig.visibleWrite &&
+                            (!isSubagentSession(sid) || state.subagentHooksConfig.visibleWrite)
                         if (visibleWriteEnabled) {
                             const existing = state.pendingWriteMap.get(sid);
                             const writeText = `'${memory.name}' ${action}`;

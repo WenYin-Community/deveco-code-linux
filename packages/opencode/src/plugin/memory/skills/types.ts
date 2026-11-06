@@ -5,21 +5,21 @@
 
 // Skill frontmatter metadata
 export interface SkillMetadata {
-  name: string              // Skill name, max 64 chars
-  description: string       // Brief description, max 1024 chars
-  platforms?: string[]      // Optional: OS restriction [macos, linux, windows]
-  slashCommand?: string     // Optional: slash command alias (e.g., "dream")
-  created?: number          // Creation timestamp
-  updated?: number          // Update timestamp
-  source?: 'auto'           // Origin: 'auto' = created by auto-skill agent, undefined = user/builtin
+  name: string // Skill name, max 64 chars
+  description: string // Brief description, max 1024 chars
+  platforms?: string[] // Optional: OS restriction [macos, linux, windows]
+  slashCommand?: string // Optional: slash command alias (e.g., "dream")
+  created?: number // Creation timestamp
+  updated?: number // Update timestamp
+  source?: 'auto' // Origin: 'auto' = created by auto-skill agent, undefined = user/builtin
 }
 
 // Full skill with content
 export interface Skill extends SkillMetadata {
-  category: string          // Category name (kebab-case)
-  content: string           // Markdown instructions
-  filepath?: string         // Full path to SKILL.md
-  mtime?: number            // File modification time
+  category: string // Category name (kebab-case)
+  content: string // Markdown instructions
+  filepath?: string // Full path to SKILL.md
+  mtime?: number // File modification time
 }
 
 // Skill header for listing (metadata only)

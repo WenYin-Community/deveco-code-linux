@@ -88,21 +88,25 @@ export class SemanticSelectionExecutor {
 
     try {
       const checkResult = await this.client.session.get({ path: { id: parentSessionID } })
-      if (checkResult.error) {
-        if (isNotFoundError(checkResult.error)) {
-          logger.warn('[SemanticSelection]', 'Parent session not found, cannot fork:', parentSessionID)
-          return false
-        }
-        logger.warn('[SemanticSelection]', 'Parent session check error:', checkResult.error)
-      }
+      if (checkResult.error) return this.handleParentCheckError(checkResult.error, parentSessionID, false)
       return true
     } catch (error) {
-      if (isNotFoundError(error)) {
-        logger.warn('[SemanticSelection]', 'Parent session not found (catch), cannot fork:', parentSessionID)
-        return false
-      }
-      return true
+      return this.handleParentCheckError(error, parentSessionID, true)
     }
+  }
+
+  private handleParentCheckError(error: unknown, parentSessionID: string, isCatch: boolean): boolean {
+    if (isNotFoundError(error)) {
+      const label = isCatch
+        ? 'Parent session not found (catch), cannot fork:'
+        : 'Parent session not found, cannot fork:'
+      logger.warn('[SemanticSelection]', label, parentSessionID)
+      return false
+    }
+    if (!isCatch) {
+      logger.warn('[SemanticSelection]', 'Parent session check error:', error)
+    }
+    return true
   }
 
   private async createAndVerifySession(): Promise<string | undefined> {

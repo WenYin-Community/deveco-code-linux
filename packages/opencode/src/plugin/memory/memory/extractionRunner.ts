@@ -248,93 +248,7 @@ export async function executeExtraction(
     const reviewMode = mode.reviewMode!
     result.reviewMode = reviewMode
 
-    const lockPath = getExtractionLockPath(context.memoryRoot)
-    const acquired = await tryAcquireExtractionLock(context.memoryRoot, context.sessionID)
-    if (!acquired) {
-      result.skipReason = "extraction_lock_failed"
-      return result
-    }
-
-    updateThresholdState(markExtractionStarted(getThresholdState()))
-
-    const reviewModeLabels: Record<ReviewMode, string> = {
-      'combined': '记忆+技能',
-      'skill-only': '技能',
-      'memory-only': '记忆',
-    }
-    await showToast(
-      `开始后台提取 (${reviewModeLabels[reviewMode]})...`,
-      'info',
-      'Auto Memory',
-      2000
-    )
-
-    if (!storage) {
-      logger.warn('[AutoMemoryExtraction]', 'Storage not initialized, cannot list existing memories')
-      result.skipReason = "storage_not_initialized"
-      return result
-    }
-    const storageMemoryPath = storage.getMemoryPath()
-    logger.info('[AutoMemoryExtraction]', 'Calling storage.list() — memoryRoot:', context.memoryRoot, 'storageMemoryPath:', storageMemoryPath)
-
-    const existingMemories = await storage.list()
-    logger.info('[AutoMemoryExtraction]', 'list() result:', existingMemories.length, 'names:', existingMemories.map(m => m.name).join(','))
-
-    const existingSkills = initializedSkillStorage 
-      ? await initializedSkillStorage.list() 
-      : []
-
-    const prompt = buildReviewPrompt(reviewMode, existingMemories, existingSkills, lockPath, context)
-
-    const agentContext: ExtractionAgentContext = {
-      client: initializedClient!,
-      sessionID: context.sessionID,
-      directory: context.projectDirectory,
-      pendingContext: {
-        messages: [], // Conversation history is inherited via session.fork (not passed here)
-        sessionID: context.sessionID,
-        capturedAt: Date.now(),
-        projectID: context.projectID,
-      },
-      config: initializedConfig,
-      memoryRoot: context.memoryRoot,
-      prompt: prompt,
-      reviewMode: reviewMode,
-      skillConfig: initializedSkillConfig,
-    }
-
-    // Store last message UUID as cursor for incremental extraction
-    const lastMsg = fetched.messages[fetched.messages.length - 1] as { info?: { id?: string } } | undefined
-    if (lastMsg?.info?.id) {
-      updateThresholdState({ ...getThresholdState(), pendingLastMessageUuid: lastMsg.info.id })
-    }
-
-    const agentResult = await runExtractionAgent(agentContext)
-
-    result.extractionRan = true
-    result.success = agentResult.success
-
-    if (!agentResult.success) {
-      await releaseExtractionLock(context.memoryRoot)
-      updateThresholdState({ ...getThresholdState(), inProgress: false })
-      result.error = agentResult.error
-
-      await showToast(
-        `提取启动失败: ${agentResult.error || '未知错误'}`,
-        'error',
-        'Auto Memory',
-        4000
-      )
-      return result
-    }
-
-    if (reviewMode === 'combined' || reviewMode === 'skill-only') {
-      updateThresholdState(resetExtractionSkillCounter(getThresholdState()))
-    }
-
-    logger.info('[AutoMemoryExtraction]', 'Extraction agent launched (fire-and-forget)')
-    return result
-
+    return runExtraction(context, fetched.messages, reviewMode, storage)
   } catch (error) {
     result.error = error instanceof Error ? error.message : "Unknown error"
 
@@ -344,6 +258,111 @@ export async function executeExtraction(
     logger.error('[AutoMemoryExtraction]', 'Error:', result.error)
     return result
   }
+}
+
+async function runExtraction(
+  context: ExtractionRunnerContext,
+  messages: unknown[],
+  reviewMode: ReviewMode,
+  storage: MemoryStorage | null,
+): Promise<ExtractionRunnerResult> {
+  const lockPath = getExtractionLockPath(context.memoryRoot)
+  const acquired = await tryAcquireExtractionLock(context.memoryRoot, context.sessionID)
+  if (!acquired) {
+    return { success: false, extractionRan: false, skipReason: "extraction_lock_failed", reviewMode }
+  }
+
+  updateThresholdState(markExtractionStarted(getThresholdState()))
+  await announceExtractionStart(reviewMode)
+
+  if (!storage) {
+    logger.warn('[AutoMemoryExtraction]', 'Storage not initialized, cannot list existing memories')
+    return { success: false, extractionRan: false, skipReason: "storage_not_initialized", reviewMode }
+  }
+
+  const storageMemoryPath = storage.getMemoryPath()
+  logger.info('[AutoMemoryExtraction]', 'Calling storage.list() — memoryRoot:', context.memoryRoot, 'storageMemoryPath:', storageMemoryPath)
+
+  const existingMemories = await storage.list()
+  logger.info('[AutoMemoryExtraction]', 'list() result:', existingMemories.length, 'names:', existingMemories.map(m => m.name).join(','))
+
+  const existingSkills = initializedSkillStorage
+    ? await initializedSkillStorage.list()
+    : []
+
+  const prompt = buildReviewPrompt(reviewMode, existingMemories, existingSkills, lockPath, context)
+  const agentContext = buildExtractionAgentContext(context, prompt, reviewMode)
+
+  updateLastMessageCursor(messages)
+
+  const agentResult = await runExtractionAgent(agentContext)
+
+  if (!agentResult.success) {
+    await failExtraction(context, agentResult.error)
+    return { success: false, extractionRan: true, error: agentResult.error, reviewMode }
+  }
+
+  if (reviewMode === 'combined' || reviewMode === 'skill-only') {
+    updateThresholdState(resetExtractionSkillCounter(getThresholdState()))
+  }
+
+  logger.info('[AutoMemoryExtraction]', 'Extraction agent launched (fire-and-forget)')
+  return { success: true, extractionRan: true, reviewMode }
+}
+
+async function announceExtractionStart(reviewMode: ReviewMode): Promise<void> {
+  const reviewModeLabels: Record<ReviewMode, string> = {
+    'combined': '记忆+技能',
+    'skill-only': '技能',
+    'memory-only': '记忆',
+  }
+  await showToast(
+    `开始后台提取 (${reviewModeLabels[reviewMode]})...`,
+    'info',
+    'Auto Memory',
+    2000
+  )
+}
+
+function buildExtractionAgentContext(
+  context: ExtractionRunnerContext,
+  prompt: string,
+  reviewMode: ReviewMode,
+): ExtractionAgentContext {
+  return {
+    client: initializedClient!,
+    sessionID: context.sessionID,
+    directory: context.projectDirectory,
+    pendingContext: {
+      messages: [], // Conversation history is inherited via session.fork (not passed here)
+      sessionID: context.sessionID,
+      capturedAt: Date.now(),
+      projectID: context.projectID,
+    },
+    config: initializedConfig,
+    memoryRoot: context.memoryRoot,
+    prompt: prompt,
+    reviewMode: reviewMode,
+    skillConfig: initializedSkillConfig,
+  }
+}
+
+function updateLastMessageCursor(messages: unknown[]): void {
+  const lastMsg = messages[messages.length - 1] as { info?: { id?: string } } | undefined
+  if (lastMsg?.info?.id) {
+    updateThresholdState({ ...getThresholdState(), pendingLastMessageUuid: lastMsg.info.id })
+  }
+}
+
+async function failExtraction(context: ExtractionRunnerContext, error: string | undefined): Promise<void> {
+  await releaseExtractionLock(context.memoryRoot)
+  updateThresholdState({ ...getThresholdState(), inProgress: false })
+  await showToast(
+    `提取启动失败: ${error || '未知错误'}`,
+    'error',
+    'Auto Memory',
+    4000
+  )
 }
 
 async function checkExtractionPreconditions(context: ExtractionRunnerContext): Promise<string | null> {

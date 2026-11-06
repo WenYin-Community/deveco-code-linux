@@ -111,7 +111,7 @@ export async function createForkedChildSession(
 
     // Capture parent model — will be passed to promptAsync to avoid
     // DB read of the forked session's (empty/corrupt) model column
-    const parentModel = (parentResult.data as any).model
+    const parentModel = (parentResult.data as { model?: { id?: string; providerID?: string } }).model
     const model = parentModel?.id && parentModel?.providerID
       ? { providerID: parentModel.providerID as string, modelID: parentModel.id as string }
       : undefined
