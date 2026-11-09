@@ -1,6 +1,7 @@
 import { Runtime } from "@opencode-ai/core/runtime"
 
 import DEFAULT_ANTHROPIC from "./anthropic.txt"
+import DEFAULT_ASK_SWITCH from "./ask-switch.txt"
 import DEFAULT_BEAST from "./beast.txt"
 import DEFAULT_BTW from "./btw.txt"
 import DEFAULT_BUILD_SWITCH from "./build-switch.txt"
@@ -16,6 +17,7 @@ import DEFAULT_PLAN from "./plan.txt"
 import DEFAULT_TRINITY from "./trinity.txt"
 
 import STUDIO_ANTHROPIC from "./deveco-studio/anthropic.txt"
+import STUDIO_ASK_SWITCH from "./deveco-studio/ask-switch.txt"
 import STUDIO_BEAST from "./deveco-studio/beast.txt"
 import STUDIO_BTW from "./deveco-studio/btw.txt"
 import STUDIO_BUILD_SWITCH from "./deveco-studio/build-switch.txt"
@@ -33,6 +35,7 @@ import STUDIO_TRINITY from "./deveco-studio/trinity.txt"
 export const profiles = {
   default: {
     anthropic: DEFAULT_ANTHROPIC,
+    askSwitch: DEFAULT_ASK_SWITCH,
     beast: DEFAULT_BEAST,
     btw: DEFAULT_BTW,
     buildSwitch: DEFAULT_BUILD_SWITCH,
@@ -49,6 +52,7 @@ export const profiles = {
   },
   "deveco-studio": {
     anthropic: STUDIO_ANTHROPIC,
+    askSwitch: STUDIO_ASK_SWITCH,
     beast: STUDIO_BEAST,
     btw: STUDIO_BTW,
     buildSwitch: STUDIO_BUILD_SWITCH,

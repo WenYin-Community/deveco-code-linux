@@ -12,6 +12,7 @@ import {
   resolveShellTimeout,
   ShellTool,
 } from "../../src/tool/shell"
+import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV } from "../../src/deveco-cli/router"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
@@ -240,6 +241,55 @@ describe("tool.shell timeout policy", () => {
     expect(resolveShellTimeout("devecocli emulator image download", longer)).toBe(longer)
     expect(resolveShellTimeout("devecocli emulator image list", 600_000)).toBe(600_000)
   })
+})
+
+describe("tool.shell docs preview env", () => {
+  const printDocsPreviewChars = () => {
+    const code = `process.stdout.write(String(process.env.${DOCS_PREVIEW_CHARS_ENV}))`
+    const text = `${bin} -e ${evalarg(code)}`
+    return PS.has(sh()) ? `& ${text}` : text
+  }
+
+  it.live(
+    "gives the ask agent the enlarged docs preview env",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const result = yield* run(
+            { command: printDocsPreviewChars(), description: "Print docs preview chars" },
+            { ...ctx, agent: "ask" },
+          )
+
+          expect(result.metadata.exit).toBe(0)
+          expect(result.output).toContain(String(ASK_DOCS_PREVIEW_CHARS))
+        }),
+      ),
+    30_000,
+  )
+
+  it.live(
+    "removes an ambient docs preview override for non-ask agents",
+    () =>
+      runIn(
+        projectRoot,
+        Effect.gen(function* () {
+          const prev = process.env[DOCS_PREVIEW_CHARS_ENV]
+          process.env[DOCS_PREVIEW_CHARS_ENV] = "999999"
+          try {
+            const result = yield* run({ command: printDocsPreviewChars(), description: "Print docs preview chars" })
+
+            expect(result.metadata.exit).toBe(0)
+            expect(result.output).toContain("undefined")
+            expect(result.output).not.toContain("999999")
+          } finally {
+            if (prev === undefined) delete process.env[DOCS_PREVIEW_CHARS_ENV]
+            else process.env[DOCS_PREVIEW_CHARS_ENV] = prev
+          }
+        }),
+      ),
+    30_000,
+  )
 })
 
 describe("tool.shell permissions", () => {

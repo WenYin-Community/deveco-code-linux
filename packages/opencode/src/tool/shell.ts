@@ -35,6 +35,7 @@ import { BashArity } from "@/permission/arity"
 import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
 import { resolveCliInvocation } from "@/deveco-cli/commands"
 import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/event"
+import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV } from "@/deveco-cli/router"
 import { Global } from "@opencode-ai/core/global"
 import { Agent } from "@/agent/agent"
 
@@ -1094,15 +1095,20 @@ export const ShellTool = Tool.define(
                 "devecocli-events",
                 `${process.pid}-${randomUUID()}.jsonl`,
               )
+              const env: NodeJS.ProcessEnv = {
+                ...(yield* shellEnv(ctx, cwd)),
+                [DEVECO_CLI_EVENT_FILE]: devecoCliEventFile,
+              }
+              // ask gets a larger single-pass docs preview; every other agent has the variable
+              // removed so an ambient override never widens its preview.
+              if (ctx.agent === "ask") env[DOCS_PREVIEW_CHARS_ENV] = String(ASK_DOCS_PREVIEW_CHARS)
+              else delete env[DOCS_PREVIEW_CHARS_ENV]
               return yield* run(
                 {
                   shell,
                   command: params.command,
                   cwd,
-                  env: {
-                    ...(yield* shellEnv(ctx, cwd)),
-                    [DEVECO_CLI_EVENT_FILE]: devecoCliEventFile,
-                  },
+                  env,
                   timeout,
                   description: params.description,
                   devecoCliEventFile,

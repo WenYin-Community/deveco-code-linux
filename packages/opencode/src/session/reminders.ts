@@ -6,7 +6,6 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PartID } from "./schema"
-import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionPromptProfile } from "./prompt/profile"
 
@@ -20,6 +19,26 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   const sessions = yield* Session.Service
   const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
   if (!userMessage) return input.messages
+
+  // any agent <-> ask switch boundary
+  const from = input.messages.findLast((msg) => msg.info.role === "assistant")?.info.agent
+  const to = input.agent.name
+  const askSwitch =
+    from !== undefined && from !== to && (from === "ask" || to === "ask") && !(from === "ask" && to === "plan")
+      ? SessionPromptProfile.current.askSwitch.replace("${from}", () => from).replace("${to}", () => to)
+      : undefined
+  if (askSwitch !== undefined) {
+    const part = yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: userMessage.info.id,
+      sessionID: userMessage.info.sessionID,
+      type: "text",
+      text: askSwitch,
+      synthetic: true,
+    })
+    userMessage.parts.push(part)
+    return input.messages
+  }
 
   if (!flags.experimentalPlanMode) {
     if (input.agent.name === "plan") {

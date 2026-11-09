@@ -221,7 +221,7 @@ describe("homegraph ready", () => {
 describe("AgentPromptParts.forAgent", () => {
   test("injects HG part only for build/goal; user source softens auto-index claim", async () => {
     const { forAgent, agentNeedsHomegraphPrompt, CODEBASE_AGENTS } = await import("../../src/agent/prompt-parts")
-    expect([...CODEBASE_AGENTS].sort()).toEqual(["build", "goal"])
+    expect([...CODEBASE_AGENTS].sort()).toEqual(["ask", "build", "goal"])
     expect(agentNeedsHomegraphPrompt("debug")).toBe(false)
 
     const agent = (name: string) => ({ name }) as never

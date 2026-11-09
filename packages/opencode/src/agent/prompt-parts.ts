@@ -6,7 +6,7 @@ import PART_CODEBASE_HOMEGRAPH from "./prompt-parts/codebase-understanding-homeg
 
 // Agents whose prompts were rewritten to route through `# Codebase understanding`.
 // Search specialists (explore) and agents without synced prompts stay out.
-export const CODEBASE_AGENTS = new Set(["build", "goal"])
+export const CODEBASE_AGENTS = new Set(["build", "goal", "ask"])
 
 /** Soften product-only claims when the user brought their own mcp.homegraph. */
 const USER_INDEX_NOTE =

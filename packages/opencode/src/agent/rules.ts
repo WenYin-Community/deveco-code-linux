@@ -6,7 +6,7 @@ import RULES_GLM_5_3 from "./rules/glm-5-3.txt"
 
 // Agents that write ArkTS code. Others (explore, title, summary) would only be
 // diluted by the platform ruleset.
-const RULES_AGENTS = new Set(["build", "debug", "goal", "spec-implementation", "spec-verify"])
+const RULES_AGENTS = new Set(["build", "debug", "goal", "spec-implementation", "spec-verify", "ask"])
 
 // The same model is spelled differently across providers (glm-5.1, glm-5-1,
 // glm-5p1), so match on a normalized id. Only collapse `p` between digits so

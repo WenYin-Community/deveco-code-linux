@@ -945,6 +945,7 @@ it.instance(
         build: { disable: true },
         goal: { disable: true },
         plan: { disable: true },
+        ask: { disable: true },
         compaction: { disable: true },
         summary: { disable: true },
       },

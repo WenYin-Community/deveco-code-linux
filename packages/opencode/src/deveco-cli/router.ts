@@ -21,6 +21,11 @@ export const MAX_DOCS_OUTPUT_LENGTH = 5_000
 
 // The devecocli command-identity policy (allowlist + usage-token rule) is dependency-free and
 // lives in ./commands; this module only consumes it when writing an event.
+/** Docs preview override, set by the shell tool for the ask agent only. ask gets a
+ * larger 20,000-char single-pass preview so fewer documents truncate at all, which
+ * removes the truncate-then-reread rounds that dominate ask latency. */
+export const DOCS_PREVIEW_CHARS_ENV = "DEVECO_DOCS_PREVIEW_CHARS"
+export const ASK_DOCS_PREVIEW_CHARS = 20_000
 
 type CreateTargetState = "missing" | "empty" | "non-empty" | "invalid"
 
@@ -119,7 +124,9 @@ function enhanceLogArgs(args: string[]) {
 }
 
 async function truncateDocsOutput(result: CliResult) {
-  if (result.stdout.length + result.stderr.length <= MAX_DOCS_OUTPUT_LENGTH) return result
+  const parsed = Number(process.env[DOCS_PREVIEW_CHARS_ENV])
+  const limit = Number.isSafeInteger(parsed) && parsed > 0 ? parsed : MAX_DOCS_OUTPUT_LENGTH
+  if (result.stdout.length + result.stderr.length <= limit) return result
   const output = [result.stdout, result.stderr].filter(Boolean).join(result.stdout.endsWith("\n") ? "" : "\n")
   // Identical responses reuse a path so repeated lookups do not add changing paths to context.
   const file = path.join(
@@ -129,8 +136,10 @@ async function truncateDocsOutput(result: CliResult) {
   )
   await fs.mkdir(path.dirname(file), { recursive: true })
   await Bun.write(file, output)
-  const notice = `[Documentation output truncated to ${MAX_DOCS_OUTPUT_LENGTH} characters.]\nFull output saved to: ${file}\n\n`
-  const truncated = `${notice}${output.slice(0, MAX_DOCS_OUTPUT_LENGTH - notice.length - 1)}\n`
+  const notice = `[Documentation output truncated to ${limit} characters.]\nFull output saved to: ${file}\n\n`
+  // A tiny limit can be shorter than the notice itself; the body budget is clamped so a
+  // negative slice end never keeps almost the whole document in the preview.
+  const truncated = `${notice}${output.slice(0, Math.max(0, limit - notice.length - 1))}\n`
   if (!result.stdout) return { ...result, stderr: truncated }
   return { ...result, stdout: truncated, stderr: "" }
 }

@@ -83,6 +83,84 @@ describe("devecocli proxy router", () => {
     expect(result.exitCode).toBe(0)
   })
 
+  test("keeps the FIRST part of truncated docs output and drops the tail", async () => {
+    const output = `HEAD-SENTINEL: overview and interfaces\n${"document body line\n".repeat(1_000)}TAIL-SENTINEL: trailing example\n`
+    const cli = runner({ "docs read sentinel": { stdout: output } })
+    const result = await executeDevecoCliProxy(["docs", "read", "sentinel"], "C:\\project", cli.run)
+
+    expect(result.stdout).toContain("HEAD-SENTINEL")
+    expect(result.stdout).not.toContain("TAIL-SENTINEL")
+    const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+    expect(file).toBeDefined()
+    expect(await Bun.file(file!).text()).toBe(output)
+  })
+
+  test("DEVECO_DOCS_PREVIEW_CHARS raises the truncation limit for the ask agent", async () => {
+    process.env.DEVECO_DOCS_PREVIEW_CHARS = "20000"
+    try {
+      const output = `${"Earlier search result\n".repeat(1000)}guides/late-result\n`
+      const cli = runner({ "docs search @State --limit 10": { stdout: output } })
+      const result = await executeDevecoCliProxy(["docs", "search", "@State", "--limit", "10"], "C:\\project", cli.run)
+
+      expect(result.stdout.length + result.stderr.length).toBe(20_000)
+      expect(result.stdout).toStartWith("[Documentation output truncated to 20000 characters.]\nFull output saved to: ")
+      const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+      expect(file).toBeDefined()
+      expect(await Bun.file(file!).text()).toBe(output)
+    } finally {
+      delete process.env.DEVECO_DOCS_PREVIEW_CHARS
+    }
+  })
+
+  test("invalid DEVECO_DOCS_PREVIEW_CHARS falls back to the default limit", async () => {
+    process.env.DEVECO_DOCS_PREVIEW_CHARS = "not-a-number"
+    try {
+      const output = `${"Earlier search result\n".repeat(300)}guides/late-result\n`
+      const cli = runner({ "docs search @State --limit 10": { stdout: output } })
+      const result = await executeDevecoCliProxy(["docs", "search", "@State", "--limit", "10"], "C:\\project", cli.run)
+
+      expect(result.stdout.length + result.stderr.length).toBe(5_000)
+      expect(result.stdout).toStartWith("[Documentation output truncated to 5000 characters.]\n")
+    } finally {
+      delete process.env.DEVECO_DOCS_PREVIEW_CHARS
+    }
+  })
+
+  test("DEVECO_DOCS_PREVIEW_CHARS with trailing garbage falls back to the default limit", async () => {
+    process.env.DEVECO_DOCS_PREVIEW_CHARS = "20000foo"
+    try {
+      const output = `${"Earlier search result\n".repeat(300)}guides/late-result\n`
+      const cli = runner({ "docs search @State --limit 10": { stdout: output } })
+      const result = await executeDevecoCliProxy(["docs", "search", "@State", "--limit", "10"], "C:\\project", cli.run)
+
+      expect(result.stdout.length + result.stderr.length).toBe(5_000)
+      expect(result.stdout).toStartWith("[Documentation output truncated to 5000 characters.]\n")
+    } finally {
+      delete process.env.DEVECO_DOCS_PREVIEW_CHARS
+    }
+  })
+
+  test("tiny DEVECO_DOCS_PREVIEW_CHARS values still bound the preview to the notice", async () => {
+    for (const raw of ["1", "50"]) {
+      process.env.DEVECO_DOCS_PREVIEW_CHARS = raw
+      try {
+        const output = `${"HEAD-SENTINEL\n".repeat(1_000)}TAIL-SENTINEL\n`
+        const cli = runner({ "docs read document-id": { stdout: output } })
+        const result = await executeDevecoCliProxy(["docs", "read", "document-id"], "C:\\project", cli.run)
+
+        expect(result.stdout).toStartWith(`[Documentation output truncated to ${raw} characters.]\n`)
+        expect(result.stdout).not.toContain("HEAD-SENTINEL")
+        expect(result.stdout).not.toContain("TAIL-SENTINEL")
+        expect(result.stdout.length).toBeLessThan(1_000)
+        const file = result.stdout.match(/^Full output saved to: (.+)$/m)?.[1]
+        expect(file).toBeDefined()
+        expect(await Bun.file(file!).text()).toBe(output)
+      } finally {
+        delete process.env.DEVECO_DOCS_PREVIEW_CHARS
+      }
+    }
+  })
+
   test("preserves docs output at the 5000 character boundary without a trailing newline", async () => {
     const args = ["docs", "read", "document-id"]
     const output = "x".repeat(5_000)

@@ -11,6 +11,7 @@ import { ProviderTransform } from "@/provider/transform"
 
 import { AgentPromptProfile } from "./prompt/profile"
 import PROMPT_DFX from "./prompt/dfx.txt"
+import PROMPT_ASK from "./prompt/ask.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@opencode-ai/core/global"
@@ -400,6 +401,49 @@ export const layer = Layer.effect(
               user,
             ),
             prompt: AgentPromptProfile.current.prompts.summary,
+          },
+          ask: {
+            name: "ask",
+            description:
+              "HarmonyOS Q&A primary agent. Answers knowledge questions from the local docs knowledge base AND project questions by reading local context (read-only, no edits). For code changes use the build agent.",
+            options: {
+              reasoningEffort: "low",
+            },
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+                doom_loop: "ask",
+                grep: "allow",
+                glob: "allow",
+                read: {
+                  "*": "allow",
+                  "*.env": "ask",
+                  "*.env.*": "ask",
+                  "*.env.example": "allow",
+                },
+                task: {
+                  explore: "allow",
+                  ask: "deny",
+                  build: "deny",
+                  goal: "deny",
+                },
+                external_directory: readonlyExternalDirectory,
+                bash: {
+                  "devecocli docs *": "allow",
+                  "devecocli.cmd docs *": "allow",
+                  "devecocli docs *>*": "deny",
+                  "devecocli.cmd docs *>*": "deny",
+                },
+              }),
+              user,
+            ),
+            mode: "primary",
+            native: true,
+            color: "success",
+            // ArkTS codegen rules arrive via the RULES_AGENTS injection of
+            // rules/common.txt — single source of truth shared with build/goal.
+            prompt: PROMPT_ASK,
           },
         }
 
