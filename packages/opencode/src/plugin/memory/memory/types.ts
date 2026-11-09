@@ -91,8 +91,8 @@ export interface TruncationConfig {
   typePriority: Record<MemoryType, number>
   // Token estimation ratios (chars per token)
   estimateRatio: {
-    chinese: number  // Chinese characters per token (default 4)
-    english: number  // English characters per token (default 1)
+    chinese: number // Chinese characters per token (default 4)
+    english: number // English characters per token (default 1)
   }
 }
 
