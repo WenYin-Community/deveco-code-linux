@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { CallToolResultSchema, LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
+import { CallToolResultSchema, LoggingMessageNotificationSchema, type Tool } from "@modelcontextprotocol/sdk/types.js"
 import { resolveVendorDir } from "@opencode-ai/core/installation/vendor-path"
 import { DEVECO_API_URL, getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import { requireDevEcoAccess } from "@/plugin/deveco/access"
@@ -169,49 +169,69 @@ async function executeVerifyUi(
     if (await isBoundDevecoOauthExpired(worktree)) await ensureInitialized(worktree)
     const params = await resolveUIVerifyParams(worktree)
     if (!params.baseURL || !params.apiKey || !params.modelName) {
-      await reportUiVerificationOperation(ctx, detail)
-      // Unresolvable credentials/params: no model was called, so report no model
-      // rather than the absent config value.
-      return {
-        title: "UI verification unavailable",
-        output: MISSING_MODEL_MESSAGE,
-        metadata: { uiVerificationModel: null },
-      }
+      return await reportMissingModel(ctx, detail)
     }
 
-    const bundleName = args.bundleName ?? (await readBundleName(worktree))
-    detail.bundleName = bundleName
-    await ensureInitialized(worktree)
-    const boundModel = runtime?.params.modelName ?? params.modelName
-    if (boundModel?.trim()) detail.modelName = normalizeModelName(boundModel)
-    const deviceType = await resolveUiVerificationDeviceType(args.device, runtime?.hdcPath)
-    if (deviceType) detail.deviceType = deviceType
-
-    const payload = {
-      bundleName,
-      ...(args.device ? { device: args.device } : {}),
-      testPlan: args.testPlan,
-      freshStart: args.freshStart ?? false,
-      sessionId: ctx.sessionID,
-    }
     metrics = new VerifyRunMetrics()
-    const result = await runVerifyUiExclusive(metrics, () => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort, metrics))
-    const parsed = readVerifyResult(result)
-    Object.assign(detail, metrics.snapshot(), parsed.detail)
-    await reportUiVerificationOperation(ctx, detail)
-    return {
-      title: "UI verification",
-      output: textFromCallResult(result),
-      // Report what the MCP child is actually bound to. `resolveUIVerifyParams` above
-      // is only a pre-check: ensureInitialized() reuses an already-started child when
-      // the binding is still valid, so a config hot-reload can leave runtime.params
-      // (the values written into the child's UI_VERIFY_* env) different from `params`.
-      metadata: { ...(parsed.id ? { id: parsed.id } : {}), uiVerificationModel: runtime?.params.modelName ?? null },
-    }
+    return await runVerifyUiAttempt(args, ctx, worktree, detail, params, metrics)
   } catch (error) {
     if (metrics) Object.assign(detail, metrics.snapshot())
     await reportUiVerificationOperation(ctx, detail)
     throw error
+  }
+}
+
+async function runVerifyUiAttempt(
+  args: Schema.Schema.Type<typeof VerifyUiParameters>,
+  ctx: Context,
+  worktree: string,
+  detail: UiVerificationOperationDetail,
+  params: UiVerifyParams,
+  metrics: VerifyRunMetrics,
+): Promise<ExecuteResult> {
+  const bundleName = args.bundleName ?? (await readBundleName(worktree))
+  detail.bundleName = bundleName
+  await ensureInitialized(worktree)
+  const boundModel = runtime?.params.modelName ?? params.modelName
+  if (boundModel?.trim()) detail.modelName = normalizeModelName(boundModel)
+  const deviceType = await resolveUiVerificationDeviceType(args.device, runtime?.hdcPath)
+  if (deviceType) detail.deviceType = deviceType
+
+  const payload = {
+    bundleName,
+    ...(args.device ? { device: args.device } : {}),
+    testPlan: args.testPlan,
+    freshStart: args.freshStart ?? false,
+    sessionId: ctx.sessionID,
+  }
+  const result = await runVerifyUiExclusive(metrics, () => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort, metrics))
+  const parsed = readVerifyResult(result)
+  Object.assign(detail, metrics.snapshot(), parsed.detail)
+  await reportUiVerificationOperation(ctx, detail)
+  return verifyUiSuccessResult(result, parsed)
+}
+
+function verifyUiSuccessResult(
+  result: unknown,
+  parsed: { id?: string; detail: Partial<UiVerificationOperationDetail> },
+): ExecuteResult {
+  // Report what the MCP child is actually bound to. `resolveUIVerifyParams` above
+  // is only a pre-check: ensureInitialized() reuses an already-started child when
+  // the binding is still valid, so a config hot-reload can leave runtime.params
+  // (the values written into the child's UI_VERIFY_* env) different from `params`.
+  const metadata: UiVerifyMetadata = { uiVerificationModel: runtime?.params.modelName ?? null }
+  if (parsed.id) metadata.id = parsed.id
+  return { title: "UI verification", output: textFromCallResult(result), metadata }
+}
+
+async function reportMissingModel(ctx: Context, detail: UiVerificationOperationDetail): Promise<ExecuteResult> {
+  await reportUiVerificationOperation(ctx, detail)
+  // Unresolvable credentials/params: no model was called, so report no model
+  // rather than the absent config value.
+  return {
+    title: "UI verification unavailable",
+    output: MISSING_MODEL_MESSAGE,
+    metadata: { uiVerificationModel: null },
   }
 }
 
@@ -383,8 +403,7 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   await stopUiVerificationMcp()
   bound = worktree
   const devecoHome = await findDevEcoHome()
-  const resolvedHdcPath = devecoHome ? hdcPath(devecoHome) : undefined
-  const verifiedHdcPath = resolvedHdcPath && (await Bun.file(resolvedHdcPath).exists()) ? resolvedHdcPath : undefined
+  const verifiedHdcPath = await resolveVerifiedHdcPath(devecoHome)
   const effectiveHdcPath = verifiedHdcPath ?? process.env.UI_VERIFY_HDC_PATH ?? process.env.RC_HDC_PATH ?? "hdc"
   const logDir = uiVerificationLogDir()
   fs.mkdirSync(logDir, { recursive: true })
@@ -407,6 +426,23 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
       UI_VERIFY_MODEL_NAME: params.modelName ?? "",
     },
   })
+  const client = await createUiVerificationClient(transport)
+  const listed = await client.listTools()
+  runtime = {
+    params,
+    client,
+    transport,
+    hdcPath: effectiveHdcPath,
+    schemaProperties: buildSchemaProperties(listed.tools),
+  };
+}
+
+async function resolveVerifiedHdcPath(devecoHome: string | undefined): Promise<string | undefined> {
+  const resolved = devecoHome ? hdcPath(devecoHome) : undefined
+  return resolved && (await Bun.file(resolved).exists()) ? resolved : undefined
+}
+
+async function createUiVerificationClient(transport: StdioClientTransport): Promise<Client> {
   const client = new Client({ name: "deveco-ui-verification", version: "1.0.0" })
   await client.connect(transport)
   client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
@@ -417,23 +453,16 @@ async function startUiVerificationMcp(worktree: string): Promise<void> {
   client.setNotificationHandler(TracingNotificationSchema, (notification) => {
     activeRunMetrics?.recordTracingMessage(notification.params)
   })
-  const listed = await client.listTools()
-  runtime = {
-    params,
-    client,
-    transport,
-    hdcPath: effectiveHdcPath,
-    schemaProperties: new Map(
-      listed.tools.map((item) => [
-        item.name,
-        new Set(
-          item.inputSchema?.properties && typeof item.inputSchema.properties === "object"
-            ? Object.keys(item.inputSchema.properties)
-            : [],
-        ),
-      ]),
-    ),
-  };
+  return client
+}
+
+function buildSchemaProperties(tools: Tool[]): Map<string, Set<string>> {
+  return new Map(
+    tools.map((item) => {
+      const properties = item.inputSchema?.properties
+      return [item.name, new Set(properties && typeof properties === "object" ? Object.keys(properties) : [])]
+    }),
+  )
 }
 
 // Allowlist of inherited env vars passed to the ui-verification-mcp child process.
