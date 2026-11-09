@@ -32,10 +32,12 @@ describe("SEC2-003: Hard deny (§1)", () => {
     expect(isHardDeny(mk({ kind: "shell", deviceArgv: ["ls"], interactive: false }))).toBe(false)
   })
 
-  // 验证: com.android.* 和 ohos.* 系统 bundle 卸载属于硬拒绝 (保护系统应用)
+  // 验证: ohos.* / com.android.* / com.ohos.* 系统 bundle 卸载属于硬拒绝 (保护系统应用)
   it("system bundle uninstall is hard deny (SEC2-003 §1)", () => {
-    expect(isHardDeny(mk({ kind: "uninstall", bundleName: "com.android.settings" }))).toBe(true)
+    expect(isHardDeny(mk({ kind: "uninstall", bundleName: "ohos.settings" }))).toBe(true)
     expect(isHardDeny(mk({ kind: "uninstall", bundleName: "ohos.system" }))).toBe(true)
+    expect(isHardDeny(mk({ kind: "uninstall", bundleName: "com.android.settings" }))).toBe(true)
+    expect(isHardDeny(mk({ kind: "uninstall", bundleName: "com.ohos.settings" }))).toBe(true)
   })
 
   // 验证: 普通应用 bundle 卸载不属于硬拒绝 (可走用户审批)
@@ -43,10 +45,12 @@ describe("SEC2-003: Hard deny (§1)", () => {
     expect(isHardDeny(mk({ kind: "uninstall", bundleName: "com.example.app" }))).toBe(false)
   })
 
-  // 验证: isSystemBundle 前缀匹配 (com.android.* / ohos.* 为系统应用)
+  // 验证: isSystemBundle 前缀匹配 (ohos.* / com.android.* / com.ohos.* 为系统应用)
   it("isSystemBundle checks prefixes", () => {
-    expect(isSystemBundle("com.android.settings")).toBe(true)
+    expect(isSystemBundle("ohos.settings")).toBe(true)
     expect(isSystemBundle("ohos.system")).toBe(true)
+    expect(isSystemBundle("com.android.settings")).toBe(true)
+    expect(isSystemBundle("com.ohos.settings")).toBe(true)
     expect(isSystemBundle("com.example.app")).toBe(false)
   })
 

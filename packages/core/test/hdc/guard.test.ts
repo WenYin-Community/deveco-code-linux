@@ -101,9 +101,9 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     }
   })
 
-  // 验证: com.android.* 系统 bundle 卸载属于硬拒绝, 不可被策略覆盖
+  // 验证: ohos.* 系统 bundle 卸载属于硬拒绝, 不可被策略覆盖
   it("system bundle uninstall is hard deny (SEC2-003 §1)", async () => {
-    const decision = await runGuard(makeRequest(["uninstall", "com.android.settings"]), trustedCtx)
+    const decision = await runGuard(makeRequest(["uninstall", "ohos.settings"]), trustedCtx)
     expect(decision.kind).toBe("deny")
     if (decision.kind === "deny") {
       expect(decision.reasonCode).toBe("hard_denied")
@@ -119,6 +119,24 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
       expect(decision.reasonCode).toBe("hard_denied")
     }
   })
+
+  // 验证: com.android.* / com.ohos.* 系统 bundle 卸载同样属于硬拒绝
+  // (设备上的系统应用还沿用这两个命名空间, TC-05 要求覆盖)
+  for (const bundleName of ["com.android.settings", "com.ohos.settings"]) {
+    it(`${bundleName} uninstall is hard deny, not bundle_not_allowed (SEC2-003 §1)`, async () => {
+      const direct = await runGuard(makeRequest(["uninstall", bundleName]), trustedCtx)
+      expect(direct.kind).toBe("deny")
+      if (direct.kind === "deny") {
+        expect(direct.reasonCode).toBe("hard_denied")
+      }
+
+      const viaShell = await runGuard(makeRequest(["shell", "bm", "uninstall", "-n", bundleName]), trustedCtx)
+      expect(viaShell.kind).toBe("deny")
+      if (viaShell.kind === "deny") {
+        expect(viaShell.reasonCode).toBe("hard_denied")
+      }
+    })
+  }
 
   // 验证: 对象校验先于已知策略 — install 路径越界时返回 local_path_denied, 不进入 Permission
   it("object validation before known policy — install outside workspace rejected", async () => {
@@ -182,6 +200,67 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     expect(decision.kind).toBe("allow")
     if (decision.kind === "allow") {
       expect(decision.approvalResult).toBe("allow_once")
+    }
+  })
+
+  // 验证: saved permission 只加速同一动作, 不得突破产品上限 (§1.10, TC-15) —
+  // aa start 的 Always allow 保存后, 同一 bundle 的 aa force-stop 仍须弹窗。
+  // evaluate 返回 saved_permission allow (当次无弹窗), ceiling=ask 必须
+  // 走 awaitApproval 拿到当次审批后才允许执行。
+  it("saved permission cannot bypass ask ceiling (aa force-stop) — prompts again", async () => {
+    let approvalCalls = 0
+    const savedLayer = Layer.succeed(HdcPermissionPort, {
+      evaluate: () =>
+        Effect.succeed({
+          effect: "allow" as const,
+          policySource: "saved_permission" as const,
+          approvalResult: "always_allow" as const,
+          needsApproval: false,
+        }),
+      awaitApproval: () =>
+        Effect.sync(() => {
+          approvalCalls++
+          return {
+            effect: "allow" as const,
+            policySource: "one_time_approval" as const,
+            approvalResult: "allow_once" as const,
+            needsApproval: false,
+            approvalPrompted: true,
+          }
+        }),
+    })
+    const decision = await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, savedLayer)
+    expect(approvalCalls).toBe(1)
+    expect(decision.kind).toBe("allow")
+    if (decision.kind === "allow") {
+      expect(decision.approvalResult).toBe("allow_once")
+      expect(decision.approvalPrompted).toBe(true)
+    }
+  })
+
+  // 验证: saved permission 放行 + 无法取得当次审批 (端口仍返回无弹窗 allow)
+  // → fail-closed deny(approval_denied), 不得执行 ask-ceiling 操作。
+  it("saved permission without a prompt fails closed on ask-ceiling operation", async () => {
+    const savedLayer = Layer.succeed(HdcPermissionPort, {
+      evaluate: () =>
+        Effect.succeed({
+          effect: "allow" as const,
+          policySource: "saved_permission" as const,
+          approvalResult: "always_allow" as const,
+          needsApproval: false,
+        }),
+      awaitApproval: () =>
+        Effect.succeed({
+          effect: "allow" as const,
+          policySource: "saved_permission" as const,
+          approvalResult: "always_allow" as const,
+          needsApproval: false,
+        }),
+    })
+    const decision = await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, savedLayer)
+    expect(decision.kind).toBe("deny")
+    if (decision.kind === "deny") {
+      expect(decision.reasonCode).toBe("approval_denied")
     }
   })
 

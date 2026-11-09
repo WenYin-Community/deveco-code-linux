@@ -33,12 +33,12 @@ export const HARD_DENY_SHELL_COMMANDS: ReadonlySet<string> = new Set([
   "sideload",
   "update",
   "updater",       // OHOS updater binary (hdc shell updater -u ...)
-  "flashcp",       // flashcp: raw flash write
-  "flash_erase",   // flash_erase: erase MTD partition
-  "flash_unlock",  // flash_unlock: unlock flash for writing
-  "nandwrite",     // nandwrite: write to NAND
-  "nanddump",      // nanddump: dump NAND
-  "erase_mmc",     // erase_mmc: erase eMMC partition
+  "flashcp",       // Raw flash write
+  "flash_erase",   // Erase an MTD partition
+  "flash_unlock",  // Unlock flash for writing
+  "nandwrite",     // Write to NAND
+  "nanddump",      // Dump NAND
+  "erase_mmc",     // Erase an eMMC partition
 ])
 
 // Prefix match for commands with filesystem-type suffixes or subcommand separators
@@ -50,11 +50,11 @@ export const HARD_DENY_SHELL_PREFIXES: readonly string[] = [
   "nand",
 ]
 
-// System bundle prefixes — uninstall of these is product hard deny (SR2 §2.1)
-const SYSTEM_BUNDLE_PREFIXES: readonly string[] = [
-  "com.android.",
-  "ohos.",
-]
+// System bundle prefixes — uninstall of these is product hard deny (SR2 §2.1).
+// Devices ship system apps under both the OpenHarmony namespace (`ohos.*`)
+// and the legacy `com.android.*` / `com.ohos.*` namespaces; all three are
+// system applications, so uninstalling any of them is a product hard deny.
+const SYSTEM_BUNDLE_PREFIXES: readonly string[] = ["ohos.", "com.android.", "com.ohos."]
 
 export function isSystemBundle(bundleName: string): boolean {
   return SYSTEM_BUNDLE_PREFIXES.some((prefix) => bundleName.startsWith(prefix))
@@ -63,18 +63,24 @@ export function isSystemBundle(bundleName: string): boolean {
 // Hard deny check: firmware mutation + system bundle uninstall
 export function isHardDeny(operation: HdcOperation): boolean {
   if (HARD_DENY_KINDS.has(operation.kind)) return true
-  // Shell-wrapped firmware mutation (hdc shell mount/dd/...) is hard
-  // deny too — the device-facing command is what matters.
-  if (operation.kind === "shell" && operation.deviceArgv.length > 0) {
-    const cmd = operation.deviceArgv[0]
-    if (HARD_DENY_SHELL_COMMANDS.has(cmd)) return true
-    if (HARD_DENY_SHELL_PREFIXES.some((prefix) => cmd.startsWith(prefix))) return true
-  }
-  // System bundle uninstall (via hdc uninstall or shell bm uninstall) is hard deny
-  if (operation.kind === "uninstall" && operation.bundleName) {
-    if (isSystemBundle(operation.bundleName)) return true
-  }
-  return false
+  if (isShellHardDeny(operation)) return true
+  return isSystemBundleUninstall(operation)
+}
+
+// Shell-wrapped firmware mutation (hdc shell mount/dd/...) is hard deny
+// too — the device-facing command is what matters.
+function isShellHardDeny(operation: HdcOperation): boolean {
+  if (operation.kind !== "shell") return false
+  const cmd = operation.deviceArgv[0]
+  if (cmd === undefined) return false
+  if (HARD_DENY_SHELL_COMMANDS.has(cmd)) return true
+  return HARD_DENY_SHELL_PREFIXES.some((prefix) => cmd.startsWith(prefix))
+}
+
+// System bundle uninstall (via hdc uninstall or shell bm uninstall) is hard deny
+function isSystemBundleUninstall(operation: HdcOperation): boolean {
+  if (operation.kind !== "uninstall") return false
+  return operation.bundleName !== undefined && isSystemBundle(operation.bundleName)
 }
 
 // ─── Product policy per category ───────────────────────────

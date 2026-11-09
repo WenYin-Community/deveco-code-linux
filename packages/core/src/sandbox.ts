@@ -75,7 +75,7 @@ export const PermissionProfile = Schema.Struct({
   process: ProcessOverride.pipe(Schema.optional),
 }).annotate({
   identifier: "Sandbox.PermissionProfile",
-  description: "Resolved permission intent: profile id, filesystem rules, network, workspace roots, process deny list",
+  description: "Resolved permission profile: profile id, filesystem rules, network, workspace roots, process deny list",
 })
 export type PermissionProfile = typeof PermissionProfile.Type
 

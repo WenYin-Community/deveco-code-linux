@@ -444,6 +444,14 @@ describe("SEC2-001/004: categoryOf mapping", () => {
     expect(categoryOf(op)).toBe("device_readonly")
   })
 
+  // 验证: shell echo (仅标准输出) → device_readonly。指南把 echo 列为只读查询;
+  // 重定向 `>`/`|` 已在 parser 阶段拒绝, 因此 echo 不能写设备文件。
+  it("shell echo → device_readonly", () => {
+    const op: HdcOperation = { kind: "shell", deviceArgv: ["echo", "hello"], interactive: false }
+    const { categoryOf } = require("../../src/hdc/operation")
+    expect(categoryOf(op)).toBe("device_readonly")
+  })
+
   // 验证: shell param set (修改系统参数) → param_change
   it("shell param set → param_change", () => {
     const op: HdcOperation = { kind: "shell", deviceArgv: ["param", "set", "key", "val"], interactive: false }

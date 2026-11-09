@@ -302,8 +302,9 @@ export const HdcPermissionPortV1Layer = Layer.effect(
         // the product ceiling without user consent.
         //
         // Pass an EMPTY ruleset so permission.ask() does not short-
-        // circuit on the config "allow" rule or existing saved
-        // permissions. This forces a real user prompt.
+        // circuit on the config "allow" rule, and ignore saved
+        // permissions so a previous "Always allow" cannot stand in for
+        // the consent this ceiling requires. This forces a real prompt.
         const id = PermissionV1.ID.ascending()
         repliedCache.delete(id)
         const sessionID = SessionSchema.ID.descending(request.sessionID)
@@ -329,7 +330,7 @@ export const HdcPermissionPortV1Layer = Layer.effect(
         type AskOutcome = { _tag: "ok" } | { _tag: "failed"; error: PermissionV1.Error }
 
         const outcome: AskOutcome = yield* permission
-          .ask(input, { timeoutMs: APPROVAL_TIMEOUT_MS })
+          .ask(input, { timeoutMs: APPROVAL_TIMEOUT_MS, ignoreSavedPermissions: true })
           .pipe(
             Effect.map(() => ({ _tag: "ok" } as const)),
             Effect.catch((error: unknown) =>

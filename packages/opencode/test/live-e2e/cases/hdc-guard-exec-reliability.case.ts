@@ -1,10 +1,12 @@
-import fs from "node:fs/promises"
 import path from "node:path"
-import { buildEnv, findDevEcoHome, hdcPath, sdkPath } from "../../../src/tool/lib/env"
-import { realUserEnv, runHdcGuardExecDriver, runProcess } from "../env"
-import type { LiveTestCase } from "../types"
+import { runHdcGuardExecDriver, runProcess } from "../env"
+import { removeDeviceFiles, withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { HdcGuardExecDriverResult } from "../fixtures/hdc-guard-exec-driver"
+import type { CaseContext, LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_EXEC_RELIABILITY"
+
+type DriverEnv = Record<string, string | undefined>
 
 // FR-EXEC-001: long-running output streaming, cancel, and concurrent
 // request isolation. NFR-RELY-001's streaming-loss/cancel aspects are
@@ -35,91 +37,106 @@ const testCase: LiveTestCase = {
   parallel: false,
   cleanup: "结束删除临时工作区、隔离 cache 目录与设备端两个并发目标文件。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
-    const hdc = hdcPath(home)
+    return withGuardWorkspace(ctx, "hdc-guard-reliab-", async ({ hdc, env, workspace }) => {
+      const srcFile = "sr1-conc-src.txt"
+      const srcContent = `concurrent-${process.pid}-${Date.now()}`
+      const remoteA = `/data/local/tmp/sr1-conc-a-${process.pid}.txt`
+      const remoteB = `/data/local/tmp/sr1-conc-b-${process.pid}.txt`
 
-    const workspace = await ctx.createTempWorkspace("hdc-guard-reliab-")
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
+      try {
+        await Bun.file(path.join(workspace, srcFile)).write(srcContent)
+        await removeDeviceFiles(hdc, [remoteA, remoteB])
 
-    const srcFile = "sr1-conc-src.txt"
-    const srcContent = `concurrent-${process.pid}-${Date.now()}`
-    const remoteA = `/data/local/tmp/sr1-conc-a-${process.pid}.txt`
-    const remoteB = `/data/local/tmp/sr1-conc-b-${process.pid}.txt`
+        const cancel = await runCancelLeg(ctx, env, workspace)
+        const concurrent = await runConcurrentLeg(ctx, env, workspace, srcFile, remoteA, remoteB)
+        await verifyDeviceFiles(hdc, remoteA, remoteB, srcContent)
 
-    try {
-      await Bun.file(path.join(workspace, srcFile)).write(srcContent)
-      await runProcess([hdc, "shell", "rm", "-f", remoteA, remoteB], 15_000)
-
-      const cancel = await runHdcGuardExecDriver({
-        env,
-        workspace,
-        mode: "cancel",
-        hdcArgs: ["shell", "hilog"],
-        timeoutMs: 60_000,
-      })
-      await ctx.writeArtifact(CASE_ID, "cancel-driver.json", JSON.stringify(cancel.driver, null, 2))
-      if (cancel.driver.error) throw new Error(`cancel driver failed: ${cancel.driver.error}`)
-      const cancelled = cancel.driver.runs[0]
-      if (!cancelled) throw new Error("cancel leg produced no run")
-      if (!cancel.driver.streamedBytes || cancel.driver.streamedBytes <= 0) {
-        throw new Error(`expected streamed hilog output, got ${String(cancel.driver.streamedBytes)} bytes`)
-      }
-      if (!cancel.driver.killToExitMs || cancel.driver.killToExitMs > 2000) {
-        throw new Error(`expected kill-to-exit within 2000ms, got ${String(cancel.driver.killToExitMs)}ms`)
-      }
-      const followUp = cancel.driver.runs[1]
-      if (!followUp || followUp.exitCode !== 0 || !`${followUp.stdout}\n${followUp.stderr}`.includes("Ver:")) {
-        throw new Error(`guard server must stay responsive after cancel:\n${JSON.stringify(followUp)}`)
-      }
-
-      const concurrent = await runHdcGuardExecDriver({
-        env,
-        workspace,
-        mode: "concurrent",
-        localFile: srcFile,
-        remoteA,
-        remoteB,
-      })
-      await ctx.writeArtifact(CASE_ID, "concurrent-driver.json", JSON.stringify(concurrent.driver, null, 2))
-      if (concurrent.driver.error) throw new Error(`concurrent driver failed: ${concurrent.driver.error}`)
-      if (concurrent.driver.asked.length !== 2) {
-        throw new Error(`expected 2 concurrent approval asks, got ${concurrent.driver.asked.length}`)
-      }
-      if (concurrent.driver.runs.length !== 2) {
-        throw new Error(`expected 2 concurrent runs, got ${concurrent.driver.runs.length}`)
-      }
-      concurrent.driver.runs.forEach((run, index) => {
-        const combined = `${run.stdout}\n${run.stderr}`
-        if (run.exitCode !== 0 || !combined.includes("FileTransfer finish")) {
-          throw new Error(`concurrent run ${index}: expected successful send\n${combined}`)
+        return {
+          details: {
+            streamedBytes: cancel.driver.streamedBytes,
+            killToExitMs: cancel.driver.killToExitMs,
+            concurrentAsks: concurrent.driver.asked.length,
+            concurrentRuns: concurrent.driver.runs.length,
+            deviceFilesVerified: [remoteA, remoteB],
+          },
         }
-      })
-
-      const catA = await runProcess([hdc, "shell", "cat", remoteA], 15_000)
-      const catB = await runProcess([hdc, "shell", "cat", remoteB], 15_000)
-      const deviceA = catA.stdout.trim()
-      const deviceB = catB.stdout.trim()
-      if (deviceA !== srcContent || deviceB !== srcContent) {
-        throw new Error(`device files mismatch:\nA=${deviceA}\nB=${deviceB}\nexpected=${srcContent}`)
+      } finally {
+        await removeDeviceFiles(hdc, [remoteA, remoteB]).catch(() => undefined)
       }
-
-      return {
-        details: {
-          streamedBytes: cancel.driver.streamedBytes,
-          killToExitMs: cancel.driver.killToExitMs,
-          concurrentAsks: concurrent.driver.asked.length,
-          concurrentRuns: concurrent.driver.runs.length,
-          deviceFilesVerified: [remoteA, remoteB],
-        },
-      }
-    } finally {
-      await runProcess([hdc, "shell", "rm", "-f", remoteA, remoteB], 15_000).catch(() => undefined)
-      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
+}
+
+async function runCancelLeg(ctx: CaseContext, env: DriverEnv, workspace: string) {
+  const cancel = await runHdcGuardExecDriver({
+    env,
+    workspace,
+    mode: "cancel",
+    hdcArgs: ["shell", "hilog"],
+    timeoutMs: 60_000,
+  })
+  await ctx.writeArtifact(CASE_ID, "cancel-driver.json", JSON.stringify(cancel.driver, null, 2))
+  if (cancel.driver.error) throw new Error(`cancel driver failed: ${cancel.driver.error}`)
+  requireCancelVerdict(cancel.driver)
+  return cancel
+}
+
+function requireCancelVerdict(driver: HdcGuardExecDriverResult): void {
+  const cancelled = driver.runs[0]
+  if (!cancelled) throw new Error("cancel leg produced no run")
+  if (!driver.streamedBytes || driver.streamedBytes <= 0) {
+    throw new Error(`expected streamed hilog output, got ${String(driver.streamedBytes)} bytes`)
+  }
+  if (!driver.killToExitMs || driver.killToExitMs > 2000) {
+    throw new Error(`expected kill-to-exit within 2000ms, got ${String(driver.killToExitMs)}ms`)
+  }
+  const followUp = driver.runs[1]
+  if (!followUp || followUp.exitCode !== 0 || !`${followUp.stdout}\n${followUp.stderr}`.includes("Ver:")) {
+    throw new Error(`guard server must stay responsive after cancel:\n${JSON.stringify(followUp)}`)
+  }
+}
+
+async function runConcurrentLeg(
+  ctx: CaseContext,
+  env: DriverEnv,
+  workspace: string,
+  srcFile: string,
+  remoteA: string,
+  remoteB: string,
+) {
+  const concurrent = await runHdcGuardExecDriver({
+    env,
+    workspace,
+    mode: "concurrent",
+    localFile: srcFile,
+    remoteA,
+    remoteB,
+  })
+  await ctx.writeArtifact(CASE_ID, "concurrent-driver.json", JSON.stringify(concurrent.driver, null, 2))
+  if (concurrent.driver.error) throw new Error(`concurrent driver failed: ${concurrent.driver.error}`)
+  if (concurrent.driver.asked.length !== 2) {
+    throw new Error(`expected 2 concurrent approval asks, got ${concurrent.driver.asked.length}`)
+  }
+  if (concurrent.driver.runs.length !== 2) {
+    throw new Error(`expected 2 concurrent runs, got ${concurrent.driver.runs.length}`)
+  }
+  concurrent.driver.runs.forEach((run, index) => {
+    const combined = `${run.stdout}\n${run.stderr}`
+    if (run.exitCode !== 0 || !combined.includes("FileTransfer finish")) {
+      throw new Error(`concurrent run ${index}: expected successful send\n${combined}`)
+    }
+  })
+  return concurrent
+}
+
+async function verifyDeviceFiles(hdc: string, remoteA: string, remoteB: string, expected: string): Promise<void> {
+  const catA = await runProcess([hdc, "shell", "cat", remoteA], 15_000)
+  const catB = await runProcess([hdc, "shell", "cat", remoteB], 15_000)
+  const deviceA = catA.stdout.trim()
+  const deviceB = catB.stdout.trim()
+  if (deviceA !== expected || deviceB !== expected) {
+    throw new Error(`device files mismatch:\nA=${deviceA}\nB=${deviceB}\nexpected=${expected}`)
+  }
 }
 
 export default testCase

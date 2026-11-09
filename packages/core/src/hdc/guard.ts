@@ -125,20 +125,23 @@ export const HdcGuardLayer = Layer.effect(
         // allow but productCeiling=ask), we must still prompt the user —
         // the config's allow cannot bypass the ceiling. Treat it as an
         // ask regardless of whether the port already set needsApproval.
-        // But skip if evaluate() already obtained user approval
-        // (allow_once/always_allow) — no need to ask again.
-        const alreadyApproved = permResult.approvalResult === "allow_once" || permResult.approvalResult === "always_allow"
+        // But skip if evaluate() already obtained user approval *in this
+        // request* — no need to ask again. A saved permission that allowed
+        // without prompting is NOT such an approval: it may never widen the
+        // ceiling (§1.10), so it must go through the prompt path.
+        const alreadyApproved = isApprovedNow(permResult)
         let finalResult = permResult
         if (evaluatedEffect === "ask" && !alreadyApproved && (permResult.needsApproval || permResult.effect === "allow")) {
           finalResult = yield* permissionPort.awaitApproval(permRequest, permResult)
         }
 
         // Enforce product ceiling on the final result. An explicit
-        // user approval (allow_once/always_allow) is the product
-        // ceiling itself for ask-ceiling operations — approving is
-        // exactly what the product asked for, so the ceiling must
-        // not compress the approval back to ask.
-        const approved = finalResult.approvalResult === "allow_once" || finalResult.approvalResult === "always_allow"
+        // user approval (allow_once/always_allow obtained through a
+        // prompt this request) is the product ceiling itself for
+        // ask-ceiling operations — approving is exactly what the
+        // product asked for, so the ceiling must not compress the
+        // approval back to ask.
+        const approved = isApprovedNow(finalResult)
         const finalEffect = approved
           ? finalResult.effect
           : enforceCeiling(finalResult.effect, policy.productCeiling)
@@ -151,6 +154,13 @@ export const HdcGuardLayer = Layer.effect(
             finalResult.approvalResult,
             finalResult.approvalPrompted,
           )
+        }
+
+        // The ceiling still demands consent and no interactive approval
+        // was obtained (e.g. a saved permission with ceiling=ask). Fail
+        // closed as an approval denial rather than executing.
+        if (finalEffect === "ask") {
+          return deny("approval_denied", finalResult.policySource, finalResult.approvalResult, true)
         }
 
         // Deny
@@ -172,6 +182,14 @@ export const HdcGuardLayer = Layer.effect(
 )
 
 // ─── Map Permission result to reason code ─────────────────
+function isApprovedNow(result: PermissionResult): boolean {
+  // allow_once only ever comes from an actual reply. always_allow can be
+  // produced either by a reply this request or by a saved permission
+  // short-circuiting the prompt — only the former carries approvalPrompted.
+  if (result.approvalResult === "allow_once") return true
+  return result.approvalResult === "always_allow" && result.approvalPrompted === true
+}
+
 function mapDenyReasonCode(result: PermissionResult): ReasonCode {
   // AR-SEC2-007 §4: saved.add 失败 → saved_permission_failed (not approval_denied)
   if (result.savedPermissionFailed) return "saved_permission_failed"

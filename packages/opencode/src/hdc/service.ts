@@ -112,9 +112,21 @@ async function publishTelemetryEvent<D extends EventV2.Definition>(definition: D
   const { EventV2Bridge } = await import("@/event-v2-bridge")
   await AppRuntime.runPromise(
     Effect.gen(function* () {
+      // Local structured record of the telemetry stream. The EventV2 bus
+      // is in-process only (these events are not durable), so without
+      // this line the started/finished pairing is unobservable in
+      // deveco.log (FR-OBS-001 verification).
+      yield* Effect.logInfo(definition.type, data)
       const bridge = yield* EventV2Bridge.Service
       yield* bridge.publish(definition, data)
-    }),
+    }).pipe(
+      // Fire-and-forget stays fire-and-forget, but a silent failure
+      // hides broken telemetry — log it at warn level instead of
+      // swallowing it.
+      Effect.catch((error) =>
+        Effect.logWarning("hdc_telemetry_publish_failed", { type: definition.type, error: String(error) }),
+      ),
+    ),
   )
 }
 
@@ -159,6 +171,7 @@ function auditDecision(
   decision: HdcGuardDecision,
 ): void {
   const opLabel = argv[0] ?? ""
+  const auditedArgv = redactAuditArgv(argv)
   if (decision.kind === "allow") {
     // Saved-permission allows without an interactive prompt this run
     // (approvalPrompted absent) are recorded as "allow"; only allows that
@@ -171,7 +184,7 @@ function auditDecision(
       requestID,
       callID,
       op: opLabel,
-      argv,
+      argv: auditedArgv,
       action: promptedAllow ? "ask-approved" : "allow",
     })
     return
@@ -181,10 +194,20 @@ function auditDecision(
       requestID,
       callID,
       op: opLabel,
-      argv,
+      argv: auditedArgv,
       action: decision.reasonCode === "approval_timeout" ? "ask-timeout" : "ask-rejected",
     })
   }
+}
+
+// NFR-PRIV-001/101: audit records the command shape but never the
+// device serial. `-t` and `-s` are the hdc selector flags (parser
+// strips both), so the value that follows either is replaced with a
+// placeholder.
+export function redactAuditArgv(argv: string[]): string[] {
+  return argv.map((arg, index) =>
+    index > 0 && (argv[index - 1] === "-t" || argv[index - 1] === "-s") ? "<target>" : arg,
+  )
 }
 
 function denialMessage(decision: HdcGuardDecision): string {
@@ -251,93 +274,120 @@ export async function handleGuardRequest(ctx: HdcIpcServer.HdcRequestContext): P
   const requestID = request.callID ?? crypto.randomUUID()
   const startedAt = Date.now()
 
-  const opCategory = request.argv[0] ?? ""
   publishTelemetry(RequestStarted, {
     requestID,
     platform: process.platform,
-    opCategory,
+    opCategory: request.argv[0] ?? "",
   })
 
   const state: TelemetryState = { policyDecision: "deny", failureStage: "entry" }
   try {
-    const directory = registeredSessions.get(request.sessionID)
-    if (!directory) {
-      throw new HdcDenial("guard_unavailable", "session is not registered with this hdc guard; refusing to run")
-    }
-
-    const hdcDescriptor = await HdcRegistry.tryDiscoverTrustedHdc()
-    if (!hdcDescriptor) {
-      throw new HdcDenial("hdc_unavailable", "real hdc could not be located or verified; refusing to run")
-    }
-
-    const guardRequest: HdcGuardRequest = {
-      requestId: requestID,
-      argv: request.argv,
-      cwd: request.cwd,
-      hdcVersion: hdcDescriptor.version,
-    }
-    const trustedContext = await buildTrustedContext(request, hdcDescriptor.version)
-
-    const decision = await ServerTreeDecide(directory, guardRequest, trustedContext)
-    state.policyDecision = decision.kind === "allow" ? "allow" : "deny"
-    mergeDecisionFields(state, decision)
-    auditDecision(requestID, request.callID, request.argv, decision)
-
-    if (decision.kind === "deny") {
-      // Single finished event: the throw below lands in the catch,
-      // which publishes once with errorType. A second publish here
-      // would break the one-finished-per-request invariant.
-      state.failureStage = "decision"
-      throw new HdcDenial(decision.reasonCode, denialMessage(decision))
-    }
-
-    // Allow: bind the original argv (§7.4) and run.
-    // Stdin is intentionally NOT forwarded to the spawned hdc: every
-    // approvable operation is a one-shot command whose full device-side
-    // effect is visible in the approval prompt, and bridging stdin would
-    // let piped content act on the device invisibly to the approval
-    // (`echo reboot | hdc shell sh`). Bare interactive `hdc shell` is
-    // already rejected (capability_unsupported), so the executor spawns
-    // with stdin "ignore" and any stdin frames from the shim are dropped.
-    state.failureStage = "execution"
-    if (decision.approvalResult === "allow_once" || decision.approvalResult === "always_allow") {
-      state.approvalResult = "approved"
-    }
-    const code = await HdcExecutor.execHdc({
-      argv: request.argv,
-      cwd: request.cwd,
-      signal: ctx.signal,
-      onStdout: ctx.emitStdout,
-      onStderr: ctx.emitStderr,
-    })
-    publishTelemetry(RequestFinished, {
-      requestID,
-      policyDecision: state.policyDecision,
-      ...(state.approvalResult ? { approvalResult: state.approvalResult } : {}),
-      executionResult: "executed",
-      failureStage: state.failureStage,
-      durationMs: Date.now() - startedAt,
-      ...(state.decisionId ? { decisionId: state.decisionId } : {}),
-      ...(state.policySource ? { policySource: state.policySource } : {}),
-      ...(state.operationKind ? { operationKind: state.operationKind } : {}),
-    })
+    const code = await runGuardedRequest(ctx, request, requestID, state)
+    publishFinished(requestID, startedAt, state, { executionResult: "executed" })
     return code
   } catch (error) {
-    publishTelemetry(RequestFinished, {
-      requestID,
-      policyDecision: state.policyDecision,
-      ...(state.approvalResult ? { approvalResult: state.approvalResult } : {}),
+    publishFinished(requestID, startedAt, state, {
       executionResult: "not_executed",
-      failureStage: state.failureStage,
-      ...(error instanceof HdcDenial ? { errorType: error.reasonCode } : { errorType: "guard_unavailable" }),
-      durationMs: Date.now() - startedAt,
-      ...(state.decisionId ? { decisionId: state.decisionId } : {}),
-      ...(state.policySource ? { policySource: state.policySource } : {}),
-      ...(state.reasonCode ? { reasonCode: state.reasonCode } : {}),
-      ...(state.operationKind ? { operationKind: state.operationKind } : {}),
+      errorType: error instanceof HdcDenial ? error.reasonCode : "guard_unavailable",
     })
     throw error
   }
+}
+
+async function runGuardedRequest(
+  ctx: HdcIpcServer.HdcRequestContext,
+  request: HdcIpcServer.HdcRequestContext["request"],
+  requestID: string,
+  state: TelemetryState,
+): Promise<number> {
+  const directory = requireRegisteredSession(request.sessionID)
+  const hdcDescriptor = await requireTrustedHdc()
+  const guardRequest: HdcGuardRequest = {
+    requestId: requestID,
+    argv: request.argv,
+    cwd: request.cwd,
+    hdcVersion: hdcDescriptor.version,
+  }
+  const trustedContext = await buildTrustedContext(request, hdcDescriptor.version)
+
+  const decision = await serverTreeDecide(directory, guardRequest, trustedContext)
+  state.policyDecision = decision.kind === "allow" ? "allow" : "deny"
+  mergeDecisionFields(state, decision)
+  auditDecision(requestID, request.callID, request.argv, decision)
+
+  if (decision.kind === "deny") {
+    // Single finished event: the throw lands in the caller's catch,
+    // which publishes once with errorType. A second publish here
+    // would break the one-finished-per-request invariant.
+    state.failureStage = "decision"
+    throw new HdcDenial(decision.reasonCode, denialMessage(decision))
+  }
+
+  return executeAllowed(ctx, request, decision, state)
+}
+
+function requireRegisteredSession(sessionID: string): string {
+  const directory = registeredSessions.get(sessionID)
+  if (!directory) {
+    throw new HdcDenial("guard_unavailable", "session is not registered with this hdc guard; refusing to run")
+  }
+  return directory
+}
+
+async function requireTrustedHdc(): Promise<HdcRegistry.TrustedHdcDescriptor> {
+  const descriptor = await HdcRegistry.tryDiscoverTrustedHdc()
+  if (!descriptor) {
+    throw new HdcDenial("hdc_unavailable", "real hdc could not be located or verified; refusing to run")
+  }
+  return descriptor
+}
+
+// Allow: bind the original argv (§7.4) and run.
+// Stdin is intentionally NOT forwarded to the spawned hdc: every
+// approvable operation is a one-shot command whose full device-side
+// effect is visible in the approval prompt, and bridging stdin would
+// let piped content act on the device invisibly to the approval
+// (`echo reboot | hdc shell sh`). Bare interactive `hdc shell` is
+// already rejected (capability_unsupported), so the executor spawns
+// with stdin "ignore" and any stdin frames from the shim are dropped.
+async function executeAllowed(
+  ctx: HdcIpcServer.HdcRequestContext,
+  request: HdcIpcServer.HdcRequestContext["request"],
+  decision: HdcGuardDecision,
+  state: TelemetryState,
+): Promise<number> {
+  state.failureStage = "execution"
+  if (decision.approvalResult === "allow_once" || decision.approvalResult === "always_allow") {
+    state.approvalResult = "approved"
+  }
+  return HdcExecutor.execHdc({
+    argv: request.argv,
+    cwd: request.cwd,
+    signal: ctx.signal,
+    onStdout: ctx.emitStdout,
+    onStderr: ctx.emitStderr,
+  })
+}
+
+interface FinishedFields {
+  executionResult: "executed" | "not_executed"
+  errorType?: string
+}
+
+function publishFinished(requestID: string, startedAt: number, state: TelemetryState, fields: FinishedFields): void {
+  publishTelemetry(RequestFinished, {
+    requestID,
+    policyDecision: state.policyDecision,
+    ...(state.approvalResult ? { approvalResult: state.approvalResult } : {}),
+    executionResult: fields.executionResult,
+    failureStage: state.failureStage,
+    ...(fields.errorType ? { errorType: fields.errorType } : {}),
+    durationMs: Date.now() - startedAt,
+    ...(state.decisionId ? { decisionId: state.decisionId } : {}),
+    ...(state.policySource ? { policySource: state.policySource } : {}),
+    ...(state.reasonCode ? { reasonCode: state.reasonCode } : {}),
+    ...(state.operationKind ? { operationKind: state.operationKind } : {}),
+  })
 }
 
 // The decision must run inside the server tree (the Effect tree
@@ -348,7 +398,7 @@ export async function handleGuardRequest(ctx: HdcIpcServer.HdcRequestContext): P
 // the session's directory (captured at arm time) also keeps it
 // aligned with the reply's `directory` query parameter even when
 // the shell cwd drifts.
-async function ServerTreeDecide(directory: string, guardRequest: HdcGuardRequest, trustedContext: HdcGuardTrustedContext): Promise<HdcGuardDecision> {
+async function serverTreeDecide(directory: string, guardRequest: HdcGuardRequest, trustedContext: HdcGuardTrustedContext): Promise<HdcGuardDecision> {
   const { ServerRuntime } = await import("@/server/server-runtime")
   const { InstanceStore } = await import("@/project/instance-store")
   return ServerRuntime.runPromise(

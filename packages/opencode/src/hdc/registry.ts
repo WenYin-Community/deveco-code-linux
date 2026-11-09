@@ -64,31 +64,47 @@ async function parseHdcVersion(bin: string): Promise<string | undefined> {
 // (fail closed).
 
 async function verifyWindowsSignature(bin: string): Promise<boolean> {
-  const escaped = bin.replace(/'/g, "''")
-  const command = `$s = Get-AuthenticodeSignature -LiteralPath '${escaped}'; $s.SignerCertificate.Subject`
   // Prefer PowerShell 7 (pwsh): its Microsoft.PowerShell.Security
   // module autoloads cleanly, unlike Windows PowerShell 5.1 where
   // autoload can fail in a non-interactive context. Fall back to
   // powershell 5.1 only if pwsh is absent.
   for (const exe of ["pwsh", "powershell"]) {
-    let ps
-    try {
-      ps = Bun.spawn([exe, "-NoProfile", "-NonInteractive", "-Command", command], { stdout: "pipe", stderr: "pipe" })
-    } catch {
-      // Executable not found in PATH — try the next fallback
-      continue
-    }
-    const [code, stdout] = await Promise.all([ps.exited, new Response(ps.stdout).text()])
-    if (code !== 0) continue
-    const subject = stdout.trim()
-    if (!subject) continue
-    // Signer subject is a DN like CN="Huawei Technologies Co., Ltd.", ...
-    // Match the CN component whether or not it is quoted.
-    const cnMatch = subject.match(/CN=(?:"([^"]+)"|([^,]+))/i)
-    const cn = cnMatch ? (cnMatch[1] ?? cnMatch[2]) : undefined
+    const cn = await readWindowsSignerCN(exe, bin)
+    if (cn === undefined) continue
     return cn === WINDOWS_TRUSTED_SIGNER_CN
   }
   return false
+}
+
+// Returns the signer's CN, or undefined when this PowerShell host is
+// unavailable or the binary carries no readable signature.
+async function readWindowsSignerCN(exe: string, bin: string): Promise<string | undefined> {
+  const escaped = bin.replaceAll("'", "''")
+  const command = `$s = Get-AuthenticodeSignature -LiteralPath '${escaped}'; $s.SignerCertificate.Subject`
+  const ps = spawnSignatureProbe(exe, command)
+  if (!ps) return undefined
+
+  const [code, stdout] = await Promise.all([ps.exited, new Response(ps.stdout).text()])
+  if (code !== 0) return undefined
+  return signerCNFromSubject(stdout.trim())
+}
+
+// Signer subject is a DN like CN="Huawei Technologies Co., Ltd.", ...
+// Match the CN component whether or not it is quoted.
+function signerCNFromSubject(subject: string): string | undefined {
+  if (!subject) return undefined
+  const matches = subject.match(/CN=(?:"([^"]+)"|([^,]+))/i)
+  if (!matches) return undefined
+  return matches[1] ?? matches[2]
+}
+
+function spawnSignatureProbe(exe: string, command: string) {
+  try {
+    return Bun.spawn([exe, "-NoProfile", "-NonInteractive", "-Command", command], { stdout: "pipe", stderr: "pipe" })
+  } catch {
+    // Executable not found in PATH — try the next fallback
+    return undefined
+  }
 }
 
 async function verifyMacSignature(bin: string): Promise<boolean> {

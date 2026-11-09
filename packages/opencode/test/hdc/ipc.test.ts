@@ -11,60 +11,108 @@ interface ClientResult {
   denial?: { reasonCode: string; message: string }
 }
 
-async function requestOnce(endpoint: string, token: string, argv: string[], options?: { sessionID?: string; cwd?: string; pid?: number; caps?: string[]; v?: number; sendRequest?: boolean }): Promise<ClientResult> {
+interface RequestOptions {
+  sessionID?: string
+  cwd?: string
+  pid?: number
+  caps?: string[]
+  v?: number
+  sendRequest?: boolean
+}
+
+async function requestOnce(endpoint: string, token: string, argv: string[], options?: RequestOptions): Promise<ClientResult> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint)
     const result: ClientResult = { frames: [] }
-    let buffer = Buffer.alloc(0)
+    const collector = createFrameCollector(result, socket, resolve, reject)
     socket.on("error", reject)
-    socket.on("connect", () => {
-      // The busy rejection fires on accept, before any request frame
-      // is read; a probe that stays silent still gets the denied
-      // frame, without racing the server's post-flush destroy().
-      if (options?.sendRequest === false) return
-      const frame: HdcProtocol.RequestFrame = {
-        v: options?.v ?? HdcProtocol.PROTOCOL_VERSION,
-        token,
-        sessionID: options?.sessionID ?? "ses_test",
-        pid: options?.pid ?? process.pid,
-        caps: options?.caps ?? [...HdcProtocol.PROTOCOL_CAPS],
-        cwd: options?.cwd ?? process.cwd(),
-        argv,
-      }
-      socket.write(HdcProtocol.encodeFrame(frame))
-    })
-    socket.on("data", (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk])
-      while (buffer.length >= HdcProtocol.LENGTH_PREFIX_BYTES) {
-        const frameLength = buffer.readUInt32BE(0)
-        if (buffer.length < HdcProtocol.LENGTH_PREFIX_BYTES + frameLength) return
-        const body = buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES, HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
-        buffer = buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
-        const decoded = HdcProtocol.decodeServerFrame(JSON.parse(body.toString("utf-8")))
-        if (!decoded || !("value" in decoded)) {
-          reject(new Error("server sent an invalid frame"))
-          return
-        }
-        const frame = decoded.value
-        result.frames.push(frame)
-        if (frame.type === "exit") {
-          result.exitCode = frame.code
-          socket.end()
-          resolve(result)
-          return
-        }
-        if (frame.type === "denied") {
-          result.denial = { reasonCode: frame.reasonCode, message: frame.message }
-          socket.end()
-          resolve(result)
-          return
-        }
-      }
-    })
-    socket.on("close", () => {
-      if (result.exitCode === undefined && !result.denial) reject(new Error("connection closed before a terminal frame"))
-    })
+    socket.on("connect", () => writeRequest(socket, token, argv, options))
+    socket.on("data", (chunk: Buffer) => collector.consume(chunk))
+    socket.on("close", () => collector.finish())
   })
+}
+
+function writeRequest(socket: net.Socket, token: string, argv: string[], options: RequestOptions | undefined): void {
+  // The busy rejection fires on accept, before any request frame
+  // is read; a probe that stays silent still gets the denied
+  // frame, without racing the server's post-flush destroy().
+  if (options?.sendRequest === false) return
+  socket.write(HdcProtocol.encodeFrame(requestFrameOf(token, argv, options)))
+}
+
+function createFrameCollector(
+  result: ClientResult,
+  socket: net.Socket,
+  resolve: (result: ClientResult) => void,
+  reject: (error: Error) => void,
+) {
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  return {
+    consume(chunk: Buffer): void {
+      buffer = consumeServerFrames(Buffer.concat([buffer, chunk]), result, socket, resolve, reject)
+    },
+    finish(): void {
+      if (result.exitCode === undefined && !result.denial) reject(new Error("connection closed before a terminal frame"))
+    },
+  }
+}
+
+function requestFrameOf(token: string, argv: string[], options: RequestOptions | undefined): HdcProtocol.RequestFrame {
+  return {
+    v: options?.v ?? HdcProtocol.PROTOCOL_VERSION,
+    token,
+    sessionID: options?.sessionID ?? "ses_test",
+    pid: options?.pid ?? process.pid,
+    caps: options?.caps ?? [...HdcProtocol.PROTOCOL_CAPS],
+    cwd: options?.cwd ?? process.cwd(),
+    argv,
+  }
+}
+
+// Decodes every complete frame in `buffer`, resolving the request on
+// its terminal frame. Returns the unconsumed remainder.
+function consumeServerFrames(
+  buffer: Buffer,
+  result: ClientResult,
+  socket: net.Socket,
+  resolve: (result: ClientResult) => void,
+  reject: (error: Error) => void,
+): Buffer {
+  let rest = buffer
+  while (rest.length >= HdcProtocol.LENGTH_PREFIX_BYTES) {
+    const frameLength = rest.readUInt32BE(0)
+    if (rest.length < HdcProtocol.LENGTH_PREFIX_BYTES + frameLength) return rest
+    const body = rest.subarray(HdcProtocol.LENGTH_PREFIX_BYTES, HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
+    rest = rest.subarray(HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
+    const decoded = HdcProtocol.decodeServerFrame(JSON.parse(body.toString("utf-8")))
+    if (!decoded || !("value" in decoded)) {
+      reject(new Error("server sent an invalid frame"))
+      return rest
+    }
+    if (settleFrame(decoded.value, result, socket, resolve)) return rest
+  }
+  return rest
+}
+
+// Returns true when the frame terminates the request.
+function settleFrame(
+  frame: HdcProtocol.ServerFrame,
+  result: ClientResult,
+  socket: net.Socket,
+  resolve: (result: ClientResult) => void,
+): boolean {
+  result.frames.push(frame)
+  if (frame.type === "exit") {
+    result.exitCode = frame.code
+    socket.end()
+    resolve(result)
+    return true
+  }
+  if (frame.type !== "denied") return false
+  result.denial = { reasonCode: frame.reasonCode, message: frame.message }
+  socket.end()
+  resolve(result)
+  return true
 }
 
 describe("hdc ipc server", () => {
@@ -364,7 +412,7 @@ describe("hdc ipc server", () => {
     try {
       await new Promise<void>((resolve, reject) => {
         const socket = net.createConnection(server.endpoint)
-        let buffer = Buffer.alloc(0)
+    let buffer = Buffer.alloc(0)
         let sawExit = false
         socket.on("error", reject)
         socket.on("connect", () => {

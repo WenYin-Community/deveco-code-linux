@@ -79,6 +79,13 @@ function isProbeablePid(pid: number): boolean {
 // the handler attaches a consumer are buffered (in order) and
 // replayed on attach.
 
+type StdinFrameRead =
+  | { kind: "incomplete" }
+  | { kind: "denied"; message: string }
+  | { kind: "frame"; value: HdcProtocol.ClientFrame }
+
+type StdinStep = { kind: "wait" } | { kind: "ok" } | { kind: "denied"; message: string }
+
 class Connection {
   private buffer = Buffer.alloc(0)
   private requestSeen = false
@@ -186,47 +193,71 @@ class Connection {
   // undecodable is a protocol violation (fail closed).
   private tryReadStdinFrames() {
     if (this.finished || !this.requestSeen) return
-    while (this.buffer.length >= HdcProtocol.LENGTH_PREFIX_BYTES) {
-      const frameLength = this.buffer.readUInt32BE(0)
-      if (frameLength > HdcProtocol.MAX_FRAME_BYTES) {
-        this.sendDenied("guard_unavailable", "stdin frame exceeds size limit")
+    for (;;) {
+      if (this.buffer.length < HdcProtocol.LENGTH_PREFIX_BYTES) return
+      const step = this.consumeStdinFrame()
+      if (step.kind === "wait") return
+      if (step.kind === "denied") {
+        this.sendDenied("guard_unavailable", step.message)
         return
       }
-      if (this.buffer.length < HdcProtocol.LENGTH_PREFIX_BYTES + frameLength) return
-
-      const body = this.buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES, HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
-      this.buffer = this.buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(body.toString("utf-8"))
-      } catch {
-        this.sendDenied("guard_unavailable", "stdin frame is not valid JSON")
-        return
-      }
-      const frame = HdcProtocol.decodeClientFrame(parsed)
-      if (Option.isNone(frame)) {
-        this.sendDenied("guard_unavailable", "stdin frame failed schema validation")
-        return
-      }
-      const value = frame.value
-      if ("type" in value && value.type === "stdin") {
-        if (this.stdinClosed) continue
-        const chunk = Buffer.from(value.data, "base64")
-        if (this.stdinConsumer) this.stdinConsumer.onStdin(chunk)
-        else this.pendingStdin.push(chunk)
-        continue
-      }
-      if ("type" in value && value.type === "stdinEnd") {
-        if (this.stdinClosed) continue
-        this.stdinClosed = true
-        if (this.stdinConsumer) this.stdinConsumer.onStdinEnd()
-        else this.pendingStdinEnd = true
-        continue
-      }
-      // A second request frame on the same connection: protocol violation.
-      this.sendDenied("guard_unavailable", "multiple requests on one connection")
-      return
     }
+  }
+
+  // Decodes and applies exactly one stdin frame. "wait" means the
+  // buffer holds a partial frame, so reading stops until more data
+  // arrives.
+  private consumeStdinFrame(): StdinStep {
+    const read = this.readStdinFrame()
+    if (read.kind === "incomplete") return { kind: "wait" }
+    if (read.kind === "denied") return { kind: "denied", message: read.message }
+    if (this.applyStdinFrame(read.value)) return { kind: "ok" }
+    // A second request frame on the same connection.
+    return { kind: "denied", message: "multiple requests on one connection" }
+  }
+
+  private readStdinFrame(): StdinFrameRead {
+    const frameLength = this.buffer.readUInt32BE(0)
+    if (frameLength > HdcProtocol.MAX_FRAME_BYTES) return { kind: "denied", message: "stdin frame exceeds size limit" }
+    if (this.buffer.length < HdcProtocol.LENGTH_PREFIX_BYTES + frameLength) return { kind: "incomplete" }
+
+    const body = this.buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES, HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
+    this.buffer = this.buffer.subarray(HdcProtocol.LENGTH_PREFIX_BYTES + frameLength)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body.toString("utf-8"))
+    } catch {
+      return { kind: "denied", message: "stdin frame is not valid JSON" }
+    }
+    const frame = HdcProtocol.decodeClientFrame(parsed)
+    if (Option.isNone(frame)) return { kind: "denied", message: "stdin frame failed schema validation" }
+    return { kind: "frame", value: frame.value }
+  }
+
+  // Returns false when the frame is a protocol violation (a request
+  // frame after the first one).
+  private applyStdinFrame(value: HdcProtocol.ClientFrame): boolean {
+    if (!("type" in value)) return false
+    if (value.type === "stdin") {
+      if (this.stdinClosed) return true
+      this.deliverStdin(Buffer.from(value.data, "base64"))
+      return true
+    }
+    if (value.type !== "stdinEnd") return false
+    if (this.stdinClosed) return true
+    this.stdinClosed = true
+    this.deliverStdinEnd()
+    return true
+  }
+
+  private deliverStdin(chunk: Buffer) {
+    if (this.stdinConsumer) this.stdinConsumer.onStdin(chunk)
+    else this.pendingStdin.push(chunk)
+  }
+
+  private deliverStdinEnd() {
+    if (this.stdinConsumer) this.stdinConsumer.onStdinEnd()
+    else this.pendingStdinEnd = true
   }
 
   private async run(request: HdcProtocol.RequestFrame): Promise<void> {
@@ -293,24 +324,10 @@ class Connection {
 export function startHdcIpcServer(handler: HdcRequestHandler): Promise<HdcIpcServer> {
   const endpoint = generateEndpoint()
   const token = generateToken()
-  let activeRequests = 0
+  const limiter: ConnectionLimiter = { token, handler, active: 0 }
 
   return new Promise((resolve, reject) => {
-    const server = net.createServer((socket) => {
-      // Concurrency limit: fail closed rather than queue unboundedly.
-      if (activeRequests >= HdcProtocol.MAX_CONCURRENT_REQUESTS) {
-        socket.on("error", () => {})
-        // end() inside the connection callback leaves server.close() hanging on Bun/Windows
-        // named pipes; destroy on write-callback instead (frame is flushed to the OS first).
-        socket.write(HdcProtocol.encodeFrame({ type: "denied", reasonCode: "guard_unavailable", message: "server busy" }), () => socket.destroy())
-        return
-      }
-      socket.on("error", () => {})
-      new Connection(socket, token, handler, (delta) => {
-        activeRequests += delta
-      })
-    })
-
+    const server = net.createServer((socket) => acceptConnection(socket, limiter))
     server.on("error", (error) => {
       if (!listening) reject(error)
     })
@@ -318,15 +335,41 @@ export function startHdcIpcServer(handler: HdcRequestHandler): Promise<HdcIpcSer
     let listening = false
     server.listen(endpoint, () => {
       listening = true
-      resolve({
-        endpoint,
-        token,
-        close: () =>
-          new Promise<void>((resolveClose) => {
-            server.close(() => resolveClose())
-            if (process.platform !== "win32") unlink(endpoint, () => {})
-          }),
-      })
+      resolve({ endpoint, token, close: () => closeServer(server, endpoint) })
     })
+  })
+}
+
+interface ConnectionLimiter {
+  token: string
+  handler: HdcRequestHandler
+  active: number
+}
+
+function acceptConnection(socket: net.Socket, limiter: ConnectionLimiter): void {
+  // Concurrency limit: fail closed rather than queue unboundedly.
+  if (limiter.active >= HdcProtocol.MAX_CONCURRENT_REQUESTS) {
+    rejectBusy(socket)
+    return
+  }
+  socket.on("error", () => {})
+  void new Connection(socket, limiter.token, limiter.handler, (delta) => {
+    limiter.active += delta
+  })
+}
+
+function rejectBusy(socket: net.Socket): void {
+  socket.on("error", () => {})
+  // end() inside the connection callback leaves server.close() hanging on Bun/Windows
+  // named pipes; destroy on write-callback instead (frame is flushed to the OS first).
+  socket.write(HdcProtocol.encodeFrame({ type: "denied", reasonCode: "guard_unavailable", message: "server busy" }), () =>
+    socket.destroy(),
+  )
+}
+
+function closeServer(server: net.Server, endpoint: string): Promise<void> {
+  return new Promise((resolveClose) => {
+    server.close(() => resolveClose())
+    if (process.platform !== "win32") unlink(endpoint, () => {})
   })
 }

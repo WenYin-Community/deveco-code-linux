@@ -3,7 +3,7 @@ export * as HdcManifest from "./manifest"
 // ─── HDC Guard product manifest (SR1 v3.0) ──────────────────
 // Single source of truth for the preset device-side boundaries
 // SR1 enforces without user configuration (§2.2 rule 1). SR1
-// offers no user rules; SR2 will build its policy surface on top
+// offers no user rules; SR2 will build its policy layer on top
 // of these defaults.
 
 // Device-allowed paths for real-device file transfer (§0.2

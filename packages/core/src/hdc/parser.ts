@@ -69,37 +69,51 @@ export function parse(argv: readonly string[], hdcVersion: string): ParseResult 
     return { _tag: "runtime_incompatible", version: hdcVersion, supported: [MIN_HDC_VERSION] }
   }
 
-  // 2. Strip global flags (-t <device>, -s <device>) that precede the subcommand
-  // HDC CLI accepts global target selectors before the subcommand:
-  //   hdc -t 127.0.0.1:5555 shell ls /data
-  //   hdc -s <serial> install app.hap
-  // These must be stripped before dispatch so argv[0] is the actual subcommand.
+  const stripped = stripGlobalFlags(argv)
+  if (stripped._tag === "invalid") return { _tag: "invalid_request", reason: stripped.reason }
+
+  // 2. Empty argv after stripping flags → invalid_request
+  if (stripped.argv.length === 0) {
+    return { _tag: "invalid_request", reason: "argv contains only global flags, no subcommand" }
+  }
+
+  // 3. Dispatch to command-specific parsers
+  return parseCommand(stripped.argv)
+}
+
+type StripResult = { _tag: "ok"; argv: readonly string[] } | { _tag: "invalid"; reason: string }
+
+// HDC CLI accepts global target selectors before the subcommand:
+//   hdc -t 127.0.0.1:5555 shell ls /data
+//   hdc -s <serial> install app.hap
+// These must be stripped before dispatch so argv[0] is the actual subcommand.
+function stripGlobalFlags(argv: readonly string[]): StripResult {
   let offset = 0
-  while (offset + 1 < argv.length) {
-    const arg = argv[offset]
-    if (arg === "-t" || arg === "-s") {
-      offset += 2 // skip flag + its value
-      continue
-    }
-    break
+  while (offset + 1 < argv.length && (argv[offset] === "-t" || argv[offset] === "-s")) {
+    offset += 2 // skip flag + its value
   }
 
   // Dangling global flag without a value (e.g. bare `hdc -t`) → invalid_request
   // (guide A.1: missing operand is structurally unparseable, fail closed)
-  if (offset < argv.length && (argv[offset] === "-t" || argv[offset] === "-s")) {
-    return { _tag: "invalid_request", reason: `global flag ${argv[offset]} requires a value` }
+  const dangling = argv[offset]
+  if (dangling === "-t" || dangling === "-s") {
+    return { _tag: "invalid", reason: `global flag ${dangling} requires a value` }
   }
 
-  const commandArgs = offset > 0 ? argv.slice(offset) : argv
+  return { _tag: "ok", argv: offset > 0 ? argv.slice(offset) : argv }
+}
 
-  // 3. Empty argv after stripping flags → invalid_request
-  if (commandArgs.length === 0) {
-    return { _tag: "invalid_request", reason: "argv contains only global flags, no subcommand" }
-  }
-
+function parseCommand(commandArgs: readonly string[]): ParseResult {
   const command = commandArgs[0]
+  const simple = parseSimpleCommand(command)
+  if (simple !== undefined) return simple
+  const subcommand = parseSubcommand(command, commandArgs)
+  if (subcommand !== undefined) return subcommand
+  return parseFallback(command, commandArgs)
+}
 
-  // 4. Dispatch to command-specific parsers
+// Commands whose operation carries no arguments beyond the kind.
+function parseSimpleCommand(command: string): ParseResult | undefined {
   switch (command) {
     case "version":
     case "-v":
@@ -108,49 +122,11 @@ export function parse(argv: readonly string[], hdcVersion: string): ParseResult 
     case "-h":
     case "--help":
       return { _tag: "success", operation: { kind: "versionOrHelp" } }
-
-    case "list":
-      return parseList(commandArgs)
-
     case "discover":
       return { _tag: "success", operation: { kind: "discover" } }
-
-    case "shell":
-      return parseShell(commandArgs)
-
-    case "hilog":
-      return { _tag: "success", operation: { kind: "hilog", args: commandArgs.slice(1) } }
-
-    case "file":
-      return parseFile(commandArgs)
-
-    case "install":
-      return parseInstall(commandArgs)
-
-    case "uninstall":
-      return parseUninstall(commandArgs)
-
-    case "bugreport":
-      return parseBugreport(commandArgs)
-
-    case "tconn":
-      return parseTconn(commandArgs)
-
-    case "fport":
-      return parsePortForward(commandArgs, "forward")
-
-    case "rport":
-      return parsePortForward(commandArgs, "reverse")
-
-    case "smode":
-    case "tmode":
-    case "daemon":
-      return parseModeOrDaemon(commandArgs)
-
     case "reboot":
     case "boot":
       return { _tag: "success", operation: { kind: "rebootOrBoot" } }
-
     // Product hard-deny commands (AR-SEC2-003)
     case "mount":
     case "dd":
@@ -161,18 +137,55 @@ export function parse(argv: readonly string[], hdcVersion: string): ParseResult 
     case "erase":
     case "format":
       return { _tag: "success", operation: { kind: "firmwareMutation", command } }
-
-    // Firmware mutation binary variants (mkfs.ext4, updater, flashcp, etc.)
-    // Uses shared constants from product-policy.ts to avoid duplication.
     default:
-      if (
-        HARD_DENY_SHELL_COMMANDS.has(command) ||
-        HARD_DENY_SHELL_PREFIXES.some((p) => command.startsWith(p))
-      ) {
-        return { _tag: "success", operation: { kind: "firmwareMutation", command } }
-      }
-      return { _tag: "success", operation: { kind: "unclassified", originalArgv: [...commandArgs] } }
+      return undefined
   }
+}
+
+function parseSubcommand(command: string, commandArgs: readonly string[]): ParseResult | undefined {
+  switch (command) {
+    case "list":
+      return parseList(commandArgs)
+    case "shell":
+      return parseShell(commandArgs)
+    case "hilog":
+      return { _tag: "success", operation: { kind: "hilog", args: commandArgs.slice(1) } }
+    case "file":
+      return parseFile(commandArgs)
+    case "install":
+      return parseInstall(commandArgs)
+    case "uninstall":
+      return parseUninstall(commandArgs)
+    case "bugreport":
+      return parseBugreport(commandArgs)
+    case "tconn":
+      return parseTconn(commandArgs)
+    case "fport":
+      return parsePortForward(commandArgs, "forward")
+    case "rport":
+      return parsePortForward(commandArgs, "reverse")
+    case "smode":
+    case "tmode":
+    case "daemon":
+      return parseModeOrDaemon(commandArgs)
+    default:
+      return undefined
+  }
+}
+
+// Firmware mutation binary variants (mkfs.ext4, updater, flashcp, etc.)
+// Uses shared constants from product-policy.ts to avoid duplication.
+function parseFallback(command: string, commandArgs: readonly string[]): ParseResult {
+  if (isHardDenyShellCommand(command)) {
+    return { _tag: "success", operation: { kind: "firmwareMutation", command } }
+  }
+  return { _tag: "success", operation: { kind: "unclassified", originalArgv: [...commandArgs] } }
+}
+
+function isHardDenyShellCommand(command: string): boolean {
+  return (
+    HARD_DENY_SHELL_COMMANDS.has(command) || HARD_DENY_SHELL_PREFIXES.some((prefix) => command.startsWith(prefix))
+  )
 }
 
 // ─── Command-specific parsers ──────────────────────────────

@@ -168,6 +168,7 @@ export const HdcPermissionAdapterLayer = Layer.effect(
             policySource: "one_time_approval" as const,
             approvalResult: "allow_once" as const,
             needsApproval: false,
+            approvalPrompted: true,
           }
         }
 
@@ -199,6 +200,7 @@ export const HdcPermissionAdapterLayer = Layer.effect(
               policySource: "saved_permission" as const,
               approvalResult: "always_allow" as const,
               needsApproval: false,
+              approvalPrompted: true,
             }
           }
 

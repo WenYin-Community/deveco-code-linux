@@ -343,15 +343,6 @@ describe("SEC2-002: Bundle validators (§2)", () => {
   // System bundle uninstall is rejected by isHardDeny in Step 3 (product-policy).
   // Even if one reaches Step 4, it is not in the project bundle list, so
   // validateBundle rejects it too (bundle_not_allowed).
-  // 验证: com.android.* 系统 bundle 不在项目 bundle 列表时被 validateBundle 拒绝
-  it("system bundle com.android.* rejected by validateBundle (not a project bundle)", () => {
-    const result = validateBundle("com.android.settings", ctx)
-    expect(result._tag).toBe("invalid")
-    if (result._tag === "invalid") {
-      expect(result.reasonCode).toBe("bundle_not_allowed")
-    }
-  })
-
   // 验证: ohos.* 系统 bundle 不在项目 bundle 列表时被 validateBundle 拒绝
   it("system bundle ohos.* rejected by validateBundle (not a project bundle)", () => {
     const result = validateBundle("ohos.system", ctx)
@@ -570,7 +561,7 @@ describe("SEC2-002: Operation-level validation (§5)", () => {
 
   // 验证: uninstall 系统 bundle 在 Step 4 也会被拒 (不在项目 bundle 列表; Step 3 isHardDeny 已先拒绝)
   it("uninstall with system bundle rejected by validateOperation (not a project bundle)", () => {
-    const op: HdcOperation = { kind: "uninstall", bundleName: "com.android.settings" }
+    const op: HdcOperation = { kind: "uninstall", bundleName: "com.ohos.settings" }
     const result = validateOperation(op, request, trustedCtx)
     expect(result._tag).toBe("invalid")
     if (result._tag === "invalid") {

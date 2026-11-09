@@ -9,12 +9,12 @@ import { handleGuardRequest, registerSession } from "./service"
 
 // ─── HDC guard shell environment (SR1) ──────────────────────
 // Wires the guard into every controlled shell:
-//  1. writes the `hdc(.cmd)` shim into Global.Path.bin (a
-//     deveco cache dir that only controlled shells put on
-//     PATH — never the user's global PATH);
+//  1. writes the hdc shim (hdc.cmd on Windows) into the deveco bin
+//     cache directory that only controlled shells put on PATH —
+//     never the user's global PATH;
 //  2. starts the per-process guard IPC server (lazy singleton);
-//  3. injects DEVECO_CODE_HDC_* env vars + a PATH that
-//     resolves `hdc` to the shim.
+//  3. injects the guard environment variables plus a PATH that
+//     resolves hdc to the shim.
 //
 // If any step fails, no env is injected and the shell still
 // works — hdc then fails closed at the shim (CON-05).
@@ -72,25 +72,34 @@ export interface HdcGuardShellEnv {
   DEVECO_CODE_HDC_CALL?: string
 }
 
-// Returns the env vars that route `hdc` through the guard for
+export interface HdcGuardShellEnvInput {
+  sessionID: string | undefined
+  callID: string | undefined
+  currentPath: string | undefined
+  directory: string | undefined
+}
+
+// Returns the env vars that route hdc through the guard for
 // one shell, or undefined when the guard cannot arm itself (the
 // caller then injects nothing and hdc fails closed at the shim).
 // `directory` is the session's instance directory — the key the
 // TUI's permission reply resolves the pending ask by, so it must
 // be captured at arm time (the shell cwd may drift from it).
-export async function ensureHdcGuardShellEnv(sessionID: string | undefined, callID: string | undefined, currentPath: string | undefined, directory: string | undefined): Promise<HdcGuardShellEnv | undefined> {
+export async function ensureHdcGuardShellEnv(
+  input: HdcGuardShellEnvInput,
+): Promise<HdcGuardShellEnv | undefined> {
   // Without a session there is nothing to bind permission asks
   // to; refuse to arm rather than run unattributed (fail closed).
-  if (!sessionID || !directory) return undefined
+  if (!input.sessionID || !input.directory) return undefined
 
   const server = await ensureGuardServer()
-  registerSession(sessionID, directory)
+  registerSession(input.sessionID, input.directory)
 
   return {
-    PATH: isolatedShellPath(currentPath ?? process.env.PATH, Global.Path.bin),
+    PATH: isolatedShellPath(input.currentPath ?? process.env.PATH, Global.Path.bin),
     DEVECO_CODE_HDC_ENDPOINT: server.endpoint,
     DEVECO_CODE_HDC_TOKEN: server.token,
-    DEVECO_CODE_HDC_SESSION: sessionID,
-    ...(callID ? { DEVECO_CODE_HDC_CALL: callID } : {}),
+    DEVECO_CODE_HDC_SESSION: input.sessionID,
+    ...(input.callID ? { DEVECO_CODE_HDC_CALL: input.callID } : {}),
   }
 }

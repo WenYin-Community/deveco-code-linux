@@ -26,7 +26,7 @@ export interface ExecOptions {
 // A stdin sink that buffers writes until the child's stdin is
 // available (Bun's spawn stdin resolves asynchronously), then
 // replays them in order. `end` is delivered after all buffered
-// writes. Compatible with Bun's FileSink surface (write/end).
+// writes. Compatible with Bun's FileSink interface (write/end).
 export interface StdinSink {
   write: (chunk: Buffer) => void
   end: () => void
@@ -37,36 +37,50 @@ export interface HdcStdinBridge {
   attach: (target: StdinSink) => void
 }
 
-export function createStdinSink(): HdcStdinBridge {
-  const pending: Buffer[] = []
-  let target: StdinSink | undefined
-  let ended = false
-  let endQueued = false
+interface StdinBufferState {
+  pending: Buffer[]
+  target: StdinSink | undefined
+  ended: boolean
+  endQueued: boolean
+}
 
+export function createStdinSink(): HdcStdinBridge {
+  const state: StdinBufferState = { pending: [], target: undefined, ended: false, endQueued: false }
   return {
     sink: {
-      write: (chunk: Buffer) => {
-        if (ended) return
-        if (target) target.write(chunk)
-        else pending.push(chunk)
-      },
-      end: () => {
-        if (ended) return
-        ended = true
-        if (target) target.end()
-        else endQueued = true
-      },
+      write: (chunk: Buffer) => bufferStdinWrite(state, chunk),
+      end: () => bufferStdinEnd(state),
     },
-    attach: (nextTarget: StdinSink) => {
-      target = nextTarget
-      for (const chunk of pending) nextTarget.write(chunk)
-      pending.length = 0
-      if (endQueued) {
-        endQueued = false
-        nextTarget.end()
-      }
-    },
+    attach: (nextTarget: StdinSink) => attachStdinTarget(state, nextTarget),
   }
+}
+
+function bufferStdinWrite(state: StdinBufferState, chunk: Buffer): void {
+  if (state.ended) return
+  if (!state.target) {
+    state.pending.push(chunk)
+    return
+  }
+  state.target.write(chunk)
+}
+
+function bufferStdinEnd(state: StdinBufferState): void {
+  if (state.ended) return
+  state.ended = true
+  if (!state.target) {
+    state.endQueued = true
+    return
+  }
+  state.target.end()
+}
+
+function attachStdinTarget(state: StdinBufferState, nextTarget: StdinSink): void {
+  state.target = nextTarget
+  for (const chunk of state.pending) nextTarget.write(chunk)
+  state.pending.length = 0
+  if (!state.endQueued) return
+  state.endQueued = false
+  nextTarget.end()
 }
 
 async function resolveHdcBinary(): Promise<string> {
@@ -81,24 +95,32 @@ async function resolveHdcBinary(): Promise<string> {
 
 function cleanSpawnEnv(): Record<string, string> {
   const env: Record<string, string> = {}
+  const binDir = path.resolve(Global.Path.bin).toLowerCase()
+  const pathKeyNames = new Set(process.platform === "win32" ? ["Path", "PATH", "path"] : ["PATH"])
+
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue
     if (key.toUpperCase().startsWith("DEVECO_CODE_HDC_")) continue
-    env[key] = value
-  }
-
-  // Strip the shim dir from PATH so the child cannot resolve our
-  // `hdc` shim (case-insensitive compare on all platforms).
-  const binDir = path.resolve(Global.Path.bin).toLowerCase()
-  const sep = path.delimiter
-  for (const key of new Set(process.platform === "win32" ? ["Path", "PATH", "path"] : ["PATH"])) {
-    const value = env[key]
-    if (!value) continue
-    const filtered = value.split(sep).filter((entry) => entry.length > 0 && path.resolve(entry).toLowerCase() !== binDir)
-    if (filtered.length === 0) delete env[key]
-    else env[key] = filtered.join(sep)
+    if (!pathKeyNames.has(key)) {
+      env[key] = value
+      continue
+    }
+    // Strip the shim dir from PATH so the child cannot resolve our
+    // `hdc` shim (case-insensitive compare on all platforms). An empty
+    // result omits the variable entirely.
+    const filtered = filterPathValue(value, binDir)
+    if (filtered === undefined) continue
+    env[key] = filtered
   }
   return env
+}
+
+function filterPathValue(value: string, binDir: string): string | undefined {
+  const sep = path.delimiter
+  const filtered = value
+    .split(sep)
+    .filter((entry) => entry.length > 0 && path.resolve(entry).toLowerCase() !== binDir)
+  return filtered.length === 0 ? undefined : filtered.join(sep)
 }
 
 async function pump(stream: ReadableStream<Uint8Array> | undefined, emit: (chunk: Buffer) => void): Promise<void> {

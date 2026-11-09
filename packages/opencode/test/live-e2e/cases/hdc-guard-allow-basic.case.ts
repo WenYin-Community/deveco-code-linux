@@ -1,7 +1,5 @@
-import stripAnsi from "strip-ansi"
-import { buildEnv, findDevEcoHome, sdkPath } from "../../../src/tool/lib/env"
-import { realUserEnv } from "../env"
-import type { LiveTestCase, RunCommandResult } from "../types"
+import { runGuardedBash, withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_ALLOW_BASIC"
 
@@ -64,33 +62,16 @@ const testCase: LiveTestCase = {
   cleanup:
     "用例不修改设备状态（只读查询）；XDG_CACHE_HOME 指向临时目录使 hdc shim 与运行产物隔离，结束删除临时目录，不污染用户真实 cache bin。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
-
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
-    try {
+    return withGuardWorkspace(ctx, "hdc-guard-allow-", async ({ env }) => {
       const results: Record<string, { exit: number; output: string }> = {}
       for (const item of commands) {
-        const result = await ctx.runDeveco(
-          [
-            "debug",
-            "agent",
-            "build",
-            "--tool",
-            "bash",
-            "--params",
-            JSON.stringify({ command: item.command, description: `Allow-path probe: ${item.label}` }),
-          ],
-          { env, timeoutMs: 60_000 },
-        )
+        const result = await runGuardedBash(ctx, env, item.command, `Allow-path probe: ${item.label}`)
         await ctx.writeArtifact(CASE_ID, `${item.label.replace(/\s+/g, "-")}.log`, result.stdout)
-        const output = requireBashOutput(result, item.command)
-        if (output.exit !== 0) {
-          throw new Error(`\`${item.command}\` exited with ${output.exit} through the hdc guard:\n${output.output}`)
+        if (result.exit !== 0) {
+          throw new Error(`\`${item.command}\` exited with ${result.exit} through the hdc guard:\n${result.output}`)
         }
-        item.assert(output.output)
-        results[item.label] = { exit: output.exit, output: output.output }
+        item.assert(result.output)
+        results[item.label] = { exit: result.exit, output: result.output }
       }
       return {
         details: {
@@ -98,37 +79,8 @@ const testCase: LiveTestCase = {
           exits: Object.fromEntries(Object.entries(results).map(([key, value]) => [key, value.exit])),
         },
       }
-    } finally {
-      const fs = await import("node:fs/promises")
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
-}
-
-function parseDebugToolResult(stdout: string) {
-  const clean = stripAnsi(stdout)
-  const start = clean.indexOf("{")
-  const end = clean.lastIndexOf("}")
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`debug tool stdout did not contain JSON: ${stdout}`)
-  }
-  return JSON.parse(clean.slice(start, end + 1)) as {
-    tool?: unknown
-    input?: unknown
-    result?: { metadata?: { exit?: unknown }; output?: unknown }
-  }
-}
-
-function requireBashOutput(result: RunCommandResult, command: string) {
-  const parsed = parseDebugToolResult(result.stdout)
-  if (parsed.tool !== "bash") throw new Error(`Expected debug tool result for bash, got ${String(parsed.tool)}`)
-  const input = parsed.input as { command?: unknown } | undefined
-  if (input?.command !== command) {
-    throw new Error(`Unexpected bash command: ${String(input?.command)}`)
-  }
-  const metadata = parsed.result?.metadata as { exit?: unknown } | undefined
-  const output = typeof parsed.result?.output === "string" ? parsed.result.output : ""
-  return { exit: typeof metadata?.exit === "number" ? metadata.exit : -1, output }
 }
 
 export default testCase

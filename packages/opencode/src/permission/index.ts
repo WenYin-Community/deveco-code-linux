@@ -31,6 +31,12 @@ export interface AskOptions {
   // forever. On expiry the pending request is removed, a reject
   // reply is published, and the ask fails with AskTimedOutError.
   timeoutMs?: number
+  // Ignore saved "Always allow" rules (the `approved` set) when
+  // evaluating this ask, forcing a real prompt. The hdc guard uses
+  // this to enforce a product ceiling: a saved permission may
+  // accelerate an operation of the same class but must never stand
+  // in for the explicit consent an ask-ceiling operation requires.
+  ignoreSavedPermissions?: boolean
 }
 
 export interface Interface {
@@ -91,10 +97,13 @@ export const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput, options?: AskOptions) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
+      // Caller can demand a fresh decision (hdc guard product ceiling):
+      // saved "Always allow" rules must not short-circuit the prompt.
+      const saved = options?.ignoreSavedPermissions ? [] : approved
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = evaluate(request.permission, pattern, ruleset, saved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           return yield* new PermissionV1.DeniedError({

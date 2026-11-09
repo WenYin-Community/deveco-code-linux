@@ -7,7 +7,12 @@ import { ensureHdcGuardShellEnv } from "@/hdc/shim-env"
 export async function HdcGuardEnvPlugin(_input: PluginInput): Promise<Hooks> {
   return {
     "shell.env": async (input, output) => {
-      const extra = await ensureHdcGuardShellEnv(input.sessionID, input.callID, output.env.PATH, input.directory).catch(() => undefined)
+      const extra = await ensureHdcGuardShellEnv({
+        sessionID: input.sessionID,
+        callID: input.callID,
+        currentPath: output.env.PATH,
+        directory: input.directory,
+      }).catch(() => undefined)
       if (!extra) return
       Object.assign(output.env, extra)
     },

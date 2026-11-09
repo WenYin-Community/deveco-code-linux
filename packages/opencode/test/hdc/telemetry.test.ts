@@ -197,7 +197,7 @@ describe("hdc guard telemetry (FR-OBS-001)", () => {
         // Entry: the session is not registered with the guard.
         await expectDenial(["list", "targets"], cwd, "guard_unavailable", { sessionID: UNREGISTERED })
 
-        // Decision: SEC2 deny decisions surface their reason code.
+        // Decision: SEC2 deny decisions expose their reason code.
         await expectDenial(["flash", "boot.img"], cwd, "hard_denied")
         await expectDenial(["file"], cwd, "invalid_request")
 

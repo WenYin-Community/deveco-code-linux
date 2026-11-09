@@ -1,12 +1,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { buildEnv, findDevEcoHome, hdcPath, sdkPath } from "../../../src/tool/lib/env"
-import { buildHarmonyProject, createHarmonyProject, realUserEnv, runHdcGuardDriver, runProcess } from "../env"
-import type { LiveTestCase } from "../types"
+import { buildHarmonyProject, createHarmonyProject, runHdcGuardDriver, runProcess } from "../env"
+import { withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { CaseContext, LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_INSTALL_LAUNCH"
 const APP_NAME = "Sr1E2eApp"
 const BUNDLE_NAME = "com.example.sr1e2e"
+
+type DriverEnv = Record<string, string | undefined>
 
 async function findFirstHap(dir: string): Promise<string | undefined> {
   const entries = await fs.readdir(dir, { withFileTypes: true, recursive: true }).catch(() => [])
@@ -44,89 +46,91 @@ const testCase: LiveTestCase = {
   parallel: false,
   cleanup: "结束用真实 hdc 直连卸载 com.example.sr1e2e 并删除临时工作区与隔离 cache 目录，设备状态恢复。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
-    const hdc = hdcPath(home)
+    return withGuardWorkspace(ctx, "hdc-guard-install-", async ({ hdc, env, workspace }) => {
+      const projectRoot = path.join(workspace, APP_NAME)
 
-    const workspace = await ctx.createTempWorkspace("hdc-guard-install-")
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
-    const projectRoot = path.join(workspace, APP_NAME)
+      try {
+        await createHarmonyProject(workspace, APP_NAME, BUNDLE_NAME, env)
+        await buildHarmonyProject(projectRoot, env)
+        const hap = await findFirstHap(path.join(projectRoot, "entry", "build"))
+        if (!hap) throw new Error("no .hap produced by devecocli build")
 
-    try {
-      await createHarmonyProject(workspace, APP_NAME, BUNDLE_NAME, env)
-      await buildHarmonyProject(projectRoot, env)
-      const hap = await findFirstHap(path.join(projectRoot, "entry", "build"))
-      if (!hap) throw new Error("no .hap produced by devecocli build")
+        const install = await runInstallLeg(ctx, env, projectRoot, hap)
+        await verifyBundleInstalled(hdc, BUNDLE_NAME)
+        const launch = await runLaunchLeg(ctx, env, projectRoot)
+        const launched = await waitForAppProcess(hdc, BUNDLE_NAME)
 
-      const install = await runHdcGuardDriver({
-        env,
-        workspace: projectRoot,
-        reply: "once",
-        hdcArgs: ["install", hap],
-      })
-      await ctx.writeArtifact(CASE_ID, "install-driver.json", JSON.stringify(install.driver, null, 2))
-      if (install.driver.error) throw new Error(`install driver failed: ${install.driver.error}`)
-      if (install.driver.asked.length !== 1 || install.driver.asked[0].metadata.operationType !== "install") {
-        throw new Error(`expected 1 install approval ask, got ${JSON.stringify(install.driver.asked)}`)
+        return {
+          details: {
+            installSessionID: install.sessionID,
+            launchSessionID: launch.sessionID,
+            installAskCount: install.asked.length,
+            launchAskCount: launch.asked.length,
+            hapPath: hap,
+            launched,
+          },
+        }
+      } finally {
+        await runProcess([hdc, "uninstall", BUNDLE_NAME], 30_000).catch(() => undefined)
       }
-      if (install.driver.runs.length !== 1 || install.driver.runs[0].exitCode !== 0) {
-        throw new Error(`expected a successful install, got ${JSON.stringify(install.driver.runs)}`)
-      }
-      if (!install.driver.runs[0].stdout.includes("successfully")) {
-        throw new Error(`hdc install output does not report success:\n${install.driver.runs[0].stdout}`)
-      }
-
-      const dump = await runProcess([hdc, "shell", "bm", "dump", "-n", BUNDLE_NAME], 20_000)
-      if (!dump.stdout.includes(BUNDLE_NAME)) {
-        throw new Error(`bundle ${BUNDLE_NAME} not found on device after guarded install\nstdout: ${dump.stdout}\nstderr: ${dump.stderr}`)
-      }
-
-      const launch = await runHdcGuardDriver({
-        env,
-        workspace: projectRoot,
-        reply: "once",
-        hdcArgs: ["shell", "aa", "start", "-b", BUNDLE_NAME, "-a", "EntryAbility"],
-      })
-      await ctx.writeArtifact(CASE_ID, "launch-driver.json", JSON.stringify(launch.driver, null, 2))
-      if (launch.driver.error) throw new Error(`launch driver failed: ${launch.driver.error}`)
-      if (launch.driver.asked.length !== 1 || launch.driver.asked[0].metadata.operationType !== "aa start") {
-        throw new Error(`expected 1 "aa start" approval ask, got ${JSON.stringify(launch.driver.asked)}`)
-      }
-      if (launch.driver.runs.length !== 1 || launch.driver.runs[0].exitCode !== 0) {
-        throw new Error(`expected a successful launch, got ${JSON.stringify(launch.driver.runs)}`)
-      }
-      if (!launch.driver.runs[0].stdout.includes("start ability successfully")) {
-        throw new Error(`aa start output does not report success:\n${launch.driver.runs[0].stdout}`)
-      }
-
-      // aa start reports success once the ability is scheduled; the
-      // process appears in ps a moment later (observed 2-12s on the
-      // emulator), so poll for it instead of a single immediate check.
-      let launched = false
-      for (let attempt = 0; attempt < 60 && !launched; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        const ps = await runProcess([hdc, "shell", "ps", "-ef"], 15_000)
-        launched = ps.stdout.includes(BUNDLE_NAME)
-      }
-      if (!launched) throw new Error(`app process ${BUNDLE_NAME} not found after guarded aa start`)
-
-      return {
-        details: {
-          installSessionID: install.driver.sessionID,
-          launchSessionID: launch.driver.sessionID,
-          installAskCount: install.driver.asked.length,
-          launchAskCount: launch.driver.asked.length,
-          hapPath: hap,
-          launched,
-        },
-      }
-    } finally {
-      await runProcess([hdc, "uninstall", BUNDLE_NAME], 30_000).catch(() => undefined)
-      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
+}
+
+async function runInstallLeg(ctx: CaseContext, env: DriverEnv, workspace: string, hap: string) {
+  const install = await runHdcGuardDriver({ env, workspace, reply: "once", hdcArgs: ["install", hap] })
+  await ctx.writeArtifact(CASE_ID, "install-driver.json", JSON.stringify(install.driver, null, 2))
+  if (install.driver.error) throw new Error(`install driver failed: ${install.driver.error}`)
+  if (install.driver.asked.length !== 1 || install.driver.asked[0].metadata.operationType !== "install") {
+    throw new Error(`expected 1 install approval ask, got ${JSON.stringify(install.driver.asked)}`)
+  }
+  if (install.driver.runs.length !== 1 || install.driver.runs[0].exitCode !== 0) {
+    throw new Error(`expected a successful install, got ${JSON.stringify(install.driver.runs)}`)
+  }
+  if (!install.driver.runs[0].stdout.includes("successfully")) {
+    throw new Error(`hdc install output does not report success:\n${install.driver.runs[0].stdout}`)
+  }
+  return install.driver
+}
+
+async function verifyBundleInstalled(hdc: string, bundleName: string): Promise<void> {
+  const dump = await runProcess([hdc, "shell", "bm", "dump", "-n", bundleName], 20_000)
+  if (!dump.stdout.includes(bundleName)) {
+    throw new Error(`bundle ${bundleName} not found on device after guarded install\nstdout: ${dump.stdout}\nstderr: ${dump.stderr}`)
+  }
+}
+
+async function runLaunchLeg(ctx: CaseContext, env: DriverEnv, workspace: string) {
+  const launch = await runHdcGuardDriver({
+    env,
+    workspace,
+    reply: "once",
+    hdcArgs: ["shell", "aa", "start", "-b", BUNDLE_NAME, "-a", "EntryAbility"],
+  })
+  await ctx.writeArtifact(CASE_ID, "launch-driver.json", JSON.stringify(launch.driver, null, 2))
+  if (launch.driver.error) throw new Error(`launch driver failed: ${launch.driver.error}`)
+  if (launch.driver.asked.length !== 1 || launch.driver.asked[0].metadata.operationType !== "aa start") {
+    throw new Error(`expected 1 "aa start" approval ask, got ${JSON.stringify(launch.driver.asked)}`)
+  }
+  if (launch.driver.runs.length !== 1 || launch.driver.runs[0].exitCode !== 0) {
+    throw new Error(`expected a successful launch, got ${JSON.stringify(launch.driver.runs)}`)
+  }
+  if (!launch.driver.runs[0].stdout.includes("start ability successfully")) {
+    throw new Error(`aa start output does not report success:\n${launch.driver.runs[0].stdout}`)
+  }
+  return launch.driver
+}
+
+// aa start reports success once the ability is scheduled; the
+// process appears in ps a moment later (observed 2-12s on the
+// emulator), so poll for it instead of a single immediate check.
+async function waitForAppProcess(hdc: string, bundleName: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const ps = await runProcess([hdc, "shell", "ps", "-ef"], 15_000)
+    if (ps.stdout.includes(bundleName)) return true
+  }
+  throw new Error(`app process ${bundleName} not found after guarded aa start`)
 }
 
 export default testCase

@@ -25,7 +25,7 @@ import type { PreparedCommand, SandboxPrepareRequest } from "@bitfun-ai/sandbox"
 // are negatively cached for a short window so transient breakage
 // self-heals while every command still fails closed.
 //
-// Boundaries (hdc_guard_sr2.md §1.3, fr-host-101-gap.md):
+// Boundaries (hdc_guard_sr2.md §1.3):
 //   - macOS only; Windows does not claim host enforcement;
 //   - full-access profiles skip the sandbox entirely (user
 //     opt-out) and are not host-enforced;
@@ -168,6 +168,21 @@ function canaryCacheKey(options: CanaryOptions): string {
   ])
 }
 
+async function collectProbeOutput(stream: ReadableStream<Uint8Array> | undefined): Promise<string> {
+  if (!stream) return ""
+  let bytes = 0
+  let text = ""
+  const reader = stream.getReader()
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    bytes += value.byteLength
+    if (bytes <= MAX_PROBE_OUTPUT_BYTES) text += Buffer.from(value).toString("utf8")
+  }
+  return text
+}
+
 async function spawnProbe(
   prepared: PreparedCommandLike,
   timeoutMs: number,
@@ -185,23 +200,8 @@ async function spawnProbe(
     proc.kill()
   }, timeoutMs)
 
-  const collect = async (stream: ReadableStream<Uint8Array> | undefined) => {
-    if (!stream) return ""
-    let bytes = 0
-    let text = ""
-    const reader = stream.getReader()
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      if (!value) continue
-      bytes += value.byteLength
-      if (bytes <= MAX_PROBE_OUTPUT_BYTES) text += Buffer.from(value).toString("utf8")
-    }
-    return text
-  }
-
   try {
-    const [stdout, stderr] = await Promise.all([collect(proc.stdout), collect(proc.stderr)])
+    const [stdout, stderr] = await Promise.all([collectProbeOutput(proc.stdout), collectProbeOutput(proc.stderr)])
     const code = await proc.exited
     return { code: timedOut ? null : code, stdout, stderr, timedOut }
   } finally {
@@ -228,49 +228,16 @@ async function runProbe(
   return spawn(prepared, timeoutMs)
 }
 
+type CanaryPush = (name: CanaryName, status: CanaryStatus, detail: string, startedAt: number) => void
+
 async function runCanaries(options: CanaryOptions, deps: CanaryDeps): Promise<CanaryResult[]> {
   const results: CanaryResult[] = []
-  const push = (name: CanaryName, status: CanaryStatus, detail: string, startedAt: number) => {
+  const push: CanaryPush = (name, status, detail, startedAt) => {
     results.push({ name, status, detail, durationMs: Date.now() - startedAt })
   }
 
-  for (const bin of options.bins) {
-    const startedAt = Date.now()
-    const outcome = await runProbe(options, deps, READ_DENY_SCRIPT, bin, PROBE_TIMEOUT_MS)
-    const leaked = outcome.stdout.includes("CANARY_READ_LEAKED")
-    const denied = outcome.stdout.includes("CANARY_READ_DENIED")
-    push(
-      "direct_read_deny",
-      !leaked && denied && !outcome.timedOut ? "passed" : "failed",
-      leaked
-        ? `read of ${bin} succeeded inside the sandbox`
-        : outcome.timedOut
-          ? `read probe of ${bin} timed out`
-          : denied
-            ? `read of ${bin} denied`
-            : `read probe of ${bin} produced no verdict (exit ${outcome.code})`,
-      startedAt,
-    )
-  }
-
-  for (const bin of options.bins) {
-    const startedAt = Date.now()
-    const outcome = await runProbe(options, deps, EXEC_DENY_SCRIPT, bin, PROBE_TIMEOUT_MS)
-    const denied = outcome.stdout.includes("CANARY_EXEC_DENIED")
-    const ran = outcome.stdout.includes("CANARY_EXEC_RAN_")
-    push(
-      "direct_exec_deny",
-      denied && !ran && !outcome.timedOut ? "passed" : "failed",
-      ran
-        ? `exec of ${bin} ran inside the sandbox (${outcome.stdout.trim()})`
-        : outcome.timedOut
-          ? `exec probe of ${bin} timed out`
-          : denied
-            ? `exec of ${bin} denied`
-            : `exec probe of ${bin} produced no verdict (exit ${outcome.code}, stderr: ${outcome.stderr.trim().slice(0, 200)})`,
-      startedAt,
-    )
-  }
+  await runReadDenyCanaries(options, deps, push)
+  await runExecDenyCanaries(options, deps, push)
 
   if (!options.armed) {
     // No guard env in this shell (CON-05): the shim/UDS chain is
@@ -281,17 +248,7 @@ async function runCanaries(options: CanaryOptions, deps: CanaryDeps): Promise<Ca
     return results
   }
 
-  {
-    const startedAt = Date.now()
-    const outcome = await runProbe(options, deps, SHIM_ALLOW_SCRIPT, undefined, PROBE_TIMEOUT_MS)
-    const present = outcome.stdout.includes("CANARY_SHIM_PRESENT")
-    push(
-      "shim_allow",
-      present && !outcome.timedOut ? "passed" : "failed",
-      outcome.timedOut ? "shim probe timed out" : present ? "hdc shim resolvable on PATH" : `hdc shim not resolvable on PATH (exit ${outcome.code})`,
-      startedAt,
-    )
-  }
+  await runShimCanary(options, deps, push)
 
   if (!options.profile.network_enabled) {
     // Network-off profiles deny network-outbound, which on macOS also
@@ -304,26 +261,70 @@ async function runCanaries(options: CanaryOptions, deps: CanaryDeps): Promise<Ca
     return results
   }
 
-  {
-    const startedAt = Date.now()
-    const outcome = await runProbe(options, deps, TRUSTED_EXEC_SCRIPT, undefined, TRUSTED_EXEC_TIMEOUT_MS)
-    const guardResponded = outcome.stderr.includes("[hdc-guard] reason_code=") && !outcome.stderr.includes("reason_code=guard_unavailable")
-    const approved = outcome.code === 0 && !outcome.timedOut
-    push(
-      "trusted_exec",
-      approved || guardResponded ? "passed" : "failed",
-      outcome.timedOut
-        ? "trusted exec probe timed out (guard unreachable or approval pending)"
-        : approved
-          ? "hdc list targets completed via guard"
-          : guardResponded
-            ? "guard responded (policy denial; trusted pipe verified)"
-            : `guard did not respond to hdc list targets (exit ${outcome.code}, stderr: ${outcome.stderr.trim().slice(0, 200)})`,
-      startedAt,
-    )
-  }
-
+  await runTrustedExecCanary(options, deps, push)
   return results
+}
+
+async function runReadDenyCanaries(options: CanaryOptions, deps: CanaryDeps, push: CanaryPush): Promise<void> {
+  for (const bin of options.bins) {
+    const startedAt = Date.now()
+    const outcome = await runProbe(options, deps, READ_DENY_SCRIPT, bin, PROBE_TIMEOUT_MS)
+    const leaked = outcome.stdout.includes("CANARY_READ_LEAKED")
+    const denied = outcome.stdout.includes("CANARY_READ_DENIED")
+    push("direct_read_deny", !leaked && denied && !outcome.timedOut ? "passed" : "failed", describeReadDeny(bin, outcome, leaked, denied), startedAt)
+  }
+}
+
+function describeReadDeny(bin: string, outcome: ProbeOutcome, leaked: boolean, denied: boolean): string {
+  if (leaked) return `read of ${bin} succeeded inside the sandbox`
+  if (outcome.timedOut) return `read probe of ${bin} timed out`
+  if (denied) return `read of ${bin} denied`
+  return `read probe of ${bin} produced no verdict (exit ${outcome.code})`
+}
+
+async function runExecDenyCanaries(options: CanaryOptions, deps: CanaryDeps, push: CanaryPush): Promise<void> {
+  for (const bin of options.bins) {
+    const startedAt = Date.now()
+    const outcome = await runProbe(options, deps, EXEC_DENY_SCRIPT, bin, PROBE_TIMEOUT_MS)
+    const denied = outcome.stdout.includes("CANARY_EXEC_DENIED")
+    const ran = outcome.stdout.includes("CANARY_EXEC_RAN_")
+    push("direct_exec_deny", denied && !ran && !outcome.timedOut ? "passed" : "failed", describeExecDeny(bin, outcome, denied, ran), startedAt)
+  }
+}
+
+function describeExecDeny(bin: string, outcome: ProbeOutcome, denied: boolean, ran: boolean): string {
+  if (ran) return `exec of ${bin} ran inside the sandbox (${outcome.stdout.trim()})`
+  if (outcome.timedOut) return `exec probe of ${bin} timed out`
+  if (denied) return `exec of ${bin} denied`
+  return `exec probe of ${bin} produced no verdict (exit ${outcome.code}, stderr: ${outcome.stderr.trim().slice(0, 200)})`
+}
+
+async function runShimCanary(options: CanaryOptions, deps: CanaryDeps, push: CanaryPush): Promise<void> {
+  const startedAt = Date.now()
+  const outcome = await runProbe(options, deps, SHIM_ALLOW_SCRIPT, undefined, PROBE_TIMEOUT_MS)
+  const present = outcome.stdout.includes("CANARY_SHIM_PRESENT")
+  push("shim_allow", present && !outcome.timedOut ? "passed" : "failed", describeShim(outcome, present), startedAt)
+}
+
+function describeShim(outcome: ProbeOutcome, present: boolean): string {
+  if (outcome.timedOut) return "shim probe timed out"
+  if (present) return "hdc shim resolvable on PATH"
+  return `hdc shim not resolvable on PATH (exit ${outcome.code})`
+}
+
+async function runTrustedExecCanary(options: CanaryOptions, deps: CanaryDeps, push: CanaryPush): Promise<void> {
+  const startedAt = Date.now()
+  const outcome = await runProbe(options, deps, TRUSTED_EXEC_SCRIPT, undefined, TRUSTED_EXEC_TIMEOUT_MS)
+  const guardResponded = outcome.stderr.includes("[hdc-guard] reason_code=") && !outcome.stderr.includes("reason_code=guard_unavailable")
+  const approved = outcome.code === 0 && !outcome.timedOut
+  push("trusted_exec", approved || guardResponded ? "passed" : "failed", describeTrustedExec(outcome, approved, guardResponded), startedAt)
+}
+
+function describeTrustedExec(outcome: ProbeOutcome, approved: boolean, guardResponded: boolean): string {
+  if (outcome.timedOut) return "trusted exec probe timed out (guard unreachable or approval pending)"
+  if (approved) return "hdc list targets completed via guard"
+  if (guardResponded) return "guard responded (policy denial; trusted pipe verified)"
+  return `guard did not respond to hdc list targets (exit ${outcome.code}, stderr: ${outcome.stderr.trim().slice(0, 200)})`
 }
 
 export async function runHostEnforcementCanaries(options: CanaryOptions, deps: CanaryDeps): Promise<CanaryRun> {

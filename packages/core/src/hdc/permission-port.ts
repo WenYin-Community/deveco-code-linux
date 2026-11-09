@@ -72,41 +72,28 @@ export class HdcPermissionPort extends Context.Service<HdcPermissionPort, HdcPer
 // Maps normalized operation to Permission action and resource.
 // The final mapping will be frozen by SR2 TBD-02 and architecture TBD-03.
 
+const PERMISSION_ACTION_BY_KIND: Readonly<Record<HdcOperation["kind"], string>> = {
+  versionOrHelp: "hdc:query",
+  listTargets: "hdc:query",
+  discover: "hdc:query",
+  shell: "hdc:shell",
+  hilog: "hdc:hilog",
+  install: "hdc:install",
+  fileSend: "hdc:file:send",
+  fileRecv: "hdc:file:recv",
+  uninstall: "hdc:uninstall",
+  appControl: "hdc:app:control",
+  bugreport: "hdc:bugreport",
+  transportConnect: "hdc:tconn",
+  portForward: "hdc:fport",
+  modeOrDaemon: "hdc:mode",
+  rebootOrBoot: "hdc:reboot",
+  firmwareMutation: "hdc:firmware",
+  unclassified: "hdc:unclassified",
+}
+
 export function mapToPermissionAction(operation: HdcOperation): string {
-  switch (operation.kind) {
-    case "versionOrHelp":
-    case "listTargets":
-    case "discover":
-      return "hdc:query"
-    case "shell":
-      return "hdc:shell"
-    case "hilog":
-      return "hdc:hilog"
-    case "install":
-      return "hdc:install"
-    case "fileSend":
-      return "hdc:file:send"
-    case "fileRecv":
-      return "hdc:file:recv"
-    case "uninstall":
-      return "hdc:uninstall"
-    case "appControl":
-      return "hdc:app:control"
-    case "bugreport":
-      return "hdc:bugreport"
-    case "transportConnect":
-      return "hdc:tconn"
-    case "portForward":
-      return "hdc:fport"
-    case "modeOrDaemon":
-      return "hdc:mode"
-    case "rebootOrBoot":
-      return "hdc:reboot"
-    case "firmwareMutation":
-      return "hdc:firmware"
-    case "unclassified":
-      return "hdc:unclassified"
-  }
+  return PERMISSION_ACTION_BY_KIND[operation.kind]
 }
 
 export function mapToPermissionResource(

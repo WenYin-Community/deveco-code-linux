@@ -1,10 +1,11 @@
-import fs from "node:fs/promises"
 import path from "node:path"
-import { buildEnv, findDevEcoHome, hdcPath, sdkPath } from "../../../src/tool/lib/env"
-import { realUserEnv, runHdcGuardDriver, runProcess } from "../env"
-import type { LiveTestCase } from "../types"
+import { runHdcGuardDriver, runProcess } from "../env"
+import { removeDeviceFiles, withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { CaseContext, LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_FILE_SEND_APPROVE"
+
+type DriverEnv = Record<string, string | undefined>
 
 const testCase: LiveTestCase = {
   id: CASE_ID,
@@ -34,86 +35,99 @@ const testCase: LiveTestCase = {
   cleanup:
     "结束用真实 hdc 直连删除设备端 /data/local/tmp/ 目标文件并删除临时工作区与隔离 cache 目录，设备状态恢复。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
-    const hdc = hdcPath(home)
+    return withGuardWorkspace(ctx, "hdc-guard-send-", async ({ hdc, env, workspace }) => {
+      const fileName = `sr1-e2e-${process.pid}-${Date.now()}.txt`
+      const remotePath = `/data/local/tmp/${fileName}`
+      const payload = `sr1-e2e-payload-${Date.now()}\n`
 
-    const workspace = await ctx.createTempWorkspace("hdc-guard-send-")
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const fileName = `sr1-e2e-${process.pid}-${Date.now()}.txt`
-    const remotePath = `/data/local/tmp/${fileName}`
-    const payload = `sr1-e2e-payload-${Date.now()}\n`
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
+      try {
+        await Bun.write(path.join(workspace, fileName), payload)
+        await removeDeviceFiles(hdc, [remotePath])
 
-    try {
-      await Bun.write(path.join(workspace, fileName), payload)
-      await runProcess([hdc, "shell", "rm", "-f", remotePath], 15_000)
+        const send = await runSendLeg(ctx, env, workspace, fileName, remotePath)
+        await verifyDeviceContent(hdc, remotePath, payload)
+        const recv = await runRecvLeg(ctx, env, workspace, remotePath, `received-${fileName}`, payload)
 
-      // Same session, two sends: the approval must cover exactly one
-      // request each time (FR-APPROVAL-001).
-      const send = await runHdcGuardDriver({
-        env,
-        workspace,
-        reply: "once",
-        repeat: 2,
-        hdcArgs: ["file", "send", fileName, remotePath],
-      })
-      await ctx.writeArtifact(CASE_ID, "send-driver.json", JSON.stringify(send.driver, null, 2))
-      if (send.driver.error) throw new Error(`file send driver failed: ${send.driver.error}`)
-      if (send.driver.asked.length !== 2) {
-        throw new Error(`expected 2 approval asks for 2 sends (FR-APPROVAL-001), got ${send.driver.asked.length}`)
+        return {
+          details: {
+            sessionID: send.sessionID,
+            sendAskCount: send.asked.length,
+            recvAskCount: recv.asked.length,
+            remotePath,
+            payloadBytes: payload.length,
+          },
+        }
+      } finally {
+        await removeDeviceFiles(hdc, [remotePath]).catch(() => undefined)
       }
-      for (const ask of send.driver.asked) {
-        if (ask.metadata.operationType !== "file send") throw new Error(`expected operationType="file send", got ${String(ask.metadata.operationType)}`)
-      }
-      if (send.driver.runs.length !== 2 || send.driver.runs.some((run) => run.exitCode !== 0)) {
-        throw new Error(`expected 2 successful sends, got ${JSON.stringify(send.driver.runs.map((run) => run.exitCode))}`)
-      }
-
-      const cat = await runProcess([hdc, "shell", "cat", remotePath], 15_000)
-      // hdc shell strips the trailing newline over its transport; the
-      // byte-exact comparison happens on the file recv below.
-      if (cat.exitCode !== 0 || cat.stdout.trim() !== payload.trim()) {
-        throw new Error(
-          `device file content mismatch after guarded file send\nexitCode: ${cat.exitCode}\nstdout: ${cat.stdout}\nstderr: ${cat.stderr}`,
-        )
-      }
-
-      const recvName = `received-${fileName}`
-      const recv = await runHdcGuardDriver({
-        env,
-        workspace,
-        reply: "once",
-        hdcArgs: ["file", "recv", remotePath, recvName],
-      })
-      await ctx.writeArtifact(CASE_ID, "recv-driver.json", JSON.stringify(recv.driver, null, 2))
-      if (recv.driver.error) throw new Error(`file recv driver failed: ${recv.driver.error}`)
-      if (recv.driver.asked.length !== 1 || recv.driver.asked[0].metadata.operationType !== "file recv") {
-        throw new Error(`expected 1 "file recv" approval ask, got ${JSON.stringify(recv.driver.asked)}`)
-      }
-      if (recv.driver.runs.length !== 1 || recv.driver.runs[0].exitCode !== 0) {
-        throw new Error(`expected a successful recv, got ${JSON.stringify(recv.driver.runs.map((run) => run.exitCode))}`)
-      }
-      const received = await Bun.file(path.join(workspace, recvName)).text()
-      if (received !== payload) {
-        throw new Error(`received file content mismatch:\n${received}`)
-      }
-
-      return {
-        details: {
-          sessionID: send.driver.sessionID,
-          sendAskCount: send.driver.asked.length,
-          recvAskCount: recv.driver.asked.length,
-          remotePath,
-          payloadBytes: payload.length,
-        },
-      }
-    } finally {
-      await runProcess([hdc, "shell", "rm", "-f", remotePath], 15_000).catch(() => undefined)
-      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
+}
+
+// Same session, two sends: the approval must cover exactly one
+// request each time (FR-APPROVAL-001).
+async function runSendLeg(ctx: CaseContext, env: DriverEnv, workspace: string, fileName: string, remotePath: string) {
+  const send = await runHdcGuardDriver({
+    env,
+    workspace,
+    reply: "once",
+    repeat: 2,
+    hdcArgs: ["file", "send", fileName, remotePath],
+  })
+  await ctx.writeArtifact(CASE_ID, "send-driver.json", JSON.stringify(send.driver, null, 2))
+  if (send.driver.error) throw new Error(`file send driver failed: ${send.driver.error}`)
+  if (send.driver.asked.length !== 2) {
+    throw new Error(`expected 2 approval asks for 2 sends (FR-APPROVAL-001), got ${send.driver.asked.length}`)
+  }
+  for (const ask of send.driver.asked) {
+    if (ask.metadata.operationType !== "file send") {
+      throw new Error(`expected operationType="file send", got ${String(ask.metadata.operationType)}`)
+    }
+  }
+  if (send.driver.runs.length !== 2 || send.driver.runs.some((run) => run.exitCode !== 0)) {
+    throw new Error(`expected 2 successful sends, got ${JSON.stringify(send.driver.runs.map((run) => run.exitCode))}`)
+  }
+  return send.driver
+}
+
+async function verifyDeviceContent(hdc: string, remotePath: string, payload: string): Promise<void> {
+  const cat = await runProcess([hdc, "shell", "cat", remotePath], 15_000)
+  // hdc shell strips the trailing newline over its transport; the
+  // byte-exact comparison happens on the file recv below.
+  if (cat.exitCode !== 0 || cat.stdout.trim() !== payload.trim()) {
+    throw new Error(
+      `device file content mismatch after guarded file send\nexitCode: ${cat.exitCode}\nstdout: ${cat.stdout}\nstderr: ${cat.stderr}`,
+    )
+  }
+}
+
+async function runRecvLeg(
+  ctx: CaseContext,
+  env: DriverEnv,
+  workspace: string,
+  remotePath: string,
+  recvName: string,
+  payload: string,
+) {
+  const recv = await runHdcGuardDriver({
+    env,
+    workspace,
+    reply: "once",
+    hdcArgs: ["file", "recv", remotePath, recvName],
+  })
+  await ctx.writeArtifact(CASE_ID, "recv-driver.json", JSON.stringify(recv.driver, null, 2))
+  if (recv.driver.error) throw new Error(`file recv driver failed: ${recv.driver.error}`)
+  if (recv.driver.asked.length !== 1 || recv.driver.asked[0].metadata.operationType !== "file recv") {
+    throw new Error(`expected 1 "file recv" approval ask, got ${JSON.stringify(recv.driver.asked)}`)
+  }
+  if (recv.driver.runs.length !== 1 || recv.driver.runs[0].exitCode !== 0) {
+    throw new Error(`expected a successful recv, got ${JSON.stringify(recv.driver.runs.map((run) => run.exitCode))}`)
+  }
+  const received = await Bun.file(path.join(workspace, recvName)).text()
+  if (received !== payload) {
+    throw new Error(`received file content mismatch:\n${received}`)
+  }
+  return recv.driver
 }
 
 export default testCase

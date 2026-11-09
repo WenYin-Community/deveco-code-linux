@@ -1,7 +1,5 @@
-import stripAnsi from "strip-ansi"
-import { buildEnv, findDevEcoHome, sdkPath } from "../../../src/tool/lib/env"
-import { realUserEnv } from "../env"
-import type { LiveTestCase, RunCommandResult } from "../types"
+import { runGuardedBash, withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_DENY_OPERATIONS"
 
@@ -52,70 +50,22 @@ const testCase: LiveTestCase = {
   cleanup:
     "用例不修改设备状态（操作均被拒绝）；XDG_CACHE_HOME 指向临时目录使 hdc shim 隔离，结束删除临时目录。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
-
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
-    try {
+    return withGuardWorkspace(ctx, "hdc-guard-deny-", async ({ env }) => {
       const results: Record<string, { exit: number; reasonCode: string }> = {}
       for (const probe of probes) {
-        const result = await ctx.runDeveco(
-          [
-            "debug",
-            "agent",
-            "build",
-            "--tool",
-            "bash",
-            "--params",
-            JSON.stringify({ command: probe.command, description: `Deny-path probe: ${probe.label}` }),
-          ],
-          { env, timeoutMs: 60_000 },
-        )
+        const result = await runGuardedBash(ctx, env, probe.command, `Deny-path probe: ${probe.label}`)
         await ctx.writeArtifact(CASE_ID, `${probe.label}.log`, result.stdout)
-        const output = requireBashOutput(result, probe.command)
-        if (output.exit !== 1) {
-          throw new Error(`\`${probe.command}\` should exit 1 through the hdc guard, got ${output.exit}:\n${output.output}`)
+        if (result.exit !== 1) {
+          throw new Error(`\`${probe.command}\` should exit 1 through the hdc guard, got ${result.exit}:\n${result.output}`)
         }
-        if (!output.output.includes(`reason_code=${probe.reasonCode}`)) {
-          throw new Error(
-            `\`${probe.command}\` should report reason_code=${probe.reasonCode}:\n${output.output}`,
-          )
+        if (!result.output.includes(`reason_code=${probe.reasonCode}`)) {
+          throw new Error(`\`${probe.command}\` should report reason_code=${probe.reasonCode}:\n${result.output}`)
         }
-        results[probe.label] = { exit: output.exit, reasonCode: probe.reasonCode }
+        results[probe.label] = { exit: result.exit, reasonCode: probe.reasonCode }
       }
       return { details: { probes: results } }
-    } finally {
-      const fs = await import("node:fs/promises")
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
-}
-
-function parseDebugToolResult(stdout: string) {
-  const clean = stripAnsi(stdout)
-  const start = clean.indexOf("{")
-  const end = clean.lastIndexOf("}")
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error(`debug tool stdout did not contain JSON: ${stdout}`)
-  }
-  return JSON.parse(clean.slice(start, end + 1)) as {
-    tool?: unknown
-    input?: unknown
-    result?: { metadata?: { exit?: unknown }; output?: unknown }
-  }
-}
-
-function requireBashOutput(result: RunCommandResult, command: string) {
-  const parsed = parseDebugToolResult(result.stdout)
-  if (parsed.tool !== "bash") throw new Error(`Expected debug tool result for bash, got ${String(parsed.tool)}`)
-  const input = parsed.input as { command?: unknown } | undefined
-  if (input?.command !== command) {
-    throw new Error(`Unexpected bash command: ${String(input?.command)}`)
-  }
-  const metadata = parsed.result?.metadata as { exit?: unknown } | undefined
-  const output = typeof parsed.result?.output === "string" ? parsed.result.output : ""
-  return { exit: typeof metadata?.exit === "number" ? metadata.exit : -1, output }
 }
 
 export default testCase

@@ -122,25 +122,29 @@ function bundleNameFromPackInfo(parsed: unknown, depth: number): string | undefi
 // The application bundleName inside the package, or undefined
 // when it cannot be reliably determined (fail closed).
 export function readHapBundleName(hapPath: string): string | undefined {
-  let buf: Buffer
+  const buf = readHapFile(hapPath)
+  if (!buf) return undefined
+  const entries = readCentralDirectory(buf)
+  if (!entries) return undefined
+  return bundleNameFromModuleEntry(buf, entries) ?? bundleNameFromPackEntry(buf, entries)
+}
+
+function readHapFile(hapPath: string): Buffer | undefined {
   try {
-    buf = fs.readFileSync(hapPath)
+    return fs.readFileSync(hapPath)
   } catch {
     return undefined
   }
-  const entries = readCentralDirectory(buf)
-  if (!entries) return undefined
+}
 
+function bundleNameFromModuleEntry(buf: Buffer, entries: ZipEntry[]): string | undefined {
   const moduleJson = findEntry(entries, "module.json")
-  if (moduleJson) {
-    const bundleName = bundleNameFromModuleJson(parseJson(readEntryData(buf, moduleJson)))
-    if (bundleName) return bundleName
-  }
+  if (!moduleJson) return undefined
+  return bundleNameFromModuleJson(parseJson(readEntryData(buf, moduleJson)))
+}
 
+function bundleNameFromPackEntry(buf: Buffer, entries: ZipEntry[]): string | undefined {
   const packInfo = findEntry(entries, "pack.info")
-  if (packInfo) {
-    const bundleName = bundleNameFromPackInfo(parseJson(readEntryData(buf, packInfo)), 0)
-    if (bundleName) return bundleName
-  }
-  return undefined
+  if (!packInfo) return undefined
+  return bundleNameFromPackInfo(parseJson(readEntryData(buf, packInfo)), 0)
 }

@@ -107,4 +107,29 @@ describe("permission ask timeout (hdc guard)", () => {
       expect(error).toBeInstanceOf(PermissionV1.RejectedError)
     }),
   )
+
+  // hdc guard product ceiling: `always` saves an approval that normally
+  // short-circuits the next ask, but a ceiling of "ask" must still get
+  // explicit consent for this request (ignoreSavedPermissions).
+  it.instance("ignoreSavedPermissions forces a fresh prompt despite a saved Always allow", () =>
+    Effect.gen(function* () {
+      const first = yield* ask({ timeoutMs: 30_000 }).pipe(Effect.forkScoped)
+      const [pending] = yield* waitForPending(1)
+      const permission = yield* Permission.Service
+      yield* permission.reply({ requestID: pending.id, reply: "always" })
+      yield* Fiber.await(first)
+
+      // The saved rule auto-allows a repeat ask: no pending request appears.
+      const repeat = yield* ask({ timeoutMs: 50 }).pipe(Effect.forkScoped)
+      yield* Fiber.await(repeat)
+      expect(yield* permission.list()).toHaveLength(0)
+
+      // Ignoring saved permissions asks again and waits for a reply.
+      const forced = yield* ask({ timeoutMs: 30_000, ignoreSavedPermissions: true }).pipe(Effect.forkScoped)
+      const [again] = yield* waitForPending(1)
+      yield* permission.reply({ requestID: again.id, reply: "once" })
+      yield* Fiber.await(forced)
+      expect(yield* permission.list()).toHaveLength(0)
+    }),
+  )
 })

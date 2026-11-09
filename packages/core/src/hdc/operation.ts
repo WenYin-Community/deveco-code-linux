@@ -170,21 +170,7 @@ export function categoryOf(op: HdcOperation): OperationCategory {
     case "discover":
       return "non_device_query"
     case "shell":
-      // shell with getprop/param get is device_readonly; others fall through
-      if (isShellReadonly(op.deviceArgv)) return "device_readonly"
-      if (isShellParamSet(op.deviceArgv)) return "param_change"
-      if (isShellFileChange(op.deviceArgv)) return "device_file_change"
-      if (isShellAppControl(op.deviceArgv)) {
-        // Mirror the appControl branch below: shell-wrapped aa start
-        // is install_start (widenable to allow); other app-control
-        // commands stay app_lifecycle. Normally the parser lifts
-        // aa start/stop/force-stop into appControl kind, so this is
-        // a defensive fallback for raw shell operations.
-        if (op.deviceArgv[0] === "aa" && op.deviceArgv[1] === "start") return "install_start"
-        return "app_lifecycle"
-      }
-      if (isShellSystemState(op.deviceArgv)) return "system_state"
-      return "unclassified"
+      return categoryOfShell(op.deviceArgv)
     case "hilog":
       // -r clears the device log buffer and -w writes log files onto the
       // device; either flag makes the command destructive and approval-
@@ -198,7 +184,7 @@ export function categoryOf(op: HdcOperation): OperationCategory {
       // (SR2 §2.3: install/aa start widen to allow, Always-allow
       // eligible — FR-APPROVAL-101). force-stop/stop stay
       // app_lifecycle (ceiling ask, one-shot approval only).
-      return op.action === "aa start" ? "install_start" : "app_lifecycle"
+      return categoryOfAppControl(op.action)
     case "fileSend":
     case "fileRecv":
       return "file_transfer"
@@ -207,7 +193,6 @@ export function categoryOf(op: HdcOperation): OperationCategory {
     case "bugreport":
       return "diagnostic"
     case "transportConnect":
-      return "connection_forward"
     case "portForward":
       return "connection_forward"
     case "modeOrDaemon":
@@ -217,7 +202,31 @@ export function categoryOf(op: HdcOperation): OperationCategory {
       return "firmware_mutation"
     case "unclassified":
       return "unclassified"
+    default:
+      return "unclassified"
   }
+}
+
+// Shell with getprop/param get is device_readonly; the ordering of the
+// checks mirrors the fixed processing order (§1) and must stay as is.
+function categoryOfShell(deviceArgv: readonly string[]): OperationCategory {
+  if (isShellReadonly(deviceArgv)) return "device_readonly"
+  if (isShellParamSet(deviceArgv)) return "param_change"
+  if (isShellFileChange(deviceArgv)) return "device_file_change"
+  if (isShellAppControl(deviceArgv)) return categoryOfShellAppControl(deviceArgv)
+  if (isShellSystemState(deviceArgv)) return "system_state"
+  return "unclassified"
+}
+
+// Normally the parser lifts aa start/stop/force-stop into appControl kind,
+// so this is a defensive fallback for raw shell operations.
+function categoryOfShellAppControl(deviceArgv: readonly string[]): OperationCategory {
+  if (deviceArgv[0] === "aa" && deviceArgv[1] === "start") return "install_start"
+  return "app_lifecycle"
+}
+
+function categoryOfAppControl(action: string): OperationCategory {
+  return action === "aa start" ? "install_start" : "app_lifecycle"
 }
 
 // ─── Shell subcommand detection helpers ────────────────────
@@ -233,7 +242,12 @@ function isShellReadonly(argv: readonly string[]): boolean {
   if (cmd === "ps") return true
   if (cmd === "ls") return true
   if (cmd === "cat") return true
+  // Legacy device diagnostic dumper: still present on device images and
+  // read-only, so it stays device_readonly like the other queries.
   if (cmd === "dumpsys") return true
+  // echo only prints to stdout. Shell redirection (`>` / `>>` / `|`) is
+  // rejected up front by the parser, so it cannot write a device file.
+  if (cmd === "echo") return true
   if (cmd === "hilog") return !hasDestructiveHilogFlag(argv.slice(1))
   return false
 }

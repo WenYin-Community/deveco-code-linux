@@ -105,126 +105,54 @@ function getRiskDescription(category: string): string {
 
 // ─── Approval facts per operation ──────────────────────────
 
+const CONTEXT_DEVICE = "from context"
+
 function getApprovalFacts(operation: HdcOperation): ApprovalFacts {
+  return factsForKnownOperation(operation) ?? facts("unclassified", "unknown", "unknown", "操作未命中产品已定义策略")
+}
+
+// Returns undefined for unclassified so the caller owns the fallback.
+function factsForKnownOperation(operation: HdcOperation): ApprovalFacts | undefined {
   switch (operation.kind) {
     case "versionOrHelp":
-      return {
-        operationType: "version/help",
-        targetAppOrPath: "N/A",
-        targetDevice: "N/A",
-        reason: "非设备查询",
-      }
+      return facts("version/help", "N/A", "N/A", "非设备查询")
     case "listTargets":
-      return {
-        operationType: "list targets",
-        targetAppOrPath: "N/A",
-        targetDevice: "N/A",
-        reason: "设备发现",
-      }
+      return facts("list targets", "N/A", "N/A", "设备发现")
     case "discover":
-      return {
-        operationType: "discover",
-        targetAppOrPath: "N/A",
-        targetDevice: "N/A",
-        reason: "设备发现",
-      }
+      return facts("discover", "N/A", "N/A", "设备发现")
     case "install":
-      return {
-        operationType: "install",
-        targetAppOrPath: operation.packagePath,
-        targetDevice: "from context",
-        reason: "安装应用包到设备",
-      }
+      return facts("install", operation.packagePath, CONTEXT_DEVICE, "安装应用包到设备")
     case "fileSend":
-      return {
-        operationType: "file send",
-        targetAppOrPath: `${operation.localPath} → ${operation.remotePath}`,
-        targetDevice: "from context",
-        reason: "发送文件到设备",
-      }
+      return facts("file send", `${operation.localPath} → ${operation.remotePath}`, CONTEXT_DEVICE, "发送文件到设备")
     case "fileRecv":
-      return {
-        operationType: "file recv",
-        targetAppOrPath: `${operation.remotePath} → ${operation.localPath}`,
-        targetDevice: "from context",
-        reason: "从设备接收文件",
-      }
+      return facts("file recv", `${operation.remotePath} → ${operation.localPath}`, CONTEXT_DEVICE, "从设备接收文件")
     case "uninstall":
-      return {
-        operationType: "uninstall",
-        targetAppOrPath: operation.bundleName,
-        targetDevice: "from context",
-        reason: "卸载设备应用",
-      }
+      return facts("uninstall", operation.bundleName, CONTEXT_DEVICE, "卸载设备应用")
     case "appControl":
-      return {
-        operationType: operation.action,
-        targetAppOrPath: operation.bundleName ?? "unknown",
-        targetDevice: "from context",
-        reason: "应用生命周期控制",
-      }
+      return facts(operation.action, operation.bundleName ?? "unknown", CONTEXT_DEVICE, "应用生命周期控制")
     case "shell":
-      return {
-        operationType: `shell ${operation.deviceArgv.join(" ")}`,
-        targetAppOrPath: "N/A",
-        targetDevice: "from context",
-        reason: "执行设备侧命令",
-      }
+      return facts(`shell ${operation.deviceArgv.join(" ")}`, "N/A", CONTEXT_DEVICE, "执行设备侧命令")
     case "hilog":
-      return {
-        operationType: "hilog",
-        targetAppOrPath: "N/A",
-        targetDevice: "from context",
-        reason: "设备日志输出",
-      }
+      return facts("hilog", "N/A", CONTEXT_DEVICE, "设备日志输出")
     case "bugreport":
-      return {
-        operationType: "bugreport",
-        targetAppOrPath: operation.localPath ?? "default",
-        targetDevice: "from context",
-        reason: "诊断报告输出",
-      }
+      return facts("bugreport", operation.localPath ?? "default", CONTEXT_DEVICE, "诊断报告输出")
     case "transportConnect":
-      return {
-        operationType: "tconn",
-        targetAppOrPath: operation.endpoint,
-        targetDevice: "N/A",
-        reason: "设备连接",
-      }
+      return facts("tconn", operation.endpoint, "N/A", "设备连接")
     case "portForward":
-      return {
-        operationType: `${operation.direction} port forward`,
-        targetAppOrPath: operation.args.join(" "),
-        targetDevice: "from context",
-        reason: "端口转发",
-      }
+      return facts(`${operation.direction} port forward`, operation.args.join(" "), CONTEXT_DEVICE, "端口转发")
     case "modeOrDaemon":
-      return {
-        operationType: operation.action,
-        targetAppOrPath: "N/A",
-        targetDevice: "from context",
-        reason: "系统模式/守护进程操作",
-      }
+      return facts(operation.action, "N/A", CONTEXT_DEVICE, "系统模式/守护进程操作")
     case "rebootOrBoot":
-      return {
-        operationType: "reboot/boot",
-        targetAppOrPath: "N/A",
-        targetDevice: "from context",
-        reason: "设备重启",
-      }
+      return facts("reboot/boot", "N/A", CONTEXT_DEVICE, "设备重启")
     case "firmwareMutation":
-      return {
-        operationType: operation.command,
-        targetAppOrPath: "N/A",
-        targetDevice: "from context",
-        reason: "固件变更（硬拒绝）",
-      }
+      return facts(operation.command, "N/A", CONTEXT_DEVICE, "固件变更（硬拒绝）")
     case "unclassified":
-      return {
-        operationType: "unclassified",
-        targetAppOrPath: "unknown",
-        targetDevice: "unknown",
-        reason: "操作未命中产品已定义策略",
-      }
+      return undefined
+    default:
+      return undefined
   }
+}
+
+function facts(operationType: string, targetAppOrPath: string, targetDevice: string, reason: string): ApprovalFacts {
+  return { operationType, targetAppOrPath, targetDevice, reason }
 }

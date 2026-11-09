@@ -1,10 +1,10 @@
-import fs from "node:fs/promises"
-import path from "node:path"
-import { buildEnv, findDevEcoHome, sdkPath } from "../../../src/tool/lib/env"
-import { realUserEnv, runHdcGuardExecDriver } from "../env"
-import type { LiveTestCase } from "../types"
+import { runHdcGuardExecDriver } from "../env"
+import { withGuardWorkspace } from "../fixtures/hdc-guard-case-support"
+import type { CaseContext, LiveTestCase } from "../types"
 
 const CASE_ID = "HDC_GUARD_SUBPROCESS"
+
+type DriverEnv = Record<string, string | undefined>
 
 // FR-GATE-001: direct calls AND one-level ordinary subprocess calls
 // (npm / Gradle / Hvigor) must enter the same HDC Guard policy flow
@@ -44,58 +44,56 @@ const testCase: LiveTestCase = {
   parallel: false,
   cleanup: "结束删除临时工作区与隔离 cache 目录；所有探针均不产生设备端变更。",
   async run(ctx) {
-    const home = await findDevEcoHome()
-    if (!home) throw new Error("DevEco Studio was not found")
+    return withGuardWorkspace(ctx, "hdc-guard-subproc-", async ({ env, workspace }) => {
+      const summaries: string[] = []
+      const npmAvailable: Record<string, boolean> = {}
 
-    const workspace = await ctx.createTempWorkspace("hdc-guard-subproc-")
-    const cacheDir = await ctx.createTempWorkspace("hdc-guard-cache-")
-    const env = { ...realUserEnv(), ...buildEnv(home, sdkPath(home)), XDG_CACHE_HOME: cacheDir }
-
-    const summaries: string[] = []
-    const legResults: Record<string, unknown> = {}
-    try {
       for (const wrapper of ["node", "npm"] as const) {
-        const probeArgs = PROBES.map((probe) => probe.args.join(" ")).join(` ${SEP} `)
-        const driver = await runHdcGuardExecDriver({
-          env,
-          workspace,
-          mode: "subprocess",
-          wrapper,
-          hdcArgs: probeArgs.split(" "),
-        })
-        await ctx.writeArtifact(CASE_ID, `${wrapper}-driver.json`, JSON.stringify(driver.driver, null, 2))
-        if (driver.driver.error) throw new Error(`${wrapper} driver failed: ${driver.driver.error}`)
-        if (driver.driver.runs.length !== PROBES.length) {
-          throw new Error(`${wrapper}: expected ${PROBES.length} runs, got ${driver.driver.runs.length}`)
-        }
-        driver.driver.runs.forEach((run, index) => {
-          const probe = PROBES[index]
-          const combined = `${run.stdout}\n${run.stderr}`
-          if (run.exitCode !== probe.exit) {
-            throw new Error(`${wrapper}/${probe.label}: expected exit ${probe.exit}, got ${run.exitCode}\n${combined}`)
-          }
-          if (!combined.includes(probe.expect)) {
-            throw new Error(`${wrapper}/${probe.label}: expected "${probe.expect}" in output:\n${combined}`)
-          }
-          summaries.push(`${wrapper}/${probe.label}: exit=${run.exitCode} ${probe.label.startsWith("allow") ? "allow" : probe.label.replace("deny-", "")}`)
-        })
-        legResults[wrapper] = { npmAvailable: driver.driver.npmAvailable }
+        const leg = await runWrapperLeg(ctx, env, workspace, wrapper)
+        summaries.push(...leg.summaries)
+        npmAvailable[wrapper] = leg.npmAvailable
       }
 
-      const npmAvailable = (legResults.npm as { npmAvailable?: boolean } | undefined)?.npmAvailable ?? true
       return {
         details: {
           probes: PROBES.map((item) => item.label),
           summaries,
-          npmAvailable,
+          npmAvailable: npmAvailable.npm ?? true,
           subprocessLegsVerified: 2,
         },
       }
-    } finally {
-      await fs.rm(workspace, { recursive: true, force: true }).catch(() => undefined)
-      await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   },
+}
+
+async function runWrapperLeg(ctx: CaseContext, env: DriverEnv, workspace: string, wrapper: "node" | "npm") {
+  const probeArgs = PROBES.map((probe) => probe.args.join(" ")).join(` ${SEP} `)
+  const driver = await runHdcGuardExecDriver({
+    env,
+    workspace,
+    mode: "subprocess",
+    wrapper,
+    hdcArgs: probeArgs.split(" "),
+  })
+  await ctx.writeArtifact(CASE_ID, `${wrapper}-driver.json`, JSON.stringify(driver.driver, null, 2))
+  if (driver.driver.error) throw new Error(`${wrapper} driver failed: ${driver.driver.error}`)
+  if (driver.driver.runs.length !== PROBES.length) {
+    throw new Error(`${wrapper}: expected ${PROBES.length} runs, got ${driver.driver.runs.length}`)
+  }
+
+  const summaries = driver.driver.runs.map((run, index) => {
+    const probe = PROBES[index]
+    const combined = `${run.stdout}\n${run.stderr}`
+    if (run.exitCode !== probe.exit) {
+      throw new Error(`${wrapper}/${probe.label}: expected exit ${probe.exit}, got ${run.exitCode}\n${combined}`)
+    }
+    if (!combined.includes(probe.expect)) {
+      throw new Error(`${wrapper}/${probe.label}: expected "${probe.expect}" in output:\n${combined}`)
+    }
+    return `${wrapper}/${probe.label}: exit=${run.exitCode} ${probe.label.startsWith("allow") ? "allow" : probe.label.replace("deny-", "")}`
+  })
+
+  return { summaries, npmAvailable: driver.driver.npmAvailable ?? true }
 }
 
 export default testCase

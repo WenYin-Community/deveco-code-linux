@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { HdcService, registerSession, unregisterSession } from "../../src/hdc/service"
+import { HdcService, redactAuditArgv, registerSession, unregisterSession } from "../../src/hdc/service"
 import { HdcProtocol } from "../../src/hdc/protocol"
 import { HdcDenial, HdcReason } from "../../src/hdc/reason"
 import { allow, deny, type HdcGuardDecision } from "@opencode-ai/core/hdc"
@@ -227,5 +227,25 @@ describe("hdc guard service", () => {
         await fs.rm(home, { recursive: true, force: true })
       }
     })
+  })
+})
+
+describe("audit redaction (NFR-PRIV-001/101)", () => {
+  test("replaces the device serial after -t", () => {
+    expect(redactAuditArgv(["-t", "127.0.0.1:5555", "shell", "ls", "/data/local/tmp"])).toEqual([
+      "-t",
+      "<target>",
+      "shell",
+      "ls",
+      "/data/local/tmp",
+    ])
+  })
+
+  test("replaces the device serial after -s", () => {
+    expect(redactAuditArgv(["-s", "FMR0223C13000649", "shell", "ls"])).toEqual(["-s", "<target>", "shell", "ls"])
+  })
+
+  test("leaves a command without -t untouched", () => {
+    expect(redactAuditArgv(["shell", "getprop", "ro.build.version"])).toEqual(["shell", "getprop", "ro.build.version"])
   })
 })

@@ -8,7 +8,7 @@
 // through the same entry the shell.env plugin hook uses
 // (ensureHdcGuardShellEnv), then runs `hdc <args...>` inside a guarded
 // shell child, <repeat> times against the same session. A concurrent
-// approver polls the same HTTP permission surface the TUI uses
+// approver polls the same HTTP permission endpoints the TUI uses
 // (GET /permission) and replies <once|reject> to every pending hdc ask
 // via the TUI's reply route (POST /permission/{id}/reply), capturing
 // the request metadata. Exercising the real HTTP ask/reply path is the
@@ -54,15 +54,7 @@ interface PendingAsk {
   metadata: Record<string, unknown>
 }
 
-async function main() {
-  if (!workspace || !resultFile || hdcArgs.length === 0) {
-    result.error = "usage: hdc-guard-ask-driver.ts <workspace> <once|reject> <result-file> <repeat> <hdc-args...>"
-    return
-  }
-
-  const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
-  const serverURL = `http://${listener.hostname}:${listener.port}`
-
+async function bootGuardedSession() {
   const { store, ctx } = await AppRuntime.runPromise(
     InstanceStore.Service.use((store) => store.load({ directory: workspace }).pipe(Effect.map((ctx) => ({ store, ctx })))),
   )
@@ -71,60 +63,96 @@ async function main() {
     Effect.gen(function* () {
       const sessionSvc = yield* Session.Service
       const session = yield* sessionSvc.create({ title: "HDC guard live E2E" })
-      const guardEnv = yield* Effect.promise(() =>
-        HdcShimEnv.ensureHdcGuardShellEnv(session.id, undefined, process.env.PATH, workspace),
+      const env = yield* Effect.promise(() =>
+        HdcShimEnv.ensureHdcGuardShellEnv({
+          sessionID: session.id,
+          callID: undefined,
+          currentPath: process.env.PATH,
+          directory: workspace,
+        }),
       )
-      if (!guardEnv) throw new Error("guard env could not be armed")
-      return { sessionID: session.id, guardEnv }
+      if (!env) throw new Error("guard env could not be armed")
+      return { sessionID: session.id, guardEnv: env }
     }).pipe(Effect.provideService(InstanceRef, ctx)),
   )
-  result.sessionID = sessionID
 
-  // Approver: poll and reply through the same HTTP routes the TUI
-  // uses, so the E2E exercises the real reply path.
-  let accepting = true
-  const approver = (async () => {
-    while (accepting) {
-      const response = await fetch(`${serverURL}/permission?directory=${encodeURIComponent(workspace)}`).catch(() => undefined)
-      if (response?.ok) {
-        const requests = ((await response.json().catch(() => [])) as PendingAsk[]).filter((request) =>
-          request.permission.startsWith("hdc"),
-        )
-        for (const request of requests) {
-          if (!result.asked.some((asked) => asked.id === request.id)) {
-            result.asked.push({ id: request.id, patterns: [...request.patterns], metadata: { ...request.metadata } })
-          }
-          await fetch(`${serverURL}/permission/${request.id}/reply?directory=${encodeURIComponent(workspace)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ reply: replyMode }),
-          }).catch(() => undefined)
-        }
-      }
+  return { store, ctx, sessionID, guardEnv }
+}
+
+// Approver: poll and reply through the same HTTP routes the TUI
+// uses, so the E2E exercises the real reply path.
+function startApprover(serverURL: string) {
+  const state = { accepting: true }
+  const done = (async () => {
+    while (state.accepting) {
+      await pollPendingAsks(serverURL)
       await Bun.sleep(100)
     }
   })()
+  return {
+    stop: () => {
+      state.accepting = false
+    },
+    done,
+  }
+}
 
-  try {
-    for (let i = 0; i < repeat; i++) {
-      const proc = Bun.spawn([process.env.ComSpec ?? "cmd.exe", "/c", "hdc", ...hdcArgs], {
-        cwd: workspace,
-        env: { ...process.env, ...guardEnv },
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      const [exitCode, stdout, stderr] = await Promise.all([
-        proc.exited,
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ])
-      result.runs.push({ exitCode, stdout, stderr })
+async function pollPendingAsks(serverURL: string): Promise<void> {
+  const response = await fetch(`${serverURL}/permission?directory=${encodeURIComponent(workspace)}`).catch(() => undefined)
+  if (!response?.ok) return
+  const requests = ((await response.json().catch(() => [])) as PendingAsk[]).filter((request) => request.permission.startsWith("hdc"))
+  for (const request of requests) {
+    if (!result.asked.some((asked) => asked.id === request.id)) {
+      result.asked.push({ id: request.id, patterns: [...request.patterns], metadata: { ...request.metadata } })
     }
+    await replyToAsk(serverURL, request.id)
+  }
+}
+
+async function replyToAsk(serverURL: string, requestID: string): Promise<void> {
+  await fetch(`${serverURL}/permission/${requestID}/reply?directory=${encodeURIComponent(workspace)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reply: replyMode }),
+  }).catch(() => undefined)
+}
+
+async function runGuardedShell(guardEnv: HdcShimEnv.HdcGuardShellEnv): Promise<void> {
+  for (let i = 0; i < repeat; i++) {
+    const proc = Bun.spawn([process.env.ComSpec ?? "cmd.exe", "/c", "hdc", ...hdcArgs], {
+      cwd: workspace,
+      env: { ...process.env, ...guardEnv },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exitCode, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    result.runs.push({ exitCode, stdout, stderr })
+  }
+}
+
+async function main() {
+  if (!workspace || !resultFile || hdcArgs.length === 0) {
+    result.error = "usage: hdc-guard-ask-driver.ts <workspace> <once|reject> <result-file> <repeat> <hdc-args...>"
+    return
+  }
+
+  const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  const serverURL = `http://${listener.hostname}:${listener.port}`
+  const { store, ctx, sessionID, guardEnv } = await bootGuardedSession()
+  result.sessionID = sessionID
+
+  const approver = startApprover(serverURL)
+  try {
+    await runGuardedShell(guardEnv)
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error)
   } finally {
-    accepting = false
-    await approver
+    approver.stop()
+    await approver.done
     await AppRuntime.runPromise(store.dispose(ctx)).catch(() => {})
     await listener.stop().catch(() => undefined)
     await Bun.write(resultFile, JSON.stringify(result, null, 2))

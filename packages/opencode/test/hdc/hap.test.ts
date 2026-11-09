@@ -25,55 +25,64 @@ function buildZip(entries: TestEntry[]): Buffer {
     const nameBuf = Buffer.from(entry.name, "utf8")
     const method = entry.deflate ? 8 : 0
     const payload = entry.deflate ? zlib.deflateRawSync(entry.data) : entry.data
-
-    const local = Buffer.alloc(30)
-    local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(20, 4)
-    local.writeUInt16LE(0, 6)
-    local.writeUInt16LE(method, 8)
-    local.writeUInt16LE(0, 10)
-    local.writeUInt16LE(0, 12)
-    local.writeUInt32LE(0, 14)
-    local.writeUInt32LE(payload.length, 18)
-    local.writeUInt32LE(entry.data.length, 22)
-    local.writeUInt16LE(nameBuf.length, 26)
-    local.writeUInt16LE(0, 28)
-    locals.push(local, nameBuf, payload)
-
-    const central = Buffer.alloc(46)
-    central.writeUInt32LE(0x02014b50, 0)
-    central.writeUInt16LE(20, 4)
-    central.writeUInt16LE(20, 6)
-    central.writeUInt16LE(0, 8)
-    central.writeUInt16LE(method, 10)
-    central.writeUInt16LE(0, 12)
-    central.writeUInt16LE(0, 14)
-    central.writeUInt32LE(0, 16)
-    central.writeUInt32LE(payload.length, 20)
-    central.writeUInt32LE(entry.data.length, 24)
-    central.writeUInt16LE(nameBuf.length, 28)
-    central.writeUInt16LE(0, 30)
-    central.writeUInt16LE(0, 32)
-    central.writeUInt16LE(0, 34)
-    central.writeUInt32LE(0, 36)
-    central.writeUInt32LE(0, 40)
-    central.writeUInt32LE(offset, 42)
-    centrals.push(central, nameBuf)
-
+    locals.push(buildLocalHeader(method, nameBuf, entry.data.length, payload), nameBuf, payload)
+    centrals.push(buildCentralHeader(method, nameBuf, entry.data.length, payload, offset), nameBuf)
     offset += 30 + nameBuf.length + payload.length
   }
 
   const centralBuf = Buffer.concat(centrals)
+  return Buffer.concat([...locals, centralBuf, buildEndOfCentralDirectory(entries.length, centralBuf.length, offset)])
+}
+
+function buildLocalHeader(method: number, nameBuf: Buffer, rawLength: number, payload: Buffer): Buffer {
+  const local = Buffer.alloc(30)
+  local.writeUInt32LE(0x04034b50, 0)
+  local.writeUInt16LE(20, 4)
+  local.writeUInt16LE(0, 6)
+  local.writeUInt16LE(method, 8)
+  local.writeUInt16LE(0, 10)
+  local.writeUInt16LE(0, 12)
+  local.writeUInt32LE(0, 14)
+  local.writeUInt32LE(payload.length, 18)
+  local.writeUInt32LE(rawLength, 22)
+  local.writeUInt16LE(nameBuf.length, 26)
+  local.writeUInt16LE(0, 28)
+  return local
+}
+
+function buildCentralHeader(method: number, nameBuf: Buffer, rawLength: number, payload: Buffer, offset: number): Buffer {
+  const central = Buffer.alloc(46)
+  central.writeUInt32LE(0x02014b50, 0)
+  central.writeUInt16LE(20, 4)
+  central.writeUInt16LE(20, 6)
+  central.writeUInt16LE(0, 8)
+  central.writeUInt16LE(method, 10)
+  central.writeUInt16LE(0, 12)
+  central.writeUInt16LE(0, 14)
+  central.writeUInt32LE(0, 16)
+  central.writeUInt32LE(payload.length, 20)
+  central.writeUInt32LE(rawLength, 24)
+  central.writeUInt16LE(nameBuf.length, 28)
+  central.writeUInt16LE(0, 30)
+  central.writeUInt16LE(0, 32)
+  central.writeUInt16LE(0, 34)
+  central.writeUInt32LE(0, 36)
+  central.writeUInt32LE(0, 40)
+  central.writeUInt32LE(offset, 42)
+  return central
+}
+
+function buildEndOfCentralDirectory(count: number, centralLength: number, offset: number): Buffer {
   const eocd = Buffer.alloc(22)
   eocd.writeUInt32LE(0x06054b50, 0)
   eocd.writeUInt16LE(0, 4)
   eocd.writeUInt16LE(0, 6)
-  eocd.writeUInt16LE(entries.length, 8)
-  eocd.writeUInt16LE(entries.length, 10)
-  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt16LE(count, 8)
+  eocd.writeUInt16LE(count, 10)
+  eocd.writeUInt32LE(centralLength, 12)
   eocd.writeUInt32LE(offset, 16)
   eocd.writeUInt16LE(0, 20)
-  return Buffer.concat([...locals, centralBuf, eocd])
+  return eocd
 }
 
 const MODULE_JSON = Buffer.from(JSON.stringify({ app: { bundleName: "com.example.app" }, module: { name: "entry" } }))

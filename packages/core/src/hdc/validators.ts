@@ -95,68 +95,48 @@ export function validateLocalOutput(localPath: string, ctx: ValidationContext): 
   const resolved = resolveLocalPath(localPath, ctx.cwd)
 
   if (!isWithinWorkspace(resolved, ctx.workspaceRoot)) {
-    return {
-      _tag: "invalid",
-      reasonCode: "local_path_denied",
-      detail: "output path is outside workspace root",
-    }
+    return deniedLocalOutput("output path is outside workspace root")
   }
 
-  // specs §2.5.3: "输出路径的父目录、覆盖策略、symlink/hard-link 和 file identity 必须校验"
-  // 1. Reject if the output path itself is a symlink (could be redirected outside workspace).
-  // 2. Parent directory must exist and be writable (creatable output condition).
+  const selfResult = validateOutputSelf(resolved)
+  if (selfResult._tag === "invalid") return selfResult
+  return validateOutputParent(resolved)
+}
+
+// specs §2.5.3: reject when the output path itself is a symlink (it could
+// be redirected outside the workspace). A missing path is allowed — it can
+// be created — but any other filesystem error fails closed.
+function validateOutputSelf(resolved: string): ValidationResult {
   try {
     const outStats = fs.lstatSync(resolved)
-    if (outStats.isSymbolicLink()) {
-      return {
-        _tag: "invalid",
-        reasonCode: "local_path_denied",
-        detail: "output path is a symbolic link",
-      }
-    }
+    if (outStats.isSymbolicLink()) return deniedLocalOutput("output path is a symbolic link")
+    return { _tag: "valid" }
   } catch (err) {
-    // 输出路径允许不存在 (可以创建); 但权限不足仍要拒绝
-    const cls = classifyFsError(err)
-    if (cls !== "not_found") {
-      const code = (err as NodeJS.ErrnoException | null | undefined)?.code ?? "UNKNOWN"
-      return {
-        _tag: "invalid",
-        reasonCode: "local_path_denied",
-        detail: `output path not accessible (errno: ${code})`,
-      }
-    }
-    // not_found: 正常, 继续检查父目录
+    if (classifyFsError(err) === "not_found") return { _tag: "valid" }
+    return deniedLocalOutput(`output path not accessible (errno: ${errnoCode(err)})`)
   }
+}
 
+// The parent directory must exist and be writable (creatable output condition).
+function validateOutputParent(resolved: string): ValidationResult {
   const parentDir = path.dirname(resolved)
   try {
     const parentStats = fs.statSync(parentDir)
-    if (!parentStats.isDirectory()) {
-      return {
-        _tag: "invalid",
-        reasonCode: "local_path_denied",
-        detail: "parent of output path is not a directory",
-      }
-    }
+    if (!parentStats.isDirectory()) return deniedLocalOutput("parent of output path is not a directory")
     fs.accessSync(parentDir, fs.constants.W_OK)
+    return { _tag: "valid" }
   } catch (err) {
-    const cls = classifyFsError(err)
-    if (cls === "not_found") {
-      return {
-        _tag: "invalid",
-        reasonCode: "local_path_denied",
-        detail: "parent directory of output path does not exist",
-      }
-    }
-    const code = (err as NodeJS.ErrnoException | null | undefined)?.code ?? "UNKNOWN"
-    return {
-      _tag: "invalid",
-      reasonCode: "local_path_denied",
-      detail: `parent directory of output path not writable (errno: ${code})`,
-    }
+    if (classifyFsError(err) === "not_found") return deniedLocalOutput("parent directory of output path does not exist")
+    return deniedLocalOutput(`parent directory of output path not writable (errno: ${errnoCode(err)})`)
   }
+}
 
-  return { _tag: "valid" }
+function deniedLocalOutput(detail: string): ValidationResult {
+  return { _tag: "invalid", reasonCode: "local_path_denied", detail }
+}
+
+function errnoCode(err: unknown): string {
+  return (err as NodeJS.ErrnoException | null | undefined)?.code ?? "UNKNOWN"
 }
 
 // ─── Device path validators ────────────────────────────────
@@ -391,100 +371,134 @@ export function validateOperation(
   }
   const targetResult = validateTargetDevice(operation, ctx)
   if (targetResult._tag === "invalid") return targetResult
+  return validateOperationPayload(operation, request, ctx)
+}
 
+function validateOperationPayload(
+  operation: HdcOperation,
+  request: { cwd: string },
+  ctx: ValidationContext,
+): ValidationResult {
   switch (operation.kind) {
-    case "install": {
-      const localResult = validateLocalInput(operation.packagePath, ctx)
-      if (localResult._tag === "invalid") return localResult
-      // Application identity of the package must match the current project
-      // (FR-OBJECT-002). Read the hap's bundleName directly; fail closed
-      // when it cannot be determined.
-      return validateBundle(readHapBundleName(resolveLocalPath(operation.packagePath, request.cwd)), ctx)
-    }
-    case "fileSend": {
-      const localResult = validateLocalInput(operation.localPath, ctx)
-      if (localResult._tag === "invalid") return localResult
-      return validateDevicePath(operation.remotePath)
-    }
-    case "fileRecv": {
-      const localResult = validateLocalOutput(operation.localPath, ctx)
-      if (localResult._tag === "invalid") return localResult
-      return validateDevicePath(operation.remotePath)
-    }
-    case "uninstall": {
+    case "install":
+      return validateInstallOperation(operation.packagePath, request.cwd, ctx)
+    case "fileSend":
+      return validateFileSendOperation(operation.localPath, operation.remotePath, ctx)
+    case "fileRecv":
+      return validateFileRecvOperation(operation.localPath, operation.remotePath, ctx)
+    case "uninstall":
       return validateBundle(operation.bundleName, ctx)
-    }
-    case "appControl": {
-      if (operation.action.startsWith("aa ")) {
-        return validateBundle(operation.bundleName, ctx)
-      }
-      return { _tag: "valid" }
-    }
-    case "transportConnect": {
+    case "appControl":
+      return validateAppControlOperation(operation.action, operation.bundleName, ctx)
+    case "transportConnect":
       return validateEndpoint(operation.endpoint)
-    }
-    case "portForward": {
-      // hdc fport/rport uses format: tcp:localPort:remotePort (e.g. tcp:8080:8080)
-      // Also supports bare numeric args for older formats.
-      const ports: number[] = []
-      for (const arg of operation.args) {
-        if (/^\d+$/.test(arg)) {
-          ports.push(parseInt(arg, 10))
-        } else {
-          // Extract all port numbers from tcp:localPort:remotePort format
-          const matches = arg.match(/:(\d+)/g)
-          if (matches) {
-            for (const m of matches) {
-              ports.push(parseInt(m.slice(1), 10))
-            }
-          }
-        }
-      }
-      for (const port of ports) {
-        const portResult = validatePort(port)
-        if (portResult._tag === "invalid") return portResult
-      }
-      return { _tag: "valid" }
-    }
-    case "shell": {
-      const deviceArgv = operation.deviceArgv
-      if (deviceArgv.length === 0) return { _tag: "valid" }
-
-      if (deviceArgv[0] === "rm" || deviceArgv[0] === "mkdir" || deviceArgv[0] === "rmdir") {
-        // Every non-flag argument is a device path
-        for (const arg of deviceArgv.slice(1)) {
-          if (arg.startsWith("-")) continue
-          const pathResult = validateDevicePath(arg)
-          if (pathResult._tag === "invalid") return pathResult
-        }
-      }
-
-      if (deviceArgv[0] === "chmod" || deviceArgv[0] === "chown") {
-        // First non-flag argument is the mode/owner spec, the rest are device paths.
-        // Treating the mode ("644") as a path used to misfire device_path_denied (L2).
-        const operands = deviceArgv.slice(1).filter((a) => !a.startsWith("-"))
-        for (const arg of operands.slice(1)) {
-          const pathResult = validateDevicePath(arg)
-          if (pathResult._tag === "invalid") return pathResult
-        }
-      }
-
-      // param set <name> <value>: validate the param name against allowlist
-      if (deviceArgv[0] === "param" && deviceArgv[1] === "set" && deviceArgv[2]) {
-        return validateParamName(deviceArgv[2])
-      }
-
-      return { _tag: "valid" }
-    }
-    case "bugreport": {
-      if (operation.localPath) {
-        return validateLocalOutput(operation.localPath, ctx)
-      }
-      return { _tag: "valid" }
-    }
+    case "portForward":
+      return validatePortForwardOperation(operation.args)
+    case "shell":
+      return validateShellOperation(operation.deviceArgv)
+    case "bugreport":
+      return validateBugreportOperation(operation.localPath, ctx)
     default:
       return { _tag: "valid" }
   }
+}
+
+// Application identity of the package must match the current project
+// (FR-OBJECT-002). Read the hap's bundleName directly; fail closed when it
+// cannot be determined.
+function validateInstallOperation(packagePath: string, cwd: string, ctx: ValidationContext): ValidationResult {
+  const localResult = validateLocalInput(packagePath, ctx)
+  if (localResult._tag === "invalid") return localResult
+  return validateBundle(readHapBundleName(resolveLocalPath(packagePath, cwd)), ctx)
+}
+
+function validateFileSendOperation(localPath: string, remotePath: string, ctx: ValidationContext): ValidationResult {
+  const localResult = validateLocalInput(localPath, ctx)
+  if (localResult._tag === "invalid") return localResult
+  return validateDevicePath(remotePath)
+}
+
+function validateFileRecvOperation(localPath: string, remotePath: string, ctx: ValidationContext): ValidationResult {
+  const localResult = validateLocalOutput(localPath, ctx)
+  if (localResult._tag === "invalid") return localResult
+  return validateDevicePath(remotePath)
+}
+
+function validateAppControlOperation(
+  action: string,
+  bundleName: string | undefined,
+  ctx: ValidationContext,
+): ValidationResult {
+  if (!action.startsWith("aa ")) return { _tag: "valid" }
+  return validateBundle(bundleName, ctx)
+}
+
+// hdc fport/rport uses format: tcp:localPort:remotePort (e.g. tcp:8080:8080)
+// Also supports bare numeric args for older formats.
+function validatePortForwardOperation(args: readonly string[]): ValidationResult {
+  const ports: number[] = []
+  for (const arg of args) collectPortNumbers(arg, ports)
+  return validatePorts(ports)
+}
+
+function collectPortNumbers(arg: string, ports: number[]): void {
+  if (/^\d+$/.test(arg)) {
+    ports.push(parseInt(arg, 10))
+    return
+  }
+  const matches = arg.match(/:(\d+)/g)
+  if (!matches) return
+  for (const match of matches) ports.push(parseInt(match.slice(1), 10))
+}
+
+function validatePorts(ports: readonly number[]): ValidationResult {
+  for (const port of ports) {
+    const portResult = validatePort(port)
+    if (portResult._tag === "invalid") return portResult
+  }
+  return { _tag: "valid" }
+}
+
+function validateShellOperation(deviceArgv: readonly string[]): ValidationResult {
+  if (deviceArgv.length === 0) return { _tag: "valid" }
+  const pathResult = validateShellPathArgs(deviceArgv)
+  if (pathResult._tag === "invalid") return pathResult
+  const ownerResult = validateShellOwnerArgs(deviceArgv)
+  if (ownerResult._tag === "invalid") return ownerResult
+  // param set <name> <value>: validate the param name against allowlist
+  if (deviceArgv[0] === "param" && deviceArgv[1] === "set" && deviceArgv[2]) {
+    return validateParamName(deviceArgv[2])
+  }
+  return { _tag: "valid" }
+}
+
+// Every non-flag argument of rm/mkdir/rmdir is a device path.
+function validateShellPathArgs(deviceArgv: readonly string[]): ValidationResult {
+  if (deviceArgv[0] !== "rm" && deviceArgv[0] !== "mkdir" && deviceArgv[0] !== "rmdir") return { _tag: "valid" }
+  for (const arg of deviceArgv.slice(1)) {
+    if (arg.startsWith("-")) continue
+    const pathResult = validateDevicePath(arg)
+    if (pathResult._tag === "invalid") return pathResult
+  }
+  return { _tag: "valid" }
+}
+
+// chmod/chown's first non-flag argument is the mode/owner spec, the rest
+// are device paths. Treating the mode ("644") as a path used to misfire
+// device_path_denied (L2).
+function validateShellOwnerArgs(deviceArgv: readonly string[]): ValidationResult {
+  if (deviceArgv[0] !== "chmod" && deviceArgv[0] !== "chown") return { _tag: "valid" }
+  const operands = deviceArgv.slice(1).filter((value) => !value.startsWith("-"))
+  for (const arg of operands.slice(1)) {
+    const pathResult = validateDevicePath(arg)
+    if (pathResult._tag === "invalid") return pathResult
+  }
+  return { _tag: "valid" }
+}
+
+function validateBugreportOperation(localPath: string | undefined, ctx: ValidationContext): ValidationResult {
+  if (!localPath) return { _tag: "valid" }
+  return validateLocalOutput(localPath, ctx)
 }
 
 // ─── Helpers ───────────────────────────────────────────────

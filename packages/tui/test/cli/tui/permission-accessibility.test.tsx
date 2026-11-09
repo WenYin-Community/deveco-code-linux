@@ -31,11 +31,8 @@ interface Reply {
   requestID: string
 }
 
-async function mount(request: PermissionRequest, language = "en") {
-  const tmp = await tmpdir()
-  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language }))
-  const replies: Reply[] = []
-  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+function createReplyFetcher(replies: Reply[]): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init)
     const pathname = new URL(request.url).pathname
     if (request.method === "POST" && pathname.startsWith("/permission/") && pathname.endsWith("/reply")) {
@@ -45,64 +42,78 @@ async function mount(request: PermissionRequest, language = "en") {
     }
     return Response.json({})
   }) as typeof fetch
+}
+
+function Harness(props: { request: PermissionRequest; directory: string; fetcher: typeof fetch }) {
+  const renderer = useRenderer()
+  const keymap = createDefaultOpenTuiKeymap(renderer)
+  const config = createTuiResolvedConfig()
+  onCleanup(registerOpencodeKeymap(keymap, renderer, config))
   const sync = {
     data: { session: [], part: {} },
   } as unknown as ReturnType<typeof useSync>
+  const paths = { home: props.directory, state: props.directory, worktree: props.directory }
+  return (
+    <TestTuiContexts directory={props.directory} paths={paths}>
+      <OpencodeKeymapProvider keymap={keymap}>
+        <TuiConfigProvider config={config}>
+          <KVProvider>
+            <I18nProvider>
+              <ThemeProvider mode="dark">
+                <SDKProvider url="http://127.0.0.1:9" fetch={props.fetcher} events={{ subscribe: async () => () => {} }}>
+                  <ProjectProvider>
+                    <SyncContext.Provider value={sync}>
+                      <PathFormatterProvider path="/workspace">
+                        <PermissionPrompt request={props.request} directory="/workspace" />
+                      </PathFormatterProvider>
+                    </SyncContext.Provider>
+                  </ProjectProvider>
+                </SDKProvider>
+              </ThemeProvider>
+            </I18nProvider>
+          </KVProvider>
+        </TuiConfigProvider>
+      </OpencodeKeymapProvider>
+    </TestTuiContexts>
+  )
+}
 
-  function Harness() {
-    const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
-    const config = createTuiResolvedConfig()
-    onCleanup(registerOpencodeKeymap(keymap, renderer, config))
-    return (
-      <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
-        <OpencodeKeymapProvider keymap={keymap}>
-          <TuiConfigProvider config={config}>
-            <KVProvider>
-              <I18nProvider>
-                <ThemeProvider mode="dark">
-                  <SDKProvider url="http://127.0.0.1:9" fetch={fetcher} events={{ subscribe: async () => () => {} }}>
-                    <ProjectProvider>
-                      <SyncContext.Provider value={sync}>
-                        <PathFormatterProvider path="/workspace">
-                          <PermissionPrompt request={request} directory="/workspace" />
-                        </PathFormatterProvider>
-                      </SyncContext.Provider>
-                    </ProjectProvider>
-                  </SDKProvider>
-                </ThemeProvider>
-              </I18nProvider>
-            </KVProvider>
-          </TuiConfigProvider>
-        </OpencodeKeymapProvider>
-      </TestTuiContexts>
-    )
-  }
-
-  const setup = await testRender(() => <Harness />, { width: 100, height: 36, kittyKeyboard: true })
+async function mount(request: PermissionRequest, language = "en") {
+  const tmp = await tmpdir()
+  await Bun.write(`${tmp.path}/kv.json`, JSON.stringify({ language }))
+  const replies: Reply[] = []
+  const setup = await testRender(() => <Harness request={request} directory={tmp.path} fetcher={createReplyFetcher(replies)} />, {
+    width: 100,
+    height: 36,
+    kittyKeyboard: true,
+  })
   return {
     setup,
     replies,
-    async frame(text: string, timeout = 2000) {
-      for (let i = 0; i < timeout / 10; i++) {
-        await Bun.sleep(10)
-        await setup.renderOnce()
-        const frame = setup.captureCharFrame()
-        if (frame.includes(text)) return frame
-      }
-      throw new Error(setup.captureCharFrame())
-    },
-    async waitForReplies(count: number, timeout = 2000) {
-      const start = Date.now()
-      while (replies.length < count) {
-        if (Date.now() - start > timeout) throw new Error(`expected ${count} replies, got ${replies.length}`)
-        await Bun.sleep(10)
-      }
-    },
+    frame: (text: string, timeout = 2000) => waitForFrame(setup, text, timeout),
+    waitForReplies: (count: number, timeout = 2000) => waitForReplyCount(replies, count, timeout),
     async close() {
       setup.renderer.destroy()
       await tmp[Symbol.asyncDispose]()
     },
+  }
+}
+
+async function waitForFrame(setup: Awaited<ReturnType<typeof testRender>>, text: string, timeout: number): Promise<string> {
+  for (let i = 0; i < timeout / 10; i++) {
+    await Bun.sleep(10)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    if (frame.includes(text)) return frame
+  }
+  throw new Error(setup.captureCharFrame())
+}
+
+async function waitForReplyCount(replies: Reply[], count: number, timeout: number): Promise<void> {
+  const start = Date.now()
+  while (replies.length < count) {
+    if (Date.now() - start > timeout) throw new Error(`expected ${count} replies, got ${replies.length}`)
+    await Bun.sleep(10)
   }
 }
 
