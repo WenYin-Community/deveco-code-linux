@@ -242,10 +242,10 @@ You have access to persistent project memories that contain important context ab
 // Auto Dream Configuration
 export interface AutoDreamConfig {
   enabled: boolean
-  minHours: number          // Minimum hours between consolidations (default 24)
-  minSessions: number       // Minimum sessions before consolidation (default 5)
-  lockStaleMs: number       // Lock expiry time in ms (default 1 hour = 3600000)
-  extractionTimeoutMs: number  // Timeout for LLM consolidation (default 60000)
+  minHours: number // Minimum hours between consolidations (default 24)
+  minSessions: number // Minimum sessions before consolidation (default 2)
+  lockStaleMs: number // Lock expiry time in ms (default 30 minutes = 1800000)
+  extractionTimeoutMs: number // Timeout for LLM consolidation (default 15 minutes = 900000)
 }
 
 export const DEFAULT_AUTO_DREAM_CONFIG: AutoDreamConfig = {

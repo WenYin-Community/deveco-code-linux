@@ -1034,21 +1034,15 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         };
                     }
                     try {
-                        const name = args.name;
-                        const description = args.description;
-                        const type = args.type as MemoryType;
-                        const content = args.content;
-                        const pin = args.pin;
-                        const ttl = args.ttl;
-                        const existing = await state.storage.read(name);
+                        const existing = await state.storage.read(args.name);
                         const memory = await state.storage.write({
-                            name,
-                            description,
-                            type,
-                            content,
+                            name: args.name,
+                            description: args.description,
+                            type: args.type as MemoryType,
+                            content: args.content,
                             created: existing?.created,
-                            pin,
-                            ttl,
+                            pin: args.pin,
+                            ttl: args.ttl,
                         });
                         const action = existing ? 'updated' : 'created';
                         const sid = ctx.sessionID || 'default';
