@@ -164,3 +164,7 @@ assistant: Clients are marked as failed in the `connectToServer` function in src
 - Read lines containing `ERROR`; ignore `WARN` unless relevant. Categories: type errors (add explicit types, drop unsafe casts), import errors (check `oh-package.json5`), missing resources, undeclared permissions in `module.json5`, and API level mismatch (`compileSdkVersion` in `build-profile.json5`).
 - Fix the Errors, then re-run `devecocli build` incrementally.
 - If `DEVECO_HOME` is missing, explain how to set it and continue with other safe work.
+
+# devecocli/deveco=cli
+- Check version by `devecocli --version`
+- Check the help command by `devecocli -h`
