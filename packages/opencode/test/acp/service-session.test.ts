@@ -291,6 +291,10 @@ describe("ACP service sessions", () => {
     expect(categories(result)).toContain("model")
     expect(categories(result)).toContain("thought_level")
     expect(categories(result)).toContain("mode")
+    // The JVM client throws on `current_mode_update` unless the created session
+    // advertised `modes`, which would silently freeze the IDE's mode selector.
+    expect(result.modes?.currentModeId).toBe("build")
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual(["build", "plan"])
     expect(updates).toHaveLength(1)
     expect(JSON.stringify(updates[0])).toContain("available_commands_update")
     expect(JSON.stringify(updates[0])).toContain("review-skill")
@@ -316,6 +320,7 @@ describe("ACP service sessions", () => {
 
     expect(result.configOptions?.find((option) => option.id === "effort")?.currentValue).toBe("high")
     expect(result.configOptions?.find((option) => option.id === "mode")?.currentValue).toBe("plan")
+    expect(result.modes?.currentModeId).toBe("plan")
   })
 
   it("replays loaded session transcript chunks", async () => {
@@ -505,6 +510,28 @@ describe("ACP service sessions", () => {
 
     expect(result.configOptions?.find((option) => option.id === "effort")?.currentValue).toBe("high")
     expect(result.configOptions?.find((option) => option.id === "mode")?.currentValue).toBe("plan")
+  })
+
+  it("falls back to the default mode when the restored agent is not advertised", async () => {
+    const { service } = makeService([
+      {
+        info: {
+          role: "user",
+          model: { providerID: "test", modelID: "test-model", variant: "default" },
+          // Sticky debug sessions route through a hidden agent, so `debug` never
+          // appears in availableModes even though it is the restored agent.
+          agent: "debug",
+        },
+        parts: [],
+      },
+    ])
+    const result = await Effect.runPromise(
+      service.loadSession({ cwd: "/workspace", sessionId: "ses_loaded", mcpServers: [] }),
+    )
+
+    expect(result.configOptions?.find((option) => option.id === "mode")?.currentValue).toBe("build")
+    expect(result.modes?.currentModeId).toBe("build")
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual(["build", "plan"])
   })
 
   it("maps provider auth failures to auth-required request errors", async () => {

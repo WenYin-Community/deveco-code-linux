@@ -408,6 +408,7 @@ export class Subscription {
     }
     if (part.type === "tool") {
       await this.handleToolPart(session.id, part, session.cwd)
+      await this.syncMode(session, part)
     }
   }
 
@@ -446,6 +447,23 @@ export class Subscription {
         status: "in_progress",
         content: [{ type: "content", content: { type: "text", text: lines.join("\n") } }],
       },
+    })
+  }
+
+  // plan_exit/plan_enter hand the session to another agent by writing a synthetic
+  // user message (tool/plan.ts); the runner picks the agent up from that message
+  // but no ACP notification follows, so the client keeps prompting with its stale
+  // mode (service.ts pins `agent: modeId`). Mirror the switch into the session
+  // state and push current_mode_update. Live events only — replay derives the
+  // mode from the messages themselves (restoreFromMessages).
+  private async syncMode(session: ACPSession.Info, part: ToolPart) {
+    if (part.state.status !== "completed") return
+    const mode = part.tool === "plan_exit" ? "build" : part.tool === "plan_enter" ? "plan" : undefined
+    if (!mode || session.modeId === mode) return
+    const state = await Effect.runPromise(this.input.session.setMode(session.id, mode))
+    await this.input.connection.sessionUpdate({
+      sessionId: state.id,
+      update: { sessionUpdate: "current_mode_update", currentModeId: mode },
     })
   }
 

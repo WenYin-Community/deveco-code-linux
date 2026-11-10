@@ -223,6 +223,7 @@ export function make(input: {
     yield* registerMcpServers(input.sdk, registeredMcp, params.cwd, state.id, params.mcpServers)
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
 
+    const modes = modeState(snapshot, state.modeId)
     const response = {
       sessionId: state.id,
       configOptions: configOptions(snapshot, {
@@ -230,6 +231,7 @@ export function make(input: {
         variant: state.variant,
         modeId: state.modeId,
       }),
+      ...(modes ? { modes } : {}),
     }
     ACPProfile.duration("acp.newSession", started)
     return response
@@ -261,12 +263,14 @@ export function make(input: {
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
 
+    const modes = modeState(snapshot, state.modeId)
     return {
       configOptions: configOptions(snapshot, {
         model: state.model ?? model,
         variant: state.variant,
         modeId: state.modeId,
       }),
+      ...(modes ? { modes } : {}),
     }
   })
 
@@ -346,12 +350,14 @@ export function make(input: {
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
 
+    const modes = modeState(snapshot, state.modeId)
     return {
       configOptions: configOptions(snapshot, {
         model: state.model ?? model,
         variant: state.variant,
         modeId: state.modeId,
       }),
+      ...(modes ? { modes } : {}),
     }
   })
 
@@ -415,6 +421,7 @@ export function make(input: {
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
 
+    const modes = modeState(snapshot, state.modeId)
     return {
       sessionId: state.id,
       configOptions: configOptions(snapshot, {
@@ -422,6 +429,7 @@ export function make(input: {
         variant: state.variant,
         modeId: state.modeId,
       }),
+      ...(modes ? { modes } : {}),
     }
   })
 
@@ -933,8 +941,34 @@ function configOptions(snapshot: Directory.Snapshot, session: ConfigState) {
     currentModel: session.model,
     currentVariant: session.variant,
     modes: snapshot.availableModes,
-    currentModeId: session.modeId,
+    currentModeId: knownModeId(snapshot, session.modeId),
   })
+}
+
+// A restored session can carry a mode the directory no longer advertises: load,
+// resume and fork take it from the last user message's agent, which is `debug`
+// while a sticky debug state is active (hidden, so filtered out of availableModes)
+// or a custom agent that has since been deleted from config. Fall back to the
+// default instead of handing the client an id its mode selector cannot render.
+function knownModeId(snapshot: Directory.Snapshot, modeId: string | undefined) {
+  if (snapshot.availableModes.length === 0) return undefined
+  if (modeId && snapshot.availableModes.some((mode) => mode.id === modeId)) return modeId
+  return snapshot.defaultModeID
+}
+
+// Session responses carry the mode both ways: as a config option (what the IDE
+// plugin's dropdown reads) and as the protocol's `modes` state. The latter is not
+// optional in practice — the ACP JVM client derives its `currentMode` flow from
+// `response.modes` and throws "Modes are not provided by the agent" without it,
+// which drops every `current_mode_update` before it reaches the client's notify
+// path and leaves the mode selector stuck on its old value.
+function modeState(snapshot: Directory.Snapshot, modeId: string | undefined) {
+  const currentModeId = knownModeId(snapshot, modeId)
+  if (!currentModeId) return undefined
+  return {
+    availableModes: snapshot.availableModes.map((mode) => ({ ...mode })),
+    currentModeId,
+  }
 }
 
 function parseSelectedModel(snapshot: Directory.Snapshot, modelId: string) {

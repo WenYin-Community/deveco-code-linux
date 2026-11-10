@@ -334,14 +334,14 @@ function completedTool(
   } satisfies ToolPart
 }
 
-function errorTool(sessionID: string, callID: string) {
+function errorTool(sessionID: string, callID: string, tool = "bash") {
   return {
     id: `part_${callID}`,
     sessionID,
     messageID: `msg_${callID}`,
     type: "tool",
     callID,
-    tool: "bash",
+    tool,
     state: {
       status: "error",
       input: { cmd: "exit 1" },
@@ -1040,5 +1040,58 @@ describe("acp event routing", () => {
         { type: "content", content: { type: "image", mimeType: "image/png", data: image } },
       ],
     ])
+  })
+
+  it("mirrors a completed plan_exit into current_mode_update so the client leaves plan mode", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_plan", cwd: "/workspace", modeId: "plan" }))
+
+    await harness.subscription.handle(
+      toolUpdated(completedTool("ses_plan", "call_exit", "switched", [], { tool: "plan_exit" })),
+    )
+
+    expect(await Effect.runPromise(harness.session.getMode("ses_plan"))).toBe("build")
+    expect(harness.updates.at(-1)?.update).toEqual({
+      sessionUpdate: "current_mode_update",
+      currentModeId: "build",
+    })
+
+    await harness.subscription.handle(
+      toolUpdated(completedTool("ses_plan", "call_exit", "switched", [], { tool: "plan_exit" })),
+    )
+
+    expect(harness.updates.filter((item) => item.update.sessionUpdate === "current_mode_update")).toHaveLength(1)
+  })
+
+  it("mirrors plan_enter back to plan mode on live events only", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_build", cwd: "/workspace", modeId: "build" }))
+
+    await harness.subscription.replayMessage(
+      assistantToolMessage(completedTool("ses_build", "call_replayed", "switched", [], { tool: "plan_enter" })),
+    )
+
+    expect(await Effect.runPromise(harness.session.getMode("ses_build"))).toBe("build")
+    expect(harness.updates.some((item) => item.update.sessionUpdate === "current_mode_update")).toBe(false)
+
+    await harness.subscription.handle(
+      toolUpdated(completedTool("ses_build", "call_live", "switched", [], { tool: "plan_enter" })),
+    )
+
+    expect(await Effect.runPromise(harness.session.getMode("ses_build"))).toBe("plan")
+    expect(harness.updates.at(-1)?.update).toEqual({
+      sessionUpdate: "current_mode_update",
+      currentModeId: "plan",
+    })
+  })
+
+  it("leaves the mode alone when the switch tool fails", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_denied", cwd: "/workspace", modeId: "plan" }))
+
+    await harness.subscription.handle(toolUpdated(errorTool("ses_denied", "call_exit", "plan_exit")))
+
+    expect(await Effect.runPromise(harness.session.getMode("ses_denied"))).toBe("plan")
+    expect(harness.updates.some((item) => item.update.sessionUpdate === "current_mode_update")).toBe(false)
   })
 })

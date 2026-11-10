@@ -266,7 +266,13 @@ export const layer = Layer.effect(
             tool.patch,
             tool.spec_write,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ...(flags.client === "cli" ? [tool.plan, tool.planwrite, tool.planenter] : []),
+            // plan_enter/plan_exit ask a Question and then hand the session to
+            // another agent, so they stay limited to clients that can answer one
+            // and follow the switch. Per-agent availability is the permission
+            // layer's job: plan_enter/plan_exit are deny by default and only the
+            // plan agent allows plan_exit, while plan_write is denied for build,
+            // explore and dfx and otherwise rides the "*" allow default.
+            ...(["cli", "acp"].includes(flags.client) ? [tool.plan, tool.planwrite, tool.planenter] : []),
             // HarmonyOS tools
             tool.switchcwd,
             tool.verify_ui,

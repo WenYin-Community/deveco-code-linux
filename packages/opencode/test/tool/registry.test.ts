@@ -52,16 +52,20 @@ const brokenPluginLayer = Layer.succeed(
 )
 
 const root = LayerNode.group([ToolRegistry.node, Agent.node])
-const replacements = (experimentalBackgroundSubagents: boolean) => [
+const replacements = (flags: Partial<RuntimeFlags.Info> = {}) => [
   LayerNode.replace(Config.node, configLayer),
-  LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents })),
+  LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: false, ...flags })),
 ]
 
-const it = testEffect(LayerNode.buildLayer(root, { replacements: replacements(false) }))
-const background = testEffect(LayerNode.buildLayer(root, { replacements: replacements(true) }))
+const it = testEffect(LayerNode.buildLayer(root, { replacements: replacements() }))
+const background = testEffect(
+  LayerNode.buildLayer(root, { replacements: replacements({ experimentalBackgroundSubagents: true }) }),
+)
+const acpClient = testEffect(LayerNode.buildLayer(root, { replacements: replacements({ client: "acp" }) }))
+const headlessClient = testEffect(LayerNode.buildLayer(root, { replacements: replacements({ client: "sdk" }) }))
 const withBrokenPlugin = testEffect(
   LayerNode.buildLayer(root, {
-    replacements: [...replacements(false), LayerNode.replace(Plugin.node, brokenPluginLayer)],
+    replacements: [...replacements(), LayerNode.replace(Plugin.node, brokenPluginLayer)],
   }),
 )
 
@@ -93,6 +97,30 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+    }),
+  )
+
+  // The IDE plugin talks to `deveco acp`, which sets DEVECO_CLIENT=acp. Without
+  // the plan tools the plan agent has no way to hand the session to build.
+  acpClient.instance("exposes the plan tools to acp clients", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("plan_enter")
+      expect(ids).toContain("plan_write")
+      expect(ids).toContain("plan_exit")
+    }),
+  )
+
+  headlessClient.instance("keeps the plan tools away from non-interactive clients", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).not.toContain("plan_enter")
+      expect(ids).not.toContain("plan_write")
+      expect(ids).not.toContain("plan_exit")
     }),
   )
 
