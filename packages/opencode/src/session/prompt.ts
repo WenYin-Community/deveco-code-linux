@@ -1583,7 +1583,21 @@ export const layer = Layer.effect(
 
       const isDebugCommand = input.command === Command.Default.DEBUG && cmd.subtask !== true
       const debug = isDebugCommand ? yield* agentMode.handleDebugCommand(input) : undefined
-      if (debug?.type === "echo") return debug.result
+      if (debug?.type === "echo") {
+        // The echo branch returns before the trigger below, so /debug clear|status would never
+        // reach plugins (and analytics would miss it). This flow ran no plugins before, so a
+        // failing hook must never turn into a failed debug command: ignore the whole cause
+        // (defects included, since a rejected hook becomes an Effect defect) and drop the
+        // unused parts output. The normal-path trigger below stays untouched.
+        yield* plugin
+          .trigger(
+            "command.execute.before",
+            { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
+            { parts: [] },
+          )
+          .pipe(Effect.ignoreCause)
+        return debug.result
+      }
 
       const requestedAgent = (yield* agentMode.resolveCommandAgent(input)) ?? input.agent
       const agentName = cmd.agent ?? requestedAgent

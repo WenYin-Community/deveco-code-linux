@@ -12,13 +12,14 @@ import type {
   AnalyticsTransportFields,
   BuildProjectAnalyticsEvent,
   BuildProjectInfo,
+  DevEcoCodeSlashEvent,
   QueuedAnalyticsSubmission,
   UiVerificationAnalyticsEvent,
   UiVerificationOperationDetail,
   ToolExecution,
   ToolSummary,
 } from "./types"
-import { ANALYTICS_ACTION, isAnalyticsSourceType } from "./types"
+import { ANALYTICS_ACTION, isAnalyticsSourceType, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
 
 const ANALYTICS_FILE = "analytics.json"
 const DEVICE_ID_FILE = "device-id.json"
@@ -318,6 +319,9 @@ function isPendingAnalyticsEvent(value: unknown): value is PendingAnalyticsEvent
   if (value.action === ANALYTICS_ACTION.UI_VERIFICATION) {
     return isUiVerificationAnalyticsEvent(value.event)
   }
+  if (value.action === ANALYTICS_ACTION.SLASH_COMMAND) {
+    return isDevEcoCodeSlashEvent(value.event)
+  }
   return false
 }
 
@@ -430,6 +434,50 @@ function isUiVerificationAnalyticsEvent(value: unknown): value is UiVerification
     hasStrings(value, ['sourceVersion', 'os_arch', 'os_name', 'os_version', 'sessionid', 'messageId']) &&
     isUiVerificationOperationDetail(value.event_detail)
   );
+}
+
+const SLASH_COMMAND_STRING_FIELDS = [
+  "sourceVersion",
+  "os_arch",
+  "os_name",
+  "os_version",
+  "sessionid",
+  "projectId",
+] as const
+
+function isSlashCommandName(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= SLASH_COMMAND_NAME_MAX_LENGTH
+  )
+}
+
+// Milliseconds since the epoch, captured when the command was dispatched (not upload time).
+function isSlashCommandTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+// Exact key set: the environment fields plus timestamp, sessionid, projectId and commandName.
+// commandName is a command name only (never arguments), which is also why the event carries no
+// prompt text.
+function isDevEcoCodeSlashEvent(value: unknown): value is DevEcoCodeSlashEvent {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, [
+      "sourceType",
+      "sourceVersion",
+      "os_arch",
+      "os_name",
+      "os_version",
+      "timestamp",
+      "sessionid",
+      "projectId",
+      "commandName",
+    ]) &&
+    isAnalyticsSourceType(value.sourceType) &&
+    hasStrings(value, SLASH_COMMAND_STRING_FIELDS) &&
+    isSlashCommandTimestamp(value.timestamp) &&
+    isSlashCommandName(value.commandName)
+  )
 }
 
 function createPendingEvent(submission: AnalyticsQueueSubmission): PendingAnalyticsEvent {

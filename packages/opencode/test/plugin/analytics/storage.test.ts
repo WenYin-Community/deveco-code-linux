@@ -7,7 +7,9 @@ import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
 import type {
   AiCodeAttributionEvent,
   AiSessionEvent,
+  AnalyticsAction,
   BuildProjectAnalyticsEvent,
+  DevEcoCodeSlashEvent,
   UiVerificationAnalyticsEvent,
 } from "@/plugin/analytics/types"
 import {
@@ -642,7 +644,11 @@ test("queue accepts legacy and custom tool summaries but rejects malformed categ
   expect(pending[1]?.event).toMatchObject({ operations: { customTools: [{ name: "my_check", count: 2 }] } })
 })
 
-async function stageEncryptedStorage(root: string, events: unknown[]) {
+async function stageEncryptedStorage(
+  root: string,
+  events: unknown[],
+  action: AnalyticsAction = ANALYTICS_ACTION.AI_SESSION,
+) {
   const file = path.join(root, "analytics", "analytics.json")
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(
@@ -652,7 +658,7 @@ async function stageEncryptedStorage(root: string, events: unknown[]) {
         JSON.stringify({
           schemaVersion: ANALYTICS_SCHEMA_VERSION,
           pendingEvents: events.map((event, index) => ({
-            action: ANALYTICS_ACTION.AI_SESSION,
+            action,
             event,
             uid: `uid-${index}`,
             queueId: `queue-${index}`,
@@ -824,5 +830,67 @@ test("ui verification queue accepts only the documented detail types", async () 
   expect(pending.map((item) => item.queueId)).toEqual(["queue-2"])
   if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
     expect(pending[0].event.event_detail.stepReused).toBe(2)
+  }
+})
+
+// The server command hook and the TUI reporting path (POST /analytics/command) write the same
+// 9-key event with no provenance fields, so one fixture covers both.
+function slashCommandEvent(): DevEcoCodeSlashEvent {
+  return {
+    sourceType: "DevEco-Code-Cli",
+    sourceVersion: "1.2.3",
+    os_arch: "arm64",
+    os_name: process.platform,
+    os_version: "os-version",
+    timestamp: 1762750800000,
+    sessionid: "session-slash",
+    projectId: "550e8400-e29b-41d4-a716-446655440000",
+    commandName: "my-flow",
+  }
+}
+
+test("slash command events round-trip through the encrypted pending queue", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.SLASH_COMMAND, event: slashCommandEvent() })
+  const pending = await getPendingEvents()
+
+  expect(pending).toHaveLength(1)
+  expect(pending[0]?.action).toBe(ANALYTICS_ACTION.SLASH_COMMAND)
+  if (pending[0]?.action === ANALYTICS_ACTION.SLASH_COMMAND) {
+    expect(pending[0].event).toEqual(slashCommandEvent())
+  }
+})
+
+test("slash command queue rejects malformed payloads and unknown keys", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const valid = slashCommandEvent()
+  const withoutName: Record<string, unknown> = { ...valid }
+  delete withoutName.commandName
+  await stageEncryptedStorage(
+    tmp.path,
+    [
+      withoutName,
+      { ...valid, commandName: "" },
+      { ...valid, commandName: "x".repeat(65) },
+      { ...valid, timestamp: -1 },
+      { ...valid, timestamp: 1.5 },
+      // The wire-level timestamp is a stringified number; the event field must stay numeric.
+      { ...valid, timestamp: "1762750800000" },
+      // No prompt/argument text ever travels with this event: an extra key is malformed.
+      { ...valid, arguments: "private argument text" },
+      // Control: the valid 64-char boundary must survive, otherwise the rejections above
+      // could pass for the wrong reason.
+      { ...valid, commandName: "y".repeat(64) },
+    ],
+    ANALYTICS_ACTION.SLASH_COMMAND,
+  )
+
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-7"])
+  if (pending[0]?.action === ANALYTICS_ACTION.SLASH_COMMAND) {
+    expect(pending[0].event.commandName).toHaveLength(64)
   }
 })

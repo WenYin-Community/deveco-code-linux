@@ -7,7 +7,7 @@ import {
   registerManagedTextareaLayer,
   registerTimedLeader,
 } from "@opentui/keymap/addons/opentui"
-import { stringifyKeyStroke, type Binding } from "@opentui/keymap"
+import { stringifyKeyStroke, type Binding, type Keymap, type KeymapEvent } from "@opentui/keymap"
 import {
   formatCommandBindings as formatCommandBindingsExtra,
   formatKeySequence as formatKeySequenceExtra,
@@ -256,6 +256,67 @@ export function useCommandShortcut(command: string): Accessor<string> {
       config,
     ),
   )
+}
+
+// Runtime data key holding the session the TUI is showing. The app keeps it in sync with the
+// active route so command execution can attach the session to an analytics report without the
+// keymap owning route state.
+export const LOCAL_COMMAND_SESSION_ID_DATA_KEY = "deveco.local_command.session_id"
+
+// Slash names whose execution is handled by the prompt submit path instead of by the command
+// `run`; reporting them from the command would double count the same user action.
+const PROMPT_INTERCEPTED_SLASH_COMMANDS = new Set(["goal"])
+
+// Slash names whose execution terminates the client. /exit tears the renderer down and ends the
+// process before the report's fire-and-forget flush can finish, so the event would only reach the
+// server on the next launch (the queue retries) — and exit carries no workflow value anyway.
+const CLIENT_TERMINATING_SLASH_COMMANDS = new Set(["exit"])
+
+let externalCommandDispatches = 0
+
+// The IDE/control plane drives TUI UI actions through `tui.command.execute` (open help, focus
+// sessions, submit the prompt, ...). Those server routes only publish the TUI event; they never
+// run SessionPrompt.command, and the action is initiated outside this client's own input, so it
+// is not a user-typed slash command. The product rule counts user-initiated slash command
+// executions only, so these actions are deliberately reported nowhere — this wrapper keeps them
+// out of the client counter.
+export function dispatchExternalCommand<TTarget extends object, TEvent extends KeymapEvent>(
+  keymap: Keymap<TTarget, TEvent>,
+  command: string,
+) {
+  externalCommandDispatches += 1
+  try {
+    return keymap.dispatchCommand(command)
+  } finally {
+    externalCommandDispatches -= 1
+  }
+}
+
+// Reports every local execution of a palette command that carries a slashName. Slash completion,
+// the command palette and direct keybindings all execute commands through the keymap, so wrapping
+// `run` at layer-registration time is the one place that sees each execution exactly once.
+// Commands without a slashName (text editing, dialog control, ...) are never reported.
+export function registerLocalCommandReporting<TTarget extends object, TEvent extends KeymapEvent>(
+  keymap: Keymap<TTarget, TEvent>,
+  report: (name: string, sessionID?: string) => void,
+) {
+  keymap.prependCommandTransformer((command, ctx) => {
+    const slashName = command.slashName
+    if (typeof slashName !== "string" || !slashName) return
+    if (PROMPT_INTERCEPTED_SLASH_COMMANDS.has(slashName)) return
+    if (CLIENT_TERMINATING_SLASH_COMMANDS.has(slashName)) return
+    ctx.skipOriginal()
+    ctx.add({
+      ...command,
+      run: (context) => {
+        if (externalCommandDispatches === 0) {
+          const sessionID = keymap.getData(LOCAL_COMMAND_SESSION_ID_DATA_KEY)
+          report(slashName, typeof sessionID === "string" ? sessionID : undefined)
+        }
+        return command.run(context)
+      },
+    })
+  })
 }
 
 export function useCommandSlashes(): Accessor<readonly CommandSlashEntry[]> {

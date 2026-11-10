@@ -56,6 +56,18 @@ async function writeStorage(file: string, storage: ProjectIdStorage): Promise<vo
   }
 }
 
+// Only an absolute, existing directory identifies a project. Anything else (relative text, a file,
+// a path that does not exist) would mint a project id for a string the caller invented and grow
+// the persisted project-id table without bound, so callers reject it instead.
+export async function usableProjectDirectory(candidate: string | undefined): Promise<string | undefined> {
+  if (!candidate || !path.isAbsolute(candidate)) return undefined
+  try {
+    return (await fs.stat(candidate)).isDirectory() ? candidate : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export async function normalizeProjectDirectory(
   directory: string,
   platform: NodeJS.Platform = process.platform,

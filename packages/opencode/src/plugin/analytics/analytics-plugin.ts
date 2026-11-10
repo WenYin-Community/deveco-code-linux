@@ -11,8 +11,15 @@ import type { CodeAttributionTracker, CodeAttributionTrackerOptions } from "./co
 import { getOrCreateProjectId } from "./project-id"
 import { globalUploader } from "./uploader"
 import { getVersion } from "./storage"
-import { ANALYTICS_ACTION } from "./types"
-import type { AiSessionEvent, AnalyticsSubmission, BuildProjectAnalyticsEvent, BuildProjectInfo } from "./types"
+import { createEnvironmentFields } from "./events"
+import { ANALYTICS_ACTION, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
+import type {
+  AiSessionEvent,
+  AnalyticsSubmission,
+  BuildProjectAnalyticsEvent,
+  BuildProjectInfo,
+  DevEcoCodeSlashEvent,
+} from "./types"
 
 const ANALYTICS_DIR = path.join(Global.Path.data, "analytics", "log")
 const LOG_FILE = path.join(ANALYTICS_DIR, "analytics.log")
@@ -98,6 +105,7 @@ export function extractBuildExitCode(output: string, fallback: number): number {
 }
 
 type ChatMessageHook = NonNullable<Hooks["chat.message"]>
+type CommandBeforeHook = NonNullable<Hooks["command.execute.before"]>
 type ToolBeforeHook = NonNullable<Hooks["tool.execute.before"]>
 type ToolAfterHook = NonNullable<Hooks["tool.execute.after"]>
 type ToolFinallyHook = NonNullable<Hooks["tool.execute.finally"]>
@@ -166,6 +174,7 @@ class AnalyticsRuntime {
   hooks(): Hooks {
     return {
       event: async ({ event }) => this.event(event),
+      "command.execute.before": async (input) => this.commandBefore(input),
       "chat.message": async (input, output) => this.chatMessage(input, output),
       "tool.execute.before": async (input) => this.toolBefore(input),
       "tool.execute.after": async (input, output) => this.toolAfter(input, output),
@@ -324,6 +333,35 @@ class AnalyticsRuntime {
       agentName,
     })
     await this.log(`Session started, provider: ${providerId}, model: ${modelId}, agent: ${agentName}`)
+  }
+
+  // Reports every slash command the server dispatches, whoever authored it: product built-ins,
+  // config commands, MCP prompts and skills. The event records the invocation only, not where the
+  // command came from.
+  // Counts invocations, not successful executions: the hook fires before the command runs.
+  // Analytics must never fail or hang a user command, so every failure is swallowed here; the
+  // event contents are deliberately not logged on error.
+  private async commandBefore(input: Parameters<CommandBeforeHook>[0]) {
+    try {
+      const commandName = input.command.trim()
+      // The queue validator rejects empty names, so such an event would be silently dropped on
+      // the next queue read; skip it before enqueueing anything.
+      if (!commandName) return
+      if (!(await this.ensureEligible())) return
+      const event: DevEcoCodeSlashEvent = {
+        ...createEnvironmentFields(this.dependencies.version()),
+        timestamp: Date.now(),
+        sessionid: input.sessionID,
+        projectId: this.projectId,
+        commandName: commandName.slice(0, SLASH_COMMAND_NAME_MAX_LENGTH),
+      }
+      // upload() is an awaited local encrypted queue write; the network flush is fire-and-forget
+      // so a slow upload can never delay the command.
+      await this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.SLASH_COMMAND, event })
+      void this.dependencies.uploader.flush().catch(() => undefined)
+    } catch {
+      // Never let analytics failures reach command execution.
+    }
   }
 
   private async toolBefore(input: Parameters<ToolBeforeHook>[0]) {

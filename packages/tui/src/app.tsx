@@ -35,7 +35,7 @@ import { ProjectProvider, useProject } from "./context/project"
 import { EditorContextProvider } from "./context/editor"
 import { BtwProvider } from "./context/btw"
 import { useEvent } from "./context/event"
-import { SDKProvider, useSDK } from "./context/sdk"
+import { createClientCommandReporter, SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
 import { DataProvider } from "./context/data"
@@ -79,7 +79,10 @@ import { CommandPaletteDialog } from "./component/command-palette"
 import {
   COMMAND_PALETTE_COMMAND,
   DEVECO_BASE_MODE,
+  dispatchExternalCommand,
+  LOCAL_COMMAND_SESSION_ID_DATA_KEY,
   OpencodeKeymapProvider,
+  registerLocalCommandReporting,
   registerOpencodeKeymap,
   stringifyKeyStroke,
   useBindings,
@@ -203,6 +206,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       )
       win32DisableProcessedInput()
       const keymap = createDefaultOpenTuiKeymap(renderer)
+      // Local slash commands execute inside the TUI, so the client reports them; this must be
+      // registered before any command layer so every palette command is wrapped.
+      registerLocalCommandReporting(keymap, createClientCommandReporter(input))
       yield* Effect.acquireRelease(
         Effect.sync(() => registerOpencodeKeymap(keymap, renderer, input.config)),
         (unregister) => Effect.sync(unregister),
@@ -447,6 +453,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const [pasteSummaryEnabled, setPasteSummaryEnabled] = createSignal(
     kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
   )
+
+  // Locally executed slash commands are reported from the keymap, which has no route access;
+  // publish the active session so reports can carry it.
+  createEffect(() => {
+    keymap.setData(LOCAL_COMMAND_SESSION_ID_DATA_KEY, route.data.type === "session" ? route.data.sessionID : undefined)
+  })
 
   // Update terminal window title based on current route and session
   createEffect(() => {
@@ -1171,7 +1183,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
   event.on("tui.command.execute", (evt, { workspace }) => {
     if (workspace !== project.workspace.current()) return
-    keymap.dispatchCommand(evt.properties.command)
+    dispatchExternalCommand(keymap, evt.properties.command)
   })
 
   event.on("tui.toast.show", (evt, { workspace }) => {

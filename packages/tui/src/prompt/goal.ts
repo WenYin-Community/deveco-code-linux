@@ -39,6 +39,18 @@ export function isGoalCommandAgent(name: string | undefined) {
   return name === GOAL_AGENT
 }
 
+// /goal is executed by the prompt submit path, never by SessionPrompt.command, so the client
+// reports it itself. One submit can pass several branches (agent rejection, budget, help,
+// stop/clear/resume, start), so the report must fire exactly once per submit.
+export function createGoalCommandReport(report: (sessionID?: string) => void): (sessionID?: string) => void {
+  let reported = false
+  return (sessionID) => {
+    if (reported) return
+    reported = true
+    report(sessionID)
+  }
+}
+
 export const GOAL_SUBCOMMANDS = [
   { command: "/goal stop", description: "Pause the active goal and stop execution" },
   { command: "/goal clear", description: "Delete the goal and stop execution" },

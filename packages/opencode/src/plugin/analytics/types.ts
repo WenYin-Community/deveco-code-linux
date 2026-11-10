@@ -181,11 +181,30 @@ export interface UiVerificationAnalyticsEvent extends AnalyticsEnvironmentFields
   event_detail: UiVerificationOperationDetail
 }
 
+// Upper bound for commandName, shared by the emitter (truncates) and the queue validator
+// (rejects). Config commands, MCP prompts and skills are named outside this repo, so the name can
+// be arbitrary long text.
+export const SLASH_COMMAND_NAME_MAX_LENGTH = 64
+
+// A slash command the server dispatched, whoever authored it: product built-ins, config commands
+// (.deveco/command/*.md and cfg.command), MCP prompts and skills. The event records the invocation
+// only and carries no provenance about which kind of command it was.
+export interface DevEcoCodeSlashEvent extends AnalyticsEnvironmentFields {
+  // Milliseconds since the epoch, captured when the command was dispatched. The wire-level
+  // timestamp of the upload is a different value (upload time), so keep both.
+  timestamp: number
+  sessionid: string
+  projectId: string
+  // Command name without the leading slash, truncated to SLASH_COMMAND_NAME_MAX_LENGTH.
+  commandName: string
+}
+
 export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
   BUILD_PROJECT: "DevEcoCodeBuild",
   UI_VERIFICATION: "DevEcoCodeVerify",
+  SLASH_COMMAND: "DevEcoCodeSlash",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -206,6 +225,10 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.UI_VERIFICATION
       event: UiVerificationAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.SLASH_COMMAND
+      event: DevEcoCodeSlashEvent
     }
 
 export interface AnalyticsTransportFields {

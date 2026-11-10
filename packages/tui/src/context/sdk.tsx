@@ -8,6 +8,55 @@ export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
 }
 
+export type ClientCommandReporter = (name: string, sessionID?: string) => void
+
+// Narrower than the global fetch type (which also carries Bun helpers) so callers and tests can
+// pass any plain fetch implementation.
+type ClientCommandFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+
+type ClientCommandReporterOptions = {
+  url: string
+  directory?: string
+  fetch?: ClientCommandFetch
+  headers?: RequestInit["headers"]
+}
+
+// Reports a slash command this client executed itself. Palette commands run inside the TUI and
+// never reach SessionPrompt.command, so the server cannot count them through its command hook.
+// The call is fire-and-forget and swallows every failure: analytics must never disturb the TUI.
+export function createClientCommandReporter(options: ClientCommandReporterOptions): ClientCommandReporter {
+  return (name, sessionID) => {
+    if (!name) return
+    void sendClientCommand(options, name, sessionID)
+  }
+}
+
+async function sendClientCommand(
+  options: ClientCommandReporterOptions,
+  name: string,
+  sessionID: string | undefined,
+): Promise<void> {
+  try {
+    await (options.fetch ?? fetch)(new URL("/analytics/command", options.url), {
+      method: "POST",
+      headers: clientCommandHeaders(options),
+      body: JSON.stringify({ name, sessionID, directory: options.directory }),
+    })
+  } catch {
+    // Reporting is best-effort.
+  }
+}
+
+function clientCommandHeaders(options: ClientCommandReporterOptions): Headers {
+  const headers = new Headers(options.headers)
+  headers.set("Content-Type", "application/json")
+  // Mirrors the generated SDK's POST shape: it tags the request with the directory header
+  // (the query parameter rewriting only applies to GET/HEAD), which is what the instance
+  // routing middleware reads to pick the project.
+  if (options.directory) headers.set("x-deveco-directory", encodeURIComponent(options.directory))
+  return headers
+}
+
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
   init: (props: {
@@ -145,6 +194,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       directory: props.directory,
       event: emitter,
       fetch: props.fetch ?? fetch,
+      reportClientCommand: createClientCommandReporter(props),
       url: props.url,
     }
   },

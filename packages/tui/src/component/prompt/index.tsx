@@ -69,6 +69,7 @@ import { GoalStatus } from "../../routes/session/goal-status"
 import {
   GOAL_AGENT,
   GOAL_BUDGET_KV_KEY,
+  createGoalCommandReport,
   formatGoalBudget,
   formatGoalHelp,
   goalElapsedSeconds,
@@ -1235,9 +1236,15 @@ export function Prompt(props: PromptProps) {
     if (!store.prompt.input) return false
     const trimmed = store.prompt.input.trim()
     const initialGoalCommand = parseGoalCommand(trimmed)
+    // /goal is executed by this submit path, never by SessionPrompt.command: the palette command
+    // only prefills the prompt. Report the interception once per submit, including the branches
+    // that reject it (wrong agent, missing session), so local goal usage is never conflated with
+    // the server-dispatched built-in.
+    const reportGoalCommand = createGoalCommandReport((sessionID) => sdk.reportClientCommand("goal", sessionID))
     const agent = local.agent.current()
     if (!agent) return false
     if (initialGoalCommand && !isGoalCommandAgent(agent.name)) {
+      reportGoalCommand(props.sessionID)
       clearSubmittedPrompt(store.mode)
       toast.show({
         message: "/goal is only available in the build agent. Switch to build and try again.",
@@ -1247,6 +1254,7 @@ export function Prompt(props: PromptProps) {
     }
     if (initialGoalCommand?.action === "open_budget") {
       clearSubmittedPrompt(store.mode)
+      reportGoalCommand(props.sessionID)
       const budget = await DialogGoalBudget.show(dialog, defaultGoalBudget())
       if (budget === undefined) return true
       kv.set(GOAL_BUDGET_KV_KEY, budget)
@@ -1275,6 +1283,7 @@ export function Prompt(props: PromptProps) {
     }
     if (initialGoalCommand?.action === "help") {
       clearSubmittedPrompt(store.mode)
+      reportGoalCommand(props.sessionID)
       void DialogAlert.show(dialog, "Goal mode", goalHelpMessage)
       return true
     }
@@ -1285,6 +1294,7 @@ export function Prompt(props: PromptProps) {
         initialGoalCommand.action === "resume")
     ) {
       clearSubmittedPrompt(store.mode)
+      reportGoalCommand(props.sessionID)
       if (!props.sessionID) {
         toast.show({
           message: initialGoalCommand.action === "resume" ? "No goal exists to resume." : "No session goal exists yet.",
@@ -1459,6 +1469,7 @@ export function Prompt(props: PromptProps) {
     const goalCommand = parseGoalCommand(inputText)
     if (goalCommand) {
       clearSubmittedPrompt(currentMode)
+      reportGoalCommand(sessionID)
       if (goalCommand.action === "open_budget") return true
       if (goalCommand.action === "help") {
         void DialogAlert.show(dialog, "Goal mode", goalHelpMessage)

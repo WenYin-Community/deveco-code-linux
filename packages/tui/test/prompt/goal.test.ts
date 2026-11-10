@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  createGoalCommandReport,
   GOAL_COMPLETIONS,
   GOAL_SUBCOMMANDS,
   goalElapsedSeconds,
@@ -242,3 +243,29 @@ describe("goal sidebar state", () => {
     ).toBe(50)
   })
 })
+
+describe("createGoalCommandReport", () => {
+  test("reports a submit once even when several branches ask for it", () => {
+    const reports: (string | undefined)[] = []
+    const report = createGoalCommandReport((sessionID) => reports.push(sessionID))
+
+    // The agent-rejection branch reports, then the same submit must not report again from the
+    // action branch.
+    report("ses_1")
+    report("ses_1")
+    report(undefined)
+
+    expect(reports).toEqual(["ses_1"])
+  })
+
+  test("reports every submit separately", () => {
+    const reports: (string | undefined)[] = []
+    const first = createGoalCommandReport((sessionID) => reports.push(sessionID))
+    first("ses_1")
+    const second = createGoalCommandReport((sessionID) => reports.push(sessionID))
+    second("ses_2")
+
+    expect(reports).toEqual(["ses_1", "ses_2"])
+  })
+})
+
