@@ -351,7 +351,7 @@ describe("acp usage", () => {
     }).pipe(
       Effect.provide(
         // A failing loader proves the push is computed from the event payload
-        // alone; reloading the message list would surface this failure.
+        // alone; reloading the message list would expose this failure.
         fakeLayer({ messages: Effect.fail(new Error("must not reload messages")) }),
       ),
     )

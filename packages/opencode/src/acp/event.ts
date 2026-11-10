@@ -122,6 +122,7 @@ function debugStateText(part: DebugStatePart): string {
     case "cleared":
       return condition ? `Debug mode cleared: ${condition}` : "Debug mode cleared"
     case "none":
+    default:
       return "Debug mode is not active"
   }
 }
