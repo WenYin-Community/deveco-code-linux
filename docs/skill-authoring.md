@@ -57,11 +57,10 @@ the same name:
    names in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`).
    A whitelisted skill missing from the package fails the build.
 
-The CLI publishes under both `@deveco/` (releases) and `@deveco-test/`
-(pre-release builds). The shell name pinned in `packages/opencode/package.json`
-is tried first; the other scope is a fallback, so switching a test build needs no
-code change. The package is resolved through the shell first because
-`deveco-cli-common` is its `optionalDependency` and package managers may hoist it.
+The package is resolved from the `@deveco/deveco-cli` shell dependency pinned in
+`packages/opencode/package.json`; `<shell>-common` ships as its
+`optionalDependency`. The lookup order and pre-release scope handling live in
+`packages/opencode/script/skill-sources.ts`.
 
 - Build-time embedding: `packages/opencode/script/skill-sources.ts` (used by
   `build.ts`) → `DEVECO_DEFAULT_SKILLS` + `DEVECO_DEFAULT_SKILLS_HASH`
