@@ -33,6 +33,11 @@ object DevEcoTheme {
     val green: Color get() = JBColor(0x2E7D32, 0x66BB6A).toComposeColor()
     val red: Color get() = JBColor(0xC62828, 0xEF5350).toComposeColor()
     val linkAccent: Color get() = JBColor.namedColor("Link.activeForeground", 0x5B8DEF).toComposeColor()
+    // Inline markdown chips: code spans get a 1px rounded outline on the panel
+    // background, links a filled rounded chip (drawn from text layout geometry
+    // in MarkdownChipRenderer261.kt, mirrored as flat spans on the 243 line).
+    val inlineCodeBorder: Color get() = JBColor(0xB9BEC7, 0x57595E).toComposeColor()
+    val linkChipBg: Color get() = JBColor(0xDCE4F0, 0x2B2E33).toComposeColor()
     val danger: Color get() = JBColor(0xE53935, 0xE57373).toComposeColor()
     val stopRed: Color get() = JBColor(0xD32F2F, 0xE5484D).toComposeColor()
     val warning: Color get() = JBColor(0xE65100, 0xE08C3A).toComposeColor()

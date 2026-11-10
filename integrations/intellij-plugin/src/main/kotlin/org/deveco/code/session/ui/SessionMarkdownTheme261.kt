@@ -34,7 +34,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,6 +63,7 @@ import org.deveco.code.session.model.SessionViewState
 import org.deveco.code.session.model.SessionViewportState
 import org.jetbrains.jewel.bridge.theme.retrieveEditorTextStyle
 import org.jetbrains.jewel.bridge.toComposeColor
+import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.intui.markdown.bridge.ProvideMarkdownStyling
 import org.jetbrains.jewel.intui.markdown.bridge.styling.create
 import org.jetbrains.jewel.markdown.MarkdownBlock
@@ -73,6 +76,7 @@ import org.jetbrains.jewel.markdown.extensions.github.tables.GitHubTableRenderer
 import org.jetbrains.jewel.markdown.extensions.github.tables.RowBackgroundStyle
 import org.jetbrains.jewel.markdown.processing.MarkdownProcessor
 import org.jetbrains.jewel.markdown.rendering.DefaultMarkdownBlockRenderer
+import org.jetbrains.jewel.markdown.rendering.InlineMarkdownRenderer
 import org.jetbrains.jewel.markdown.rendering.InlinesStyling
 import org.jetbrains.jewel.markdown.rendering.MarkdownStyling
 import org.jetbrains.jewel.markdown.rendering.MarkdownStyling.Code
@@ -92,7 +96,6 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
     val codeBg = JBColor.namedColor("Editor.background", 0xFFFFFF).toComposeColor()
     val codeTextColor = JBColor.namedColor("Editor.foreground", 0x000000).toComposeColor()
     val codeBorder = JBColor.namedColor("Group.separatorColor", 0xD0D7DE).toComposeColor()
-    val inlineCodeBg = JBColor.namedColor("TextField.background", 0xECEFF1).toComposeColor()
 
     val baseTextStyle = TextStyle(
         color = textColor,
@@ -108,22 +111,29 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
     }
     // Use the IDE editor font family/size/ligatures so code blocks match the editor exactly.
     val codeTextStyle = remember(editorSchemeTick) { retrieveEditorTextStyle() }.copy(color = codeTextColor)
+    // Inline code reads as neutral text and links as blue text; the outlined/filled
+    // chips around them are drawn from text layout geometry in
+    // MarkdownChipRenderer261.kt, so the spans only carry color and font here.
+    val inlineCodeSpan = SpanStyle(
+        color = textColor,
+        fontFamily = codeTextStyle.fontFamily,
+    )
+    val linkSpan = SpanStyle(
+        color = accentColor,
+    )
     val inlinesStyling = InlinesStyling.create(
         textStyle = baseTextStyle,
-        inlineCode = SpanStyle(
-            color = accentColor,
-            background = inlineCodeBg.copy(alpha = 0.15f),
-            fontFamily = codeTextStyle.fontFamily,
-        ),
-        link = SpanStyle(
-            color = accentColor,
-        ),
+        inlineCode = inlineCodeSpan,
+        link = linkSpan,
     )
-    // Custom heading styles with smaller font sizes for chat context
+    // Custom heading styles with smaller font sizes for chat context. Headings get
+    // the same inline code/link spans so chips stay consistent inside them.
     val heading = MarkdownStyling.Heading(
         h1 = MarkdownStyling.Heading.H1(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -133,6 +143,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h2 = MarkdownStyling.Heading.H2(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -142,6 +154,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h3 = MarkdownStyling.Heading.H3(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -151,6 +165,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h4 = MarkdownStyling.Heading.H4(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -160,6 +176,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h5 = MarkdownStyling.Heading.H5(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -169,6 +187,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h6 = MarkdownStyling.Heading.H6(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
+                inlineCode = inlineCodeSpan,
+                link = linkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -219,17 +239,23 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         ),
         headerBaseFontWeight = FontWeight.SemiBold,
     )
+    val rendererExtensions = listOf(
+        GitHubTableRendererExtension(tableStyling, markdownStyling),
+    )
     val blockRenderer = SafeOrderedListMarkdownBlockRenderer(
         styling = markdownStyling,
-        rendererExtensions = listOf(
-            GitHubTableRendererExtension(tableStyling, markdownStyling),
-        ),
+        rendererExtensions = rendererExtensions,
+        inlineRenderer = ChipInlineMarkdownRenderer(rendererExtensions),
     )
     val processor = MarkdownProcessor(
         extensions = listOf(GitHubTableProcessorExtension),
     )
-    val selectionColors = remember {
-        val bg = JBColor(0x3574F0, 0x2F5FB0).toComposeColor().copy(alpha = 0.85f)
+    // Resolve the selection color from the Compose theme state, not JBColor: a
+    // remembered JBColor snapshot freezes whichever LaF branch was active at
+    // first composition and shipped the light blue into dark mode.
+    val isLightTheme = !JewelTheme.isDark
+    val selectionColors = remember(isLightTheme) {
+        val bg = if (isLightTheme) Color(0xFFA6D2FF) else Color(0xFF2F5FB0).copy(alpha = 0.85f)
         TextSelectionColors(handleColor = bg, backgroundColor = bg)
     }
     CompositionLocalProvider(LocalTextSelectionColors provides selectionColors) {
@@ -252,7 +278,40 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
 private class SafeOrderedListMarkdownBlockRenderer(
     styling: MarkdownStyling,
     rendererExtensions: List<MarkdownRendererExtension>,
-) : DefaultMarkdownBlockRenderer(styling, rendererExtensions) {
+    inlineRenderer: InlineMarkdownRenderer,
+) : DefaultMarkdownBlockRenderer(styling, rendererExtensions, inlineRenderer) {
+    // Feed the paragraph Text's layout back into a drawBehind chip layer: the
+    // inline renderer tagged code/link ranges, and each wrapped line fragment of a
+    // tagged range gets its rounded chip here.
+    @Composable
+    override fun RenderParagraph(
+        block: MarkdownBlock.Paragraph,
+        styling: MarkdownStyling.Paragraph,
+        enabled: Boolean,
+        onUrlClick: (String) -> Unit,
+        onTextLayout: (TextLayoutResult) -> Unit,
+        modifier: Modifier,
+        overflow: TextOverflow,
+        softWrap: Boolean,
+        maxLines: Int,
+    ) {
+        val paragraphLayout = remember { mutableStateOf<TextLayoutResult?>(null) }
+        super.RenderParagraph(
+            block,
+            styling,
+            enabled,
+            onUrlClick,
+            onTextLayout = {
+                paragraphLayout.value = it
+                onTextLayout(it)
+            },
+            modifier = modifier.drawInlineChips(paragraphLayout),
+            overflow = overflow,
+            softWrap = softWrap,
+            maxLines = maxLines,
+        )
+    }
+
     @Composable
     override fun RenderOrderedList(
         block: MarkdownBlock.ListBlock.OrderedList,

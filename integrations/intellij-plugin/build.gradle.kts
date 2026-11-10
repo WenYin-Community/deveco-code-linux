@@ -69,6 +69,7 @@ kotlin {
             kotlin.exclude(
                 "**/FenceLanguage261.kt",
                 "**/IdeMcpSession.kt",
+                "**/MarkdownChipRenderer261.kt",
                 "**/PlatformComposePanel261.kt",
                 "**/PlatformComposeTab261.kt",
                 "**/SessionMarkdownTheme261.kt",
@@ -79,7 +80,10 @@ kotlin {
         // The 243 line renders with Jewel 0.27.0, which lacks the platform
         // RenderOrderedList API and its positive-integer validation entirely.
         sourceSets.test {
-            kotlin.exclude("**/SafeOrderedListRendererTest.kt")
+            kotlin.exclude(
+                "**/MarkdownChipRendererTest.kt",
+                "**/SafeOrderedListRendererTest.kt",
+            )
         }
     }
 }
