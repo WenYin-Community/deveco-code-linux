@@ -31,8 +31,6 @@ stages:
       test:
         name: unit-test
         runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         steps:
           - name: 检出代码
             uses: checkout

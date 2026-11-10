@@ -36,8 +36,6 @@ stages:
       auto-merge:
         name: 检查并合入 PR
         runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}

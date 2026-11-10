@@ -32,8 +32,6 @@ stages:
       post-guide:
         name: 发布 PR 命令使用指南
         runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
