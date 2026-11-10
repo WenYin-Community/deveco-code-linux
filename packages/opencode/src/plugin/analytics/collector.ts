@@ -189,17 +189,21 @@ export class SessionCollector {
             : source === "builtin" || isBuiltinTool(toolName)
               ? "builtinTools"
               : "customTools"
-    // Use the original tool identity for classification and build tracking.
-    const name = category === "skillTools" && skillName?.trim() ? skillName : toolName
+    // toolExecutions records the executed tool identity, never a renamed label: a skill call stays
+    // "skill" so the tool dimension stays enumerable. The per-skill breakdown is carried by
+    // operations.skillTools only, which reads toolCounts below.
     this.context.toolExecutions.push({
-      toolName: name,
+      toolName,
       duration,
       isSuccess,
       timestamp: Date.now(),
     })
-    const key = `${category}\0${name}`
+    // Counting still splits a skill call by the skill's own name, so operations.skillTools keeps
+    // its per-skill entries while the execution log above drops the rename.
+    const countName = category === "skillTools" && skillName?.trim() ? skillName : toolName
+    const key = `${category}\0${countName}`
     this.context.toolCounts.set(key, {
-      name,
+      name: countName,
       category,
       count: (this.context.toolCounts.get(key)?.count ?? 0) + 1,
     })

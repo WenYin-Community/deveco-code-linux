@@ -410,11 +410,68 @@ test("classifies tools by origin and keeps custom, MCP, and skill counts separat
   ])
 })
 
-test("uses skill names for details and counts without changing tool identity", async () => {
+test("keeps builtin tool ids unchanged", async () => {
   const collector = new SessionCollector({ analyticsEnabled: async () => true })
   collector.setLoggedIn(true)
   collector.startSession({
-    sessionID: "session-skill-names",
+    sessionID: "session-builtin-tool-ids",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  collector.recordToolExecution("bash", 10, true)
+  collector.recordToolExecution("read", 20, true, false, "builtin")
+  collector.recordToolExecution("build_project", 30, true, true)
+  const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  // Ordinary tools keep their own id in the execution log and in the per-category counters.
+  expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual(["bash", "read", "build_project"])
+  expect(event?.operations.builtinTools).toEqual([
+    { name: "bash", count: 1 },
+    { name: "read", count: 1 },
+    { name: "build_project", count: 1 },
+  ])
+  expect(event?.operations.skillTools).toEqual([])
+})
+
+test("records the skill tool id while keeping per-skill counts", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-skill-tool-id",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  // The execution log keeps the tool id "skill"; the skill name only refines the per-skill
+  // counter under operations.skillTools.
+  collector.recordToolExecution("skill", 10, true, false, "builtin", "hmos-arkui-develop-skill")
+  const single = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(single?.toolExecutions).toEqual([
+    { toolName: "skill", duration: 10, isSuccess: true, timestamp: expect.any(Number) },
+  ])
+  // No skillName field is added to the execution entry, so the tool dimension stays enumerable.
+  expect(Object.keys(single?.toolExecutions[0] ?? {})).toEqual(["toolName", "duration", "isSuccess", "timestamp"])
+  expect(single?.operations.skillTools).toEqual([{ name: "hmos-arkui-develop-skill", count: 1 }])
+
+  // A second, different skill adds its own counter; both executions still read as "skill".
+  collector.recordToolExecution("skill", 20, false, false, "builtin", "arkts-error-fixes")
+  const pair = await collector.buildEvent("project-id", "/tmp/non-harmony")
+  expect(pair?.operations.skillTools).toEqual([
+    { name: "hmos-arkui-develop-skill", count: 1 },
+    { name: "arkts-error-fixes", count: 1 },
+  ])
+  expect(pair?.toolExecutions.map((tool) => tool.toolName)).toEqual(["skill", "skill"])
+})
+
+test("falls back to the tool id when the skill name is blank", async () => {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-skill-tool-id-fallbacks",
     messageId: "message-1",
     sourceVersion: "1.2.3",
     providerId: "deveco",
@@ -439,11 +496,12 @@ test("uses skill names for details and counts without changing tool identity", a
     mcpTools: [{ name: "skill", count: 1 }],
     devecoCliCommands: [],
   })
+  // Blank skill names fall back to "skill" for counting and never leak into the execution log.
   expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual([
-    "arkts-error-fixes",
-    "arkts-error-fixes",
-    "read",
-    "build_project",
+    "skill",
+    "skill",
+    "skill",
+    "skill",
     "skill",
     "skill",
     "skill",
