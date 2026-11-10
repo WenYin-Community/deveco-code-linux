@@ -9,6 +9,7 @@ import type { Event, OpencodeClient } from "@opencode-ai/sdk/v2"
 import { Effect, ManagedRuntime } from "effect"
 import { ACPEvent } from "@/acp/event"
 import { ACPSession } from "@/acp/session"
+import { UsageService } from "@/acp/usage"
 
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type PermissionReplyParams = Parameters<OpencodeClient["permission"]["reply"]>[0]
@@ -63,7 +64,15 @@ function createHarness(
     },
     unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
   } satisfies Pick<AgentSideConnection, "requestPermission" | "sessionUpdate" | "unstable_createElicitation">
-  const subscription = new ACPEvent.Subscription({ sdk, connection, session })
+  const usage = UsageService.Service.of({
+    buildUsage: UsageService.buildUsage,
+    latestAssistantMessage: UsageService.latestAssistantMessage,
+    totalSessionCost: UsageService.totalSessionCost,
+    contextLimit: () => Effect.succeed(128000),
+    sendUpdate: () => Effect.void,
+    sendFromAssistantMessage: () => Effect.void,
+  })
+  const subscription = new ACPEvent.Subscription({ sdk, connection, session, usage })
 
   return { connection, replies, requests, sdk, session, subscription, updates }
 }

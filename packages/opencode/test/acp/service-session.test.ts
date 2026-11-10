@@ -257,6 +257,7 @@ describe("ACP service sessions", () => {
         Effect.sync(() => {
           usageUpdates.push(input.sessionID)
         }),
+      sendFromAssistantMessage: () => Effect.void,
     })
 
     return {
@@ -1162,6 +1163,7 @@ describe("ACP service sessions", () => {
         totalSessionCost: UsageService.totalSessionCost,
         contextLimit: () => Effect.succeed(128000),
         sendUpdate: () => Effect.void,
+        sendFromAssistantMessage: () => Effect.void,
       }),
     })
     await Effect.runPromise(failing.loadSession({ cwd: "/workspace", sessionId: session.sessionId, mcpServers: [] }))
@@ -1204,6 +1206,7 @@ describe("ACP service sessions", () => {
         totalSessionCost: UsageService.totalSessionCost,
         contextLimit: () => Effect.succeed(128000),
         sendUpdate: () => Effect.void,
+        sendFromAssistantMessage: () => Effect.void,
       }),
     })
     await Effect.runPromise(failing.newSession({ cwd: "/workspace", mcpServers: [] }))

@@ -28,6 +28,20 @@ const user = (): UsageService.SessionMessage => ({
   info: { role: "user" },
 })
 
+const stepMessage = (input: Partial<UsageService.AssistantMessage> = {}): UsageService.AssistantMessage => ({
+  role: "assistant",
+  providerID: "anthropic",
+  modelID: "claude-sonnet",
+  cost: 0.5,
+  tokens: {
+    input: 100,
+    output: 20,
+    reasoning: 0,
+    cache: { read: 41_000, write: 0 },
+  },
+  ...input,
+})
+
 const assistantWithoutProvider = (): UsageService.SessionMessage => ({
   info: {
     role: "assistant",
@@ -311,5 +325,82 @@ describe("acp usage", () => {
         }),
       ),
     )
+  })
+
+  it.effect("sends a per-step usage_update from the assistant message without cost or reload", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      yield* usage.sendFromAssistantMessage({
+        connection: connection(updates),
+        sessionID: "ses_1",
+        directory: "/workspace",
+        message: stepMessage(),
+      })
+
+      expect(updates).toEqual([
+        {
+          sessionId: "ses_1",
+          update: {
+            sessionUpdate: "usage_update",
+            used: 41_100,
+            size: 128_000,
+          },
+        },
+      ])
+    }).pipe(
+      Effect.provide(
+        // A failing loader proves the push is computed from the event payload
+        // alone; reloading the message list would surface this failure.
+        fakeLayer({ messages: Effect.fail(new Error("must not reload messages")) }),
+      ),
+    )
+  })
+
+  it.effect("skips the per-step push when provider or model is missing", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      yield* usage.sendFromAssistantMessage({
+        connection: connection(updates),
+        sessionID: "ses_1",
+        directory: "/workspace",
+        message: stepMessage({ providerID: undefined }),
+      })
+
+      expect(updates).toEqual([])
+    }).pipe(Effect.provide(fakeLayer({})))
+  })
+
+  it.effect("skips the per-step push when used is zero", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      yield* usage.sendFromAssistantMessage({
+        connection: connection(updates),
+        sessionID: "ses_1",
+        directory: "/workspace",
+        message: stepMessage({
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      })
+
+      expect(updates).toEqual([])
+    }).pipe(Effect.provide(fakeLayer({})))
+  })
+
+  it.effect("skips the per-step push when context size is unknown", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      yield* usage.sendFromAssistantMessage({
+        connection: connection(updates),
+        sessionID: "ses_1",
+        directory: "/workspace",
+        message: stepMessage({ providerID: "missing" }),
+      })
+
+      expect(updates).toEqual([])
+    }).pipe(Effect.provide(fakeLayer({})))
   })
 })

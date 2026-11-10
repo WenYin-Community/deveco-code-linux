@@ -109,7 +109,12 @@ export function make(input: {
   })
 
   const events = input.connection
-    ? ACPEvent.start({ sdk: input.sdk, connection: input.connection, session })
+    ? ACPEvent.start({
+        sdk: input.sdk,
+        connection: input.connection,
+        session,
+        usage: input.usage ?? makeUsageService(input.sdk),
+      })
     : undefined
   if (events) input.eventSubscription?.(events)
 
@@ -692,12 +697,39 @@ function makeUsageService(sdk: OpencodeClient) {
     )
   })
 
+  const sendFromAssistantMessage: UsageService.Interface["sendFromAssistantMessage"] = Effect.fn(
+    "ACP.promptUsage.sendFromAssistantMessage",
+  )(function* (params) {
+    if (!params.message.providerID || !params.message.modelID) return
+    const used = params.message.tokens.input + params.message.tokens.cache.read
+    if (used <= 0) return
+    const size = yield* contextLimit({
+      directory: params.directory,
+      providerID: ProviderV2.ID.make(params.message.providerID),
+      modelID: ModelV2.ID.make(params.message.modelID),
+    })
+    if (!size) return
+    yield* Effect.promise(() =>
+      params.connection
+        .sessionUpdate({
+          sessionId: params.sessionID,
+          update: {
+            sessionUpdate: "usage_update",
+            used,
+            size,
+          },
+        })
+        .catch(() => {}),
+    )
+  })
+
   return UsageService.Service.of({
     buildUsage: UsageService.buildUsage,
     latestAssistantMessage: UsageService.latestAssistantMessage,
     totalSessionCost: UsageService.totalSessionCost,
     contextLimit,
     sendUpdate,
+    sendFromAssistantMessage,
   })
 }
 

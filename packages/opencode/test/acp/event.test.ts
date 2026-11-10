@@ -14,6 +14,7 @@ import { ACPEvent } from "@/acp/event"
 import * as ACPService from "@/acp/service"
 import { Directory } from "@/acp/directory"
 import { ACPSession } from "@/acp/session"
+import { UsageService } from "@/acp/usage"
 
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 type ToolSessionUpdateParams = SessionUpdateParams & {
@@ -116,9 +117,25 @@ function createHarness(messages: Record<string, SessionMessageResponse> = {}) {
     unstable_createElicitation: () => Promise.resolve({ action: "decline" }),
   } satisfies Pick<AgentSideConnection, "sessionUpdate" | "unstable_createElicitation">
   const session = makeSessionService()
-  const subscription = new ACPEvent.Subscription({ sdk, connection, session })
+  const usagePushes: Array<{
+    sessionID: string
+    directory: string
+    message: UsageService.AssistantMessage
+  }> = []
+  const usage = UsageService.Service.of({
+    buildUsage: UsageService.buildUsage,
+    latestAssistantMessage: UsageService.latestAssistantMessage,
+    totalSessionCost: UsageService.totalSessionCost,
+    contextLimit: () => Effect.succeed(128000),
+    sendUpdate: () => Effect.void,
+    sendFromAssistantMessage: (input) =>
+      Effect.sync(() => {
+        usagePushes.push({ sessionID: input.sessionID, directory: input.directory, message: input.message })
+      }),
+  })
+  const subscription = new ACPEvent.Subscription({ sdk, connection, session, usage })
 
-  return { calls, connection, events, sdk, session, subscription, updates }
+  return { calls, connection, events, sdk, session, subscription, updates, usagePushes }
 }
 
 function textDelta(sessionID: string, messageID: string, partID: string, delta: string): Event {
@@ -141,6 +158,30 @@ function sessionError(
   error: NonNullable<EventSessionError["properties"]["error"]>,
 ): Event {
   return { id, type: "session.error", properties: { sessionID, error } }
+}
+
+// Minimal assistant-message envelope for message.updated; overrides patch the
+// fields a test cares about (tokens, time.completed, role). The cast stands in
+// for the full assistant Message shape, which the handler never reads beyond
+// role/time/tokens/provider/model ids.
+function assistantMessageUpdated(sessionID: string, id: string, overrides: Record<string, unknown> = {}): Event {
+  return {
+    id: `evt_${id}`,
+    type: "message.updated",
+    properties: {
+      sessionID,
+      info: {
+        id,
+        sessionID,
+        role: "assistant",
+        providerID: "deveco",
+        modelID: "GLM-5.3",
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: Date.now(), completed: Date.now() },
+        ...overrides,
+      },
+    },
+  } as Event
 }
 
 function partUpdated(sessionID: string, messageID: string, partID: string, type: DeltaPartType): Event {
@@ -344,6 +385,75 @@ describe("acp event routing", () => {
 
     expect(harness.updates.map((update) => update.sessionId)).toEqual(["ses_b"])
     expect(harness.updates[0]?.update.sessionUpdate).toBe("agent_message_chunk")
+  })
+
+  it("pushes a per-step usage update when an assistant message completes", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_usage", cwd: "/workspace" }))
+
+    await harness.subscription.handle(
+      assistantMessageUpdated("ses_usage", "msg_step1", {
+        tokens: { input: 100, output: 5, reasoning: 0, cache: { read: 41000, write: 0 } },
+      }),
+    )
+
+    expect(harness.usagePushes).toHaveLength(1)
+    expect(harness.usagePushes[0]?.sessionID).toBe("ses_usage")
+    expect(harness.usagePushes[0]?.directory).toBe("/workspace")
+    expect(harness.usagePushes[0]?.message.modelID).toBe("GLM-5.3")
+    expect(harness.usagePushes[0]?.message.tokens.cache.read).toBe(41000)
+  })
+
+  it("skips usage pushes for incomplete, zero-token, user, and unregistered-session messages", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_usage", cwd: "/workspace" }))
+    const tokens = { input: 10, output: 1, reasoning: 0, cache: { read: 10, write: 0 } }
+
+    // still streaming: no time.completed yet
+    await harness.subscription.handle(assistantMessageUpdated("ses_usage", "msg_live", { time: { created: Date.now() } }))
+    // completed but empty (abandoned placeholder step)
+    await harness.subscription.handle(assistantMessageUpdated("ses_usage", "msg_zero"))
+    // user messages never drive the ring
+    await harness.subscription.handle(assistantMessageUpdated("ses_usage", "msg_user", { role: "user", tokens }))
+    // task subagent session (not ACP-registered): its tokens stay off the parent's ring
+    await harness.subscription.handle(assistantMessageUpdated("ses_ghost", "msg_sub", { tokens }))
+
+    expect(harness.usagePushes).toHaveLength(0)
+  })
+
+  it("dedupes a repeated completion for the same message and tokens", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_usage", cwd: "/workspace" }))
+    const event = assistantMessageUpdated("ses_usage", "msg_step1", {
+      tokens: { input: 0, output: 3, reasoning: 0, cache: { read: 22000, write: 0 } },
+    })
+
+    await harness.subscription.handle(event)
+    await harness.subscription.handle({ ...event, id: "evt_repeat" })
+
+    expect(harness.usagePushes).toHaveLength(1)
+  })
+
+  it("drops a step completion that lands inside the rate-limit interval", async () => {
+    const harness = createHarness()
+    await Effect.runPromise(harness.session.create({ id: "ses_usage", cwd: "/workspace" }))
+
+    await harness.subscription.handle(
+      assistantMessageUpdated("ses_usage", "msg_step1", {
+        tokens: { input: 100, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    )
+    // A different message completing inside the 1.5s floor is dropped, so a
+    // burst of fast steps can push at most one update per interval; the
+    // end-of-turn sendUpdate is the authoritative catch-up.
+    await harness.subscription.handle(
+      assistantMessageUpdated("ses_usage", "msg_step2", {
+        tokens: { input: 200, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    )
+
+    expect(harness.usagePushes).toHaveLength(1)
+    expect(harness.usagePushes[0]?.message.tokens.input).toBe(100)
   })
 
   it("forwards a session error as an agent chunk so the turn is not silently empty", async () => {

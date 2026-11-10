@@ -55,6 +55,12 @@ export interface Interface {
     readonly sessionID: string
     readonly directory: string
   }) => Effect.Effect<void>
+  readonly sendFromAssistantMessage: (input: {
+    readonly connection: UsageConnection
+    readonly sessionID: string
+    readonly directory: string
+    readonly message: AssistantMessage
+  }) => Effect.Effect<void>
 }
 
 export class MessageLoader extends Context.Service<MessageLoader, MessageLoaderInterface>()(
@@ -213,12 +219,47 @@ export const layer = Layer.effect(
       )
     })
 
+    // Per-step live ring refresh: a just-completed assistant message already
+    // carries its final token counts and model ids, so this pushes straight
+    // from the event payload without reloading the message list. cost is
+    // omitted (optional on the wire); the end-of-turn sendUpdate still
+    // delivers the cumulative amount.
+    const sendFromAssistantMessage = Effect.fn("ACPUsage.sendFromAssistantMessage")(function* (input: {
+      readonly connection: UsageConnection
+      readonly sessionID: string
+      readonly directory: string
+      readonly message: AssistantMessage
+    }) {
+      if (!input.message.providerID || !input.message.modelID) return
+      const used = input.message.tokens.input + input.message.tokens.cache.read
+      if (used <= 0) return
+      const size = yield* contextLimit({
+        directory: input.directory,
+        providerID: ProviderV2.ID.make(input.message.providerID),
+        modelID: ModelV2.ID.make(input.message.modelID),
+      })
+      if (!size) return
+      yield* Effect.promise(() =>
+        input.connection
+          .sessionUpdate({
+            sessionId: input.sessionID,
+            update: {
+              sessionUpdate: "usage_update",
+              used,
+              size,
+            },
+          })
+          .catch(() => {}),
+      )
+    })
+
     return Service.of({
       buildUsage,
       latestAssistantMessage,
       totalSessionCost,
       contextLimit,
       sendUpdate,
+      sendFromAssistantMessage,
     })
   }),
 )

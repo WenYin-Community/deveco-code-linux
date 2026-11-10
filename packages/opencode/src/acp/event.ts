@@ -3,6 +3,7 @@ import type {
   Event,
   EventMessagePartDelta,
   EventMessagePartUpdated,
+  EventMessageUpdated,
   EventSessionError,
   OpencodeClient,
   Part,
@@ -13,6 +14,7 @@ import { Effect, Option, Schema } from "effect"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { ACPElicitation } from "./elicitation"
+import { UsageService } from "./usage"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import {
   duplicateRunningToolUpdate,
@@ -31,6 +33,11 @@ type GlobalEventEnvelope = {
 type GlobalEventStream = {
   stream: AsyncIterable<GlobalEventEnvelope>
 }
+
+// Floor between two per-step usage pushes for the same session. Completed
+// assistant messages are the trigger, so bursts only happen on fast error
+// retries — the end-of-turn sendUpdate is the authoritative catch-up.
+const USAGE_PUSH_MIN_INTERVAL_MS = 1500
 
 type SessionErrorPayload = NonNullable<EventSessionError["properties"]["error"]>
 
@@ -95,7 +102,12 @@ function sessionErrorChunk(messageId: string, error: SessionErrorPayload) {
   }
 }
 
-export function start(input: { sdk: OpencodeClient; connection: Connection; session: ACPSession.Interface }) {
+export function start(input: {
+  sdk: OpencodeClient
+  connection: Connection
+  session: ACPSession.Interface
+  usage: UsageService.Interface
+}) {
   const subscription = new Subscription(input)
   subscription.start()
   return subscription
@@ -105,6 +117,7 @@ export class Subscription {
   private readonly abort = new AbortController()
   private readonly shellSnapshots = new Map<string, string>()
   private readonly toolStarts = new Set<string>()
+  private readonly usagePushes = new Map<string, { messageId: string; used: number; at: number }>()
   private readonly permission: ACPPermission.Handler
   private readonly elicitation: ACPElicitation.Handler
   private started = false
@@ -114,6 +127,7 @@ export class Subscription {
       sdk: OpencodeClient
       connection: Connection
       session: ACPSession.Interface
+      usage: UsageService.Interface
     },
   ) {
     this.permission = new ACPPermission.Handler(input)
@@ -146,6 +160,8 @@ export class Subscription {
         return this.handlePartUpdated(event)
       case "message.part.delta":
         return this.handlePartDelta(event)
+      case "message.updated":
+        return this.handleMessageUpdated(event)
     }
   }
 
@@ -174,6 +190,34 @@ export class Subscription {
       sessionId: session.id,
       update: sessionErrorChunk(`error-${event.id}`, error),
     })
+  }
+
+  // Live context-ring refresh: every completed assistant message (one per
+  // provider step) carries its final token counts, so the client's ring can
+  // follow a long turn step by step instead of jumping once at turn end.
+  // Deduplicated by (message, used) and rate-limited; unregistered sessions
+  // are task subagents, whose tokens never feed the parent's ring.
+  private async handleMessageUpdated(event: EventMessageUpdated) {
+    const info = event.properties.info
+    if (info.role !== "assistant") return
+    if (!info.time.completed) return
+    const session = await Effect.runPromise(this.input.session.tryGet(event.properties.sessionID))
+    if (!session) return
+    const used = info.tokens.input + info.tokens.cache.read
+    if (used <= 0) return
+    const prev = this.usagePushes.get(session.id)
+    const now = Date.now()
+    if (prev && prev.messageId === info.id && prev.used === used) return
+    if (prev && now - prev.at < USAGE_PUSH_MIN_INTERVAL_MS) return
+    this.usagePushes.set(session.id, { messageId: info.id, used, at: now })
+    await Effect.runPromise(
+      this.input.usage.sendFromAssistantMessage({
+        connection: this.input.connection,
+        sessionID: session.id,
+        directory: session.cwd,
+        message: info,
+      }),
+    )
   }
 
   async replayMessage(message: SessionMessageResponse) {
