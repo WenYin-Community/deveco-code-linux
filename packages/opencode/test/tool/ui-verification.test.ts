@@ -223,7 +223,7 @@ test("falls back to the built-in cloud model when the task default map has no en
 
   const result = await verify()
   expect(result.output).toBe("ok")
-  expect(result.metadata.uiVerificationModel).toBe("Qwen3_VL_235B_A22B_Instruct")
+  expect(result.metadata.uiVerificationModel).toBe("Qwen3_5_397B_A17B_w8a8_single")
 })
 
 for (const name of ["log", "screenshot"] as const) {
