@@ -63,6 +63,8 @@ type UiVerifyParams = {
   modelName: string | null
 }
 
+type DevicePrefix = "emulator" | "physical"
+
 type ToolName = "verify_ui" | "get_ui_verification_log" | "save_ui_screenshot"
 
 type RuntimeState = {
@@ -165,6 +167,7 @@ async function executeVerifyUi(
     planLen: Array.from(args.testPlan).length,
   }
   let metrics: VerifyRunMetrics | undefined
+  const devicePrefix: { value?: DevicePrefix } = {}
   try {
     if (await isBoundDevecoOauthExpired(worktree)) await ensureInitialized(worktree)
     const params = await resolveUIVerifyParams(worktree)
@@ -173,9 +176,14 @@ async function executeVerifyUi(
     }
 
     metrics = new VerifyRunMetrics()
-    return await runVerifyUiAttempt(args, ctx, worktree, detail, params, metrics)
+    return await runVerifyUiAttempt(args, ctx, worktree, detail, params, metrics, devicePrefix)
   } catch (error) {
-    if (metrics) Object.assign(detail, metrics.snapshot())
+    if (metrics) {
+      Object.assign(detail, metrics.snapshot())
+      const deviceType = resolveDeviceType(metrics.deviceInfo())
+      if (deviceType) detail.deviceType = deviceType
+    }
+    if (devicePrefix.value) detail.deviceCategory = devicePrefix.value
     await reportUiVerificationOperation(ctx, detail)
     throw error
   }
@@ -188,14 +196,15 @@ async function runVerifyUiAttempt(
   detail: UiVerificationOperationDetail,
   params: UiVerifyParams,
   metrics: VerifyRunMetrics,
+  devicePrefix: { value?: DevicePrefix },
 ): Promise<ExecuteResult> {
   const bundleName = args.bundleName ?? (await readBundleName(worktree))
   detail.bundleName = bundleName
   await ensureInitialized(worktree)
   const boundModel = runtime?.params.modelName ?? params.modelName
   if (boundModel?.trim()) detail.modelName = normalizeModelName(boundModel)
-  const deviceType = await resolveUiVerificationDeviceType(args.device, runtime?.hdcPath)
-  if (deviceType) detail.deviceType = deviceType
+  devicePrefix.value = await resolveUiVerificationDeviceType(args.device, runtime?.hdcPath)
+  if (devicePrefix.value) detail.deviceCategory = devicePrefix.value
 
   const payload = {
     bundleName,
@@ -207,6 +216,9 @@ async function runVerifyUiAttempt(
   const result = await runVerifyUiExclusive(metrics, () => callUiVerificationTool(worktree, "verify_ui", payload, ctx.abort, metrics))
   const parsed = readVerifyResult(result)
   Object.assign(detail, metrics.snapshot(), parsed.detail)
+  // 形态在 run 过程中由引擎 tracing 上报（折叠细分类型优先于 devicetype 静态值），结束时组合
+  const deviceType = resolveDeviceType(metrics.deviceInfo())
+  if (deviceType) detail.deviceType = deviceType
   await reportUiVerificationOperation(ctx, detail)
   return verifyUiSuccessResult(result, parsed)
 }
@@ -653,6 +665,21 @@ export function normalizeToolName(name: unknown): string {
   return TOOL_NAME_PATTERN.test(normalized) ? normalized : "other"
 }
 
+export function normalizeDeviceForm(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+  return normalized === "" ? undefined : normalized
+}
+
+export function resolveDeviceType(info: { deviceTypeForm?: string; foldableType?: string }): string | undefined {
+  return info.foldableType ?? info.deviceTypeForm
+}
+
 function asNonNegativeInt(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null
 }
@@ -670,6 +697,9 @@ export class VerifyRunMetrics {
   private screenshotCount = 0
   private tokenUsage = 0
   private hasTokenUsage = false
+  private deviceTypeForm: string | undefined
+  private foldableType: string | undefined
+  private deeplinkUsed = false
 
   recordProgress(progress: number): void {
     if (!Number.isInteger(progress) || progress < 0) return
@@ -698,6 +728,15 @@ export class VerifyRunMetrics {
     if (message.event === "UI_VERIFICATION_HISTORY_REUSED") {
       const reused = asNonNegativeInt(message.reused_steps)
       if (reused !== null) this.stepReused = reused
+      return
+    }
+    if (message.event === "UI_VERIFICATION_DEVICE_INFO") {
+      this.deviceTypeForm = normalizeDeviceForm(message.device_type)
+      this.foldableType = normalizeDeviceForm(message.foldable_type)
+      return
+    }
+    if (message.event === "UI_VERIFICATION_DEEPLINK_USED") {
+      this.deeplinkUsed = true
     }
   }
 
@@ -718,6 +757,10 @@ export class VerifyRunMetrics {
     }
   }
 
+  deviceInfo(): { deviceTypeForm?: string; foldableType?: string } {
+    return { deviceTypeForm: this.deviceTypeForm, foldableType: this.foldableType }
+  }
+
   snapshot() {
     return {
       stepExecuted: this.stepExecuted,
@@ -726,6 +769,7 @@ export class VerifyRunMetrics {
       toolUsageDist: { ...this.toolUsageDist },
       screenshotCount: this.screenshotCount,
       ...(this.hasTokenUsage ? { tokenUsage: this.tokenUsage } : {}),
+      ...(this.deeplinkUsed ? { deeplinkUsed: true } : {}),
     }
   }
 
@@ -747,7 +791,7 @@ export class VerifyRunMetrics {
 async function resolveUiVerificationDeviceType(
   selector: string | undefined,
   hdc: string | undefined,
-): Promise<"emulator" | "physical" | undefined> {
+): Promise<DevicePrefix | undefined> {
   if (!hdc) return undefined
   try {
     const serials = await listHdcSerials(hdc)
@@ -765,7 +809,7 @@ async function resolveUiVerificationDeviceType(
   }
 }
 
-function deviceTypeFromSerial(serial: string): "emulator" | "physical" {
+function deviceTypeFromSerial(serial: string): DevicePrefix {
   return serial.startsWith("127.0.0.1:") ? "emulator" : "physical"
 }
 

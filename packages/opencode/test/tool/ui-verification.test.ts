@@ -13,9 +13,11 @@ import {
   SaveUiScreenshotTool,
   VerifyRunMetrics,
   VerifyUiTool,
+  normalizeDeviceForm,
   normalizeModelName,
   normalizeToolName,
   readVerifyResult,
+  resolveDeviceType,
   stopUiVerificationMcp,
 } from "@/tool/ui-verification/ui-verification-tool"
 import { tmpdir } from "../fixture/fixture"
@@ -323,6 +325,49 @@ test("falls back to prompt plus completion and omits tokenUsage when nothing par
   empty.recordLogMessage("Prompt tokens: undefined, Completion tokens: undefined, Total tokens: undefined")
   empty.recordLogMessage("usage: {not valid json}")
   expect(empty.snapshot()).not.toHaveProperty("tokenUsage")
+})
+
+test("records device info and deeplink usage from engine tracing events", () => {
+  const metrics = new VerifyRunMetrics()
+  expect(metrics.snapshot()).not.toHaveProperty("deeplinkUsed")
+  expect(metrics.deviceInfo()).toEqual({})
+
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_DEVICE_INFO",
+    device_type: "Phone",
+    is_emulator: false,
+    foldable_type: "WideFold",
+  })
+  metrics.recordTracingMessage({ event: "UI_VERIFICATION_DEEPLINK_USED" })
+
+  expect(metrics.deviceInfo()).toEqual({ deviceTypeForm: "phone", foldableType: "widefold" })
+  expect(metrics.snapshot().deeplinkUsed).toBe(true)
+})
+
+test("ignores malformed device info payloads", () => {
+  const metrics = new VerifyRunMetrics()
+  metrics.recordTracingMessage({
+    event: "UI_VERIFICATION_DEVICE_INFO",
+    device_type: 42,
+    foldable_type: ["WideFold"],
+  })
+  expect(metrics.deviceInfo()).toEqual({ deviceTypeForm: undefined, foldableType: undefined })
+})
+
+test("resolves deviceType with foldable type priority over device form", () => {
+  expect(resolveDeviceType({ deviceTypeForm: "phone", foldableType: "widefold" })).toBe("widefold")
+  expect(resolveDeviceType({ deviceTypeForm: "2in1", foldableType: "2in1-foldable" })).toBe("2in1-foldable")
+  expect(resolveDeviceType({ deviceTypeForm: "tablet" })).toBe("tablet")
+  expect(resolveDeviceType({})).toBeUndefined()
+})
+
+test("normalizes device form values for telemetry", () => {
+  expect(normalizeDeviceForm("  2in1 ")).toBe("2in1")
+  expect(normalizeDeviceForm("Phone")).toBe("phone")
+  expect(normalizeDeviceForm("a b_c!d")).toBe("a-b-c-d")
+  expect(normalizeDeviceForm("")).toBeUndefined()
+  expect(normalizeDeviceForm(undefined)).toBeUndefined()
+  expect(normalizeDeviceForm("x".repeat(40))).toHaveLength(32)
 })
 
 test("parses verify result business status and optional failType", () => {

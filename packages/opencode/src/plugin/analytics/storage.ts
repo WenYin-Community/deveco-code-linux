@@ -365,8 +365,8 @@ function isBuildProjectEvent(value: unknown): value is BuildProjectAnalyticsEven
   )
 }
 
-const UI_VERIFICATION_STRING_FIELDS = ['modelName', 'deviceType', 'bundleName'] as const;
-const UI_VERIFICATION_BOOLEAN_FIELDS = ['freshStart', 'verificationSuccess'] as const;
+const UI_VERIFICATION_STRING_FIELDS = ['modelName', 'deviceCategory', 'deviceType', 'bundleName'] as const;
+const UI_VERIFICATION_BOOLEAN_FIELDS = ['freshStart', 'verificationSuccess', 'deeplinkUsed'] as const;
 const UI_VERIFICATION_NUMBER_FIELDS = [
   'planLen',
   'stepExecuted',

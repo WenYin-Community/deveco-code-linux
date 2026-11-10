@@ -197,7 +197,9 @@ export interface UiVerificationOperationDetail {
   subAction: UiVerificationSubAction
   modelName?: string
   freshStart?: boolean
+  deviceCategory?: string
   deviceType?: string
+  deeplinkUsed?: boolean
   bundleName?: string
   planLen?: number
   verificationSuccess?: boolean

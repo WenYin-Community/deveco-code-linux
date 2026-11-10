@@ -560,10 +560,12 @@ function uiVerificationEvent(): UiVerificationAnalyticsEvent {
       subAction: 'run',
       modelName: 'vision-model',
       freshStart: true,
-      deviceType: 'emulator',
+      deviceCategory: 'emulator',
+      deviceType: 'phone',
       bundleName: 'com.example.app',
       planLen: 32,
       verificationSuccess: false,
+      deeplinkUsed: false,
       stepExecuted: 4,
       stepTotalDurationMs: 1000,
       stepReused: 2,
@@ -763,6 +765,23 @@ test("ui verification events round-trip through the encrypted pending queue", as
   expect(pending[0]?.action).toBe(ANALYTICS_ACTION.UI_VERIFICATION)
   if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
     expect(pending[0].event.event_detail).toEqual(uiVerificationEvent().event_detail)
+  }
+})
+
+test("ui verification queue preserves the deeplinkUsed flag", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const event = uiVerificationEvent()
+
+  await enqueuePendingEvent({
+    action: ANALYTICS_ACTION.UI_VERIFICATION,
+    event: { ...event, event_detail: { ...event.event_detail, deeplinkUsed: true } },
+  })
+  const pending = await getPendingEvents()
+
+  expect(pending).toHaveLength(1)
+  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
+    expect(pending[0].event.event_detail.deeplinkUsed).toBe(true)
   }
 })
 
