@@ -6,6 +6,10 @@ export type ConfigOptionModel = {
   id: string
   name: string
   variants?: Record<string, Record<string, unknown>>
+  // Request-option overlay (e.g. the cloud-declared `reasoningEffort`
+  // applied when no variant is selected). ACP does not forward this
+  // object; only the resolved default effort below rides the wire.
+  options?: Record<string, unknown>
 }
 
 export type ConfigOptionProvider = {
@@ -52,6 +56,7 @@ export function buildModelSelectOption(input: {
 export function buildEffortSelectOption(input: {
   variants: readonly string[]
   currentVariant?: string
+  defaultEffort?: string
 }): SessionConfigOption | undefined {
   if (input.variants.length === 0) return undefined
 
@@ -66,6 +71,12 @@ export function buildEffortSelectOption(input: {
       value: variant,
       name: formatVariantName(variant),
     })),
+    // Side channel only: `currentValue` and `options` keep their existing
+    // shape and behavior. Clients that know the key can prefer the cloud
+    // default on first load; every other client ignores it.
+    ...(input.defaultEffort && input.variants.includes(input.defaultEffort)
+      ? { _meta: { defaultEffort: input.defaultEffort } }
+      : {}),
   }
 }
 
@@ -96,7 +107,8 @@ export function buildConfigOptions(input: {
   currentModeId?: string
 }): SessionConfigOption[] {
   const variants = variantsForModel(input.providers, input.currentModel)
-  const effort = buildEffortSelectOption({ variants, currentVariant: input.currentVariant })
+  const defaultEffort = defaultEffortForModel(input.providers, input.currentModel)
+  const effort = buildEffortSelectOption({ variants, currentVariant: input.currentVariant, defaultEffort })
 
   return [
     buildModelSelectOption({
@@ -194,6 +206,15 @@ function variantsForModel(providers: readonly ConfigOptionProvider[], model: Mod
   return Object.keys(
     providers.find((provider) => provider.id === model.providerID)?.models[model.modelID]?.variants ?? {},
   )
+}
+
+/** Cloud-declared default effort for the selected model. It lives in the
+ * provider's request-option overlay (`options.reasoningEffort`) and is not
+ * itself a selectable variant, so callers forward it via `_meta`. */
+function defaultEffortForModel(providers: readonly ConfigOptionProvider[], model: ModelSelection["model"]) {
+  const override = providers.find((provider) => provider.id === model.providerID)?.models[model.modelID]?.options
+  const effort = override?.reasoningEffort
+  return typeof effort === "string" ? effort : undefined
 }
 
 function selectVariant(variant: string | undefined, variants: readonly string[]) {

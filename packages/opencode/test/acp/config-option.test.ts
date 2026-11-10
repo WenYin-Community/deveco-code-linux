@@ -114,6 +114,74 @@ describe("acp config options", () => {
     expect(buildEffortSelectOption({ variants: [] })).toBeUndefined()
   })
 
+  test("forwards the cloud default effort through _meta without changing currentValue or options", () => {
+    expect(
+      buildEffortSelectOption({
+        variants: ["low", "high", "max"],
+        currentVariant: "low",
+        defaultEffort: "high",
+      }),
+    ).toEqual({
+      id: "effort",
+      name: "Effort",
+      description: "Available effort levels for this model",
+      category: "thought_level",
+      type: "select",
+      currentValue: "low",
+      options: [
+        { value: "low", name: "Low" },
+        { value: "high", name: "High" },
+        { value: "max", name: "Max" },
+      ],
+      _meta: { defaultEffort: "high" },
+    })
+  })
+
+  test("omits the default effort hint when it is not a selectable variant", () => {
+    const option = buildEffortSelectOption({
+      variants: ["low", "high"],
+      currentVariant: "low",
+      defaultEffort: "max",
+    })
+    expect(option?.type === "select" ? option._meta : undefined).toBeUndefined()
+  })
+
+  test("builds effort options from provider model defaults", () => {
+    const options = buildConfigOptions({
+      providers: [
+        {
+          id: "deveco",
+          name: "DevEco Code",
+          models: {
+            "GLM-5.3": {
+              id: "GLM-5.3",
+              name: "GLM-5.3",
+              variants: {
+                low: { reasoningEffort: "low" },
+                high: { reasoningEffort: "high" },
+                max: { reasoningEffort: "max" },
+              },
+              options: { reasoningEffort: "high" },
+            },
+          },
+        },
+      ],
+      currentModel: { providerID: "deveco", modelID: "GLM-5.3" },
+    })
+
+    const effort = options.find((option) => option.id === "effort")
+    if (effort?.type !== "select") throw new Error("expected effort select option")
+    // Existing ACP behavior is unchanged: the current value still follows the
+    // variant fallback, not the cloud default.
+    expect(effort.currentValue).toBe("low")
+    expect(effort.options).toEqual([
+      { value: "low", name: "Low" },
+      { value: "high", name: "High" },
+      { value: "max", name: "Max" },
+    ])
+    expect(effort._meta).toEqual({ defaultEffort: "high" })
+  })
+
   test("builds the mode select option with descriptions when present", () => {
     expect(
       buildModeSelectOption({
