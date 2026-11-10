@@ -8,15 +8,6 @@ on:
         required: true
         type: string
 
-concurrency:
-  # 禁止并发：新运行抢占同一 MR 的旧运行，其余排队等待
-  enable: true
-  max: 1
-  exceed-action: QUEUE
-  preemption:
-    enable: true
-    events: [mr_id]
-
 permissions:
   repository: read
 
