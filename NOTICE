@@ -18,9 +18,9 @@ The following components are licensed under the MIT License:
 
   - @actions/core (1.11.1)
   - @actions/github (6.0.1)
-  - @clack/core (1.5.1)
+  - @clack/core (1.6.0)
   - @clack/prompts (1.0.0-alpha.1) - Copyright (c) Nate Moore
-  - @clack/prompts (1.8.1)
+  - @clack/prompts (1.9.0)
   - @deveco/deveco-cli (1.3.4)
   - @effect/opentelemetry (4.0.0-beta.74)
   - @effect/platform-node (4.0.0-beta.74)
@@ -55,7 +55,7 @@ The following components are licensed under the MIT License:
   - fuzzysort (3.1.0) - Copyright (c) farzher
   - gitlab-ai-provider (6.9.3) - Copyright (c) Vladimir Glafirov
   - gray-matter (4.0.3) - Copyright (c) Jon Schlinkert (https://github.com/jonschlinkert)
-  - homegraph (1.6.3)
+  - homegraph (1.6.4)
   - hono (4.12.26) - Copyright (c) Yusuke Wada <yusuke@kamawada.com> (https://github.com/yusukebe)
   - htmlparser2 (8.0.2) - Copyright (c) Felix Boehm <me@feedic.com>
   - ignore (7.0.5) - Copyright (c) kael
@@ -74,6 +74,7 @@ The following components are licensed under the MIT License:
   - picomatch (4.0.7)
   - remeda (2.26.0) - Copyright (c) Łukasz Sentkiewicz
   - rfdc (1.4.1)
+  - sisteransi (2.0.0)
   - sisteransi (1.0.5)
   - solid-js (1.9.10) - Copyright (c) Ryan Carniato
   - streamroller (3.1.5)
