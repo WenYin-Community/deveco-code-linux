@@ -1162,5 +1162,16 @@
     "key_loading_failed": "API key saved, but provider loading failed. Please try again.",
     "invalid_studio": "Invalid path. Please enter a directory containing DevEco Studio (v6.1 or later).",
     "studio_placeholder": " e.g. D:\\DevEco Studio"
+  },
+  "skill": {
+    "hmos-dfx-analyzer": {
+      "desc": "Deterministic triage for HarmonyOS AppFreeze / CppCrash / JSCrash plus non-crashing white-screen analysis"
+    },
+    "hmos-arkui-develop-skill": {
+      "desc": "It provides an ArkTS and ArkUI coding guide, covering fatal gotchas, API quick-references, ArkTS linter rules, forbidden syntax, null safety, struct/@Component constraints, V1/V2 state management, rendering control, API parameter correctness, and UI quality standards"
+    },
+    "hmos-design-to-arkts": {
+      "desc": "Handle tasks that convert Pixso or Figma design files into HarmonyOS ArkTS code. This skill must be used whenever the user invokes `$hmos-design-to-arkts`, provides a Pixso or Figma link, selects a node in the Pixso client, supplies design DSL, screenshots, or local assets, or asks to convert a UI design into ArkTS"
+    }
   }
 }

@@ -44,6 +44,10 @@ private val KNOWN_COMMANDS = mapOf(
     "customize-deveco" to "slash.command.customize-deveco.desc",
     "deveco-cli" to "slash.command.deveco-cli.desc",
     "deveco-create-project" to "slash.command.deveco-create-project.desc",
+    "analyze" to "slash.command.analyze.desc",
+    "hmos-dfx-analyzer" to "slash.command.hmos-dfx-analyzer.desc",
+    "hmos-arkui-develop-skill" to "slash.command.hmos-arkui-develop-skill.desc",
+    "hmos-design-to-arkts" to "slash.command.hmos-design-to-arkts.desc",
 )
 
 private val CLIENT_COMMANDS = setOf("compact", "new")

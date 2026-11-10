@@ -1163,5 +1163,16 @@
     "key_loading_failed": "API 密钥已保存，但服务商加载失败，请重试。",
     "invalid_studio": "路径无效，请输入 DevEco Studio（6.1 或更高版本）的安装目录。",
     "studio_placeholder": " 例如 D:\\DevEco Studio"
+  },
+  "skill": {
+    "hmos-dfx-analyzer": {
+      "desc": "HarmonyOS 应用故障确定性分诊（卡死 / CppCrash / JSCrash）与非崩溃白屏分析"
+    },
+    "hmos-arkui-develop-skill": {
+      "desc": "提供了ArkTS&ArkUI编码指南，包括致命陷阱、API 快速参考、ArkTS 检查器规则、禁用语法、空安全、struct/@Component 约束、V1/V2 状态管理、渲染控制、API 参数正确性以及 UI 质量标准"
+    },
+    "hmos-design-to-arkts": {
+      "desc": "处理 Pixso 或 Figma 设计稿转 HarmonyOS ArkTS 代码的任务。当用户使用 `$hmos-design-to-arkts`、提供 Pixso/Figma 链接、Pixso 客户端选中节点、设计稿 DSL/截图/本地资源，或要求把 UI 设计稿转换为 ArkTS 时，必须使用本 skill"
+    }
   }
 }
