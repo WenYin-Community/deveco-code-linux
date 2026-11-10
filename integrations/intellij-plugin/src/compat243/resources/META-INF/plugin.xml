@@ -45,12 +45,20 @@
     <fileIconProvider implementation="org.deveco.code.session.editor.SessionFileIconProvider" />
     <notificationGroup id="DevEco Code Migration" displayType="BALLOON" />
     <postStartupActivity implementation="org.deveco.code.action.NewSessionToolbarRegistrar" />
+    <!-- Backstop only; the preload itself normally starts at app creation. -->
+    <postStartupActivity implementation="org.deveco.code.toolwindow.ToolWindowPreloadRegistrar" />
   </extensions>
 
   <applicationListeners>
     <!-- Restores/drops the runtime-added main toolbar button across dynamic
          disable/re-enable cycles of this plugin. -->
     <listener class="org.deveco.code.action.NewSessionToolbarLifecycle"
+      topic="com.intellij.ide.plugins.DynamicPluginListener" />
+    <!-- Defines the tool window UI classes off the EDT before the first, login-triggered
+         Compose tab creation; see ToolWindowPreloader for why this must stay race-free. -->
+    <listener class="org.deveco.code.toolwindow.ToolWindowPreloadLifecycle"
+      topic="com.intellij.ide.AppLifecycleListener" />
+    <listener class="org.deveco.code.toolwindow.ToolWindowPreloadLifecycle"
       topic="com.intellij.ide.plugins.DynamicPluginListener" />
   </applicationListeners>
 

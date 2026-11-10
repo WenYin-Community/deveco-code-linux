@@ -12,7 +12,7 @@ class DevEcoToolWindowFactory :
     override fun shouldBeAvailable(project: Project): Boolean = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        ToolImprovementConsentMigrator.migrate()
+        ToolImprovementConsentMigrator.migrateAsync()
         toolWindow.addDevEcoComposeTab(project)
         val content = toolWindow.contentManager.contents.firstOrNull() ?: return
         content.displayName = null
