@@ -1,7 +1,7 @@
 /**
  * Build-time skill sources.
  *
- * Built-in skills come from two places:
+ * Built-in skills come from two sources:
  *   - `resources/skills/` in this repository (project-owned skills)
  *   - the installed CLI implementation package `@deveco/deveco-cli-common/skills/`
  *     (skills the CLI team ships with `devecocli`)
