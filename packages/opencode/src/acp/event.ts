@@ -1,5 +1,6 @@
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
 import type {
+  DebugStatePart,
   Event,
   EventMessagePartDelta,
   EventMessagePartUpdated,
@@ -99,6 +100,46 @@ function sessionErrorChunk(messageId: string, error: SessionErrorPayload) {
     messageId,
     content: { type: "text" as const, text: sessionErrorText(error) },
     _meta: { error: sessionErrorMeta(error) },
+  }
+}
+
+// Sticky-debug transcript markers (`debug-state` parts) are the only durable
+// record of a /debug turn: the typed text is either absent (status/clear echo
+// a marker-only user message) or synthetic (enter hides the expanded command
+// template), so without this mirror a reloaded session shows nothing for the
+// turn. ACP has no dedicated update for them, so they travel as agent chunks
+// tagged `_meta.debugState` — same pattern as sessionErrorChunk. It must NOT
+// be a user_message_chunk: clients key per-user-message state (replay indices,
+// original-text decorations) off user chunks, and marker-only turns consume no
+// index on the saving side. The text is a plain-language fallback for clients
+// that don't know the meta; the TUI wording lives in its debug_state i18n.
+function debugStateText(part: DebugStatePart): string {
+  const condition = part.condition.trim()
+  switch (part.state) {
+    case "set":
+    case "status":
+      return condition ? `Debug mode active: ${condition}` : "Debug mode active"
+    case "cleared":
+      return condition ? `Debug mode cleared: ${condition}` : "Debug mode cleared"
+    case "none":
+      return "Debug mode is not active"
+  }
+}
+
+function debugStateChunk(part: DebugStatePart) {
+  return {
+    sessionUpdate: "agent_message_chunk" as const,
+    // Part-scoped id keeps each marker its own message and makes the live and
+    // replay emissions of the same part indistinguishable to the client.
+    messageId: `debug-state-${part.id}`,
+    content: { type: "text" as const, text: debugStateText(part) },
+    _meta: {
+      debugState: {
+        state: part.state,
+        condition: part.condition,
+        ...(part.command ? { command: part.command } : {}),
+      },
+    },
   }
 }
 
@@ -230,6 +271,13 @@ export class Subscription {
         await this.handleToolPart(message.info.sessionID, part, cwd ?? process.cwd())
         continue
       }
+      if (part.type === "debug-state") {
+        await this.input.connection.sessionUpdate({
+          sessionId: message.info.sessionID,
+          update: debugStateChunk(part),
+        })
+        continue
+      }
       await this.replayContentPart(message, part)
     }
 
@@ -306,6 +354,13 @@ export class Subscription {
         metadata: "metadata" in part ? part.metadata : undefined,
       }),
     )
+    if (part.type === "debug-state") {
+      await this.input.connection.sessionUpdate({
+        sessionId: session.id,
+        update: debugStateChunk(part),
+      })
+      return
+    }
     if (part.type === "tool") {
       await this.handleToolPart(session.id, part, session.cwd)
     }

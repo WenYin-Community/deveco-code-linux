@@ -604,7 +604,13 @@ export function make(input: {
         "session",
       )
       yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
-      return promptResponse(response.info, params.messageId, !!response.info.error)
+      // The SDK types session.command's info as AssistantMessage, but echo-shaped
+      // commands (/debug status|clear) resolve to the marker's USER message, which
+      // carries no tokens: promptResponse would defect inside buildUsage and the
+      // client only ever sees a generic internal service failure for the turn.
+      // Answer without usage, like the compact path above.
+      const info = response.info.role === "assistant" ? response.info : undefined
+      return promptResponse(info, params.messageId, !!response.info.error)
     }),
     cancel,
   }
