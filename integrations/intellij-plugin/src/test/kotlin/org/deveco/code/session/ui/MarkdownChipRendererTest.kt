@@ -1,5 +1,6 @@
 package org.deveco.code.session.ui
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import org.jetbrains.jewel.markdown.InlineMarkdown
@@ -9,7 +10,6 @@ import org.junit.Test
 
 class MarkdownChipRendererTest {
 
-    private val renderer = ChipInlineMarkdownRenderer(emptyList())
     // Built positionally: the intui bridge create() factories read JewelTheme,
     // which is unavailable outside a composition.
     private val styling = InlinesStyling(
@@ -25,6 +25,7 @@ class MarkdownChipRendererTest {
         SpanStyle(),
         SpanStyle(),
     )
+    private val renderer = ChipInlineMarkdownRenderer(emptyList(), styling.inlineCode)
 
     @Test
     fun `code and link spans are tagged with chip annotations`() {
@@ -126,5 +127,75 @@ class MarkdownChipRendererTest {
         val chips = rendered.getStringAnnotations(CHIP_ANNOTATION_TAG, 0, rendered.text.length)
         assertEquals(1, chips.size)
         assertEquals("is.message", rendered.text.substring(chips[0].start, chips[0].end))
+    }
+
+    @Test
+    fun `hard line break next to a chip is preserved`() {
+        val rendered = renderer.renderAsAnnotatedString(
+            listOf(
+                InlineMarkdown.Text("before"),
+                InlineMarkdown.HardLineBreak,
+                InlineMarkdown.Code("after"),
+            ),
+            styling,
+            false,
+        ) { }
+        assertEquals("before\nafter", rendered.text)
+        val chips = rendered.getStringAnnotations(CHIP_ANNOTATION_TAG, 0, rendered.text.length)
+        assertEquals(1, chips.size)
+        assertEquals("after", rendered.text.substring(chips[0].start, chips[0].end))
+    }
+
+    @Test
+    fun `full-width punctuation hugs the chip`() {
+        val rendered = renderer.renderAsAnnotatedString(
+            listOf(
+                InlineMarkdown.Text("调用（"),
+                InlineMarkdown.Code("Agent"),
+                InlineMarkdown.Text("），继续"),
+            ),
+            styling,
+            false,
+        ) { }
+        assertEquals("调用（Agent），继续", rendered.text)
+    }
+
+    @Test
+    fun `code inside strong emphasis gets a chip`() {
+        val rendered = renderer.renderAsAnnotatedString(
+            listOf(
+                InlineMarkdown.StrongEmphasis("**", listOf(InlineMarkdown.Code("Agent"))),
+            ),
+            styling,
+            false,
+        ) { }
+        assertEquals("Agent", rendered.text)
+        val chips = rendered.getStringAnnotations(CHIP_ANNOTATION_TAG, 0, rendered.text.length)
+        assertEquals(1, chips.size)
+        assertEquals(CHIP_KIND_CODE, chips[0].item)
+    }
+
+    @Test
+    fun `stylings without the chip code span render plain`() {
+        val plain = InlinesStyling(
+            TextStyle.Default,
+            SpanStyle(color = Color.Red),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+            SpanStyle(),
+        )
+        val rendered = renderer.renderAsAnnotatedString(
+            listOf(InlineMarkdown.Text("a "), InlineMarkdown.Code("x")),
+            plain,
+            false,
+        ) { }
+        assertEquals("a x", rendered.text)
+        assertEquals(0, rendered.getStringAnnotations(CHIP_ANNOTATION_TAG, 0, rendered.text.length).size)
     }
 }

@@ -121,6 +121,16 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
     val linkSpan = SpanStyle(
         color = accentColor,
     )
+    // Same look, distinct instances: the chip renderer gates on the identity of
+    // inlineCodeSpan, and headings draw no chips, so carrying the gated instance
+    // into heading styling would add gap spaces there with no outline.
+    val headingInlineCodeSpan = SpanStyle(
+        color = textColor,
+        fontFamily = codeTextStyle.fontFamily,
+    )
+    val headingLinkSpan = SpanStyle(
+        color = accentColor,
+    )
     val inlinesStyling = InlinesStyling.create(
         textStyle = baseTextStyle,
         inlineCode = inlineCodeSpan,
@@ -132,8 +142,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h1 = MarkdownStyling.Heading.H1(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 18.sp, fontWeight = FontWeight.Bold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -143,8 +153,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h2 = MarkdownStyling.Heading.H2(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 16.sp, fontWeight = FontWeight.Bold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -154,8 +164,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h3 = MarkdownStyling.Heading.H3(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -165,8 +175,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h4 = MarkdownStyling.Heading.H4(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -176,8 +186,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h5 = MarkdownStyling.Heading.H5(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -187,8 +197,8 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         h6 = MarkdownStyling.Heading.H6(
             inlinesStyling = InlinesStyling.create(
                 textStyle = baseTextStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
-                inlineCode = inlineCodeSpan,
-                link = linkSpan,
+                inlineCode = headingInlineCodeSpan,
+                link = headingLinkSpan,
             ),
             underlineWidth = 0.dp,
             underlineColor = Color.Unspecified,
@@ -245,7 +255,7 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
     val blockRenderer = SafeOrderedListMarkdownBlockRenderer(
         styling = markdownStyling,
         rendererExtensions = rendererExtensions,
-        inlineRenderer = ChipInlineMarkdownRenderer(rendererExtensions),
+        inlineRenderer = ChipInlineMarkdownRenderer(rendererExtensions, inlineCodeSpan),
     )
     val processor = MarkdownProcessor(
         extensions = listOf(GitHubTableProcessorExtension),

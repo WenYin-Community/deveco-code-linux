@@ -30,6 +30,7 @@ internal const val CHIP_KIND_LINK = "link"
 
 internal class ChipInlineMarkdownRenderer(
     rendererExtensions: List<MarkdownRendererExtension>,
+    private val chipCodeSpan: SpanStyle,
 ) : DefaultInlineMarkdownRenderer(rendererExtensions) {
     // Kotlin cannot call a superclass member extension (the per-node render hooks),
     // so tag ranges here instead: every top-level node is rendered by super on its
@@ -39,21 +40,54 @@ internal class ChipInlineMarkdownRenderer(
         styling: InlinesStyling,
         enabled: Boolean,
         onUrlClicked: ((String) -> Unit)?,
+    ): AnnotatedString {
+        // Headings and the thought area reuse this renderer but draw no chips, so
+        // tagging them would insert gap spaces with no outline to show for it.
+        // Only the styling carrying the chip code span instance gets chips.
+        if (styling.inlineCode !== chipCodeSpan) {
+            return super.renderAsAnnotatedString(inlineMarkdown, styling, enabled, onUrlClicked)
+        }
+        return renderTagged(inlineMarkdown.toList(), styling, enabled, onUrlClicked)
+    }
+
+    private fun renderTagged(
+        inlines: List<InlineMarkdown>,
+        styling: InlinesStyling,
+        enabled: Boolean,
+        onUrlClicked: ((String) -> Unit)?,
     ): AnnotatedString = buildAnnotatedString {
-        val inlines = inlineMarkdown.toList()
         val kinds = inlines.map(::chipKind)
         val parts = inlines.map { inline ->
-            val kind = chipKind(inline) ?: return@map super.renderAsAnnotatedString(listOf(inline), styling, enabled, onUrlClicked)
-            buildAnnotatedString {
-                pushStringAnnotation(CHIP_ANNOTATION_TAG, kind)
-                append(super.renderAsAnnotatedString(listOf(inline), styling, enabled, onUrlClicked))
-                pop()
+            when (inline) {
+                // Emphasis wrappers are re-rendered here so code/links nested in
+                // bold/italic still get their chips; code inside a link stays
+                // inside the link chip on purpose (no nested outlines).
+                is InlineMarkdown.StrongEmphasis -> buildAnnotatedString {
+                    pushStyle(styling.strongEmphasis)
+                    append(renderTagged(inline.inlineContent, styling, enabled, onUrlClicked))
+                    pop()
+                }
+                is InlineMarkdown.Emphasis -> buildAnnotatedString {
+                    pushStyle(styling.emphasis)
+                    append(renderTagged(inline.inlineContent, styling, enabled, onUrlClicked))
+                    pop()
+                }
+                else -> {
+                    val kind = chipKind(inline)
+                        ?: return@map super.renderAsAnnotatedString(listOf(inline), styling, enabled, onUrlClicked)
+                    buildAnnotatedString {
+                        pushStringAnnotation(CHIP_ANNOTATION_TAG, kind)
+                        append(super.renderAsAnnotatedString(listOf(inline), styling, enabled, onUrlClicked))
+                        pop()
+                    }
+                }
             }
         }
         // Chips need ~8dp of room per side (4dp inner padding + 4dp outer gap). A
         // plain inter-word space only carries ~4dp and the inner padding would eat
         // it, leaving the border glued to the previous word, so an existing space
         // next to a chip is replaced by the widened gap space instead of kept.
+        // Line breaks are structural: never trim or replace them.
         val trimmed = parts.toMutableList()
         val gaps = BooleanArray(parts.size)
         for (index in 0 until parts.lastIndex) {
@@ -62,25 +96,23 @@ internal class ChipInlineMarkdownRenderer(
             if (!leftIsChip && !rightIsChip) continue
             if (rightIsChip) {
                 when (val neighbour = parts[index].text.lastOrNull()) {
-                    null -> Unit
+                    null, '\n' -> Unit
                     in LEFT_HUG_NEIGHBOURS -> Unit
-                    else -> if (neighbour.isWhitespace()) {
-                        trimmed[index] = trimmed[index].trimTrailingWhitespace()
-                        gaps[index] = true
-                    } else {
+                    ' ', '\t' -> {
+                        trimmed[index] = trimmed[index].trimTrailingSpaces()
                         gaps[index] = true
                     }
+                    else -> gaps[index] = true
                 }
             } else {
                 when (val neighbour = parts[index + 1].text.firstOrNull()) {
-                    null -> Unit
+                    null, '\n' -> Unit
                     in RIGHT_HUG_NEIGHBOURS -> Unit
-                    else -> if (neighbour.isWhitespace()) {
-                        trimmed[index + 1] = trimmed[index + 1].trimLeadingWhitespace()
-                        gaps[index] = true
-                    } else {
+                    ' ', '\t' -> {
+                        trimmed[index + 1] = trimmed[index + 1].trimLeadingSpaces()
                         gaps[index] = true
                     }
+                    else -> gaps[index] = true
                 }
             }
         }
@@ -100,18 +132,20 @@ internal class ChipInlineMarkdownRenderer(
 private const val CHIP_GAP_TEXT = " "
 private val CHIP_GAP_STYLE = SpanStyle(letterSpacing = 4.sp)
 
-// Openers and CJK punctuation that must stay glued to what follows them.
-private const val LEFT_HUG_NEIGHBOURS = "([{\"'《「『【、。,;:!?…"
-// Closers, commas and periods that must stay glued to what precedes them.
-private const val RIGHT_HUG_NEIGHBOURS = ")]}\"'》」』】,;.!?、。,;:!?…%"
+// Openers and punctuation (ASCII + full-width) that must stay glued to what
+// follows them.
+private const val LEFT_HUG_NEIGHBOURS = "([{\"'（《「『【、。，,；;：:！!？?…"
+// Closers and punctuation (ASCII + full-width) that must stay glued to what
+// precedes them.
+private const val RIGHT_HUG_NEIGHBOURS = ")]}\"'）》」』】、。，,；;：:！!？?…%"
 
-private fun AnnotatedString.trimTrailingWhitespace(): AnnotatedString {
-    val keep = text.length - text.takeLastWhile { it.isWhitespace() }.length
+private fun AnnotatedString.trimTrailingSpaces(): AnnotatedString {
+    val keep = text.length - text.takeLastWhile { it == ' ' || it == '\t' }.length
     return if (keep == text.length) this else subSequence(0, keep)
 }
 
-private fun AnnotatedString.trimLeadingWhitespace(): AnnotatedString {
-    val drop = text.takeWhile { it.isWhitespace() }.length
+private fun AnnotatedString.trimLeadingSpaces(): AnnotatedString {
+    val drop = text.takeWhile { it == ' ' || it == '\t' }.length
     return if (drop == 0) this else subSequence(drop, text.length)
 }
 
