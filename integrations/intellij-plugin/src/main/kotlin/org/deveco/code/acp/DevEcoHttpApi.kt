@@ -207,7 +207,8 @@ internal class DevEcoHttpApi(baseUrl: String, username: String?, password: Strin
      * refuses deletes while a turn is in flight.
      */
     fun deleteMessage(sessionId: String, messageId: String, directory: String): Boolean {
-        val response = delete("session/${encode(sessionId)}/message/${encode(messageId)}?directory=${encQuery(directory)}")
+        val response =
+            delete("session/${encode(sessionId)}/message/${encode(messageId)}?directory=${encQuery(directory)}")
         requireSuccess(response, "message deletion")
         return response.body()?.trim()?.toBooleanStrictOrNull() == true
     }

@@ -365,21 +365,17 @@ internal class SessionSnapshotTest {
         parts = parts,
     )
 
-    private fun text(
-        id: String,
-        messageID: String,
-        value: String,
-        synthetic: Boolean = false,
-    ) = DevEcoHttpApi.SessionPart(
-        id = id,
-        messageID = messageID,
-        type = "text",
-        data = buildJsonObject {
-            put("type", "text")
-            put("text", value)
-            if (synthetic) put("synthetic", true)
-        },
-    )
+    private fun text(id: String, messageID: String, value: String, synthetic: Boolean = false) =
+        DevEcoHttpApi.SessionPart(
+            id = id,
+            messageID = messageID,
+            type = "text",
+            data = buildJsonObject {
+                put("type", "text")
+                put("text", value)
+                if (synthetic) put("synthetic", true)
+            },
+        )
 
     private fun reasoning(id: String, messageID: String, value: String) = DevEcoHttpApi.SessionPart(
         id = id,

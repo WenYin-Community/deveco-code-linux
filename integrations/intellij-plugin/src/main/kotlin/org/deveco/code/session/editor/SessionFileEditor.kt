@@ -503,7 +503,9 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
                 previewProportion = if (previewOpen) splitter.proportion else previewProportion,
                 draft = cleanedDraft,
                 fileReferences = controller.fileReferences.toList(),
-                attachments = controller.attachments.map { it.copy(thumbnail = null, originalBytes = null, optimizedBytes = null, optimizedMime = null) },
+                attachments = controller.attachments.map {
+                    it.copy(thumbnail = null, originalBytes = null, optimizedBytes = null, optimizedMime = null)
+                },
             )
         }
     }

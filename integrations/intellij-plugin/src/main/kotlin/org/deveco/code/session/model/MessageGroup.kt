@@ -300,8 +300,10 @@ internal fun turnFooterAnchors(groups: List<MessageGroup>): TurnFooterAnchors {
                 val messageAnchorId = terminal.sourceMessageId?.let { sourceMessageId ->
                     turnGroups.asReversed().firstOrNull { group ->
                         isVisible(group) &&
-                            (group.parent.sourceMessageId == sourceMessageId ||
-                                group.children.any { it.sourceMessageId == sourceMessageId })
+                            (
+                                group.parent.sourceMessageId == sourceMessageId ||
+                                    group.children.any { it.sourceMessageId == sourceMessageId }
+                                )
                     }?.parent?.id ?: turnGroups.asReversed().firstOrNull { group ->
                         group.parent.sourceMessageId == sourceMessageId ||
                             group.children.any { it.sourceMessageId == sourceMessageId }
@@ -310,11 +312,13 @@ internal fun turnFooterAnchors(groups: List<MessageGroup>): TurnFooterAnchors {
                 val anchorId = messageAnchorId ?: terminal.id.takeIf { source ->
                     turnGroups.any { it.parent.id == source }
                 } ?: lastVisibleGroupId
-                if (anchorId != null) terminalStatusByAnchorId[anchorId] = TurnTerminalStatus(
-                    status = if (terminal.errorText != null) "failed" else "stopped",
-                    timestamp = terminal.completedAt.takeIf { it > 0 } ?: terminal.createdAt,
-                    errorText = terminal.errorText,
-                )
+                if (anchorId != null) {
+                    terminalStatusByAnchorId[anchorId] = TurnTerminalStatus(
+                        status = if (terminal.errorText != null) "failed" else "stopped",
+                        timestamp = terminal.completedAt.takeIf { it > 0 } ?: terminal.createdAt,
+                        errorText = terminal.errorText,
+                    )
+                }
             }
         turnAgents = mutableListOf()
         turnGroups = mutableListOf()

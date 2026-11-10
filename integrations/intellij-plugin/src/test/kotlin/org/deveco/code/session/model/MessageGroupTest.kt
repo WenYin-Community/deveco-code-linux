@@ -243,7 +243,13 @@ internal class MessageGroupTest {
     fun `failed turn without body anchors its error for the footer copy button`() {
         val groups = groupMessages(
             listOf(
-                agent("placeholder", text = "", errorText = "APIError: 429 rate limit", completedAt = 40, sourceMessageId = "m1"),
+                agent(
+                    "placeholder",
+                    text = "",
+                    errorText = "APIError: 429 rate limit",
+                    completedAt = 40,
+                    sourceMessageId = "m1",
+                ),
             ),
         )
 

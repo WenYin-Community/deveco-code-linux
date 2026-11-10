@@ -132,7 +132,7 @@ class DevEcoSessionActions(private val project: Project) {
             effectiveOnStateChange { current ->
                 current.copy(
                     sessions = current.sessions.map { item ->
-                        if (item.info.sessionId.value == sessionId)
+                        if (item.info.sessionId.value == sessionId) {
                             SessionItem(
                                 info = item.info.copy(
                                     title = title ?: item.info.title,
@@ -140,7 +140,9 @@ class DevEcoSessionActions(private val project: Project) {
                                 ),
                                 favorite = item.favorite,
                             )
-                        else item
+                        } else {
+                            item
+                        }
                     },
                 )
             }

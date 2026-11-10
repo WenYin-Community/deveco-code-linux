@@ -14,7 +14,7 @@ internal fun ToolWindow.addDevEcoComposeTab(project: Project) {
     val composePanel = JewelComposePanel {
         DevEcoSessions(project)
     }
-    
+
     val wrapper = JPanel(object : LayoutManager {
         override fun addLayoutComponent(name: String?, comp: java.awt.Component?) = Unit
         override fun removeLayoutComponent(comp: java.awt.Component?) = Unit
@@ -32,7 +32,7 @@ internal fun ToolWindow.addDevEcoComposeTab(project: Project) {
         minimumSize = Dimension(0, 0)
         add(composePanel)
     }
-    
+
     val content = com.intellij.ui.content.ContentFactory.getInstance().createContent(wrapper, "", false)
     contentManager.addContent(content)
 }

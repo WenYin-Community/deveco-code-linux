@@ -83,7 +83,8 @@ object PrivacySettingsStore {
             val file = kvFile()
             if (!Files.isRegularFile(file)) return fallback
             val kv =
-                json.parseToJsonElement(Files.readString(file, StandardCharsets.UTF_8)) as? JsonObject ?: return fallback
+                json.parseToJsonElement(Files.readString(file, StandardCharsets.UTF_8)) as? JsonObject
+                    ?: return fallback
             (kv[key] as? JsonPrimitive)?.booleanOrNull ?: fallback
         } catch (e: Exception) {
             log.warn("Failed to read privacy setting $key, using default $fallback: ${e.message}")

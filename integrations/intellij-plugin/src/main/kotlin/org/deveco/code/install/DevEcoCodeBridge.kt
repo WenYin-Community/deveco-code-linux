@@ -176,7 +176,11 @@ object DevEcoCodeBridge {
                 service.newSession()
             }.getOrElse {
                 log.warn("bridge: session creation failed", it)
-                report(project, MyMessageBundle.message("bridge.delivery.create.failed", errorMessage(it)), error = true)
+                report(
+                    project,
+                    MyMessageBundle.message("bridge.delivery.create.failed", errorMessage(it)),
+                    error = true,
+                )
                 return
             }
             // Pooled as unsent, so a failure further down leaves a reusable blank conversation behind

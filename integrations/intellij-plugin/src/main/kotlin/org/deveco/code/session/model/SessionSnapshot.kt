@@ -220,6 +220,7 @@ private fun renderAssistantSnapshot(
                 .orEmpty()
 
             "tool" -> listOfNotNull(renderToolPart(part, previousById, message.id))
+
             else -> renderSystemParts(listOf(part), message.id, message.createdAt)
         }
     }
@@ -254,12 +255,11 @@ private fun renderAssistantSnapshot(
     )
 }
 
-internal fun DevEcoHttpApi.SessionMessageTime.hasVisibleUserParts(): Boolean =
-    role == "user" && parts.any { part ->
-        (part.type == "text" || part.type == "file") &&
-            !part.data.bool("synthetic") &&
-            !part.data.bool("ignored")
-    }
+internal fun DevEcoHttpApi.SessionMessageTime.hasVisibleUserParts(): Boolean = role == "user" && parts.any { part ->
+    (part.type == "text" || part.type == "file") &&
+        !part.data.bool("synthetic") &&
+        !part.data.bool("ignored")
+}
 
 /**
  * Reinserts local-only rows at the position they occupied before a snapshot replaced

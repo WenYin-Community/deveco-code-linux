@@ -37,19 +37,25 @@ class GeneralSettingsConfigurable : Configurable {
         panel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = EmptyBorder(0, 0, 0, 0)
-            add(TitledSeparator(MyMessageBundle.message("settings.privacy.data.collection.title")).apply {
-                alignmentX = JPanel.LEFT_ALIGNMENT
-                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
-            })
+            add(
+                TitledSeparator(MyMessageBundle.message("settings.privacy.data.collection.title")).apply {
+                    alignmentX = JPanel.LEFT_ALIGNMENT
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+                },
+            )
             add(Box.createVerticalStrut(10))
-            add(analytics.apply {
-                alignmentX = JPanel.LEFT_ALIGNMENT
-            })
+            add(
+                analytics.apply {
+                    alignmentX = JPanel.LEFT_ALIGNMENT
+                },
+            )
             add(descriptionLabel(MyMessageBundle.message("settings.privacy.stats.description")))
             add(Box.createVerticalStrut(10))
-            add(improvement.apply {
-                alignmentX = JPanel.LEFT_ALIGNMENT
-            })
+            add(
+                improvement.apply {
+                    alignmentX = JPanel.LEFT_ALIGNMENT
+                },
+            )
             add(descriptionLabel(MyMessageBundle.message("settings.privacy.improvement.description")))
             add(Box.createVerticalGlue())
         }

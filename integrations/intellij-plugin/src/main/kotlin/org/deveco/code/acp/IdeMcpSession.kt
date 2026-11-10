@@ -98,18 +98,17 @@ internal class IdeMcpSession(private val project: Project) : Disposable {
     // Active capability probe: the whitelist filter, its AllowList
     // implementation and the McpSessionOptions constructor must all exist
     // before any typed reference is made below.
-    private fun isToolFilterSupported(): Boolean =
-        try {
-            val filterClass = Class.forName("com.intellij.mcpserver.McpToolFilter")
-            Class.forName("com.intellij.mcpserver.McpToolFilter\$AllowList")
-            McpServerService.McpSessionOptions::class.java.getDeclaredConstructor(
-                McpServerService.AskCommandExecutionMode::class.java,
-                filterClass,
-            )
-            true
-        } catch (_: ReflectiveOperationException) {
-            false
-        }
+    private fun isToolFilterSupported(): Boolean = try {
+        val filterClass = Class.forName("com.intellij.mcpserver.McpToolFilter")
+        Class.forName("com.intellij.mcpserver.McpToolFilter\$AllowList")
+        McpServerService.McpSessionOptions::class.java.getDeclaredConstructor(
+            McpServerService.AskCommandExecutionMode::class.java,
+            filterClass,
+        )
+        true
+    } catch (_: ReflectiveOperationException) {
+        false
+    }
 
     private fun createSessionOptions(
         mode: McpServerService.AskCommandExecutionMode,

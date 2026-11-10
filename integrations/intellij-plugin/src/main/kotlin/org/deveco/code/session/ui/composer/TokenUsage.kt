@@ -124,7 +124,7 @@ private fun TokenUsageTooltip(
     onDismiss: () -> Unit,
 ) {
     val isLightTheme = DevEcoTheme.panel.luminance() >= 0.5f
-    
+
     Popup(
         popupPositionProvider = TooltipAboveLeftProvider,
         onDismissRequest = onDismiss,
