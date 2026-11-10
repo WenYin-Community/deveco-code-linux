@@ -596,7 +596,7 @@ test("reports empty devecocli commands when the turn ran none", async () => {
   expect(event?.operations.devecoCliCommands).toEqual([])
 })
 
-test("emits the fixed taskType and UI reconstruction sentinel in every window", async () => {
+test("keeps taskType and the UI reconstruction sentinel constant when no task signal fires", async () => {
   const collector = new SessionCollector({ analyticsEnabled: async () => true })
   collector.setLoggedIn(true)
   const start = (sessionID: string) =>
@@ -614,12 +614,84 @@ test("emits the fixed taskType and UI reconstruction sentinel in every window", 
   expect(first?.taskType).toBe("default")
   expect(first?.uiReconstructionScore).toBe(-1)
 
-  // A second window must not inherit any per-window state: both placeholders are constants,
-  // and a UI-verification model recorded in window 1 still does not produce a score.
+  // A second window must not inherit any per-window state: taskType falls back to default and the
+  // UI-reconstruction score is still the -1 sentinel, even though window 1 recorded a verification
+  // model.
   collector.recordUIVerificationModel("qwen3-vl-plus")
   collector.clear()
   start("session-window-2")
   const second = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(second?.taskType).toBe("default")
   expect(second?.uiReconstructionScore).toBe(-1)
+})
+
+// Task-type features never write taskType themselves: they only report a workflow signal through
+// markWorkflow(), and the collector maps the signals it saw once at buildEvent time. These tests
+// pin that contract (mapping table + priority arbitration + last-write-wins on the workflow field).
+async function taskTypeFor(workflows: string[]) {
+  const collector = new SessionCollector({ analyticsEnabled: async () => true })
+  collector.setLoggedIn(true)
+  collector.startSession({
+    sessionID: "session-task",
+    messageId: "message-1",
+    sourceVersion: "1.2.3",
+    providerId: "deveco",
+    modelId: "model-1",
+    agentName: "build",
+  })
+  for (const workflow of workflows) collector.markWorkflow(workflow)
+  return collector.buildEvent("project-id", "/tmp/non-harmony")
+}
+
+test("maps the design-to-arkts workflow to D2C", async () => {
+  const event = await taskTypeFor(["design-to-arkts"])
+  expect(event?.taskType).toBe("D2C")
+  // The workflow field keeps its own semantics: the last signal written, not the arbitrated type.
+  expect(event?.workflow).toBe("design-to-arkts")
+})
+
+test("arbitrates conflicting task signals by priority, not by write order", async () => {
+  // A2H outranks D2C, so a D2C skill followed by an A2H conversion still reports A2H.
+  const d2cFirst = await taskTypeFor(["design-to-arkts", "platform-migration"])
+  expect(d2cFirst?.taskType).toBe("A2H")
+  expect(d2cFirst?.workflow).toBe("platform-migration")
+
+  // Reversing the write order must not change the arbitrated type, only the last-write workflow.
+  const a2hFirst = await taskTypeFor(["platform-migration", "design-to-arkts"])
+  expect(a2hFirst?.taskType).toBe("A2H")
+  expect(a2hFirst?.workflow).toBe("design-to-arkts")
+})
+
+test("keeps taskType at default for workflows without a task mapping", async () => {
+  const event = await taskTypeFor(["hmos-arkui-develop", "unknown-workflow"])
+  expect(event?.taskType).toBe("default")
+})
+
+test("still resolves a mapped workflow when unmapped ones are also present", async () => {
+  // Unmapped signals are ignored rather than vetoing the mapped one.
+  const event = await taskTypeFor(["hmos-arkui-develop", "design-to-arkts"])
+  expect(event?.taskType).toBe("D2C")
+})
+
+test("maps the platform-migration workflow to A2H on its own", async () => {
+  // The A2H plugin is not on this branch yet, but the mapping exists so the plugin only needs
+  // markWorkflow("platform-migration") once it lands.
+  const event = await taskTypeFor(["platform-migration"])
+  expect(event?.taskType).toBe("A2H")
+  expect(event?.workflow).toBe("platform-migration")
+})
+
+test("resolves an empty signal set to default", async () => {
+  const event = await taskTypeFor([])
+  expect(event?.taskType).toBe("default")
+  expect(event?.workflow).toBe("")
+})
+
+test("ignores inherited object keys instead of treating them as mapped workflows", async () => {
+  // A plain lookup would resolve "constructor"/"toString" to prototype members, so guard with
+  // hasOwn; none of these are real signals.
+  for (const signal of ["constructor", "toString", "__proto__", "valueOf"]) {
+    const event = await taskTypeFor([signal])
+    expect(event?.taskType).toBe("default")
+  }
 })

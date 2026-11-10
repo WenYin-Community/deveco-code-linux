@@ -33,12 +33,44 @@ export interface Operations {
   devecoCliCommands: ToolSummary[]
 }
 
-// Session task classification. Only "default" is produced in this iteration; A2H/D2C are
-// reserved for the upcoming task-type detection. Storage only checks that the value is a string,
-// so adding a member here does not need a schema change (it does not narrow storage).
+// Session task classification. "default" means the window carried no task-specific signal.
+// Storage only checks that the value is a string, so adding a member here does not need a
+// schema change (it does not narrow storage).
 export type TaskType = "default" | "A2H" | "D2C"
 
 export const DEFAULT_TASK_TYPE: TaskType = "default"
+
+// Single source of truth for task classification: a task feature never writes taskType itself,
+// it only reports its workflow signal through markWorkflow(). The signal is mapped to a task type
+// here, so adding a new task is one table entry plus the existing markWorkflow() call, and no
+// feature can silently overwrite another feature's claim.
+const TASK_TYPE_BY_WORKFLOW: Readonly<Record<string, TaskType>> = {
+  "design-to-arkts": "D2C",
+  // A2H (cross-platform project migration) is not wired yet: its plugin lives on a separate branch,
+  // so no caller emits this signal today. It is listed to keep the arbitration rule (below)
+  // complete, and the plugin only needs markWorkflow("platform-migration") once merged.
+  "platform-migration": "A2H",
+}
+
+// Arbitration for windows that observe more than one task signal (e.g. a D2C skill followed by an
+// A2H conversion): the highest priority wins instead of the last write, so the result does not
+// depend on execution order. Every TaskType has a distinct rank, so "same rank, keep the first" is
+// the only tie case (a repeated signal); unlisted workflows keep default.
+// A2H outranks D2C because a cross-platform project migration is a project-level task while a D2C
+// turn is a step inside it; revisit this rank if the product defines task dominance differently.
+const TASK_TYPE_PRIORITY: Readonly<Record<TaskType, number>> = { default: 0, D2C: 1, A2H: 2 }
+
+export function resolveTaskType(workflows: Iterable<string>): TaskType {
+  // reduce keeps this functional (no mutable accumulator loop) and makes the "start from default"
+  // rule explicit: an empty signal set resolves to DEFAULT_TASK_TYPE.
+  return [...workflows].reduce<TaskType>((resolved, workflow) => {
+    // hasOwn keeps inherited keys ("constructor", "toString", ...) from passing as known signals:
+    // a plain lookup would return a non-undefined prototype member for them.
+    if (!Object.hasOwn(TASK_TYPE_BY_WORKFLOW, workflow)) return resolved
+    const candidate = TASK_TYPE_BY_WORKFLOW[workflow]
+    return TASK_TYPE_PRIORITY[candidate] > TASK_TYPE_PRIORITY[resolved] ? candidate : resolved
+  }, DEFAULT_TASK_TYPE)
+}
 
 // Sentinel for "no UI reconstruction check ran in this event window". It is deliberately
 // negative so downstream analysis can filter `uiReconstructionScore >= 0` before averaging;
@@ -78,8 +110,9 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   sessionid: string
   messageId: string
   agentName: string
-  // Session task classification for this event window. Fixed to "default" until task-type
-  // detection lands; storage only validates that it is a string.
+  // Session task classification for this event window, derived from the workflow signals the
+  // window observed (see resolveTaskType): a mapped signal yields its task type, no signal keeps
+  // "default". Storage only validates that it is a string.
   taskType: TaskType
   projectId: string
   bundleName: string
@@ -90,6 +123,8 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   toolExecutions: ToolExecution[]
   totalElapsed: number
   firstResultElapsed: number
+  // Last observed workflow signal ("" when none fired); taskType is the arbitrated view of all
+  // signals, so the two can differ when a window saw more than one.
   workflow: string
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
@@ -263,7 +298,11 @@ export interface SessionContext {
   // devecocli invocation counts keyed by the resolved two-level name ("docs.search").
   devecoCliCommandCounts: Map<string, number>
   buildProjectInfo: BuildProjectInfo[]
+  // Last observed workflow signal; kept for the workflow field's existing last-write-wins semantics.
   workflow: string
+  // Every distinct workflow signal observed in this window, used to derive taskType once at
+  // buildEvent time (see resolveTaskType) instead of letting each feature write taskType.
+  workflows: Set<string>
   buildResults: BuildResults
 }
 

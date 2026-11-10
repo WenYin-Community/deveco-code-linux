@@ -14,7 +14,7 @@ import type {
   SessionContext,
   ToolBucket,
 } from "./types"
-import { isBuiltinTool, isSkillTool, DEFAULT_TASK_TYPE, UI_RECONSTRUCTION_SCORE_UNAVAILABLE } from "./types"
+import { isBuiltinTool, isSkillTool, resolveTaskType, UI_RECONSTRUCTION_SCORE_UNAVAILABLE } from "./types"
 
 export type SessionStart = {
   sessionID: string
@@ -126,6 +126,7 @@ export class SessionCollector {
       devecoCliCommandCounts: new Map(),
       buildProjectInfo: [],
       workflow: "",
+      workflows: new Set(),
       buildResults: {
         isFirstBuildSuccess: null,
         isFinalBuildSuccess: null,
@@ -218,7 +219,11 @@ export class SessionCollector {
   }
 
   markWorkflow(name: string): void {
-    if (this.context) this.context.workflow = name
+    if (!this.context) return
+    this.context.workflow = name
+    // Keep every signal: a window can observe more than one task workflow, and taskType is
+    // arbitrated from the full set at buildEvent time rather than by write order.
+    this.context.workflows.add(name)
   }
 
   private updateBuildResults(results: BuildResults, isBuildSuccess: boolean, elapsed: number): void {
@@ -283,9 +288,9 @@ export class SessionCollector {
       sessionid: this.context.sessionID,
       messageId: this.context.messageId,
       agentName: this.context.agentName,
-      // Both are fixed placeholders for now: no task-type detection yet, and this window
-      // ran no UI reconstruction (the -1 sentinel, not a real score).
-      taskType: DEFAULT_TASK_TYPE,
+      // Derived from the workflow signals observed in this window; "default" when none matched.
+      // This window runs no UI reconstruction, hence the -1 sentinel rather than a real score.
+      taskType: resolveTaskType(this.context.workflows),
       projectId,
       bundleName: readBundleName(projectPath),
       modifiedFileCount: this.context.modifiedFiles.size,
