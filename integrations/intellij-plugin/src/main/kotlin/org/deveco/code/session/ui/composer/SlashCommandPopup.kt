@@ -29,28 +29,28 @@ private val SLASH_POPUP_MAX_WIDTH = 400.dp
 
 // --- Slash command popup ---
 
-// Client-side commands: selected → executed immediately via sendPrompt.
-// Server-side commands: selected → expanded as "/<name> " in the input for user to add args.
-// Both share localized description keys.
-private val KNOWN_COMMANDS = mapOf(
+// Client-side commands: session ops executed immediately on selection; prompt-style
+// server commands insert into the composer instead (see selectSlashItem).
+// Carries its description keys so iterating it can never miss a localization.
+private val CLIENT_COMMANDS = mapOf(
     "compact" to "slash.command.compact.desc",
     "new" to "slash.command.new.desc",
+)
+
+// Server-side commands come from the server list (the single source of truth for
+// what can actually execute); KNOWN_COMMANDS only localizes the description of
+// names we ship bundle keys for, so a stale entry here can never offer a dead command.
+private val KNOWN_COMMANDS = CLIENT_COMMANDS + mapOf(
     "debug" to "slash.command.debug.desc",
     "init" to "slash.command.init.desc",
     "review" to "slash.command.review.desc",
-    "arkts-error-fixes" to "slash.command.arkts-error-fixes.desc",
-    "arkts-grammar-standards" to "slash.command.arkts-grammar-standards.desc",
-    "arkts-runtime-fix" to "slash.command.arkts-runtime-fix.desc",
+    "analyze" to "slash.command.analyze.desc",
     "customize-deveco" to "slash.command.customize-deveco.desc",
     "deveco-cli" to "slash.command.deveco-cli.desc",
-    "deveco-create-project" to "slash.command.deveco-create-project.desc",
-    "analyze" to "slash.command.analyze.desc",
     "hmos-dfx-analyzer" to "slash.command.hmos-dfx-analyzer.desc",
     "hmos-arkui-develop-skill" to "slash.command.hmos-arkui-develop-skill.desc",
     "hmos-design-to-arkts" to "slash.command.hmos-design-to-arkts.desc",
 )
-
-private val CLIENT_COMMANDS = setOf("compact", "new")
 
 internal enum class SlashItemKind { COMMAND, MODEL, SERVER_COMMAND }
 
@@ -72,52 +72,44 @@ internal fun computeSlashItems(
 
     val afterSlash = trimmed.substring(1)
     val spaceIndex = afterSlash.indexOf(' ')
+    if (spaceIndex < 0) return buildFilterItems(afterSlash.lowercase(), commands)
 
-    return if (spaceIndex < 0) {
-        buildFilterItems(afterSlash.lowercase(), commands)
-    } else {
-        val commandName = afterSlash.substring(0, spaceIndex).lowercase()
-        val filter = afterSlash.substring(spaceIndex + 1).trim().lowercase()
-        buildSubItems(commandName, filter, models)
+    val commandName = afterSlash.substring(0, spaceIndex).lowercase()
+    val rest = afterSlash.substring(spaceIndex + 1)
+    // A trailing space (left by command insertion or a restored draft) is not an
+    // argument: keep offering command completions until real argument text appears.
+    // "/models " is the exception — its trailing space opens the model sub-list.
+    if (rest.isBlank() && commandName != "models") {
+        return buildFilterItems(commandName, commands)
     }
+    return buildSubItems(commandName, rest.trim().lowercase(), models)
 }
 
 private fun buildFilterItems(filter: String, commands: List<CommandChoice>): List<SlashItem> {
-    val knownNamesLower = KNOWN_COMMANDS.keys.map { it.lowercase() }
-    val serverKindMap = commands.associate { it.name.lowercase() to it.kind }
-
-    val knownNames = KNOWN_COMMANDS.keys.filter { it.lowercase().startsWith(filter) }
-    val clientCommands = knownNames
-        .map { name ->
-            val isClient = name in CLIENT_COMMANDS
-            val kind = serverKindMap[name.lowercase()]?.let { k ->
-                when (k) {
-                    CommandKind.SKILL -> "Skill"
-                    CommandKind.MCP -> "MCP"
-                    else -> null
-                }
-            }
+    val clientCommands = CLIENT_COMMANDS.entries
+        .filter { it.key.startsWith(filter) }
+        .map { entry ->
             SlashItem(
-                displayText = "/$name",
-                description = MyMessageBundle.message(KNOWN_COMMANDS[name]!!),
-                kind = if (isClient) SlashItemKind.COMMAND else SlashItemKind.SERVER_COMMAND,
-                payload = name,
-                tag = if (isClient) null else kind,
+                displayText = "/${entry.key}",
+                description = MyMessageBundle.message(entry.value),
+                kind = SlashItemKind.COMMAND,
+                payload = entry.key,
             )
         }
-    // Filter out server commands that match known commands (case-insensitive)
     val serverCommands = commands
         .filter { cmd ->
-            cmd.name.lowercase().startsWith(filter) && cmd.name.lowercase() !in knownNamesLower
+            cmd.name.lowercase().startsWith(filter) && cmd.name.lowercase() !in CLIENT_COMMANDS
         }
         .sortedBy { it.kind.ordinal }
-        .map {
+        .map { cmd ->
             SlashItem(
-                displayText = "/${it.name}",
-                description = it.description,
+                displayText = "/${cmd.name}",
+                description = KNOWN_COMMANDS[cmd.name.lowercase()]
+                    ?.let { MyMessageBundle.message(it) }
+                    ?: cmd.description,
                 kind = SlashItemKind.SERVER_COMMAND,
-                payload = it.name,
-                tag = when (it.kind) {
+                payload = cmd.name,
+                tag = when (cmd.kind) {
                     CommandKind.SKILL -> "Skill"
                     CommandKind.MCP -> "MCP"
                     else -> null

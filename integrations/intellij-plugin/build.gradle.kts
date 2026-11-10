@@ -67,11 +67,19 @@ kotlin {
         compilerOptions.optIn.add("androidx.compose.foundation.layout.ExperimentalLayoutApi")
         sourceSets.main {
             kotlin.exclude(
+                "**/FenceLanguage261.kt",
                 "**/IdeMcpSession.kt",
+                "**/PlatformComposePanel261.kt",
                 "**/PlatformComposeTab261.kt",
                 "**/SessionMarkdownTheme261.kt",
+                "**/TokenUsageShadow.kt",
             )
             kotlin.srcDir("src/compat243/kotlin")
+        }
+        // The 243 line renders with Jewel 0.27.0, which lacks the platform
+        // RenderOrderedList API and its positive-integer validation entirely.
+        sourceSets.test {
+            kotlin.exclude("**/SafeOrderedListRendererTest.kt")
         }
     }
 }
@@ -163,6 +171,9 @@ abstract class BuildLocalCliTask : DefaultTask() {
     @get:Internal
     abstract val repositoryRoot: DirectoryProperty
 
+    @get:Internal
+    abstract val pluginDir: DirectoryProperty
+
     @get:Input
     abstract val targetPlatform: Property<String>
 
@@ -226,7 +237,7 @@ abstract class BuildLocalCliTask : DefaultTask() {
         if (includeNodeRuntime.get()) {
             execOperations.exec {
                 workingDir = repo
-                commandLine(bun, "run", File(repo, "integrations/deveco-code/script/bundle-node.ts").absolutePath, dst.absolutePath, target)
+                commandLine(bun, "run", File(pluginDir.get().asFile, "script/bundle-node.ts").absolutePath, dst.absolutePath, target)
             }
         }
 
@@ -249,6 +260,7 @@ tasks.register<BuildLocalCliTask>("bundleLocalCli") {
     group = "build"
     description = "Build DevEco Code from this repository and bundle it into the plugin"
     repositoryRoot.set(layout.projectDirectory.dir("../.."))
+    pluginDir.set(layout.projectDirectory)
     includeNodeRuntime.set(legacyPlatform)
     targetPlatform.set(cliTarget)
     cliResourceDir.set(layout.buildDirectory.dir("generated-resources/cli"))
@@ -347,7 +359,7 @@ abstract class BuildPlatformPackagesTask : DefaultTask() {
             if (!generic.isFile) {
                 throw GradleException("Plugin package was not generated: ${generic.absolutePath}")
             }
-            val destination = File(outputDir.get().asFile, "deveco-code-jetbrains-plugin-$version-$suffix.zip")
+            val destination = File(outputDir.get().asFile, "deveco-code-core-plugin-$version-$suffix.zip")
             generic.copyTo(destination, overwrite = true)
             logger.lifecycle("Created ${destination.absolutePath}")
         }
@@ -384,6 +396,9 @@ abstract class BuildCompatibilityPackagesTask : DefaultTask() {
     abstract val pluginVersion: Property<String>
 
     @get:Input
+    abstract val platforms: ListProperty<String>
+
+    @get:Input
     @get:Optional
     abstract val ideSdkPath243: Property<String>
 
@@ -401,15 +416,22 @@ abstract class BuildCompatibilityPackagesTask : DefaultTask() {
             "darwin-x64" to "macos-x64",
             "win32-x64" to "windows-x64",
         )
-        val platforms = listOf("243", "261")
+        val requestedPlatforms = platforms.get()
+        require(requestedPlatforms.isNotEmpty() && requestedPlatforms.all { it in setOf("243", "261") }) {
+            "platform must be 243 or 261"
+        }
         val directory = projectDir.get().asFile
         val isWindows = System.getProperty("os.name").lowercase().startsWith("windows")
         val gradlew = File(directory, if (isWindows) "gradlew.bat" else "gradlew")
         val version = pluginVersion.get()
-        val destinationDir = outputDir.get().asFile.apply { mkdirs() }
+        // A previous run may have left packages for the other IDE line behind.
+        val destinationDir = outputDir.get().asFile.apply {
+            deleteRecursively()
+            mkdirs()
+        }
 
         for ((target, suffix) in targets) {
-            for (platform in platforms) {
+            for (platform in requestedPlatforms) {
                 logger.lifecycle("Building IDE $platform plugin package for $suffix")
                 execOperations.exec {
                     workingDir = directory
@@ -448,9 +470,13 @@ abstract class BuildCompatibilityPackagesTask : DefaultTask() {
                 if (!generic.isFile) {
                     throw GradleException("Plugin package was not generated: ${generic.absolutePath}")
                 }
+                // One IDE line per release run: the version is already platform-specific,
+                // so keep the filename free of 243/261. Multi-platform local builds keep
+                // the platform segment to avoid collisions.
+                val platformSuffix = if (requestedPlatforms.size > 1) "-$platform" else ""
                 val destination = File(
                     destinationDir,
-                    "deveco-code-jetbrains-plugin-$version-$platform-$suffix.zip",
+                    "deveco-code-core-plugin-$version$platformSuffix-$suffix.zip",
                 )
                 generic.copyTo(destination, overwrite = true)
                 logger.lifecycle("Created ${destination.absolutePath}")
@@ -462,9 +488,14 @@ abstract class BuildCompatibilityPackagesTask : DefaultTask() {
 val buildCompatibilityPackages = tasks.register<BuildCompatibilityPackagesTask>("buildCompatibilityPackages") {
     group = "build"
     description =
-        "Sequentially builds 243 and 261 packages for macOS ARM64, macOS x64, and Windows x64"
+        "Sequentially builds the requested IDE line (243 or 261) packages for macOS ARM64, macOS x64, and Windows x64; omit -Pplatform to build both"
     projectDir.set(layout.projectDirectory)
     pluginVersion.set(providers.gradleProperty("version"))
+    platforms.set(
+        providers.gradleProperty("platform")
+            .map { listOf(it) }
+            .orElse(providers.provider { listOf("243", "261") }),
+    )
     ideSdkPath243.set(
         providers.gradleProperty("ideSdkPath243")
             .orElse(providers.environmentVariable("IDE_SDK_PATH_243")),

@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.agentclientprotocol.model.SessionInfo
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
+import org.deveco.code.session.ui.OrbitingLoadingIndicator
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
 
@@ -46,8 +47,8 @@ internal data class SessionCardState(
     val isUnread: Boolean,
     val startedAt: Long?,
     val activity: String?,
-    val selected: Boolean,
     val hovered: Boolean,
+    val selected: Boolean,
     val lastDuration: Long?,
 )
 
@@ -65,7 +66,12 @@ internal fun SessionCard(
     val accent = colors.accent
     val muted = colors.muted
     val currentOnContextMenu by rememberUpdatedState(onContextMenu)
-    val bg = if (state.hovered) DevEcoTheme.pressedAccentSoft else Color.Transparent
+    val bg = when {
+        state.hovered && state.selected -> DevEcoTheme.selectedHoveredSessionBg
+        state.selected -> DevEcoTheme.selectedSessionBg
+        state.hovered -> DevEcoTheme.hoveredSessionBg
+        else -> Color.Transparent
+    }
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(bg)
             .clickable(
@@ -107,7 +113,6 @@ internal fun SessionCard(
             isNew = state.isNew,
             running = isRunning,
             hovered = state.hovered,
-            selected = state.selected,
             onStop = { actions.onStop(item.info) },
             onDelete = { actions.onDelete(item.info) },
             onMore = currentOnContextMenu,
@@ -120,12 +125,11 @@ private fun CardActionArea(
     isNew: Boolean,
     running: Boolean,
     hovered: Boolean,
-    selected: Boolean,
     onStop: () -> Unit,
     onDelete: () -> Unit,
     onMore: () -> Unit,
 ) {
-    if (hovered || selected) {
+    if (hovered) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (running) StopButton(onStop) else DeleteButton(onDelete)
             if (!isNew) {
@@ -175,16 +179,24 @@ private fun MoreButton(onMore: () -> Unit) {
 @Composable
 private fun StatusIndicator(status: SessionCardStatus, accent: Color, muted: Color) {
     val size = 16.dp
-    val (iconName, ext) = when (status) {
-        SessionCardStatus.NEW -> "session-new" to "svg"
-        SessionCardStatus.RUNNING -> "session-running" to "png"
-        SessionCardStatus.NORMAL_UNREAD -> "session-normal-unread" to "svg"
-        SessionCardStatus.NORMAL_READ -> "session-normal-read" to "svg"
-        SessionCardStatus.ABNORMAL_UNREAD -> "session-abnormal-unread" to "svg"
-        SessionCardStatus.ABNORMAL_READ -> "session-abnormal-read" to "svg"
+    if (status == SessionCardStatus.RUNNING) {
+        OrbitingLoadingIndicator(
+            modifier = Modifier.size(size),
+            ringColor = DevEcoTheme.loadingIndicatorColor,
+            ballColor = DevEcoTheme.loadingIndicatorColor,
+        )
+        return
+    }
+    val iconName = when (status) {
+        SessionCardStatus.NEW -> "session-new"
+        SessionCardStatus.NORMAL_UNREAD -> "session-normal-unread"
+        SessionCardStatus.NORMAL_READ -> "session-normal-read"
+        SessionCardStatus.ABNORMAL_UNREAD -> "session-abnormal-unread"
+        SessionCardStatus.ABNORMAL_READ -> "session-abnormal-read"
+        SessionCardStatus.RUNNING -> "session-running"
     }
     Icon(
-        key = DevEcoIcons.iconKey(iconName, ext),
+        key = DevEcoIcons.iconKey(iconName),
         contentDescription = null,
         modifier = Modifier.size(size),
     )

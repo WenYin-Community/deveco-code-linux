@@ -1,7 +1,5 @@
 package org.deveco.code.session.ui.messages
 
-import org.deveco.code.SmallSpinner
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,144 +35,172 @@ import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.session.SessionController
 import org.deveco.code.session.model.ChatItem
+import org.deveco.code.session.model.TurnTerminalStatus
 import org.jetbrains.jewel.markdown.Markdown
 import org.jetbrains.jewel.markdown.extensions.LocalMarkdownBlockRenderer
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.icon.PathIconKey
-import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
-private val WarningIconKey = PathIconKey("/icons/warning.svg", DevEcoTheme::class.java)
 private val CheckmarkIconKey = PathIconKey("/icons/checkmark.svg", DevEcoTheme::class.java)
-private const val COPIED_INDICATOR_MS = 2000L
+internal const val COPIED_INDICATOR_MS = 1500L
 
 @Composable
 internal fun AgentMessage(
     item: ChatItem,
-    muted: Color,
-    controller: SessionController?,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-
     Column(
-        Modifier.fillMaxWidth()
-            .hoverable(interactionSource),
+        Modifier.fillMaxWidth(),
     ) {
         if (item.text.isNotBlank()) {
             MarkdownWithCodeBlocks(
                 text = item.text,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            )
-        } else {
-            // Placeholder when agent has no text yet (e.g. during tool-calling phase)
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    key = AllIconsKeys.General.Information,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    MyMessageBundle.message("session.status.responding"),
-                    color = muted,
-                    fontSize = 12.sp,
-                )
-            }
-        }
-        if (item.interrupted) {
-            Box(
-                Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    MyMessageBundle.message("session.error.cancelled"),
-                    color = muted,
-                    fontSize = 11.sp,
-                )
-            }
-        }
-        if (controller != null && item.isComplete) {
-            AiMessageActions(
-                item = item,
-                controller = controller,
-                muted = muted,
-                enabled = !controller.responding,
-                isHovered = isHovered,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 }
 
 @Composable
-internal fun AiMessageActions(
-    item: ChatItem,
-    controller: SessionController,
+internal fun TurnFooter(
+    item: ChatItem?,
+    controller: SessionController?,
+    status: TurnTerminalStatus?,
     muted: Color,
-    enabled: Boolean,
-    isHovered: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.fillMaxWidth()) {
+        if (status?.errorText != null) {
+            Text(
+                status.errorText,
+                color = muted,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(2.dp))
+        }
+        AiMessageActions(
+            item = item,
+            controller = controller,
+            status = status,
+            muted = muted,
+        )
+    }
+}
+
+@Composable
+internal fun AiMessageActions(
+    item: ChatItem?,
+    controller: SessionController?,
+    status: TurnTerminalStatus?,
+    muted: Color,
+    modifier: Modifier = Modifier,
 ) {
     var showReportDialog by remember { mutableStateOf(false) }
+    // Copy classification for the turn footer:
+    // - a turn with answer body copies the whole turn text;
+    // - a turn without body but with a terminal error/log copies that error text;
+    // - otherwise (e.g. stopped with no output and no error) no copy button shows.
+    val errorCopyText = status?.errorText?.takeIf { it.isNotBlank() }
+    val copyText: (() -> String)? = when {
+        item != null && item.text.isNotBlank() && controller != null -> ({ controller.turnAgentText(item) })
+        errorCopyText != null -> ({ errorCopyText })
+        else -> null
+    }
+    val timestamp = status?.timestamp ?: item?.createdAt ?: 0L
 
-    val showDuration = item.duration > 0 && item.isComplete
-    val showTimeInfo = isHovered && item.isComplete
-    val infoAlpha by animateFloatAsState(
-        targetValue = if (showTimeInfo) 1f else 0f,
-        animationSpec = tween(durationMillis = 150),
-        label = "infoAlpha",
-    )
-
-    // Single row layout: disclaimer + duration + timestamp + buttons
+    // Single row layout: copy + timestamp
     Row(
-        Modifier.fillMaxWidth(),
+        modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.Start,
     ) {
-        // Left side: warning + duration
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AiMessageWarning(muted)
-            Spacer(Modifier.width(12.dp))
-            // Show duration from the item itself (each message stores its own duration)
-            if (showDuration) {
+        if (copyText != null) {
+            CopyActionButtons(copyText, muted)
+            Spacer(Modifier.width(8.dp))
+        }
+        // Timestamp - always visible. On hover, the relative time ("13分钟前")
+        // crossfades into the full timestamp ("2026-10-20 20:05:47") in place;
+        // the Box is sized to the wider of the two so the swap never shifts layout.
+        if (timestamp > 0) {
+            val timestampInteractionSource = remember { MutableInteractionSource() }
+            val timestampHovered by timestampInteractionSource.collectIsHoveredAsState()
+            // Debounce hover: 300ms delay before showing full timestamp so quick
+            // mouse passes don't flicker; exit is immediate.
+            var hoverDebounced by remember { mutableStateOf(false) }
+            LaunchedEffect(timestampHovered) {
+                if (timestampHovered) {
+                    delay(300L)
+                    hoverDebounced = true
+                } else {
+                    hoverDebounced = false
+                }
+            }
+            var tick by remember { mutableStateOf(0) }
+
+            LaunchedEffect(timestamp) {
+                while (true) {
+                    delay(60_000L)
+                    tick++
+                }
+            }
+
+            // Keyed on tick so the relative time re-formats every minute; reading
+            // tick here (not as a bare statement) registers the snapshot read.
+            val now = remember(tick) { System.currentTimeMillis() }
+
+            val timeText = if (status != null) {
+                MessageTimeFormatter.formatWithStatus(timestamp, status.status, now)
+            } else {
+                MessageTimeFormatter.format(timestamp, now)
+            }
+            val hoverText = if (status != null) {
+                MessageTimeFormatter.formatHoverWithStatus(timestamp, status.status)
+            } else {
+                MessageTimeFormatter.formatHover(timestamp)
+            }
+
+            // Crossfade alpha: 0 = relative time, 1 = full timestamp.
+            val hoverAlpha by animateFloatAsState(
+                targetValue = if (hoverDebounced) 1f else 0f,
+                animationSpec = tween(durationMillis = 150),
+                label = "timestampHoverAlpha",
+            )
+
+            // IntrinsicSize.Max reserves the width of the wider of the two texts,
+            // so the Row layout never shifts when the displayed text changes.
+            Box(
+                modifier = Modifier
+                    .width(IntrinsicSize.Max)
+                    .height(DevEcoTheme.actionButtonSize.dp)
+                    .hoverable(timestampInteractionSource),
+                contentAlignment = Alignment.CenterStart,
+            ) {
                 Text(
-                    MyMessageBundle.message("message.duration", formatDuration(item.duration)),
+                    timeText,
                     color = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
                     fontSize = 11.sp,
                     fontFamily = FontFamily.SansSerif,
-                    modifier = Modifier.graphicsLayer { alpha = infoAlpha },
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .wrapContentHeight(Alignment.CenterVertically)
+                        .graphicsLayer { alpha = 1f - hoverAlpha },
                 )
-            }
-        }
-        // Right side: timestamp + action buttons
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-        ) {
-            // Timestamp - visible only on hover
-            if (item.createdAt > 0) {
                 Text(
-                    MessageTimeFormatter.format(item.createdAt),
+                    hoverText,
                     color = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
                     fontSize = 11.sp,
-                    fontFamily = FontFamily.SansSerif,
-                    modifier = Modifier.graphicsLayer { alpha = infoAlpha },
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .wrapContentHeight(Alignment.CenterVertically)
+                        .graphicsLayer { alpha = hoverAlpha },
                 )
-                Spacer(Modifier.width(12.dp))
             }
-            RegenerateActionButton(item, controller, muted, enabled)
-            Spacer(Modifier.width(DevEcoTheme.actionSpacing.dp))
-            CopyActionButtons(item, muted, enabled)
-            // FeedbackActionButtons (like/dislike/report) hidden — keeping layout intact.
         }
+        // FeedbackActionButtons (like/dislike/report) hidden — keeping layout intact.
     }
 
-    if (showReportDialog) {
+    if (showReportDialog && item != null && controller != null) {
         ReportDialog(
             onDismiss = { showReportDialog = false },
             onSubmit = { reason ->
@@ -186,82 +212,43 @@ internal fun AiMessageActions(
 }
 
 @Composable
-private fun AiMessageWarning(muted: Color, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            key = WarningIconKey,
-            contentDescription = "Warning",
-            modifier = Modifier.size(DevEcoTheme.actionIconSize.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            MyMessageBundle.message("message.aiDisclaimer"),
-            color = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.SansSerif,
-        )
-    }
-}
-
-@Composable
-private fun RegenerateActionButton(
-    item: ChatItem,
-    controller: SessionController,
+private fun CopyActionButtons(
+    copyText: () -> String,
     muted: Color,
-    enabled: Boolean,
 ) {
-    var isRegenerating by remember { mutableStateOf(false) }
+    val clipboardManager = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+
     ActionButton(
         onClick = {
-            isRegenerating = true
-            controller.regenerateMessage(item)
-            isRegenerating = false
+            clipboardManager.setText(AnnotatedString(copyText()))
+            copied = true
         },
-        tint = if (isRegenerating) DevEcoTheme.linkAccent else muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
+        tint = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
         hoverTint = DevEcoTheme.linkAccent,
-        enabled = enabled,
-        tooltipText = MyMessageBundle.message("message.tooltip.regenerate"),
+        tooltipText = MyMessageBundle.message("message.tooltip.copy"),
     ) { _ ->
-        if (isRegenerating) {
-            SmallSpinner(
-                size = DevEcoTheme.actionIconSize.dp,
-                color = DevEcoTheme.loadingIndicatorColor,
+        if (copied) {
+            Icon(
+                key = CheckmarkIconKey,
+                contentDescription = "Copied",
+                tint = DevEcoTheme.green,
+                modifier = Modifier.size(DevEcoTheme.actionIconSize.dp),
             )
         } else {
             Icon(
-                key = DevEcoIcons.iconKey("refresh"),
-                contentDescription = "Regenerate",
+                key = DevEcoIcons.iconKey("copy"),
+                contentDescription = "Copy",
                 modifier = Modifier.size(DevEcoTheme.actionIconSize.dp),
             )
         }
     }
-}
 
-@Composable
-private fun CopyActionButtons(
-    item: ChatItem,
-    muted: Color,
-    enabled: Boolean,
-) {
-    val clipboardManager = LocalClipboardManager.current
-
-    ActionButton(
-        onClick = {
-            clipboardManager.setText(AnnotatedString(item.text))
-        },
-        tint = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
-        hoverTint = DevEcoTheme.linkAccent,
-        enabled = enabled,
-        tooltipText = MyMessageBundle.message("message.tooltip.copy"),
-    ) { _ ->
-        Icon(
-            key = DevEcoIcons.iconKey("copy"),
-            contentDescription = "Copy",
-            modifier = Modifier.size(DevEcoTheme.actionIconSize.dp),
-        )
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(COPIED_INDICATOR_MS)
+            copied = false
+        }
     }
 }
 
@@ -328,7 +315,7 @@ private fun FeedbackActionButtons(
 }
 
 @Composable
-private fun ActionButton(
+internal fun ActionButton(
     onClick: () -> Unit,
     tint: Color,
     hoverTint: Color,
@@ -346,26 +333,30 @@ private fun ActionButton(
     }
     val showTooltip = enabled && hovered && tooltipText != null
 
-    Box(
-        Modifier
-            .size(DevEcoTheme.actionButtonSize.dp)
-            .clip(RoundedCornerShape(DevEcoTheme.actionButtonRadius.dp))
-            .background(bgColor)
-            .hoverable(interactionSource, enabled = enabled)
-            .clickable(
-                enabled = enabled,
-                interactionSource = interactionSource,
-                indication = null,
-            ) {
-                onClick()
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        content(contentColor)
-    }
+    // Anchor layout for the tooltip popup: wrapping keeps the popup anchored to the
+    // button itself instead of the caller's row, so the tooltip centers on the button.
+    Box {
+        Box(
+            Modifier
+                .size(DevEcoTheme.actionButtonSize.dp)
+                .clip(RoundedCornerShape(DevEcoTheme.actionButtonRadius.dp))
+                .background(bgColor)
+                .hoverable(interactionSource, enabled = enabled)
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = interactionSource,
+                    indication = null,
+                ) {
+                    onClick()
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            content(contentColor)
+        }
 
-    if (showTooltip) {
-        TooltipPopup(tooltipText!!)
+        if (showTooltip) {
+            TooltipPopup(tooltipText!!)
+        }
     }
 }
 
@@ -399,11 +390,18 @@ private object TooltipPositionProvider : PopupPositionProvider {
         layoutDirection: LayoutDirection,
         popupContentSize: IntSize,
     ): IntOffset {
+        // Show below the button, horizontally centered on it; flip above when the
+        // window bottom leaves no room, instead of clamping onto the button itself.
         val x = anchorBounds.left + anchorBounds.width / 2 - popupContentSize.width / 2
-        val y = anchorBounds.top - popupContentSize.height - 6
+        val yBelow = anchorBounds.bottom + 6
+        val y = if (yBelow + popupContentSize.height <= windowSize.height) {
+            yBelow
+        } else {
+            (anchorBounds.top - popupContentSize.height - 6).coerceAtLeast(0)
+        }
         return IntOffset(
-            x.coerceIn(0, windowSize.width - popupContentSize.width),
-            y.coerceAtLeast(0),
+            x.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+            y,
         )
     }
 }

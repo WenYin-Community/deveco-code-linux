@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -52,10 +53,9 @@ internal fun TokenUsageRing(
 ) {
     val used = controller.usedTokens
     val threshold = controller.tokenThreshold
-    val hasData = threshold > 0L
 
-    val ratio = if (hasData) (used.toFloat() / threshold.toFloat()).coerceIn(0f, 1f) else 0f
-    val percentStr = if (hasData) String.format("%.1f", ratio * 100) else "0.0"
+    val ratio = (used.toFloat() / threshold.toFloat()).coerceIn(0f, 1f)
+    val percentStr = String.format("%.1f", ratio * 100)
 
     val baseRingColor = DevEcoTheme.muted.copy(alpha = 0.1f)
     val progressRingColor = if (ratio >= 1f) DevEcoTheme.warning else DevEcoTheme.foreground.copy(alpha = 0.6f)
@@ -123,6 +123,8 @@ private fun TokenUsageTooltip(
     popupInteractionSource: MutableInteractionSource,
     onDismiss: () -> Unit,
 ) {
+    val isLightTheme = DevEcoTheme.panel.luminance() >= 0.5f
+    
     Popup(
         popupPositionProvider = TooltipAboveLeftProvider,
         onDismissRequest = onDismiss,
@@ -132,6 +134,7 @@ private fun TokenUsageTooltip(
             Modifier
                 .hoverable(popupInteractionSource)
                 .widthIn(max = 240.dp)
+                .tokenUsageCardShadow(RoundedCornerShape(6.dp), isLightTheme)
                 .clip(RoundedCornerShape(6.dp))
                 .background(JBColor(0xF2F2F2, 0x2B2D30).toComposeColor())
                 .border(1.dp, DevEcoTheme.popupBorder, RoundedCornerShape(6.dp))

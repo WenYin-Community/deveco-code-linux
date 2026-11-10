@@ -59,7 +59,7 @@ Studio2 与另一套 Studio 通常使用不同配置/缓存目录；模型配置
 需要外部准备或下载的部分：
 
 - 完整 JDK 21（本次构建使用 Android Studio 自带 JBR 21，通过 JAVA_HOME 指定）。Studio2 的运行时不应被默认视为完整编译工具链。
-- Bun 1.3.14（仓库 packageManager 声明）；构建 PATH 需能找到 bun。Web UI 构建过程也需要可用 Node，建议 Node 22。
+- Bun 1.4.2（仓库 packageManager 声明）；构建 PATH 需能找到 bun。Web UI 构建过程也需要可用 Node，建议 Node 22。
 - 目标 Studio2 安装目录，构建通过 -PdevecoStudioPath 显式传入。
 - Gradle wrapper 首次下载 Gradle 9.6.1；Kotlin 编译插件为 2.3.20。构建适配和静态分析使用 ASM 9.7.1，仅在构建时下载使用，不进入运行安装包。
 - 可访问配置中的 Maven 仓库、Google Maven、JetBrains Jewel 仓库以及 IntelliJ 构建插件仓库。
@@ -82,7 +82,7 @@ bun install --frozen-lockfile
 bun run --cwd packages/opencode postinstall
 ```
 
-再在 integrations/deveco-code 目录执行（把两个路径换成实际路径）：
+再在 integrations/intellij-plugin 目录执行（把两个路径换成实际路径）：
 
 ```sh
 JAVA_HOME='/path/to/jdk-21/Contents/Home' ./gradlew audit243Package \

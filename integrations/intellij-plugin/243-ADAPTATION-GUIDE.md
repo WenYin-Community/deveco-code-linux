@@ -57,7 +57,7 @@
 ### 构建工具链（外部准备）
 
 - **JDK 21**（完整编译工具链，不是 Studio2 运行时）——本次用 Android Studio 自带 JBR 21 经 `JAVA_HOME` 指定。
-- **Bun 1.3.14**（`packageManager` 声明）；后端/Web UI 构建还需可用 Node，建议 Node 22。构建机的 Node 与插件额外携带的 Node 运行时是两份不同用途的依赖。
+- **Bun 1.4.2**（`packageManager` 声明）；后端/Web UI 构建还需可用 Node，建议 Node 22。构建机的 Node 与插件额外携带的 Node 运行时是两份不同用途的依赖。
 - **Gradle 9.6.1**（wrapper 首次下载）。
 - **Kotlin 2.3.20** 编译插件。
 - **ASM 9.7.1**（仅构建期，不进安装包）。

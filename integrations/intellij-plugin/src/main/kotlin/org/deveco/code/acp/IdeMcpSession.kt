@@ -2,6 +2,7 @@ package org.deveco.code.acp
 
 import com.agentclientprotocol.model.HttpHeader
 import com.agentclientprotocol.model.McpServer
+import com.intellij.mcpserver.McpToolFilter
 import com.intellij.mcpserver.impl.McpServerService
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -36,7 +37,7 @@ class IdeMcpHandle internal constructor(val endpoint: IdeMcpEndpoint, private va
     }
 
     private companion object {
-        const val SERVER_NAME = "Deveco Studio"
+        const val SERVER_NAME = "ide"
     }
 }
 
@@ -50,6 +51,10 @@ internal class IdeMcpSession(private val project: Project) : Disposable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun acquire(): IdeMcpHandle? {
+        if (!isToolFilterSupported()) {
+            log.info("IDE MCP tool filter API unavailable; ide MCP server not injected")
+            return null
+        }
         val deferred = CompletableDeferred<IdeMcpEndpoint>()
         val job = scope.launch {
             try {
@@ -90,29 +95,26 @@ internal class IdeMcpSession(private val project: Project) : Disposable {
         scope.cancel()
     }
 
+    // Active capability probe: the whitelist filter, its AllowList
+    // implementation and the McpSessionOptions constructor must all exist
+    // before any typed reference is made below.
+    private fun isToolFilterSupported(): Boolean =
+        try {
+            val filterClass = Class.forName("com.intellij.mcpserver.McpToolFilter")
+            Class.forName("com.intellij.mcpserver.McpToolFilter\$AllowList")
+            McpServerService.McpSessionOptions::class.java.getDeclaredConstructor(
+                McpServerService.AskCommandExecutionMode::class.java,
+                filterClass,
+            )
+            true
+        } catch (_: ReflectiveOperationException) {
+            false
+        }
+
     private fun createSessionOptions(
         mode: McpServerService.AskCommandExecutionMode,
-    ): McpServerService.McpSessionOptions {
-        val optionsClass = McpServerService.McpSessionOptions::class.java
-        val modeClass = McpServerService.AskCommandExecutionMode::class.java
-        try {
-            val ctor = optionsClass.getDeclaredConstructor(modeClass)
-            return ctor.newInstance(mode)
-        } catch (_: NoSuchMethodException) {
-        }
-        try {
-            val filterInterface = Class.forName("com.intellij.mcpserver.McpToolFilter")
-            val ctor = optionsClass.getDeclaredConstructor(modeClass, filterInterface)
-            val allowAllClass = Class.forName("com.intellij.mcpserver.McpToolFilter\$AllowAll")
-            val allowAllInstance = allowAllClass.getField("INSTANCE").get(null)
-            return ctor.newInstance(mode, allowAllInstance)
-        } catch (_: Exception) {
-        }
-        throw NoSuchMethodError(
-            "No compatible McpSessionOptions constructor found; " +
-                "expected (AskCommandExecutionMode) or (AskCommandExecutionMode, McpToolFilter)",
-        )
-    }
+    ): McpServerService.McpSessionOptions =
+        McpServerService.McpSessionOptions(mode, McpToolFilter.AllowList(IDE_MCP_TOOL_WHITELIST))
 
     private fun acquireService(): McpServerService? {
         val app = ApplicationManager.getApplication()
@@ -122,5 +124,28 @@ internal class IdeMcpSession(private val project: Project) : Disposable {
 
     companion object {
         private const val START_TIMEOUT_MS = 15_000L
+
+        // IDE tools exposed to the agent through the "ide" MCP server: the
+        // runtime toolset of DevEco Studio 261. Tools outside this list
+        // (analysis, build/run/terminal execution, refactoring, VCS) stay
+        // hidden; they surface through the agent's own permission-gated
+        // tools instead.
+        private val IDE_MCP_TOOL_WHITELIST = setOf(
+            "read_file",
+            "get_file_text_by_path",
+            "list_directory_tree",
+            "find_files_by_glob",
+            "find_files_by_name_keyword",
+            "get_all_open_file_paths",
+            "search_symbol",
+            "search_file",
+            "search_text",
+            "search_regex",
+            "search_in_files_by_regex",
+            "search_in_files_by_text",
+            "open_file_in_editor",
+            "create_new_file",
+            "replace_text_in_file",
+        )
     }
 }

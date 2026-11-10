@@ -6,9 +6,9 @@ import com.agentclientprotocol.model.RequestPermissionResponse
 import com.agentclientprotocol.model.SessionConfigOption
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.PathManager
-import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.Disposer
+import com.intellij.util.concurrency.AppExecutorUtil
 import org.deveco.code.util.devecoStorageRoot
 import java.io.IOException
 import java.net.InetAddress
@@ -18,6 +18,7 @@ import java.nio.file.Path
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -27,6 +28,9 @@ private data class ServerCredentials(val username: String, val password: String)
 /**
  * Application-level owner of the single shared `deveco acp` subprocess.
  *
+ * Declared as an applicationService in plugin.xml (not a light service): see
+ * the service declarations there for the dynamic-reload rationale.
+ *
  * The backend accepts one ACP connection per process but keys its session and
  * config state per cwd, so one process serves every open project. Each
  * project's [AcpClientService] attaches here: the connection, HTTP sidecar and
@@ -34,7 +38,6 @@ private data class ServerCredentials(val username: String, val password: String)
  * Lifecycle is expressed in the Disposer tree — connections are children of
  * this service, facades hold [Attachment] handles as their own children.
  */
-@Service(Service.Level.APP)
 @OptIn(UnstableApi::class)
 class SharedAcpBackend : Disposable {
 
@@ -60,30 +63,39 @@ class SharedAcpBackend : Disposable {
         /**
          * Removes stale deveco lock files before spawn: Bun v1.3.14 (deveco.exe)
          * panics in DeleteFile on a leftover lock from a previous run.
+         *
+         * A lock is stale when its owning PID is no longer alive. This catches
+         * freshly-killed processes whose locks are still within the 60s Flock
+         * stale window — the exact scenario that causes 20-second startup
+         * delays after an IDE ACP timeout kill.
          */
         private fun cleanupStaleLocks() {
             if (!IS_WINDOWS) return
             val locksDir = devecoStorageRoot.resolve("state/locks").toFile()
             if (!locksDir.isDirectory) return
-            // Only remove locks stale per Flock semantics (heartbeat/meta mtime
-            // older than 60s) — indiscriminate deletion breaks live holders.
-            val staleMs = 60_000L
-            val now = System.currentTimeMillis()
             locksDir.listFiles { f -> f.name.endsWith(".lock") }?.forEach { lock ->
-                val heartbeat = java.io.File(lock, "heartbeat")
-                val meta = java.io.File(lock, "meta.json")
-                val stamp = when {
-                    heartbeat.isFile -> heartbeat.lastModified()
-                    meta.isFile -> meta.lastModified()
-                    else -> lock.lastModified()
-                }
-                if (now - stamp <= staleMs) return@forEach
+                if (isLockHolderAlive(lock)) return@forEach
                 if (!lock.deleteRecursively()) {
-                    log.warn("Could not delete stale lock: ${lock.absolutePath}")
+                    log.warn("Could not delete stale lock: ${lock.name}")
                 } else {
-                    log.info("Deleted stale lock: ${lock.absolutePath}")
+                    log.debug("Deleted stale lock: ${lock.name}")
                 }
             }
+        }
+
+        /**
+         * Returns true if the lock's owning PID is still alive. Returns false
+         * if meta.json is missing or unreadable — a lock without valid owner
+         * metadata is orphaned and should be removed.
+         */
+        private fun isLockHolderAlive(lock: java.io.File): Boolean {
+            val meta = java.io.File(lock, "meta.json")
+            if (!meta.isFile) return false
+            val pid = runCatching {
+                val obj = com.google.gson.JsonParser.parseString(meta.readText()).asJsonObject
+                if (obj.has("pid")) obj.get("pid").asLong else null
+            }.getOrNull() ?: return false
+            return ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
         }
     }
 
@@ -96,6 +108,17 @@ class SharedAcpBackend : Disposable {
 
     @Volatile
     private var httpApi: DevEcoHttpApi? = null
+
+    /** One SSE stream per backend process; projects demultiplex by directory. */
+    @Volatile
+    private var eventStream: DevEcoHttpApi.GlobalEventStream? = null
+
+    /**
+     * Status events and resyncs mutate per-project routing state, so they run
+     * on one ordered worker — never on the SSE reader thread, whose blocking
+     * on HTTP would starve the heartbeat watchdog into reconnect loops.
+     */
+    private val statusExecutor = AppExecutorUtil.createBoundedApplicationPoolExecutor("DevecoAcpStatusDispatch", 1)
 
     @Volatile
     private var connectionState: ConnectionState = ConnectionState.STOPPED
@@ -177,6 +200,7 @@ class SharedAcpBackend : Disposable {
         }
         registerChild(fresh)
         disposeConnection(retired)
+        if (connected) startEventStream()
         return connected
     }
 
@@ -194,6 +218,7 @@ class SharedAcpBackend : Disposable {
         }
         registerChild(fresh)
         disposeConnection(retired)
+        if (reconnected) startEventStream()
         return reconnected
     }
 
@@ -205,7 +230,7 @@ class SharedAcpBackend : Disposable {
     private fun neutralSpawnDirectory(): String = try {
         Files.createDirectories(devecoStorageRoot).toString()
     } catch (e: IOException) {
-        log.warn("Could not create spawn directory $devecoStorageRoot, using IDE system dir", e)
+        log.warn("Could not create spawn directory ${devecoStorageRoot.fileName}, using IDE system dir", e)
         PathManager.getSystemPath()
     }
 
@@ -226,7 +251,7 @@ class SharedAcpBackend : Disposable {
             }
             try {
                 val detection = DevEcoCodeDetector.validateAcp(Path.of(command))
-                log.info("DevEco Code validated: ${detection.version} at $command")
+                log.debug("DevEco Code validated: ${detection.version} at ${Path.of(command).fileName}")
             } catch (e: DevEcoCodeDetector.AcpUnavailableException) {
                 // Advisory: let ACP connect and surface real protocol errors rather
                 // than hiding all sessions on an unfamiliar CLI shape.
@@ -241,6 +266,7 @@ class SharedAcpBackend : Disposable {
                     spawnDirectory,
                     ::publishSessionUpdate,
                     ::requestPermission,
+                    ::requestElicitation,
                 )
                 cleanupStaleLocks()
                 // Fresh per-connection credentials, handed over via the env vars
@@ -270,8 +296,12 @@ class SharedAcpBackend : Disposable {
                     connectionRef.set(bridge)
                     connectionState = ConnectionState.READY
                     statusText = "Connected · session endpoint http://$HTTP_HOST:$candidatePort"
-                    log.info(
-                        "Shared ACP backend connected to agent: $command; HTTP endpoint: http://$HTTP_HOST:$candidatePort; spawnDirectory=$spawnDirectory",
+                    log.debug(
+                        "Shared ACP backend connected to agent: ${Path.of(
+                            command,
+                        ).fileName}; HTTP endpoint: http://$HTTP_HOST:$candidatePort; spawnDirectory=${Path.of(
+                            spawnDirectory,
+                        ).fileName}",
                     )
                     return bridge
                 } catch (e: Exception) {
@@ -280,7 +310,7 @@ class SharedAcpBackend : Disposable {
                     runCatching { bridge.dispose() }
                 }
             }
-            log.warn("Failed to connect shared ACP backend to agent: $command", lastError)
+            log.warn("Failed to connect shared ACP backend to agent: ${Path.of(command).fileName}", lastError)
             connectionState = ConnectionState.FAILED
             statusText = "DevEco Code unavailable: ${lastError?.message ?: lastError?.javaClass?.simpleName}"
             return null
@@ -296,6 +326,7 @@ class SharedAcpBackend : Disposable {
     @Synchronized
     private fun retireConnectionLocked(): AcpClientConnection? {
         routes.clear()
+        stopEventStream()
         val connection = connectionRef.getAndSet(null)
         httpPort = 0
         httpApi = null
@@ -341,11 +372,29 @@ class SharedAcpBackend : Disposable {
         sessionId: String,
         cwd: String,
         acquireIdeMcp: () -> IdeMcpHandle?,
+        replay: Boolean = false,
     ): List<SessionConfigOption> {
-        val options = requireConnection().loadSession(sessionId, cwd, acquireIdeMcp) { routes[sessionId] = facade }
+        val options = requireConnection().loadSession(sessionId, cwd, acquireIdeMcp, replay) {
+            routes[sessionId] =
+                facade
+        }
         // Refresh covers the already-loaded case, where the factory hook doesn't run.
         routes[sessionId] = facade
         return options
+    }
+
+    /**
+     * Re-points reverse requests (permission/question) at [facade]: the window whose
+     * editor the user opened last is the one that can actually render the card.
+     * Returns false when [facade] no longer holds a connection claim.
+     */
+    internal fun claimRoute(facade: AcpClientService, sessionId: String): Boolean = synchronized(this) {
+        if (!attachments.containsKey(facade)) return false
+        val previous = routes[sessionId]
+        if (previous === facade) return true
+        routes[sessionId] = facade
+        log.info("Session route claimed: sessionId=$sessionId, reowned=${previous != null}")
+        true
     }
 
     /** Closes the ACP runtime of [sessionId] and forgets its route; throws when disconnected. */
@@ -366,6 +415,13 @@ class SharedAcpBackend : Disposable {
         liveConnection()?.cancelPrompt(sessionId)
     }
 
+    /**
+     * Whether the session was closed at protocol level (delete/archive,
+     * detached project) on the live connection. False when the backend is
+     * not connected — callers then keep normal error handling.
+     */
+    fun isSessionClosed(sessionId: String): Boolean = liveConnection()?.isSessionClosed(sessionId) ?: false
+
     fun isConnected(): Boolean = connectionRef.get()?.isAlive() == true
 
     fun connectionState(): ConnectionState = connectionState
@@ -382,6 +438,49 @@ class SharedAcpBackend : Disposable {
 
     internal fun liveConnection(): AcpClientConnection? = connectionRef.get()?.takeIf { it.isAlive() }
 
+    @Synchronized
+    private fun startEventStream() {
+        if (eventStream != null || attachments.isEmpty()) return
+        val api = httpApi ?: return
+        eventStream = api.openGlobalEventStream(::dispatchSessionStatus, ::resyncSubagents)
+    }
+
+    @Synchronized
+    private fun stopEventStream() {
+        eventStream?.close()
+        eventStream = null
+    }
+
+    private fun dispatchSessionStatus(directory: String, sessionId: String, status: SessionStatusInfo) {
+        val facades = synchronized(this) { attachments.keys.filter { it.projectDirectory == directory } }
+        if (facades.isEmpty()) return
+        postStatusTask {
+            for (facade in facades) facade.onSessionStatusEvent(sessionId, status)
+        }
+    }
+
+    private fun resyncSubagents() {
+        val facades = synchronized(this) { attachments.keys.toList() }
+        if (facades.isEmpty()) return
+        postStatusTask {
+            for (facade in facades) facade.resyncSubagents()
+        }
+    }
+
+    /**
+     * Runs [task] on the ordered status worker. Every caller of the facades'
+     * status-event/resync entry points must go through here so the routing
+     * state they mutate is single-threaded — including the per-project resync
+     * a late-connecting project issues from its own connect() thread.
+     */
+    internal fun postStatusTask(task: () -> Unit) {
+        try {
+            statusExecutor.execute(task)
+        } catch (_: RejectedExecutionException) {
+            // Shutting down; the tree teardown closes the stream first anyway.
+        }
+    }
+
     private fun publishSessionUpdate(update: AcpSessionUpdate) {
         val facade = routes[update.sessionId.value]
         if (facade == null) {
@@ -394,7 +493,7 @@ class SharedAcpBackend : Disposable {
         facade.publishSessionUpdate(update)
     }
 
-    private fun requestPermission(request: RequestPermissionRequest): RequestPermissionResponse? {
+    private suspend fun requestPermission(request: RequestPermissionRequest): RequestPermissionResponse? {
         val facade = routes[request.sessionId.value]
         if (facade == null) {
             log.warn("Permission request for unrouted session ${request.sessionId.value}; cancelling")
@@ -403,10 +502,37 @@ class SharedAcpBackend : Disposable {
         return facade.requestPermission(request)
     }
 
+    private suspend fun requestElicitation(request: ElicitationRequest): ElicitationResponse? {
+        val facade = routes[request.sessionId]
+        if (facade == null) {
+            log.warn("Elicitation request for unrouted session ${request.sessionId}; cancelling")
+            return null
+        }
+        return facade.requestElicitation(request)
+    }
+
+    /**
+     * Completer for the session's outstanding question, registered by the controller that
+     * owns the ACP request. Lets a card rendered in another window answer through the
+     * owner's suspended RPC instead of a second, desynchronized HTTP path.
+     */
+    private val questionCompleters = ConcurrentHashMap<String, (List<List<String>>?) -> Unit>()
+
+    internal fun registerQuestionCompleter(sessionId: String, completer: (List<List<String>>?) -> Unit): () -> Unit {
+        questionCompleters[sessionId] = completer
+        return { questionCompleters.remove(sessionId, completer) }
+    }
+
+    internal fun completeQuestion(sessionId: String, answers: List<List<String>>?): Boolean {
+        val completer = questionCompleters[sessionId] ?: return false
+        completer(answers)
+        return true
+    }
+
     /** The plugin-bundled CLI is the only supported agent binary; there are no PATH or env-var fallbacks. */
     private fun resolveAgentCommand(): String = try {
         val bundled = CliBinaryExtractor.extract()
-        log.info("Using bundled CLI: $bundled")
+        log.debug("Using bundled CLI: ${Path.of(bundled).fileName}")
         bundled
     } catch (e: Exception) {
         throw IllegalStateException(
@@ -417,6 +543,9 @@ class SharedAcpBackend : Disposable {
 
     override fun dispose() {
         // Tree children are disposed before this runs; disposing is idempotent.
+        // Stop the stream first: events arriving after the executor shuts down
+        // would be rejected and read as a broken stream by the reader.
         disposeConnection(retireConnectionLocked())
+        statusExecutor.shutdown()
     }
 }

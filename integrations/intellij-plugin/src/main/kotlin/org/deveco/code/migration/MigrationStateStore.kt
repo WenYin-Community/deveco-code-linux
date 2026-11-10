@@ -21,6 +21,11 @@ import java.nio.file.StandardOpenOption
  * WHOLE prompt in that project — global part included (review P1-2) — while
  * other projects keep surfacing global work. Reset = delete the marker file
  * (documented in README).
+ *
+ * Besides the done/suppressed markers above, the file carries failure
+ * markers (`failedAt`, R5): the prompt bar labels its action "Retry
+ * Migration" while the previous run has unsettled items, including after the
+ * tool window was rebuilt.
  */
 class MigrationStateStore(private val markerFile: Path) {
 
@@ -29,15 +34,33 @@ class MigrationStateStore(private val markerFile: Path) {
         val projectDone: Set<String>,
         /** Projects whose prompt was dismissed ("Don't remind me"). */
         val suppressedProjects: Set<String>,
+        /** The GLOBAL scope was left unsettled by the last finished run (R5). */
+        val globalFailed: Boolean,
+        /** Projects whose last finished run left project-scope items unsettled (R5). */
+        val failedProjects: Set<String>,
     ) {
         fun projectDone(projectId: String): Boolean = projectId in projectDone
         fun projectSuppressed(projectId: String): Boolean = projectId in suppressedProjects
+
+        /**
+         * Retry-label rule (R5): the prompt bar offers "Retry Migration"
+         * instead of "Start Migration" while the last finished run still has
+         * unsettled items. A DONE scope wins over a stale failure marker —
+         * "忽略失败项" in the report dialog writes the done marker without
+         * clearing the failure one, and done must not resurrect the retry
+         * label (the user explicitly dismissed those items).
+         */
+        fun retryNeeded(projectId: String): Boolean = (!globalDone && globalFailed) ||
+            (!projectDone(projectId) && projectId in failedProjects)
     }
 
     private val mapper = ObjectMapper()
 
     fun read(): MarkerState = try {
         val root = mapper.readTree(Files.readString(markerFile))
+        // Every field goes through .path(...): markers written by an older
+        // plugin version carry no failedAt at all and must degrade to
+        // "nothing failed", never throw (same tolerance as completedAt).
         MarkerState(
             globalDone = root.path("global").path("completedAt").isNumber,
             projectDone = root.path("projects").fields().asSequence()
@@ -46,9 +69,14 @@ class MigrationStateStore(private val markerFile: Path) {
                 .filter { it.value.path("suppressedAt").isNumber }
                 .map { it.key }
                 .toSet(),
+            globalFailed = root.path("global").path("failedAt").isNumber,
+            failedProjects = root.path("projects").fields().asSequence()
+                .filter { it.value.path("failedAt").isNumber }
+                .map { it.key }
+                .toSet(),
         )
     } catch (_: Exception) {
-        MarkerState(false, emptySet(), emptySet())
+        MarkerState(false, emptySet(), emptySet(), false, emptySet())
     }
 
     /**
@@ -82,6 +110,41 @@ class MigrationStateStore(private val markerFile: Path) {
     fun markProjectDone(projectId: String) {
         mutate { root ->
             root.with("projects").with(projectId).put("completedAt", System.currentTimeMillis())
+        }
+    }
+
+    /**
+     * Failure marker (R5): the last finished run left items unsettled, so the
+     * prompt bar keeps offering "Retry Migration" after the tool window is
+     * rebuilt — the in-memory [MigrationReport] is long gone by then.
+     *
+     * Purely additive: [clearFailed] is the only thing that drops a marker
+     * (a run that never touched a scope must not silently un-flag it).
+     *
+     * [global] marks the GLOBAL scope too. A global failure is not
+     * project-specific, so every open project's bar shows the retry label —
+     * the retry re-runs the same global work.
+     */
+    fun markFailed(projectId: String, global: Boolean) {
+        mutate { root ->
+            val now = System.currentTimeMillis()
+            root.with("projects").with(projectId).put("failedAt", now)
+            if (global) root.with("global").put("failedAt", now)
+        }
+    }
+
+    /**
+     * Drops the failure markers after a run in which everything settled (R5).
+     * BOTH scopes are cleared: [MigrationReport.allSettled] is a statement
+     * about the whole report, so no stale global/scoped failure survives it.
+     * Lookups are read-only here — clearing must not create empty nodes.
+     */
+    fun clearFailed(projectId: String) {
+        mutate { root ->
+            (root.get("projects") as? ObjectNode)?.let { projects ->
+                (projects.get(projectId) as? ObjectNode)?.remove("failedAt")
+            }
+            (root.get("global") as? ObjectNode)?.remove("failedAt")
         }
     }
 

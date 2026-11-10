@@ -35,10 +35,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.colors.EditorColorsListener
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
 import kotlinx.coroutines.CoroutineScope
@@ -57,10 +59,12 @@ import org.deveco.code.session.ui.composer.SessionComposer
 import org.deveco.code.session.ui.composer.TodoDock
 import org.deveco.code.session.model.SessionViewState
 import org.deveco.code.session.model.SessionViewportState
+import org.jetbrains.jewel.bridge.theme.retrieveEditorTextStyle
 import org.jetbrains.jewel.bridge.toComposeColor
-import org.jetbrains.jewel.intui.markdown.bridge.create as createBlockRenderer
 import org.jetbrains.jewel.intui.markdown.bridge.ProvideMarkdownStyling
 import org.jetbrains.jewel.intui.markdown.bridge.styling.create
+import org.jetbrains.jewel.markdown.MarkdownBlock
+import org.jetbrains.jewel.markdown.extensions.MarkdownRendererExtension
 import org.jetbrains.jewel.markdown.extensions.github.tables.GfmTableColors
 import org.jetbrains.jewel.markdown.extensions.github.tables.GfmTableMetrics
 import org.jetbrains.jewel.markdown.extensions.github.tables.GfmTableStyling
@@ -68,8 +72,8 @@ import org.jetbrains.jewel.markdown.extensions.github.tables.GitHubTableProcesso
 import org.jetbrains.jewel.markdown.extensions.github.tables.GitHubTableRendererExtension
 import org.jetbrains.jewel.markdown.extensions.github.tables.RowBackgroundStyle
 import org.jetbrains.jewel.markdown.processing.MarkdownProcessor
+import org.jetbrains.jewel.markdown.rendering.DefaultMarkdownBlockRenderer
 import org.jetbrains.jewel.markdown.rendering.InlinesStyling
-import org.jetbrains.jewel.markdown.rendering.MarkdownBlockRenderer
 import org.jetbrains.jewel.markdown.rendering.MarkdownStyling
 import org.jetbrains.jewel.markdown.rendering.MarkdownStyling.Code
 import org.jetbrains.jewel.ui.component.Icon
@@ -94,17 +98,22 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         color = textColor,
         fontSize = 14.sp,
     )
-    val codeTextStyle = TextStyle(
-        color = codeTextColor,
-        fontFamily = FontFamily.Monospace,
-        fontSize = 13.sp,
-    )
+    // Re-read the IDE editor font when the editor color scheme changes (font size/family
+    // edits in Settings → Editor → Font, or scheme switches) so code blocks stay in sync.
+    var editorSchemeTick by remember { mutableStateOf(0) }
+    DisposableEffect(Unit) {
+        val connection = ApplicationManager.getApplication().messageBus.connect()
+        connection.subscribe(EditorColorsManager.TOPIC, EditorColorsListener { editorSchemeTick++ })
+        onDispose { connection.disconnect() }
+    }
+    // Use the IDE editor font family/size/ligatures so code blocks match the editor exactly.
+    val codeTextStyle = remember(editorSchemeTick) { retrieveEditorTextStyle() }.copy(color = codeTextColor)
     val inlinesStyling = InlinesStyling.create(
         textStyle = baseTextStyle,
         inlineCode = SpanStyle(
             color = accentColor,
             background = inlineCodeBg.copy(alpha = 0.15f),
-            fontFamily = FontFamily.Monospace,
+            fontFamily = codeTextStyle.fontFamily,
         ),
         link = SpanStyle(
             color = accentColor,
@@ -210,7 +219,7 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
         ),
         headerBaseFontWeight = FontWeight.SemiBold,
     )
-    val blockRenderer = MarkdownBlockRenderer.Companion.createBlockRenderer(
+    val blockRenderer = SafeOrderedListMarkdownBlockRenderer(
         styling = markdownStyling,
         rendererExtensions = listOf(
             GitHubTableRendererExtension(tableStyling, markdownStyling),
@@ -235,3 +244,41 @@ internal fun SessionMarkdownTheme(project: Project, content: @Composable () -> U
     }
 }
 
+// Jewel's Decimal.formatNumber throws "Input must be a positive integer" for an
+// ordered list whose start number is not positive (model output such as "0. first",
+// including "> 0. first" inside block quotes), crashing composition. Clamping at the
+// renderer boundary covers every nesting level, because BlockQuote and list recursion
+// virtually dispatch RenderOrderedList on this same renderer instance.
+private class SafeOrderedListMarkdownBlockRenderer(
+    styling: MarkdownStyling,
+    rendererExtensions: List<MarkdownRendererExtension>,
+) : DefaultMarkdownBlockRenderer(styling, rendererExtensions) {
+    @Composable
+    override fun RenderOrderedList(
+        block: MarkdownBlock.ListBlock.OrderedList,
+        styling: MarkdownStyling.List.Ordered,
+        isInTightList: Boolean,
+        onUrlClick: (String) -> Unit,
+        modifier: Modifier,
+    ) {
+        super.RenderOrderedList(
+            clampedOrderedListStart(block),
+            styling,
+            isInTightList,
+            onUrlClick,
+            modifier,
+        )
+    }
+}
+
+internal fun clampedOrderedListStart(block: MarkdownBlock.ListBlock.OrderedList) =
+    if (block.startFrom > 0) {
+        block
+    } else {
+        MarkdownBlock.ListBlock.OrderedList(
+            children = block.children,
+            isTight = block.isTight,
+            startFrom = 1,
+            delimiter = block.delimiter,
+        )
+    }

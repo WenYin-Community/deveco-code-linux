@@ -1,96 +1,96 @@
 package org.deveco.code.session.ui.messages
 
+import com.intellij.DynamicBundle
 import org.deveco.code.MyMessageBundle
-import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.TextStyle
-import java.time.temporal.TemporalAdjusters
-import java.util.Locale
+import java.time.temporal.ChronoUnit
 
 /**
  * Formats message timestamps with smart relative formatting rules.
  *
- * Rules (based on UI design spec):
- * - Same day: "15:30"
- * - Within this week (Mon-Sun): "星期六 15:30"
- * - Within this year: "1月1日"
- * - Other year: "2025年12月31日"
+ * Display rules (based on UI design spec):
+ * - < 1 minute: "刚刚" / "Just now"
+ * - < 60 minutes: "20 分钟前" / "20 minutes ago"
+ * - Today: "09:41"
+ * - Yesterday: "昨天 18:05" / "Yesterday 18:05"
+ * - This year: "10月1日 14:12" / "Oct 1 14:12"
+ * - Earlier: "2025-12-30 14:12" / "Dec 30, 2025 14:12"
+ *
+ * Hover tooltip always shows full timestamp: "2026-10-01 14:12:00"
  */
 internal object MessageTimeFormatter {
 
+    private val HOVER_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    private val EARLIER_DISPLAY_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
     fun format(timestamp: Long, now: Long = System.currentTimeMillis()): String {
         val zone = ZoneId.systemDefault()
-        val localDate = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate()
-        val nowDate = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val instant = Instant.ofEpochMilli(timestamp)
+        val nowInstant = Instant.ofEpochMilli(now)
+        val localDateTime = instant.atZone(zone).toLocalDateTime()
+        val nowDateTime = nowInstant.atZone(zone).toLocalDateTime()
+        val localDate = localDateTime.toLocalDate()
+        val nowDate = nowDateTime.toLocalDate()
+        val locale = DynamicBundle.getLocale()
+
+        val minutesAgo = ChronoUnit.MINUTES.between(instant, nowInstant)
 
         return when {
-            localDate == nowDate -> {
-                // 本自然日内: 15:30
-                formatTime(timestamp, "HH:mm")
+            minutesAgo < 1 -> {
+                MyMessageBundle.message("time.justNow")
             }
 
-            isWithinThisWeek(localDate, nowDate) -> {
-                // 超出本自然日且本自然周内: 星期六 15:30
-                val dayOfWeek = localDate.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.CHINESE)
-                "$dayOfWeek ${formatTime(timestamp, "HH:mm")}"
+            minutesAgo < 60 -> {
+                MyMessageBundle.message("time.minutesAgo", minutesAgo)
+            }
+
+            localDate == nowDate -> {
+                localDateTime.format(DateTimeFormatter.ofPattern("HH:mm", locale))
+            }
+
+            localDate == nowDate.minusDays(1) -> {
+                val timeStr = localDateTime.format(DateTimeFormatter.ofPattern("HH:mm", locale))
+                MyMessageBundle.message("time.yesterdayWithTime", timeStr)
             }
 
             localDate.year == nowDate.year -> {
-                // 一周以外且本自然年内: 1月1日
-                "${localDate.monthValue}月${localDate.dayOfMonth}日"
+                val pattern = MyMessageBundle.message("time.pattern.thisYear")
+                localDateTime.format(DateTimeFormatter.ofPattern(pattern, locale))
             }
 
             else -> {
-                // 本自然年外: 2025年12月31日
-                "${localDate.year}年${localDate.monthValue}月${localDate.dayOfMonth}日"
+                localDateTime.format(EARLIER_DISPLAY_FORMAT)
             }
         }
     }
 
-    private fun formatTime(timestamp: Long, pattern: String): String {
-        val formatter = DateTimeFormatter.ofPattern(pattern)
-        return Instant.ofEpochMilli(timestamp)
-            .atZone(ZoneId.systemDefault())
-            .format(formatter)
+    /** Returns the full timestamp string for hover tooltip: "2026-10-01 14:12:00" */
+    fun formatHover(timestamp: Long): String {
+        val zone = ZoneId.systemDefault()
+        return Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDateTime().format(HOVER_FORMAT)
     }
 
     /**
-     * Checks if [date] is within the current week (Monday to Sunday).
-     * The current week starts on Monday of [nowDate]'s week.
+     * Formats the relative timestamp with a turn-status prefix, e.g.
+     * "「已停止 · 刚刚」" / "Stopped · just now". [statusCode] is "stopped" or
+     * "failed"; resolved against the message bundle so the label and layout
+     * (brackets, separator) stay locale-specific.
      */
-    private fun isWithinThisWeek(date: LocalDate, nowDate: LocalDate): Boolean {
-        val weekStart = nowDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val weekEnd = nowDate.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
-        return date >= weekStart && date <= weekEnd && date != nowDate
-    }
-}
+    fun formatWithStatus(timestamp: Long, statusCode: String, now: Long = System.currentTimeMillis()): String =
+        MyMessageBundle.message(
+            "message.timestamp.statusFormat",
+            MyMessageBundle.message("message.status.$statusCode"),
+            format(timestamp, now),
+        )
 
-/**
- * Formats a duration in milliseconds to a human-readable localized string.
- *
- * Examples:
- * - 30000ms -> "30s" (English) / "30 秒" (Chinese)
- * - 923000ms -> "15m23s" (English) / "15 分 23 秒" (Chinese)
- * - 7200000ms -> "2h0m" (English) / "2 小时 0 分" (Chinese)
- */
-internal fun formatDuration(ms: Long): String {
-    val totalSeconds = (ms / 1000).toInt().coerceAtLeast(0)
-    return when {
-        totalSeconds < 60 -> MyMessageBundle.message("duration.seconds", totalSeconds)
-
-        totalSeconds < 3600 -> {
-            val minutes = totalSeconds / 60
-            val seconds = totalSeconds % 60
-            MyMessageBundle.message("duration.minutes", minutes, seconds)
-        }
-
-        else -> {
-            val hours = totalSeconds / 3600
-            val minutes = (totalSeconds % 3600) / 60
-            MyMessageBundle.message("duration.hours", hours, minutes)
-        }
-    }
+    /** Same as [formatWithStatus] but for the hover tooltip's full timestamp. */
+    fun formatHoverWithStatus(timestamp: Long, statusCode: String): String = MyMessageBundle.message(
+        "message.timestamp.statusFormat",
+        MyMessageBundle.message("message.status.$statusCode"),
+        formatHover(timestamp),
+    )
 }

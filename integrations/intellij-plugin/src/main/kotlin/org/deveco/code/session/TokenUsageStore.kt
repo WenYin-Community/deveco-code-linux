@@ -1,11 +1,11 @@
 package org.deveco.code.session
 
-import com.intellij.openapi.components.Service
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import org.deveco.code.util.PluginStateFiles
+import java.util.concurrent.atomic.AtomicBoolean
 
-@Service(Service.Level.PROJECT)
 internal class TokenUsageStore(private val project: Project) {
 
     data class UsageEntry(
@@ -20,9 +20,12 @@ internal class TokenUsageStore(private val project: Project) {
     private val state = PluginStateFiles.readJson(project, "token-usage.json", State::class.java) ?: State()
     private val log = Logger.getInstance(TokenUsageStore::class.java)
 
-    // Pooled-thread reads (session load) vs EDT writes; the lock also guards markDirty's
-    // Gson serialization.
+    // Pooled-thread reads (session load) vs EDT writes. The lock only guards the
+    // in-memory state; persistence runs on a pooled thread outside the lock so
+    // high-frequency token updates never block the EDT on disk IO.
     private val lock = Any()
+    private val dirty = AtomicBoolean(false)
+    private val flushScheduled = AtomicBoolean(false)
 
     fun getUsage(sessionId: String): Triple<Long, Long, Long>? = synchronized(lock) {
         val entry = state.entries.firstOrNull { it.sessionId == sessionId }
@@ -60,8 +63,26 @@ internal class TokenUsageStore(private val project: Project) {
     }
 
     private fun markDirty() {
-        runCatching { PluginStateFiles.writeJson(project, "token-usage.json", state) }
-            .onFailure { log.warn("Failed to persist token usage", it) }
+        dirty.set(true)
+        scheduleFlush()
+    }
+
+    /** Coalescing background writer: bursts of updates collapse into one write per round. */
+    private fun scheduleFlush() {
+        if (!flushScheduled.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                while (dirty.compareAndSet(true, false)) {
+                    val snapshot = synchronized(lock) { State(state.entries.map { it.copy() }.toMutableList()) }
+                    runCatching { PluginStateFiles.writeJson(project, "token-usage.json", snapshot) }
+                        .onFailure { log.warn("Failed to persist token usage", it) }
+                }
+            } finally {
+                flushScheduled.set(false)
+            }
+            // A markDirty() racing with the flag reset above must not lose its write.
+            if (dirty.get()) scheduleFlush()
+        }
     }
 
     companion object {

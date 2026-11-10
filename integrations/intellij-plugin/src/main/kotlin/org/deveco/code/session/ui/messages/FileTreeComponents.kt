@@ -22,10 +22,16 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.Image as SkiaImage
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.fileTypes.FileTypes
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.deveco.code.DevEcoTheme
 import org.jetbrains.jewel.bridge.toComposeColor
 import org.jetbrains.jewel.ui.component.Icon as JewelIcon
@@ -91,6 +97,8 @@ private fun iconToImageBitmap(icon: Icon, size: Int = 16): androidx.compose.ui.g
  *
  * The icon follows the IDE theme (Darcula / Light / etc.) because
  * it uses VirtualFile.fileType.icon from the IntelliJ platform.
+ * Files that no longer exist on disk still resolve their IDE file
+ * type by name, so deleted files keep their real IDE icon.
  */
 @Composable
 internal fun FileIcon(
@@ -113,29 +121,42 @@ internal fun FileIcon(
         val nativePath = remember(filePath) {
             filePath.replace('/', java.io.File.separatorChar).replace('\\', java.io.File.separatorChar)
         }
-        val virtualFile = remember(nativePath) {
-            LocalFileSystem.getInstance().findFileByPath(nativePath)
+        val virtualFile by produceState<VirtualFile?>(null, nativePath) {
+            value = withContext(Dispatchers.IO) {
+                LocalFileSystem.getInstance().findFileByPath(nativePath)
+            }
         }
 
-        if (virtualFile != null) {
-            val swingIcon = remember(virtualFile) { virtualFile.fileType.icon }
-            val imageBitmap = remember(swingIcon) {
-                swingIcon?.let { iconToImageBitmap(it, 16) }
-            }
-            if (imageBitmap != null) {
-                Image(
-                    bitmap = imageBitmap,
-                    contentDescription = null,
-                    modifier = modifier.size(16.dp),
-                )
-            } else {
-                // Fallback to colored badge if icon conversion fails
-                FileIconBadge(filePath, modifier)
-            }
+        val swingIcon = remember(virtualFile, filePath) {
+            virtualFile?.fileType?.icon
+                ?: iconByFileName(filePath.substringAfterLast('/').substringAfterLast('\\'))
+        }
+        val imageBitmap = remember(swingIcon) {
+            swingIcon?.let { iconToImageBitmap(it, 16) }
+        }
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = null,
+                modifier = modifier.size(16.dp),
+            )
         } else {
+            // Fallback to colored badge if the IDE has no file type for this name
             FileIconBadge(filePath, modifier)
         }
     }
+}
+
+/**
+ * Resolves the IDE icon for a file name without requiring the file to exist,
+ * e.g. for files deleted after the session referenced them. Returns null when
+ * the IDE has no registered file type for the name, so the caller can fall
+ * back to the extension badge.
+ */
+private fun iconByFileName(fileName: String): Icon? {
+    val fileType = FileTypeManager.getInstance().getFileTypeByFileName(fileName)
+    if (fileType === FileTypes.UNKNOWN) return null
+    return fileType.icon
 }
 
 /**
@@ -187,12 +208,12 @@ internal fun FileTreeItem(
     val isFolder = extension.isEmpty() || filePath.endsWith("/")
 
     val backgroundColor = when {
-        isPreviewed -> Color(0xFF2B4A7E)
+        isPreviewed -> DevEcoTheme.previewedFileBg
         isHovered && !isFolder -> Color(0x33FFFFFF)
         else -> Color.Transparent
     }
     val textColor = when {
-        isPreviewed -> JBColor(0x000000, 0xFFFFFF).toComposeColor()
+        isPreviewed -> DevEcoTheme.previewedFileFg
         else -> DevEcoTheme.muted
     }
 
@@ -225,6 +246,9 @@ internal fun FileTreeItem(
                 color = textColor,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
         }
     }

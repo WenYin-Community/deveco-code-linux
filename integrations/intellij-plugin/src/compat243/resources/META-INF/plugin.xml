@@ -7,44 +7,52 @@
    Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
   <name>DevEco Code</name>
 
-  <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-  <vendor url="https://developer.huawei.com/consumer/cn/deveco-studio/">DevEco</vendor>
-
   <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
        Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
   <description><![CDATA[
-        DevEco Code coding-agent integration for DevEco Studio, with isolated
-        sessions and configuration.
-        ]]></description>
+    <p>一站式HarmonyOS应用AI开发工具，覆盖代码生成、问题修复、编译构建、功能验证等开发旅程，通过自然语言快速开发HarmonyOS应用。</p>
+
+    <p>All-in-one AI development tool for HarmonyOS apps, covering the entire development
+       journey including code generation, issue fixing, build and compilation, and
+       functional verification. This enables rapid development of HarmonyOS apps using
+       natural language.</p>
+  ]]></description>
 
   <!-- Product and plugin compatibility requirements.
        Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
   <depends>com.intellij.modules.platform</depends>
+  <!-- Hard dependency: DevEco Code is disabled together with CodeGenie. -->
+  <depends>com.huawei.deveco.intelligent-assistant</depends>
   <resource-bundle>messages.MyMessageBundle</resource-bundle>
 
   <!-- Extensions defined by the plugin.
        Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
   <extensions defaultExtensionNs="com.intellij">
-    <toolWindow id="DevEco Code" factoryClass="org.deveco.code.toolwindow.DevEcoToolWindowFactory"
-      anchor="left" icon="AllIcons.Toolwindows.ToolWindowPalette" />
+    <!-- Services are declared as heavy services instead of @Service light
+         services: on dynamic plugin disable/re-enable the container reliably
+         unregisters descriptor-registered services, while stale light-service
+         instances can survive and surface as ClassCastException on the next
+         lookup (cross-classloader cast). -->
+    <applicationService serviceImplementation="org.deveco.code.acp.SharedAcpBackend" />
+    <applicationService serviceImplementation="org.deveco.code.skill.GlobalSkillStateService" />
+    <projectService serviceImplementation="org.deveco.code.acp.AcpClientService" />
+    <projectService serviceImplementation="org.deveco.code.session.SessionControllerRegistry" />
+    <projectService serviceImplementation="org.deveco.code.action.DevEcoSessionActions" />
+    <projectService serviceImplementation="org.deveco.code.session.SessionModelStore" />
+    <projectService serviceImplementation="org.deveco.code.session.SessionViewStateStore" />
+    <projectService serviceImplementation="org.deveco.code.session.TokenUsageStore" />
     <fileEditorProvider implementation="org.deveco.code.session.editor.SessionFileEditorProvider" />
-    <applicationConfigurable id="ai.coding" bundle="messages.MyMessageBundle"
-      key="settings.aiCoding.displayName" instance="org.deveco.code.settings.AICodingConfigurable" />
-    <projectConfigurable id="ai.coding.skill" parentId="ai.coding" bundle="messages.MyMessageBundle"
-      key="settings.skill.displayName" instance="org.deveco.code.settings.SkillSettingsConfigurable" />
-    <projectConfigurable id="ai.coding.models" parentId="ai.coding"
-      bundle="messages.MyMessageBundle" key="settings.models.displayName"
-      instance="org.deveco.code.settings.ModelSettingsConfigurable" />
-    <!-- MCP settings node hidden for now; re-enable when ready
-    <projectConfigurable id="ai.coding.mcp" parentId="ai.coding" bundle="messages.MyMessageBundle" key="settings.mcp.displayName"
-                           instance="org.deveco.code.settings.McpSettingsConfigurable"/>
-    -->
-    <projectConfigurable id="ai.coding.archived" parentId="ai.coding"
-      bundle="messages.MyMessageBundle" key="settings.archived.displayName"
-      instance="org.deveco.code.settings.ArchivedSessionsConfigurable" />
+    <fileIconProvider implementation="org.deveco.code.session.editor.SessionFileIconProvider" />
     <notificationGroup id="DevEco Code Migration" displayType="BALLOON" />
     <postStartupActivity implementation="org.deveco.code.action.NewSessionToolbarRegistrar" />
   </extensions>
+
+  <applicationListeners>
+    <!-- Restores/drops the runtime-added main toolbar button across dynamic
+         disable/re-enable cycles of this plugin. -->
+    <listener class="org.deveco.code.action.NewSessionToolbarLifecycle"
+      topic="com.intellij.ide.plugins.DynamicPluginListener" />
+  </applicationListeners>
 
   <actions>
     <action id="org.deveco.code.action.NewSessionAction" class="org.deveco.code.action.NewSessionAction"
@@ -53,10 +61,12 @@
     <action id="org.deveco.code.action.NewSessionToolbarAction"
       class="org.deveco.code.action.NewSessionToolbarAction" text="New Session"
       description="Create a new DevEco Code session" icon="AllIcons.General.Add" />
-    <action id="org.deveco.code.action.JumpToChatAction" class="org.deveco.code.action.JumpToChatAction"
-      description="Send selected code to a new DevEco Code chat session">
-      <add-to-group group-id="EditorPopupMenu" anchor="last" />
-    </action>
+    <group id="org.deveco.code.action.JumpToChatAction" class="org.deveco.code.action.JumpToChatAction"
+      text="DevEco Code" popup="true">
+      <action id="org.deveco.code.action.QuickChatAction" class="org.deveco.code.action.QuickChatAction"
+        description="Send selected code to a new DevEco Code chat session" />
+      <add-to-group group-id="EditorPopupMenu" anchor="first" />
+    </group>
   </actions>
 
 </idea-plugin>

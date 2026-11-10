@@ -1,11 +1,11 @@
 package org.deveco.code.session.ui.composer
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,7 +24,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -38,46 +38,34 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.ui.JBColor
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.action.DevEcoSessionActions
+import org.deveco.code.session.PromptHistoryEntry
 import org.deveco.code.session.SessionController
-import org.deveco.code.session.editor.SessionVirtualFile
 import org.deveco.code.session.Thumbnailer
+import org.deveco.code.session.SendImageOptimizer
 import org.deveco.code.session.model.AttachmentItem
 import org.deveco.code.session.model.FileReference
-import org.deveco.code.session.ui.messages.SendBgIconKey
-import org.deveco.code.session.ui.messages.SendIconKey
+import org.deveco.code.DevEcoIcons
 import org.deveco.code.session.ui.messages.StopIconKey
 import org.jetbrains.jewel.bridge.toComposeColor
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
 import java.awt.Desktop
+import java.awt.KeyboardFocusManager
+import java.awt.event.KeyEvent
 import java.net.URI
+import javax.swing.SwingUtilities
 
 private val log = Logger.getInstance("ComposerContent")
 
 private const val OPENCODE_TERMS_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/terms.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
 private const val OPENCODE_PRIVACY_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/privacy-statement.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
-
-private const val MAX_TEXT_SIZE_BYTES = 1_048_576L  // 1 MB
-private const val MAX_IMAGE_SIZE_BYTES = 10_485_760L // 10 MB
-
-private fun formatFileSize(bytes: Long): String {
-    val kb = bytes / 1024.0
-    val mb = kb / 1024.0
-    return when {
-        mb >= 1 -> "%.1f MB".format(mb)
-        kb >= 1 -> "%.0f KB".format(kb)
-        else -> "$bytes B"
-    }
-}
 
 @OptIn(ExperimentalTextApi::class)
 @Composable
@@ -87,8 +75,8 @@ internal fun ComposerContent(
     background: Color,
     muted: Color,
     accent: Color,
-    input: TextFieldValue,
-    onInputChanged: (TextFieldValue) -> Unit,
+    input: String,
+    onInputChanged: (String) -> Unit,
     placeholder: String,
     enabled: Boolean,
     onSend: () -> Unit,
@@ -113,18 +101,61 @@ internal fun ComposerContent(
     var mentionDismissed by remember { mutableStateOf(false) }
     var mentionIndex by remember { mutableStateOf(0) }
 
+    // Bumped every time a popup stops showing. The popup's Swing window closes
+    // asynchronously, so its dismiss callback can land after our own state already hid
+    // it — sometimes after the user typed a fresh "/" — and an unguarded write would
+    // suppress the next popup until the next edit. A callback carrying an older
+    // generation belongs to a window we hid ourselves and is ignored.
+    var slashPopupGeneration by remember { mutableStateOf(0) }
+    var mentionPopupGeneration by remember { mutableStateOf(0) }
+
     var popupMaxHeight by remember { mutableStateOf(240.dp) }
     var composerBounds by remember { mutableStateOf(IntRect.Zero) }
 
-    val slashItems = remember(input.text, slashDismissed, controller.models, controller.commands) {
+    // The String overload of BasicTextField keeps the previous selection when the
+    // text is replaced programmatically, leaving the caret mid-text (e.g. right
+    // after the slash of an inserted command), and exposes no API to move it —
+    // a remount only resets the selection to zero. Synthesize an End key on the
+    // focused component instead; the desktop key mapping turns it into LINE_END,
+    // which for these single-line inserts is the end of the text. User typing
+    // never takes this path, so IME composition stays untouched.
+    var userEdit by remember { mutableStateOf(true) }
+    val fieldFocused by interactionSource.collectIsFocusedAsState()
+    // Marks the synthetic bare-Enter dispatch below so onPreviewKeyEvent lets it
+    // through to the text field (NEW_LINE) instead of treating it as a send.
+    var pendingSyntheticNewline by remember { mutableStateOf(false) }
+    LaunchedEffect(input) {
+        if (userEdit) {
+            userEdit = false
+            return@LaunchedEffect
+        }
+        userEdit = false
+        if (!fieldFocused) return@LaunchedEffect
+        SwingUtilities.invokeLater {
+            val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                ?: return@invokeLater
+            val timestamp = System.currentTimeMillis()
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, timestamp, 0, KeyEvent.VK_END, KeyEvent.CHAR_UNDEFINED))
+            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, timestamp, 0, KeyEvent.VK_END, KeyEvent.CHAR_UNDEFINED))
+        }
+    }
+
+    val slashItems = remember(input, slashDismissed, controller.models, controller.commands) {
         if (slashDismissed) emptyList()
-        else computeSlashItems(input.text, controller.models, controller.commands)
+        else computeSlashItems(input, controller.models, controller.commands)
     }
 
     // Refresh skill commands from HTTP API when user first types /
     var slashTriggered by remember { mutableStateOf(false) }
-    LaunchedEffect(input.text.startsWith("/")) {
-        val isSlash = input.text.startsWith("/") && !slashDismissed
+    LaunchedEffect(input.startsWith("/")) {
+        val startsWithSlash = input.startsWith("/")
+        // Leaving the slash context clears popup suppression and the selection so the
+        // next "/" always starts fresh, even if a dismiss raced a programmatic change.
+        if (!startsWithSlash) {
+            slashDismissed = false
+            slashIndex = 0
+        }
+        val isSlash = startsWithSlash && !slashDismissed
         if (isSlash && !slashTriggered) controller.refreshCommands()
         slashTriggered = isSlash
     }
@@ -137,9 +168,12 @@ internal fun ComposerContent(
         }
     }
 
-    val mentionItems = remember(input.text, input.selection.end, mentionDismissed) {
+    // The String overload of BasicTextField exposes no selection, so the mention
+    // scan assumes the caret sits at the end of the text (the common case while
+    // typing a mention).
+    val mentionItems = remember(input, mentionDismissed) {
         if (mentionDismissed) emptyList()
-        else computeMentionItems(input.text, input.selection.end, project)
+        else computeMentionItems(input, input.length, project)
     }
     val mentionVisible = mentionItems.isNotEmpty()
     val effectiveMentionIndex = if (mentionItems.isEmpty()) 0 else mentionIndex.coerceIn(0, mentionItems.lastIndex)
@@ -150,26 +184,31 @@ internal fun ComposerContent(
         }
     }
 
+    LaunchedEffect(slashVisible) { if (!slashVisible) slashPopupGeneration++ }
+    LaunchedEffect(mentionVisible) { if (!mentionVisible) mentionPopupGeneration++ }
+
     fun selectSlashItem(item: SlashItem): Boolean {
+        // Guarded: an unattached FocusRequester throws, and an exception escaping this
+        // handler aborts the key dispatch with the popup state half-applied.
+        runCatching { focusRequester.requestFocus() }
         when (item.kind) {
             SlashItemKind.COMMAND -> {
                 when (item.payload) {
+                    // Lifecycle/context ops act on the session itself and take no
+                    // arguments: run on selection. Prompt-style server commands insert
+                    // instead so the user can add arguments before sending.
                     "compact" -> {
                         if (controller.ready) controller.sendPrompt("/compact")
-                        onInputChanged(TextFieldValue(""))
+                        onInputChanged("")
                         onDraftChanged("")
                     }
                     "new" -> {
-                        onInputChanged(TextFieldValue(""))
+                        onInputChanged("")
                         onDraftChanged("")
-                        val mgr = FileEditorManager.getInstance(project)
-                        mgr.openFiles.filterIsInstance<SessionVirtualFile>()
-                            .firstOrNull { it.sessionId == controller.sessionId }
-                            ?.let { mgr.closeFile(it) }
                         DevEcoSessionActions.forProject(project).newSession()
                     }
                     "models" -> {
-                        onInputChanged(TextFieldValue("/models ", selection = androidx.compose.ui.text.TextRange(8)))
+                        onInputChanged("/models ")
                         onDraftChanged("/models ")
                         slashDismissed = false
                     }
@@ -177,42 +216,28 @@ internal fun ComposerContent(
             }
             SlashItemKind.MODEL -> {
                 item.payload?.let { controller.selectModel(it) }
-                onInputChanged(TextFieldValue(""))
+                onInputChanged("")
                 onDraftChanged("")
             }
             SlashItemKind.SERVER_COMMAND -> {
                 item.payload?.let { commandName ->
-                    onInputChanged(TextFieldValue("/$commandName ", selection = androidx.compose.ui.text.TextRange(commandName.length + 2)))
-                    onDraftChanged("/$commandName ")
+                    // No trailing space: a leftover space after the command name would
+                    // read as an empty argument and keep the caret racing the synthetic
+                    // End key, suppressing completions while the user backspaces.
+                    onInputChanged("/$commandName")
+                    onDraftChanged("/$commandName")
                     slashDismissed = true
                 }
             }
         }
-        focusRequester.requestFocus()
         return true
     }
 
     fun selectMentionItem(item: MentionItem): Boolean {
-        val total = (localAttachments ?: controller.attachments).size +
-            (localFileReferences ?: controller.fileReferences).size
-        if (total >= SessionController.MAX_ATTACHMENTS) {
-            Messages.showInfoMessage(
-                project,
-                MyMessageBundle.message("attachment.limit.warning"),
-                MyMessageBundle.message("attachment.limit.title"),
-            )
-            return false
-        }
-        val text = input.text
-        val cursor = input.selection.end
-        val beforeCursor = text.substring(0, minOf(cursor, text.length))
-        val atIndex = beforeCursor.lastIndexOf('@')
+        val atIndex = input.lastIndexOf('@')
         if (atIndex < 0) return false
-        val before = text.substring(0, atIndex)
-        val after = text.substring(cursor)
-        val newText = "$before$after"
-        val newCursor = atIndex
-        onInputChanged(TextFieldValue(newText, selection = androidx.compose.ui.text.TextRange(newCursor)))
+        val newText = input.substring(0, atIndex)
+        onInputChanged(newText)
         onDraftChanged(newText)
         // Check if file already exists in fileReferences or attachments
         val existingFileRef = (localFileReferences ?: controller.fileReferences).any { it.path == item.path }
@@ -235,16 +260,6 @@ internal fun ComposerContent(
     }
 
     fun openFileChooser(imagesOnly: Boolean) {
-        val total = (localAttachments ?: controller.attachments).size +
-            (localFileReferences ?: controller.fileReferences).size
-        if (total >= SessionController.MAX_ATTACHMENTS) {
-            Messages.showInfoMessage(
-                project,
-                MyMessageBundle.message("attachment.limit.warning"),
-                MyMessageBundle.message("attachment.limit.title"),
-            )
-            return
-        }
         val descriptor = FileChooserDescriptor(true, false, false, false, false, true)
         descriptor.title = MyMessageBundle.message(
             if (imagesOnly) "composer.imageChooser.title" else "composer.fileChooser.title"
@@ -257,35 +272,16 @@ internal fun ComposerContent(
         } else {
             descriptor.withExtensionFilter(
                 MyMessageBundle.message("composer.fileChooser.filter"),
-                *SUPPORTED_TEXT_EXTENSIONS.toTypedArray(),
+                *SUPPORTED_FILE_CHOOSER_EXTENSIONS.toTypedArray(),
             )
         }
         val files = FileChooser.chooseFiles(descriptor, project, null)
         files.forEach { vfile ->
-            val currentTotal = (localAttachments ?: controller.attachments).size +
-                (localFileReferences ?: controller.fileReferences).size
-            if (currentTotal >= SessionController.MAX_ATTACHMENTS) return@forEach
             if (vfile.isDirectory) return@forEach
             val name = vfile.name
             val path = vfile.path
             val mimeType = detectMimeType(name)
             val isSupported = isSupportedImageFile(name)
-
-            val fileSize = vfile.length
-            val maxSize = if (isSupported) MAX_IMAGE_SIZE_BYTES else MAX_TEXT_SIZE_BYTES
-            if (fileSize > maxSize) {
-                Messages.showInfoMessage(
-                    project,
-                    MyMessageBundle.message(
-                        "attachment.too.large.message",
-                        name,
-                        formatFileSize(fileSize),
-                        formatFileSize(maxSize),
-                    ),
-                    MyMessageBundle.message("attachment.too.large.title"),
-                )
-                return@forEach
-            }
 
             // Check if file already exists in fileReferences or attachments
             val existingFileRef = (localFileReferences ?: controller.fileReferences).any { it.path == path }
@@ -293,31 +289,43 @@ internal fun ComposerContent(
             if (existingFileRef || existingAttachment) return@forEach
 
             ApplicationManager.getApplication().executeOnPooledThread {
-                val originalBytes = runCatching { VfsUtilCore.loadBytes(vfile) }.onFailure { log.warn("Failed to load attachment bytes: ${vfile.path}", it) }.getOrNull()
+                val originalBytes = runCatching { VfsUtilCore.loadBytes(vfile) }.onFailure { log.warn("Failed to load attachment bytes: ${vfile.name}", it) }.getOrNull()
                 var thumbnail: ByteArray? = null
+                var optimizedBytes: ByteArray? = null
+                var optimizedMime: String? = null
                 if (isSupported && originalBytes != null) {
                     thumbnail = runCatching { Thumbnailer.generateThumbnail(originalBytes) }.onFailure { log.warn("Failed to generate thumbnail for ${vfile.name}", it) }.getOrNull()
+                    // 方案一: pre-compress the send payload here, on the same background
+                    // thread as the thumbnail, so sending just reads the cache. This
+                    // removes the seconds-long decode/scale/encode window during which an
+                    // immediate stop click was swallowed. buildAttachmentBlocks falls back
+                    // to send-time compression if this fails or the item was restored
+                    // without a cache.
+                    optimizedBytes = runCatching { SendImageOptimizer.optimize(originalBytes, mimeType) }.onFailure { log.warn("Failed to pre-optimize image for ${vfile.name}", it) }.getOrNull()
+                    // Decide the payload mime here, against the add-time original,
+                    // so sending needs neither a disk read nor a size re-compare.
+                    optimizedMime = optimizedBytes?.let { opt -> if (opt.size < originalBytes.size) "image/jpeg" else mimeType }
                 }
                 ApplicationManager.getApplication().invokeLater {
                     val targetAttachments = localAttachments ?: controller.attachments
                     val existingIndex = targetAttachments.indexOfFirst { it.path == path }
                     if (existingIndex >= 0) {
-                        val current = targetAttachments[existingIndex]
-                        if (originalBytes != null || thumbnail != null) {
+                        if (thumbnail != null || optimizedBytes != null) {
+                            val current = targetAttachments[existingIndex]
                             targetAttachments[existingIndex] = current.copy(
                                 thumbnail = thumbnail ?: current.thumbnail,
-                                originalBytes = originalBytes ?: current.originalBytes,
+                                optimizedBytes = optimizedBytes ?: current.optimizedBytes,
+                                optimizedMime = optimizedMime ?: current.optimizedMime,
                             )
                         }
                     } else {
-                        if (originalBytes != null) {
-                            val item = AttachmentItem(
-                                name = name, path = path, mimeType = mimeType,
-                                isImage = isSupported, thumbnail = thumbnail, originalBytes = originalBytes,
-                            )
-                            if (localAttachments != null) localAttachments.add(item)
-                            else controller.addAttachment(item)
-                        }
+                        val item = AttachmentItem(
+                            name = name, path = path, mimeType = mimeType,
+                            isImage = isSupported, thumbnail = thumbnail,
+                            optimizedBytes = optimizedBytes, optimizedMime = optimizedMime,
+                        )
+                        if (localAttachments != null) localAttachments.add(item)
+                        else controller.addAttachment(item)
                     }
                 }
             }
@@ -340,27 +348,26 @@ internal fun ComposerContent(
                 .clip(RoundedCornerShape(7.dp))
                 .background(background)
                 .border(1.dp, borderColor, RoundedCornerShape(7.dp))
-                .animateContentSize()
-                .padding(start = 10.dp, top = 9.dp, end = 10.dp, bottom = 0.dp),
+                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 2.dp),
         ) {
             val attachments = localAttachments ?: controller.attachments
             val fileRefs = localFileReferences ?: controller.fileReferences
             ComposerAttachments(
                 attachments = attachments,
-                muted = muted,
                 onRemove = { index ->
                     if (localAttachments != null) {
                         if (index in localAttachments.indices) localAttachments.removeAt(index)
                     } else controller.removeAttachment(index)
                 },
                 onPreview = { controller.showImageViewer(it) },
+                onOpenFile = { path -> controller.openFileAtLine(path, 0) },
             )
-            if (fileRefs.isNotEmpty()) {
+            if (fileRefs.isNotEmpty() || controller.pendingPrompt != null) {
                 FileReferenceChipRow(
                     fileRefs = fileRefs,
                     onRemove = { fileRef ->
                         if (localFileReferences != null) {
-                            val idx = localFileReferences.indexOfFirst { it == fileRef }
+                            val idx = localFileReferences.indexOf(fileRef)
                             if (idx >= 0) localFileReferences.removeAt(idx)
                         } else controller.fileReferences.remove(fileRef)
                     },
@@ -368,15 +375,27 @@ internal fun ComposerContent(
                         val line = if (fileRef.hasLineRange) fileRef.startLine - 1 else 0
                         controller.openFileAtLine(fileRef.path, line)
                     },
-                )
+                ) {
+                    controller.pendingPrompt?.let { pending ->
+                        val preview = pending.lineSequence().firstOrNull()?.trim()?.take(20) ?: pending.take(20)
+                        PendingPromptChip(
+                            preview = preview,
+                            onRemove = { controller.pendingPrompt = null },
+                        )
+                    }
+                }
             }
             BasicTextField(
                 value = input,
                 onValueChange = {
-                    val textChanged = it.text != input.text
+                    val textChanged = it != input
                     onInputChanged(it)
-                    onDraftChanged(it.text)
-                    if (textChanged) { slashDismissed = false; mentionDismissed = false }
+                    onDraftChanged(it)
+                    if (textChanged) {
+                        userEdit = true
+                        slashDismissed = false
+                        mentionDismissed = false
+                    }
                 },
                 enabled = enabled,
                 textStyle = TextStyle(color = if (!enabled) muted else textColor, fontSize = 13.sp, lineHeight = 19.sp),
@@ -386,6 +405,14 @@ internal fun ComposerContent(
                     .focusRequester(focusRequester)
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        // Our own synthetic bare Enter (dispatched below to turn Shift+Enter
+                        // into a newline): bypass every branch — including the mention/slash
+                        // popup Enter handlers — so it reaches the text field and the desktop
+                        // key mapping turns it into NEW_LINE at the real caret.
+                        if (pendingSyntheticNewline) {
+                            pendingSyntheticNewline = false
+                            return@onPreviewKeyEvent false
+                        }
                         when {
                             mentionVisible && event.key == Key.DirectionUp -> {
                                 if (mentionItems.isNotEmpty()) {
@@ -403,9 +430,8 @@ internal fun ComposerContent(
                                 mentionDismissed = true
                                 true
                             }
-                            mentionVisible && (event.key == Key.Enter || event.key == Key.Tab) && !event.isShiftPressed -> {
-                                if (input.composition != null) false
-                                else if (mentionItems.isNotEmpty()) selectMentionItem(mentionItems[effectiveMentionIndex])
+                            mentionVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
+                                if (mentionItems.isNotEmpty()) selectMentionItem(mentionItems[effectiveMentionIndex])
                                 else false
                             }
                             slashVisible && event.key == Key.DirectionUp -> {
@@ -424,35 +450,81 @@ internal fun ComposerContent(
                                 slashDismissed = true
                                 true
                             }
-                            slashVisible && (event.key == Key.Enter || event.key == Key.Tab) && !event.isShiftPressed -> {
-                                if (input.composition != null) false
-                                else if (slashItems.isNotEmpty()) selectSlashItem(slashItems[effectiveSlashIndex])
+                            slashVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
+                                if (slashItems.isNotEmpty()) selectSlashItem(slashItems[effectiveSlashIndex])
                                 else false
                             }
                             !mentionVisible && !slashVisible && event.key == Key.DirectionUp && !event.isShiftPressed -> {
                                 val prev = controller.navigateHistory(-1)
                                 if (prev != null) {
-                                    onInputChanged(TextFieldValue(prev, androidx.compose.ui.text.TextRange(prev.length)))
-                                    onDraftChanged(prev)
+                                    onInputChanged(prev.text)
+                                    onDraftChanged(prev.text)
+                                    val target = localAttachments ?: controller.attachments
+                                    target.clear()
+                                    target.addAll(prev.attachments)
+                                    val targetRefs = localFileReferences ?: controller.fileReferences
+                                    targetRefs.clear()
+                                    targetRefs.addAll(prev.fileReferences)
                                     true
                                 } else false
                             }
                             !mentionVisible && !slashVisible && event.key == Key.DirectionDown && !event.isShiftPressed -> {
                                 val next = controller.navigateHistory(1)
-                                val newInput = if (next != null) TextFieldValue(next, androidx.compose.ui.text.TextRange(next.length))
-                                else TextFieldValue("")
-                                onInputChanged(newInput)
-                                onDraftChanged(newInput.text)
+                                val target = localAttachments ?: controller.attachments
+                                val targetRefs = localFileReferences ?: controller.fileReferences
+                                if (next != null) {
+                                    onInputChanged(next.text)
+                                    onDraftChanged(next.text)
+                                    target.clear()
+                                    target.addAll(next.attachments)
+                                    targetRefs.clear()
+                                    targetRefs.addAll(next.fileReferences)
+                                } else {
+                                    onInputChanged("")
+                                    onDraftChanged("")
+                                    target.clear()
+                                    targetRefs.clear()
+                                }
                                 true
                             }
-                            event.key == Key.Enter -> {
+                            event.key == Key.Enter || event.key == Key.NumPadEnter -> {
                                 when {
+                                    // Shift+Enter / Shift+NumPadEnter inserts a newline. The
+                                    // platform key mapping only maps a *bare* Enter/NumPadEnter to
+                                    // NEW_LINE (Shift+Enter maps to null, and we'd otherwise send),
+                                    // so consume the shifted key and re-dispatch a modifier-free
+                                    // Enter KEY_PRESSED — the same synthetic-key mechanism the End
+                                    // caret fix above already relies on. The pendingSyntheticNewline
+                                    // guard at the top of this handler keeps that bare Enter from
+                                    // being interpreted as a send or as a popup selection.
                                     event.isShiftPressed -> {
-                                        onInputChanged(input.insertAtSelection("\n"))
-                                        onDraftChanged(input.text)
+                                        // Capture the focus owner during the real key event (it is
+                                        // the Compose host); re-resolving inside invokeLater could
+                                        // hand the bare Enter to a different component if focus moved
+                                        // in between. Compose key dispatch inside dispatchEvent is
+                                        // synchronous, so the preview guard above has already
+                                        // consumed the flag by the time it returns — the finally only
+                                        // covers a dispatch that never reached the guard, since a
+                                        // stale flag would swallow the user's next real Enter as a
+                                        // newline instead of a send.
+                                        val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                                        if (target != null) {
+                                            pendingSyntheticNewline = true
+                                            SwingUtilities.invokeLater {
+                                                try {
+                                                    val timestamp = System.currentTimeMillis()
+                                                    target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
+                                                    target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
+                                                } finally {
+                                                    pendingSyntheticNewline = false
+                                                }
+                                            }
+                                        }
                                         true
                                     }
-                                    input.composition != null -> false
+                                    // No composition check here (unavailable on the String
+                                    // overload); on Windows the IME consumes Enter while
+                                    // composing, so this only fires on committed input.
                                     else -> {
                                         if (!isResponding) onSend()
                                         true
@@ -464,7 +536,10 @@ internal fun ComposerContent(
                     },
                 decorationBox = { innerTextField ->
                     Box(Modifier.fillMaxWidth().heightIn(min = 38.dp)) {
-                        if (input.text.isEmpty()) {
+                        val hasContent = input.isNotEmpty() ||
+                            !localAttachments.isNullOrEmpty() || controller.attachments.isNotEmpty() ||
+                            !localFileReferences.isNullOrEmpty() || controller.fileReferences.isNotEmpty()
+                        if (!hasContent) {
                             Text(
                                 placeholder,
                                 color = muted,
@@ -472,17 +547,29 @@ internal fun ComposerContent(
                             )
                         }
                         innerTextField()
+                        // Read at composition time: the dismiss callback compares the
+                        // generation of the show cycle it was attached to with the current one.
+                        val slashGeneration = slashPopupGeneration
+                        val mentionGeneration = mentionPopupGeneration
                         ComposerPopups(
                             slashVisible = slashVisible,
                             slashItems = slashItems,
                             effectiveSlashIndex = effectiveSlashIndex,
                             onSlashSelect = { selectSlashItem(it) },
-                            onSlashDismiss = { slashDismissed = true },
+                            onSlashDismiss = {
+                                if (slashGeneration == slashPopupGeneration) {
+                                    slashDismissed = true
+                                }
+                            },
                             mentionVisible = mentionVisible,
                             mentionItems = mentionItems,
                             effectiveMentionIndex = effectiveMentionIndex,
                             onMentionSelect = { selectMentionItem(it) },
-                            onMentionDismiss = { mentionDismissed = true },
+                            onMentionDismiss = {
+                                if (mentionGeneration == mentionPopupGeneration) {
+                                    mentionDismissed = true
+                                }
+                            },
                             background = background,
                             muted = muted,
                             accent = accent,
@@ -499,37 +586,38 @@ internal fun ComposerContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        val attachmentTotal = (localAttachments ?: controller.attachments).size +
-                            (localFileReferences ?: controller.fileReferences).size
                         AddAttachmentButton(
                             muted = muted,
-                            supportsImages = controller.supportsImages,
-                            enabled = attachmentTotal < SessionController.MAX_ATTACHMENTS,
                             onSelectFile = { openFileChooser(false) },
                             onSelectImage = { openFileChooser(true) },
                         )
                         Spacer(Modifier.width(8.dp))
-                        ModeSelector(controller = controller, muted = muted)
+                        ModeSelector(controller = controller, muted = muted, inputFocusRequester = focusRequester)
                         Spacer(Modifier.width(8.dp))
-                        ModelSelector(controller = controller, muted = muted, project = project)
-                        Spacer(Modifier.width(8.dp))
-                        TokenUsageRing(
-                            controller = controller,
-                            muted = muted,
-                            textColor = textColor,
-                            caretColor = caretColor,
-                            borderColor = borderColor,
-                            composerBounds = composerBounds,
-                        )
+                        ModelSelector(controller = controller, muted = muted, project = project, inputFocusRequester = focusRequester)
+                        if (controller.tokenThreshold > 0L) {
+                            Spacer(Modifier.width(8.dp))
+                            TokenUsageRing(
+                                controller = controller,
+                                muted = muted,
+                                textColor = textColor,
+                                caretColor = caretColor,
+                                borderColor = borderColor,
+                                composerBounds = composerBounds,
+                            )
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val sendInteractionSource = remember { MutableInteractionSource() }
+                        val bgIconKey = DevEcoIcons.iconKey("button-icon")
+                        val sendIconKey = DevEcoIcons.iconKey("send")
+                        val sendDisabledIconKey = DevEcoIcons.iconKey("send-disabled")
                         Box(
                             Modifier
                                 .clickable(
                                     interactionSource = sendInteractionSource,
                                     indication = null,
-                                    enabled = if (isResponding) true else sendEnabled,
+                                    enabled = if (isResponding) !controller.stopping else sendEnabled,
                                 ) {
                                     if (isResponding) {
                                         onStop()
@@ -540,24 +628,33 @@ internal fun ComposerContent(
                                 .padding(4.dp),
                             contentAlignment = Alignment.Center,
                         ) {
+                            // While a stop is in flight the button shows the same grey
+                            // send icon as the disabled idle state: an existing,
+                            // unmistakable "not clickable" affordance.
+                            val stoppingNow = isResponding && controller.stopping
                             Icon(
-                                key = SendBgIconKey,
+                                key = bgIconKey,
                                 contentDescription = if (isResponding) MyMessageBundle.message("session.message.stop") else MyMessageBundle.message("session.message.send"),
                                 modifier = Modifier.size(32.dp),
                             )
-                            if (isResponding) {
-                                Icon(
+                            when {
+                                stoppingNow -> Icon(
+                                    key = sendDisabledIconKey,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = Color.Unspecified,
+                                )
+                                isResponding -> Icon(
                                     key = StopIconKey,
                                     contentDescription = null,
                                     modifier = Modifier.size(12.dp),
                                     tint = Color.Unspecified,
                                 )
-                            } else {
-                                Icon(
-                                    key = SendIconKey,
+                                else -> Icon(
+                                    key = if (sendEnabled) sendIconKey else sendDisabledIconKey,
                                     contentDescription = null,
                                     modifier = Modifier.size(16.dp),
-                                    tint = if (sendEnabled) Color.White else Color.Unspecified,
+                                    tint = Color.Unspecified,
                                 )
                             }
                         }
@@ -636,6 +733,10 @@ private fun ComposerFooter() {
                 MyMessageBundle.message("composer.disclaimer"),
                 color = DevEcoTheme.disclaimerFg,
                 fontSize = 11.sp,
+                softWrap = false,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
             Spacer(Modifier.width(8.dp))
             Box(
@@ -652,6 +753,9 @@ private fun ComposerFooter() {
                 MyMessageBundle.message("composer.termsOfUse"),
                 color = if (termsHovered) linkColor.copy(alpha = DevEcoTheme.mutedActionAlpha) else linkColor,
                 fontSize = 11.sp,
+                softWrap = false,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .drawBehind {
                         val y = size.height - 1f
@@ -669,6 +773,9 @@ private fun ComposerFooter() {
                 MyMessageBundle.message("composer.privacyPolicy"),
                 color = if (privacyHovered) linkColor.copy(alpha = DevEcoTheme.mutedActionAlpha) else linkColor,
                 fontSize = 11.sp,
+                softWrap = false,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .drawBehind {
                         val y = size.height - 1f
@@ -709,10 +816,51 @@ private object AboveAnchorPopupPositionProvider : PopupPositionProvider {
     }
 }
 
-private fun TextFieldValue.insertAtSelection(text: String): TextFieldValue {
-    val start = selection.min
-    val end = selection.max
-    val newText = annotatedString.text.replaceRange(start, end, text)
-    val cursor = start + text.length
-    return TextFieldValue(newText, selection = androidx.compose.ui.text.TextRange(cursor))
+@Composable
+private fun PendingPromptChip(
+    preview: String,
+    onRemove: () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0x0DFFFFFF))
+            .hoverable(interactionSource)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            key = org.jetbrains.jewel.ui.icons.AllIconsKeys.FileTypes.Text,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = Color(0xFF94A3B8),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = preview,
+            color = Color(0xFF94A3B8),
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 120.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Box(
+            modifier = Modifier
+                .size(14.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .clickable { onRemove() },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                key = org.jetbrains.jewel.ui.icons.AllIconsKeys.Actions.Close,
+                contentDescription = "Remove",
+                modifier = Modifier.size(10.dp),
+                tint = Color(0xFF64748B),
+            )
+        }
+    }
 }

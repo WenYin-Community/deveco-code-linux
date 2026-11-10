@@ -1,22 +1,20 @@
 package org.deveco.code
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.intellij.ui.JBColor
+import kotlinx.coroutines.delay
 import org.jetbrains.jewel.bridge.toComposeColor
 
 object DevEcoTheme {
@@ -41,16 +39,30 @@ object DevEcoTheme {
     val inputBackground: Color get() = JBColor.namedColor("TextField.background", 0xFFFFFF).toComposeColor()
     val popupBackground: Color get() = JBColor(0xF2F2F2, 0x2B2B2B).toComposeColor()
     val popupBorder: Color get() = JBColor(0x999999, 0x3C3C3C).toComposeColor()
+    val tooltipShadow: Color get() = JBColor(0x1B1F26, 0x000000).toComposeColor()
     val dropdownSelected: Color get() = JBColor(0xE0E0E0, 0x3D3D3D).toComposeColor()
     val dropdownHover: Color get() = JBColor(0xE8E8E8, 0x353535).toComposeColor()
     val onAccent: Color get() = JBColor(0x1E1F22, 0xFFFFFF).toComposeColor()
     val disclaimerFg: Color get() = JBColor(0x999999, 0x999999).toComposeColor()
     val mutedGray: Color get() = JBColor(0x6C707E, 0xB0B0B0).toComposeColor()
+    val attachmentNameFg: Color get() = JBColor(0x000000, 0xDFE1E6).toComposeColor()
+    // JBColor(int, int) derives its has-alpha flag from the light value only, so an
+    // alpha-bearing dark int (0x0DFFFFFF) would be flattened to opaque white; pass
+    // explicit awt Colors to keep the dark chip translucent.
+    val fileRefChipBg: Color get() = JBColor(java.awt.Color(0xEBECF0), java.awt.Color(0x0DFFFFFF, true)).toComposeColor()
     val mutedActionAlpha: Float get() = 0.7f
     val borderAlpha: Float get() = 0.38f
     val pressedAccentSoft: Color get() = pressedAccent.copy(alpha = 0.4f)
-    val tooltipBackground: Color get() = JBColor(0x333333, 0x2B2B2B).toComposeColor()
-    val tooltipForeground: Color get() = JBColor(0xFFFFFF, 0xFFFFFF).toComposeColor()
+    val selectedHoveredSessionBg: Color get() = JBColor(0xD4E2FF, 0x2E436E).toComposeColor()
+    val selectedSessionBg: Color get() = JBColor(0xDFE1E5, 0x4E5157).toComposeColor()
+    val hoveredSessionBg: Color get() = JBColor(0xEBECF0, 0x393B40).toComposeColor()
+    val previewedFileBg: Color get() = JBColor(0xD4E2FF, 0x2B4A7E).toComposeColor()
+    val previewedFileFg: Color get() = JBColor(0x1E1F22, 0xFFFFFF).toComposeColor()
+    // Swing-side tooltip colors, cached: JBColor resolves against the active LAF
+    // at paint time, so one instance stays correct across theme switches (the
+    // Compose Color getters must remain getters — toComposeColor() snapshots).
+    val tooltipBackground: JBColor = JBColor(0x27282E, 0x393B40)
+    val tooltipForeground: JBColor = JBColor(0xFFFFFF, 0xFFFFFF)
     val actionTooltipBackground: Color get() = JBColor(0xF5F5F5, 0x2B2B2B).toComposeColor()
     val actionTooltipForeground: Color get() = JBColor(0x1E1F22, 0xDFE1E5).toComposeColor()
 
@@ -93,10 +105,21 @@ object DevEcoTheme {
     val permissionDeniedBg: Color get() = JBColor(0xFFF8E1, 0x3D2E1A).toComposeColor()
     val permissionDeniedBorder: Color get() = JBColor(0xE65100, 0xE08C3A).toComposeColor().copy(alpha = 0.3f)
 
-    val messageSpacingTop: Int get() = 10
+    val messageSpacingTop: Int get() = 20
     val messageSpacingBottom: Int get() = 10
     val firstMessageTop: Int get() = 16
     val messageHorizontalPadding: Int get() = 24
+
+    // In-turn nodes (AGENT text, THOUGHT, TOOL) share one 8px rhythm. A node group
+    // takes nodeGap + nodePadding on top and nodePadding at the bottom, so two
+    // adjacent nodes end up 8px apart without an explicit gap row. Children inside
+    // a group get nodePadding on both sides plus a nodeGap spacer, which lands on
+    // the same 8px between siblings.
+    val nodePadding: Int get() = 2
+    val nodeGap: Int get() = 4
+
+    // Gap between an assistant message body and its action row.
+    val actionRowGap: Int get() = 8
 
     val actionButtonSize: Int get() = 24
     val actionIconSize: Int get() = 14
@@ -115,9 +138,9 @@ object DevEcoTheme {
     val toolEditBorder: Color get() = JBColor(0x4E9C5A, 0x3D6B4A).toComposeColor().copy(alpha = 0.3f)
     val toolEditAddedLineBg: Color get() = JBColor(0xE6F4E6, 0x1E3320).toComposeColor()
     val toolEditRemovedLineBg: Color get() = JBColor(0xFCE8E8, 0x331E1E).toComposeColor()
-    val toolExecBg: Color get() = JBColor(0xF0F4FF, 0x161719).toComposeColor()
+    val toolExecBg: Color get() = JBColor(0xFEFEFE, 0x161719).toComposeColor()
     val toolExecFg: Color get() = JBColor(0x1E1F22, 0xD4D7DD).toComposeColor()
-    val toolExecBorder: Color get() = JBColor(0xC0D0E0, 0x2A2C2F).toComposeColor()
+    val toolExecBorder: Color get() = JBColor(0x999999, 0x2A2C2F).toComposeColor()
     val toolSearchBg: Color get() = JBColor(0xF0F4FF, 0x1A2138).toComposeColor()
     val toolSearchBorder: Color get() = JBColor(0x5B8DEF, 0x5B8DEF).toComposeColor().copy(alpha = 0.25f)
 
@@ -126,11 +149,18 @@ object DevEcoTheme {
     val codeTextColor: Color get() = JBColor.namedColor("Editor.foreground", 0x000000).toComposeColor()
     val toolReadBg: Color get() = JBColor(0xF7F8FA, 0x27282C).toComposeColor()
     val toolReadBorder: Color get() = JBColor(0x8B95A5, 0x6B7280).toComposeColor().copy(alpha = 0.25f)
-    val toolThinkBg: Color get() = JBColor(0xFBF8F0, 0x2A2820).toComposeColor()
-    val toolThinkBorder: Color get() = JBColor(0xC8A85A, 0x8A7430).toComposeColor().copy(alpha = 0.25f)
     val toolMoveBg: Color get() = JBColor(0xF5F0FA, 0x241F33).toComposeColor()
     val toolMoveBorder: Color get() = JBColor(0x8B5CF6, 0x8B5CF6).toComposeColor().copy(alpha = 0.25f)
 }
+
+// Frame-stepped rotation, mirroring the platform AI chat spinners: a LaunchedEffect
+// delay loop advances a discrete frame index, so the layer rotation changes only
+// ~30 times per second in 15° steps and the Compose surface stays quiet between
+// steps. The Swing-embedded renderer paints on the IntelliJ EDT, so a continuously
+// interpolated animation (even via graphicsLayer) keeps the event queue busy and
+// blocks IdeEventQueue.flushQueue from settling to open modals.
+private const val SPINNER_CYCLE_MILLIS = 800L
+private const val SPINNER_FRAMES = 24
 
 @Composable
 fun SmallSpinner(
@@ -138,26 +168,21 @@ fun SmallSpinner(
     size: Dp = 14.dp,
     color: Color = DevEcoTheme.loadingIndicatorColor,
 ) {
-    val transition = rememberInfiniteTransition(label = "spinner")
-    val angle by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "spinner-angle",
-    )
-    Canvas(modifier = modifier.size(size)) {
+    val frame = remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(SPINNER_CYCLE_MILLIS / SPINNER_FRAMES)
+            frame.intValue = (frame.intValue + 1) % SPINNER_FRAMES
+        }
+    }
+    Canvas(modifier = modifier.size(size).graphicsLayer { rotationZ = frame.intValue * 360f / SPINNER_FRAMES }) {
         val canvasSize = this.size.width
         val center = androidx.compose.ui.geometry.Offset(canvasSize / 2f, canvasSize / 2f)
         val radius = canvasSize / 2f * 0.75f
         val strokeWidth = canvasSize * 0.15f
-        val rad = Math.toRadians(angle.toDouble())
-        val startAngle = (rad * 180 / Math.PI).toFloat()
         drawArc(
             color = color,
-            startAngle = startAngle,
+            startAngle = 0f,
             sweepAngle = 270f,
             useCenter = false,
             topLeft = androidx.compose.ui.geometry.Offset(center.x - radius, center.y - radius),

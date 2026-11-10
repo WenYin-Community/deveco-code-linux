@@ -27,12 +27,23 @@ import org.jetbrains.jewel.ui.icons.AllIconsKeys
 @Composable
 internal fun TodoDock(
     items: List<TodoDockItem>,
+    turnActive: Boolean,
     onJumpToTool: (toolItemId: String) -> Unit,
 ) {
-    if (items.isEmpty()) return
+    // Mirror the TUI sidebar (packages/tui/src/feature-plugins/sidebar/todo.tsx):
+    // render only while at least one entry is still open; the moment the last
+    // item completes the whole block disappears until a new todowrite brings
+    // open items back. Cancelled/in-progress entries keep it visible so the
+    // "Interrupted" badge can render.
+    if (items.isEmpty() || items.all { it.status == TodoDockStatus.COMPLETED }) return
     var expanded by remember { mutableStateOf(true) }
     val borderColor = DevEcoTheme.toolOutputBorder
     val itemRowBg = DevEcoTheme.toolReadBg
+    // Section 3: the dock must not fake execution after the turn ends —
+    // unfinished/cancelled entries get an "Interrupted" badge in the header.
+    val showTurnPaused = !turnActive && items.any {
+        it.status == TodoDockStatus.IN_PROGRESS || it.status == TodoDockStatus.CANCELLED
+    }
 
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 6.dp),
@@ -68,6 +79,15 @@ internal fun TodoDock(
                     color = DevEcoTheme.muted,
                     fontSize = 12.sp,
                 )
+                if (showTurnPaused) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        MyMessageBundle.message("todo.turnPaused"),
+                        color = DevEcoTheme.loadingIndicatorColor.copy(alpha = 0.7f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
 
             if (expanded) {
@@ -75,7 +95,7 @@ internal fun TodoDock(
                     Modifier.padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 8.dp),
                 ) {
                     items.forEach { todo ->
-                        TodoDockRow(todo, itemRowBg, onJumpToTool)
+                        TodoDockRow(todo, turnActive, itemRowBg, onJumpToTool)
                         if (todo != items.last()) {
                             Spacer(Modifier.height(4.dp))
                         }
@@ -89,6 +109,7 @@ internal fun TodoDock(
 @Composable
 private fun TodoDockRow(
     todo: TodoDockItem,
+    turnActive: Boolean,
     itemRowBg: Color,
     onJumpToTool: (toolItemId: String) -> Unit,
 ) {
@@ -112,7 +133,20 @@ private fun TodoDockRow(
                     )
                 }
                 TodoDockStatus.IN_PROGRESS -> {
-                    SmallSpinner(color = DevEcoTheme.loadingIndicatorColor)
+                    if (turnActive) {
+                        SmallSpinner(color = DevEcoTheme.loadingIndicatorColor)
+                    } else {
+                        // Turn ended with this item still open: a static
+                        // hollow ring instead of a fake-running spinner.
+                        Box(
+                            Modifier.size(12.dp)
+                                .border(
+                                    1.dp,
+                                    DevEcoTheme.loadingIndicatorColor.copy(alpha = 0.7f),
+                                    CircleShape,
+                                ),
+                        )
+                    }
                 }
                 TodoDockStatus.PENDING -> {
                     Box(

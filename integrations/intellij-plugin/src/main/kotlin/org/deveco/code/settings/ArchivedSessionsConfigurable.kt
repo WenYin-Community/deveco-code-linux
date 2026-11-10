@@ -13,12 +13,14 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.IconLoader
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.session.FavoriteRecord
 import org.deveco.code.session.SESSION_REFRESH_TOPIC
+import org.deveco.code.session.SessionControllerRegistry
 import org.deveco.code.session.SessionStorage
 import org.deveco.code.session.editor.SessionVirtualFile
 import org.deveco.code.util.runInEdt
@@ -55,6 +57,10 @@ class ArchivedSessionsConfigurable(private val project: Project) : Configurable 
         autoCreateRowSorter = true
         setShowGrid(false)
         intercellSpacing = Dimension(0, 0)
+        // Stretch over the whole viewport so the area below the last row is
+        // painted with the table background instead of showing the scroll
+        // pane/panel background through (visible in light themes).
+        fillsViewportHeight = true
         columnModel.getColumn(0).preferredWidth = 520
         columnModel.getColumn(0).cellRenderer = ArchivedCellRenderer()
         setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION)
@@ -107,11 +113,11 @@ class ArchivedSessionsConfigurable(private val project: Project) : Configurable 
         mainPanel.add(north, BorderLayout.NORTH)
 
         val restoreAction =
-            makeAction(AllIcons.General.InlineRefresh, "archived.restore", {
+            makeAction(::restoreIcon, "archived.restore", {
                 table.selectedRowCount > 0
             }) { markPending(PendingAction.RESTORE) }
         val deleteAction =
-            makeAction(AllIcons.General.Remove, "archived.delete", {
+            makeAction({ AllIcons.General.Remove }, "archived.delete", {
                 table.selectedRowCount > 0
             }) { markPending(PendingAction.DELETE) }
         toolbar = ActionManager.getInstance().createActionToolbar(
@@ -127,6 +133,9 @@ class ArchivedSessionsConfigurable(private val project: Project) : Configurable 
             isOpaque = true
             background = JBColor.namedColor("TableHeader.background", 0xF2F2F2)
             border = BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border())
+            // An opaque ActionToolbar paints its own Panel.background, which
+            // shows as a differently-colored block beside the buttons.
+            toolbar.component.isOpaque = false
             add(toolbar.component, BorderLayout.WEST)
         }
         val tablePanel = JPanel(BorderLayout()).apply {
@@ -215,6 +224,8 @@ class ArchivedSessionsConfigurable(private val project: Project) : Configurable 
             mgr.openFiles.filterIsInstance<SessionVirtualFile>()
                 .filter { it.sessionId == sessionId }
                 .forEach { mgr.closeFile(it) }
+            // Permanently deleted here; drop any cached controller so it is not re-attached.
+            SessionControllerRegistry.getInstance(project).evict(sessionId)
         }
     }
 
@@ -230,19 +241,35 @@ class ArchivedSessionsConfigurable(private val project: Project) : Configurable 
         ApplicationManager.getApplication().invokeLater { toolbar.updateActionsImmediately() }
     }
 
-    private fun makeAction(icon: Icon?, tooltipKey: String, enabledCheck: () -> Boolean, action: () -> Unit): AnAction =
-        object : AnAction() {
-            init {
-                if (icon != null) templatePresentation.icon = icon
-                templatePresentation.text = MyMessageBundle.message(tooltipKey)
-                templatePresentation.description = MyMessageBundle.message(tooltipKey)
-            }
-            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
-            override fun actionPerformed(e: AnActionEvent) = action()
-            override fun update(e: AnActionEvent) {
-                e.presentation.isEnabled = enabledCheck()
-            }
+    private fun makeAction(
+        iconProvider: () -> Icon?,
+        tooltipKey: String,
+        enabledCheck: () -> Boolean,
+        action: () -> Unit,
+    ): AnAction = object : AnAction() {
+        init {
+            templatePresentation.icon = iconProvider()
+            templatePresentation.text = MyMessageBundle.message(tooltipKey)
+            templatePresentation.description = MyMessageBundle.message(tooltipKey)
         }
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        override fun actionPerformed(e: AnActionEvent) = action()
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = enabledCheck()
+            // Re-resolved on every update so the icon follows dark/light theme switches.
+            iconProvider()?.let { e.presentation.icon = it }
+        }
+    }
+
+    // archived-restore-dark.svg is the design export as delivered (white glyph =
+    // dark theme); the light twin differs only in the path fill color. Keep the
+    // two files in sync when the design glyph changes.
+    private fun restoreIcon(): Icon {
+        val bg = JBColor.background()
+        val brightness = (bg.red * 0.299 + bg.green * 0.587 + bg.blue * 0.114) / 255.0
+        val variant = if (brightness < 0.5) "dark" else "light"
+        return IconLoader.getIcon("/icons/archived-restore-$variant.svg", ArchivedSessionsConfigurable::class.java)
+    }
 
     private class ArchivedTableModel : AbstractTableModel() {
         var items: List<FavoriteRecord> = emptyList()

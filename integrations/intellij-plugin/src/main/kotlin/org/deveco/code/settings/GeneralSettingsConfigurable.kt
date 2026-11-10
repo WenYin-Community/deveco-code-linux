@@ -3,9 +3,11 @@ package org.deveco.code.settings
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.options.ConfigurationException
 import com.intellij.ui.JBColor
+import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import org.deveco.code.MyMessageBundle
+import java.awt.Dimension
 import java.io.IOException
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -18,7 +20,7 @@ import javax.swing.border.EmptyBorder
  *
  * The two checkboxes persist into DevEco Code's `state/kv.json` via
  * [PrivacySettingsStore], so the CLI subprocess honors them without a
- * restart. Defaults match the CLI: both switches enabled.
+ * restart. Defaults match the CLI: analytics enabled, tool improvement disabled.
  */
 class GeneralSettingsConfigurable : Configurable {
     private var analyticsCheckbox: JBCheckBox? = null
@@ -34,12 +36,22 @@ class GeneralSettingsConfigurable : Configurable {
         improvementCheckbox = improvement
         panel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = EmptyBorder(10, 8, 8, 8)
-            add(analytics.apply { alignmentX = JPanel.LEFT_ALIGNMENT })
+            border = EmptyBorder(0, 0, 0, 0)
+            add(TitledSeparator(MyMessageBundle.message("settings.privacy.data.collection.title")).apply {
+                alignmentX = JPanel.LEFT_ALIGNMENT
+                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            })
+            add(Box.createVerticalStrut(10))
+            add(analytics.apply {
+                alignmentX = JPanel.LEFT_ALIGNMENT
+            })
             add(descriptionLabel(MyMessageBundle.message("settings.privacy.stats.description")))
             add(Box.createVerticalStrut(10))
-            add(improvement.apply { alignmentX = JPanel.LEFT_ALIGNMENT })
+            add(improvement.apply {
+                alignmentX = JPanel.LEFT_ALIGNMENT
+            })
             add(descriptionLabel(MyMessageBundle.message("settings.privacy.improvement.description")))
+            add(Box.createVerticalGlue())
         }
         reset()
         return panel as JComponent
@@ -56,7 +68,8 @@ class GeneralSettingsConfigurable : Configurable {
         val analytics = analyticsCheckbox ?: return
         val improvement = improvementCheckbox ?: return
         try {
-            PrivacySettingsStore.write(analytics.isSelected, improvement.isSelected)
+            PrivacySettingsStore.writeAnalyticsEnabled(analytics.isSelected)
+            PrivacySettingsStore.writeToolImprovementEnabled(improvement.isSelected)
         } catch (e: IOException) {
             throw ConfigurationException("Failed to save privacy settings: ${e.message}")
         }

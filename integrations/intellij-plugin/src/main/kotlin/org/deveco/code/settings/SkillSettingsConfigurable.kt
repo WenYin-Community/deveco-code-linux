@@ -1,6 +1,7 @@
 ﻿package org.deveco.code.settings
 
 import com.intellij.icons.AllIcons
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -14,6 +15,7 @@ import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import org.deveco.code.MyMessageBundle
@@ -30,6 +32,7 @@ import java.awt.GridBagLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.MouseMotionAdapter
+import java.nio.file.Files
 import java.nio.file.Path
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -169,9 +172,15 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
             ApplicationManager.getApplication().invokeLater {
                 // Preserve rows that aren't on disk yet (e.g. a just-failed
                 // import) so the user can retry on the same row instead of
-                // re-picking the source via the file chooser.
+                // re-picking the source via the file chooser. skillMdPath is
+                // the picked source for pending imports but the installed
+                // SKILL.md for rows loaded by an earlier reload — without the
+                // existence check a skill whose folder was deleted manually
+                // would resurrect as a "pending" row on every reset/apply.
                 val loadedKeys = loaded.map { "${it.type}.${it.name}" }.toSet()
-                val pending = currentSkills.filter { "${it.type}.${it.name}" !in loadedKeys }
+                val pending = currentSkills.filter {
+                    "${it.type}.${it.name}" !in loadedKeys && Files.exists(it.skillMdPath)
+                }
                 val merged = loaded + pending
                 originalSkills = loaded
                 currentSkills = merged.toMutableList()
@@ -196,6 +205,10 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
                 autoCreateRowSorter = true
                 setShowGrid(false)
                 intercellSpacing = Dimension(0, 0)
+                // Stretch over the whole viewport so the area below the last row
+                // is painted with the table background instead of showing the
+                // scroll pane/panel background through (visible in light themes).
+                fillsViewportHeight = true
                 columnModel.getColumn(0).cellRenderer = CheckboxRenderer()
                 columnModel.getColumn(0).preferredWidth = SKILL_ICON_COLUMN_PREF_WIDTH
                 columnModel.getColumn(0).minWidth = SKILL_ICON_COLUMN_MIN_WIDTH
@@ -281,6 +294,9 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
                 isOpaque = true
                 background = JBColor.namedColor("TableHeader.background", 0xF2F2F2)
                 border = javax.swing.BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border())
+                // An opaque ActionToolbar paints its own Panel.background, which
+                // shows as a differently-colored block beside the buttons.
+                toolbar.component.isOpaque = false
                 add(toolbar.component, BorderLayout.WEST)
             }
             val scrollPane = JScrollPane(table).apply {
@@ -309,14 +325,19 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
 
         private fun importSkill() {
             val typeName = MyMessageBundle.message(type.sectionKey)
-            val descriptor = FileChooserDescriptor(true, true, false, false, false, false).apply {
+            // chooseJars/chooseJarsAsFiles must be set for .zip sources to be
+            // visible and returned as a plain file on IDE 243, whose descriptor
+            // hides archives unless one of them is set. On 261 both flags fold
+            // into chooseFiles, so behavior there is unchanged.
+            val descriptor = FileChooserDescriptor(true, true, true, true, false, false).apply {
                 title = MyMessageBundle.message("skill.import.title", typeName)
                 description = "Choose a Skill folder or .zip archive containing exactly one SKILL.md"
             }
-            val initialFile = project.basePath?.let {
-                LocalFileSystem.getInstance().findFileByPath(it)
-            } ?: LocalFileSystem.getInstance().findFileByPath(System.getProperty("user.home"))
+            val initialFile = lastImportDir()
+                ?: project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+                ?: LocalFileSystem.getInstance().findFileByPath(System.getProperty("user.home"))
             val virtualFile = FileChooser.chooseFile(descriptor, project, initialFile) ?: return
+            rememberImportDir(virtualFile)
 
             val name = virtualFile.name
             val isDir = virtualFile.isDirectory
@@ -369,6 +390,24 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
             }
             currentSkills.add(SkillEntry(preview.name, sourcePath, type, true, preview.description))
             refreshSections()
+        }
+
+        // The original code always started at project.basePath, ignoring where
+        // the user browsed to last time. The platform's built-in last-opened-
+        // file store is shared across every IDE file chooser and ignored by
+        // 261's native dialog, so we keep a dedicated per-import memory.
+        private fun lastImportDir(): VirtualFile? {
+            val path = PropertiesComponent.getInstance(project).getValue(LAST_IMPORT_DIR_KEY) ?: return null
+            return LocalFileSystem.getInstance().findFileByPath(path)
+        }
+
+        // Record at selection time, not on successful import: after a rejected
+        // pick the user most likely continues browsing the same directory.
+        private fun rememberImportDir(file: VirtualFile) {
+            val dir = if (file.isDirectory) file else file.parent
+            if (dir != null && dir.isValid) {
+                PropertiesComponent.getInstance(project).setValue(LAST_IMPORT_DIR_KEY, dir.path)
+            }
         }
 
         private fun deleteSelected() {
@@ -534,6 +573,8 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
     }
 
     companion object {
+        private const val LAST_IMPORT_DIR_KEY = "deveco.code.skill.import.lastDir"
+
         private const val SKILL_TABLE_ROW_HEIGHT = 28
         private const val SKILL_TABLE_VISIBLE_ROWS = 5
         private const val MAX_DESC_PREVIEW_LEN = 60
@@ -547,7 +588,13 @@ class SkillSettingsConfigurable(private val project: com.intellij.openapi.projec
             val hoveredRow = table.getClientProperty("hoveredRow") as? Int ?: -1
             return when {
                 isSelected -> table.selectionBackground
-                row == hoveredRow -> JBColor.namedColor("Table.hoverBackground", 0xEDF3FF)
+
+                // Dark-aware fallback: classic dark themes define no
+                // Table.hoverBackground key, so a light-only default would leak
+                // a light blue hover into dark UI. Values mirror JBUI's
+                // DefaultRendererHoverBackground pair.
+                row == hoveredRow -> JBColor.namedColor("Table.hoverBackground", JBColor(0xEDF5FC, 0x464A4D))
+
                 else -> table.background
             }
         }

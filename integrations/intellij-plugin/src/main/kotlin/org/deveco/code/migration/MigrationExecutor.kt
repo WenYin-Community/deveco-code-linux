@@ -6,6 +6,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.UUID
+import kotlinx.serialization.json.put
 
 /**
  * Executes the migration item by item (functional-design §3.2 pipeline):
@@ -217,21 +218,33 @@ class MigrationExecutor(
         Pending(ConflictKind.MCP, mcp.scope, mcp.name) { migrateMcp(mcp) }
 
     private fun migrateMcp(mcp: McpItem): Outcome {
+        // Build the payload with kotlinx.serialization so names containing quotes
+        // stay valid JSON (S1).
+        val entry = kotlinx.serialization.json.Json.parseToJsonElement(mcp.configJson)
+        // Credential redaction: environment/headers are the fields that CAN hold
+        // credentials. The old plugin stored them AES-GCM encrypted; the new
+        // backend writes deveco.jsonc as plaintext JSONC. Migrating the values
+        // verbatim would silently downgrade encrypted credentials to plaintext
+        // on disk, so only the (empty) field structure is migrated and the
+        // report hint tells the user to re-enter them.
+        val redacted = redactSecretFields(entry)
+        val carriesSecrets = redacted !== entry
+        val redactedJson = redacted.toString()
         // Re-check the live target before PATCHing: Config.update mergeDeep would
         // partially overwrite a same-name entry, breaking S2 add-only semantics.
+        // An earlier run migrated the redacted form, so that counts as equivalent.
         val target = detector.targetMcpEntry(mcp.scope, mcp.name)
         if (target != null) {
-            return if (detector.jsonEquivalent(target, mcp.configJson)) {
+            return if (detector.jsonEquivalent(target, mcp.configJson) ||
+                detector.jsonEquivalent(target, redactedJson)
+            ) {
                 Outcome(ReportStatus.SKIPPED_EQUIVALENT)
             } else {
                 Outcome(ReportStatus.SKIPPED_CONFLICT)
             }
         }
-        // Build the payload with kotlinx.serialization so names containing quotes
-        // stay valid JSON (S1).
-        val entry = kotlinx.serialization.json.Json.parseToJsonElement(mcp.configJson)
         val payload = kotlinx.serialization.json.buildJsonObject {
-            put("mcp", kotlinx.serialization.json.buildJsonObject { put(mcp.name, entry) })
+            put("mcp", kotlinx.serialization.json.buildJsonObject { put(mcp.name, redacted) })
         }
         when (mcp.scope) {
             MigrationScope.PROJECT -> backend.patchProjectConfig(payload)
@@ -243,20 +256,35 @@ class MigrationExecutor(
         // resulting entry differs from what we intended, add-only was broken:
         // surface a failure instead of trusting the 2xx.
         val after = detector.targetMcpEntry(mcp.scope, mcp.name)
-        if (after == null || !detector.jsonEquivalent(after, mcp.configJson)) {
+        if (after == null || !detector.jsonEquivalent(after, redactedJson)) {
             throw IOException("concurrent modification: target mcp entry '${mcp.name}' differs from the migrated value")
         }
-        // Plaintext-storage hint (user decision 2026-09-09): the new backend
-        // stores MCP config as plaintext JSONC (0600; credentials live in the
-        // separate encrypted token.dek). Entries carrying env vars or request
-        // headers — the fields that CAN hold credentials — get a note in the
-        // report so the user can verify nothing sensitive was written.
-        val carriesSecrets = (entry as? kotlinx.serialization.json.JsonObject)
-            ?.let { it.containsKey("environment") || it.containsKey("headers") } == true
         return Outcome(
             ReportStatus.MIGRATED,
             if (carriesSecrets) org.deveco.code.MyMessageBundle.message("migration.report.hint.plaintextSecrets") else null,
         )
+    }
+
+    /** Blanks every value under `environment` / `headers`; returns [entry] unchanged when neither is present. */
+    private fun redactSecretFields(entry: kotlinx.serialization.json.JsonElement): kotlinx.serialization.json.JsonElement {
+        val obj = entry as? kotlinx.serialization.json.JsonObject ?: return entry
+        if (!obj.containsKey("environment") && !obj.containsKey("headers")) return entry
+        return kotlinx.serialization.json.buildJsonObject {
+            for ((key, value) in obj) {
+                if (key != "environment" && key != "headers") {
+                    put(key, value)
+                    continue
+                }
+                val inner = value as? kotlinx.serialization.json.JsonObject
+                if (inner == null) {
+                    put(key, value)
+                    continue
+                }
+                put(key, kotlinx.serialization.json.buildJsonObject {
+                    for (name in inner.keys) put(name, "")
+                })
+            }
+        }
     }
 
     // ---------- marker placement (requirements §4.1) ----------

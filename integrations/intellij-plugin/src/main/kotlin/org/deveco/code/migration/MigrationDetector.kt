@@ -19,7 +19,9 @@ import java.security.MessageDigest
  *  - Global MCP:     Model_Management.db → mcp_config(server_name, info) where
  *    info is AES-GCM hex encrypted with the local material key (CodeGenieKeyStore);
  *    DB lives at <codegenie-root>/<userHash>/<projectHash>/<accountHash>/ — multiple
- *    DBs are merged by server_name (latest created_time wins)
+ *    DBs are merged by server_name (latest created_time wins); across versioned
+ *    roots the newest one whose DBs carry rows (or fail to read) wins, and
+ *    zero-row roots fall through to older ones
  *  - There is NO project-level MCP and NO mcp-auth.json in the old plugin.
  *
  * Detection is read-only and must never create files (S4).
@@ -27,9 +29,6 @@ import java.security.MessageDigest
 class MigrationDetector(
     /** CodeGenie plugin roots, e.g. <ideConfig>/Huawei/DevEcoStudio26.0/codegenie — newest-first. */
     private val codegenieRoots: List<Path>,
-    /** Current IDE's versioned config dir name, e.g. "DevEcoStudio6.1" — used to
-     *  determine whether detected data comes from a different IDE version. */
-    private val currentIdeVersionName: String,
     /** Open project directory (worktree search start for .codegenie sources). */
     private val projectBase: Path,
     /** Worktree root (search stop boundary). */
@@ -51,18 +50,22 @@ class MigrationDetector(
         val projectSkills: List<SkillItem> =
             if (projectSourceDir != null) scanSkillRoots(projectSourceDir, MigrationScope.PROJECT) else emptyList()
 
-        // Source version: which codegenie root actually carried the data?
-        // Roots are newest-first; if the data came from a root that is NOT the
-        // current IDE's own codegenie dir, annotate the prompt so the user
-        // understands why it appeared (e.g. "from DevEco Studio 6.1" while
-        // running 26.0 — the user upgraded and left data behind). The value
-        // is the bare version number ("6.1", not "DevEcoStudio6.1") — the
-        // i18n template adds the "DevEco Studio" prefix.
-        val dataRoot = globalSkillsRoot ?: mcpsRoot
-        val sourceVersion = dataRoot
-            ?.parent?.fileName?.toString()
-            ?.takeIf { it != currentIdeVersionName }
-            ?.removePrefix("DevEcoStudio")
+        // Source versions (方案 B): which codegenie root carried each data
+        // kind? The pick is per kind and newest-first, so skills and MCP can
+        // come from different versions — record both so the prompt bar can
+        // name each accurately instead of collapsing them into one value
+        // that hides the other's origin. The value is the bare version
+        // number ("6.1", not "DevEcoStudio6.1"); the i18n template adds the
+        // "DevEco Studio" prefix. This is the RAW origin, not a display
+        // decision: the rendering layer decides whether to annotate it at
+        // all (a version matching the running IDE's is not annotated on its
+        // own, but it still appears in the paired "both" template when the
+        // other kind is foreign).
+        // MCP counts as sourced only when its root actually contributed
+        // items or failures; a root chosen just because DB files exist
+        // (zero rows, zero failures) contributes nothing to annotate.
+        val skillsSourceVersion = rootVersion(globalSkillsRoot)
+        val mcpSourceVersion = if (globalMcps.isEmpty() && mcpFailures.isEmpty()) null else rootVersion(mcpsRoot)
 
         val missing = mutableSetOf<MigrationScope>()
         // P1-3: unreadable MCP sources are NOT "absent" — mcpFailures keeps the
@@ -79,7 +82,8 @@ class MigrationDetector(
             mcpAuths = emptyList(),    // old plugin has no mcp-auth.json
             mcpFailures = mcpFailures,
             missingScopes = missing,
-            sourceVersion = sourceVersion,
+            skillsSourceVersion = skillsSourceVersion,
+            mcpSourceVersion = mcpSourceVersion,
         )
     }
 
@@ -87,6 +91,15 @@ class MigrationDetector(
     private var globalSkillsRoot: Path? = null
     /** Root that provided global MCP data (set by readGlobalMcps, newest-first wins). */
     private var mcpsRoot: Path? = null
+
+    /**
+     * ORIGIN side of the version comparison (codegenie root → bare version).
+     * Deliberately NOT shared with MigrationDetectorFactory.versionNameOf,
+     * which walks the opposite direction (current config dir → version name)
+     * and yields null for non-DevEcoStudio* dirs; here a raw name is kept so an
+     * oddly named origin still annotates instead of silently dropping out.
+     */
+    private fun rootVersion(root: Path?): String? = root?.parent?.fileName?.toString()?.removePrefix("DevEcoStudio")
 
     // ---------- global roots ----------
 
@@ -103,13 +116,23 @@ class MigrationDetector(
     }
 
     /**
-     * MCP reads from the SAME root selection as skills (newest root carrying
-     * data — review D3: cross-root merging would resurrect servers the user
-     * already deleted in the newer version; a key-derivation failure on the
-     * newest root WITH databases therefore must NOT fall back either, review
-     * P3-2 — it surfaces as a failure instead).
-     * Within that root, multiple DBs (user/project/account hashes) merge by
-     * server_name with latest created_time winning.
+     * Newest-first root scan: a root "carries" the MCP data only when its
+     * DBs actually contribute items or read failures; only then does it
+     * claim [mcpsRoot] and stop the scan. A root with merely zero-row DBs
+     * (the user never configured MCP in that version — the common
+     * Beta-trial case, verified on real machines) falls through to older
+     * roots that do hold config.
+     * Trade-off vs review D3: a user who DELETED every server in the newer
+     * version also leaves zero rows, so the older root's servers resurface —
+     * accepted because silently losing the older config was worse, and the
+     * prompt now annotates the MCP source version, making the origin visible
+     * and declinable. Cross-root MERGING stays forbidden (D3): once the
+     * newest root does carry data it wins alone, so servers deleted there
+     * stay deleted. A key-derivation failure on a root WITH databases still
+     * must NOT fall back (P3-2) — it surfaces as a failure instead, because
+     * the unreadable root may hold the user's newest state.
+     * Within the winning root, multiple DBs (user/project/account hashes)
+     * merge by server_name with latest created_time winning.
      *
      * Returns items plus read failures (P1-3) — "could not read" must never
      * masquerade as "nothing to migrate".
@@ -118,18 +141,25 @@ class MigrationDetector(
         for (root in codegenieRoots) {
             val dbs = listModelDbs(root)
             if (dbs.isEmpty()) continue
-            mcpsRoot = root
             val dataKey = try {
                 CodeGenieKeyStore.deriveDataKey(root.resolve("material"))
             } catch (e: Exception) {
                 // Never silent: the failure blocks the GLOBAL marker (P1-3)
-                // instead of silently skipping every MCP entry.
+                // instead of silently skipping every MCP entry — and blocks
+                // the fallback too: the unreadable root may be the newest state.
+                mcpsRoot = root
                 LOG.warn("codegenie migration: key derivation failed for ${root.fileName}: ${e.javaClass.simpleName}: ${e.message}")
                 return emptyList<McpItem>() to listOf(
                     McpFailure(null, "MCP key derivation failed for ${root.fileName}: ${e.message}"),
                 )
             }
-            return readMcpsFrom(dbs, dataKey)
+            val (items, failures) = readMcpsFrom(dbs, dataKey)
+            if (items.isNotEmpty() || failures.isNotEmpty()) {
+                mcpsRoot = root
+                return items to failures
+            }
+            // Zero rows and zero failures: this root holds no MCP config —
+            // keep scanning older roots instead of shadowing their data.
         }
         return emptyList<McpItem>() to emptyList<McpFailure>()
     }

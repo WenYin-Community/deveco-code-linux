@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,25 +21,49 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.intellij.openapi.application.ApplicationManager
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.DevEcoIcons
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.session.model.AttachmentItem
+import org.deveco.code.session.ui.messages.FileIcon
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
-import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
-internal val FileIconKey = PathIconKey("/icons/file.svg", DevEcoTheme::class.java)
+private const val THUMB_MAX_PX = 256
 
-internal val PictureIconKey = PathIconKey("/icons/picture.svg", DevEcoTheme::class.java)
+internal fun decodeToImageBitmap(imageBytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap? {
+    val original = runCatching { javax.imageio.ImageIO.read(imageBytes.inputStream()) }.getOrNull() ?: return null
+    val w = original.width
+    val h = original.height
+    if (w <= 0 || h <= 0) return null
+    val scale = minOf(THUMB_MAX_PX.toFloat() / w, THUMB_MAX_PX.toFloat() / h, 1f)
+    val tw = (w * scale).toInt().coerceAtLeast(1)
+    val th = (h * scale).toInt().coerceAtLeast(1)
+    val thumb = java.awt.image.BufferedImage(tw, th, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+    val g = thumb.createGraphics()
+    try {
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY)
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+        g.drawImage(original, 0, 0, tw, th, null)
+    } finally {
+        g.dispose()
+    }
+    val out = java.io.ByteArrayOutputStream()
+    runCatching { javax.imageio.ImageIO.write(thumb, "PNG", out) }.onFailure { return null }
+    val pngBytes = out.toByteArray()
+    val skiaImage = runCatching { org.jetbrains.skia.Image.makeFromEncoded(pngBytes) }.getOrNull() ?: return null
+    return skiaImage.toComposeImageBitmap()
+}
 
 @Composable
 internal fun ComposerAttachments(
     attachments: List<AttachmentItem>,
-    muted: Color,
     onRemove: (Int) -> Unit,
     onPreview: (ByteArray) -> Unit,
+    onOpenFile: (String) -> Unit = {},
 ) {
     if (attachments.isNotEmpty()) {
         val images = attachments.withIndex().filter { it.value.isImage }
@@ -53,13 +76,20 @@ internal fun ComposerAttachments(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 images.forEach { indexed ->
-                    AttachmentChip(
+                    ImageThumbnail(
                         name = indexed.value.name,
-                        isImage = true,
+                        path = indexed.value.path,
                         thumbnail = indexed.value.thumbnail,
-                        muted = muted,
                         onRemove = { onRemove(indexed.index) },
-                        onPreview = { indexed.value.originalBytes?.let { onPreview(it) } },
+                        onPreview = {
+                            val filePath = indexed.value.path
+                            ApplicationManager.getApplication().executeOnPooledThread {
+                                runCatching { java.io.File(filePath).readBytes() }
+                                    .getOrNull()?.let { bytes ->
+                                        ApplicationManager.getApplication().invokeLater { onPreview(bytes) }
+                                    }
+                            }
+                        },
                     )
                 }
             }
@@ -73,13 +103,76 @@ internal fun ComposerAttachments(
                 texts.forEach { indexed ->
                     AttachmentChip(
                         name = indexed.value.name,
+                        path = indexed.value.path,
                         isImage = false,
                         thumbnail = null,
-                        muted = muted,
                         onRemove = { onRemove(indexed.index) },
+                        onOpen = { onOpenFile(indexed.value.path) },
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ImageThumbnail(
+    name: String,
+    path: String,
+    thumbnail: ByteArray?,
+    onRemove: () -> Unit,
+    onPreview: () -> Unit,
+) {
+    var imageBitmap by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(path, thumbnail) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val source = thumbnail ?: runCatching { java.io.File(path).readBytes() }.getOrNull()
+            val decoded = source?.let { decodeToImageBitmap(it) }
+            ApplicationManager.getApplication().invokeLater { imageBitmap = decoded }
+        }
+    }
+
+    Box(
+        modifier = Modifier.size(48.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(DevEcoTheme.popupBackground)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onPreview() },
+    ) {
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap!!,
+                contentDescription = name,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)),
+            )
+        } else {
+            Icon(
+                key = AllIconsKeys.FileTypes.Image,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp).align(Alignment.Center),
+            )
+        }
+        // Remove button overlay
+        Box(
+            Modifier.align(Alignment.TopEnd).padding(2.dp)
+                .clip(CircleShape)
+                .background(Color(0x99000000))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onRemove() }
+                .padding(2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                key = AllIconsKeys.Actions.Close,
+                contentDescription = "Remove image",
+                modifier = Modifier.size(10.dp),
+                tint = Color.White,
+            )
         }
     }
 }
@@ -90,8 +183,6 @@ internal fun ComposerAttachments(
 @Composable
 internal fun AddAttachmentButton(
     muted: Color,
-    supportsImages: Boolean,
-    enabled: Boolean = true,
     onSelectFile: () -> Unit,
     onSelectImage: () -> Unit,
 ) {
@@ -101,21 +192,18 @@ internal fun AddAttachmentButton(
     Box {
         Box(
             Modifier.clip(RoundedCornerShape(7.dp))
-                .background(if (enabled && (hovered || expanded)) DevEcoTheme.pressedAccentSoft else Color.Transparent)
+                .background(if (hovered || expanded) DevEcoTheme.pressedAccentSoft else Color.Transparent)
                 .clickable(
                     interactionSource = interactionSource,
                     indication = null,
-                    enabled = enabled,
                 ) { expanded = true }
-                .padding(horizontal = 8.dp, vertical = 5.dp),
+                .padding(5.dp),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 key = DevEcoIcons.iconKey("add"),
                 contentDescription = "Add attachment",
-                modifier = Modifier
-                    .size(16.dp)
-                    .then(if (!enabled) Modifier.alpha(0.4f) else Modifier),
+                modifier = Modifier.size(16.dp),
             )
         }
 
@@ -132,23 +220,21 @@ internal fun AddAttachmentButton(
                         .padding(vertical = 4.dp),
                 ) {
                     AttachmentTypeItem(
-                        iconKey = FileIconKey,
+                        iconKey = DevEcoIcons.iconKey("file"),
                         text = MyMessageBundle.message("composer.attachment.file"),
                         onClick = {
                             expanded = false
                             onSelectFile()
                         },
                     )
-                    if (supportsImages) {
-                        AttachmentTypeItem(
-                            iconKey = PictureIconKey,
-                            text = MyMessageBundle.message("composer.attachment.image"),
-                            onClick = {
-                                expanded = false
-                                onSelectImage()
-                            },
-                        )
-                    }
+                    AttachmentTypeItem(
+                        iconKey = DevEcoIcons.iconKey("picture"),
+                        text = MyMessageBundle.message("composer.attachment.image"),
+                        onClick = {
+                            expanded = false
+                            onSelectImage()
+                        },
+                    )
                 }
             }
         }
@@ -165,6 +251,8 @@ private fun AttachmentTypeItem(
     val isHovered by interactionSource.collectIsHoveredAsState()
     Row(
         Modifier.fillMaxWidth()
+            .padding(horizontal = 4.dp)
+            .clip(RoundedCornerShape(6.dp))
             .hoverable(interactionSource)
             .background(if (isHovered) DevEcoTheme.pressedAccentSoft else Color.Transparent)
             .clickable(interactionSource = interactionSource, indication = null) { onClick() }
@@ -188,21 +276,24 @@ private fun AttachmentTypeItem(
 @Composable
 private fun AttachmentChip(
     name: String,
+    path: String,
     isImage: Boolean,
     thumbnail: ByteArray? = null,
-    muted: Color,
     onRemove: () -> Unit,
     onPreview: () -> Unit = {},
+    onOpen: () -> Unit = {},
 ) {
     Row(
-        Modifier.clip(RoundedCornerShape(7.dp))
-            .background(muted.copy(alpha = 0.12f))
+        Modifier.clip(RoundedCornerShape(6.dp))
+            .background(DevEcoTheme.muted.copy(alpha = 0.12f))
             .then(
                 if (isImage && thumbnail != null)
                     Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onPreview() }
+                else if (!isImage)
+                    Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen() }
                 else Modifier
             )
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+            .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (isImage && thumbnail != null) {
@@ -225,19 +316,18 @@ private fun AttachmentChip(
                 Spacer(Modifier.width(4.dp))
             }
         } else {
-            Icon(
-                key = if (isImage) AllIconsKeys.FileTypes.Image else AllIconsKeys.FileTypes.Text,
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-            )
+            FileIcon(filePath = path, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(4.dp))
         }
         Text(
             name,
-            fontSize = 11.sp,
+            color = DevEcoTheme.attachmentNameFg,
+            fontSize = 13.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+            lineHeight = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 120.dp),
+            modifier = Modifier.widthIn(max = 180.dp),
         )
         Spacer(Modifier.width(4.dp))
         Box(

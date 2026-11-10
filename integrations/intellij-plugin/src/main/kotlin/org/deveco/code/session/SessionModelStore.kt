@@ -1,17 +1,13 @@
 package org.deveco.code.session
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import org.deveco.code.acp.DevEcoHttpApi
 import org.deveco.code.util.PluginStateFiles
 import java.util.concurrent.CopyOnWriteArrayList
 
-@Service(Service.Level.PROJECT)
 internal class SessionModelStore(private val project: Project) {
-
-    data class ModelEntry(var sessionId: String = "", var modelId: String = "")
 
     data class CachedModelEntry(
         var providerId: String = "",
@@ -32,14 +28,21 @@ internal class SessionModelStore(private val project: Project) {
 
     data class CustomModelRegistry(var entries: MutableList<CustomModelEntry> = mutableListOf())
 
-    data class ProviderTypeEntry(var providerId: String = "", var providerName: String = "", var type: String = "")
+    data class ProviderTypeEntry(
+        var providerId: String = "",
+        var providerName: String = "",
+        var type: String = "",
+        var protocol: String? = null,
+    )
 
     data class ProviderTypeRegistry(var entries: MutableList<ProviderTypeEntry> = mutableListOf())
 
     data class BlacklistEntry(var providerId: String = "", var modelId: String = "")
 
     data class State(
-        var entries: MutableList<ModelEntry> = mutableListOf(),
+        // Qualified "providerId/modelId" (e.g. "alibaba-cn/glm-5.2"). Values
+        // written by older plugin versions are bare model names; readers fall
+        // back to name matching for those (SessionController.resolveStoredModel).
         var globalModelId: String? = null,
         var globalModelConfigured: Boolean = false,
         var manuallySelected: MutableList<String> = mutableListOf(),
@@ -49,8 +52,14 @@ internal class SessionModelStore(private val project: Project) {
 
     @Volatile private var state = PluginStateFiles.readJsonGlobal("models.json", State::class.java) ?: State()
 
-    @Volatile private var cachedCatalog: CachedCatalog =
-        PluginStateFiles.readJsonGlobal("model-catalog-cache.json", CachedCatalog::class.java) ?: CachedCatalog()
+    // In-memory only; no disk persistence. Restart resumes empty until a
+    // successful catalog fetch (settings page reload or session loadFromBackend)
+    // feeds it. Disk caching made the "not yet loaded" and "loaded, genuinely
+    // empty" states indistinguishable across restarts and let stale
+    // backend-derived state drive the settings page on cold start.
+    @Volatile private var cachedCatalog: CachedCatalog = CachedCatalog()
+
+    @Volatile private var catalogEverFed: Boolean = false
 
     @Volatile private var customModelRegistry: CustomModelRegistry =
         PluginStateFiles.readJsonGlobal("custom-models.json", CustomModelRegistry::class.java) ?: CustomModelRegistry()
@@ -82,21 +91,11 @@ internal class SessionModelStore(private val project: Project) {
         if (app.isDispatchThread) fire() else app.invokeLater { fire() }
     }
 
-    fun getModelId(sessionId: String): String? = state.entries.firstOrNull { it.sessionId == sessionId }?.modelId
-
-    fun setModelId(sessionId: String, modelId: String?) {
-        synchronized(stateLock) {
-            val newEntries = state.entries.filterNot { it.sessionId == sessionId }.toMutableList()
-            if (modelId != null) newEntries.add(ModelEntry(sessionId, modelId))
-            persistStateLocked(newEntries = newEntries)
-        }
-    }
-
     fun removeSession(sessionId: String) {
         synchronized(stateLock) {
-            val newEntries = state.entries.filterNot { it.sessionId == sessionId }.toMutableList()
+            if (sessionId !in state.manuallySelected) return
             val newSelected = state.manuallySelected.filterNot { it == sessionId }.toMutableList()
-            persistStateLocked(newEntries = newEntries, newManuallySelected = newSelected)
+            persistStateLocked(newManuallySelected = newSelected)
         }
     }
 
@@ -104,10 +103,10 @@ internal class SessionModelStore(private val project: Project) {
 
     fun isGlobalModelConfigured(): Boolean = state.globalModelConfigured
 
-    fun setGlobalModelId(modelId: String?) {
+    fun setGlobalModelId(modelId: String?, markConfigured: Boolean = true) {
         val notifyListeners: List<(String?) -> Unit>
         synchronized(stateLock) {
-            persistStateLocked(newGlobalModelId = modelId, newGlobalModelConfigured = true)
+            persistStateLocked(newGlobalModelId = modelId, newGlobalModelConfigured = markConfigured)
             notifyListeners = listeners.toList()
         }
         notifyListeners.forEach { listener ->
@@ -116,6 +115,36 @@ internal class SessionModelStore(private val project: Project) {
             } catch (e: Exception) {
                 log.warn("Listener failed", e)
             }
+        }
+    }
+
+    // All "providerId/modelId" keys known to the full catalog (connected
+    // providers) plus manually added custom models — the global-level view
+    // used for preference decisions that must not depend on one session's
+    // filtered list (blacklist / connection-state filtering).
+    fun catalogModelIds(): Set<String> = (
+        cachedCatalog.models.map { "${it.providerId}/${it.modelId}" } +
+            customModelRegistry.entries.map { "${it.providerId}/${it.modelId}" }
+        ).toSet()
+
+    // Rollback counterpart of markManuallySelected: a rejected selection must
+    // not permanently exempt the session from global model switches.
+    fun unmarkManuallySelected(sessionId: String) {
+        synchronized(stateLock) {
+            if (sessionId !in state.manuallySelected) return
+            val newSelected = state.manuallySelected.filterNot { it == sessionId }.toMutableList()
+            persistStateLocked(newManuallySelected = newSelected)
+        }
+    }
+
+    // Rewrites the stored global model preference to its qualified
+    // "providerId/modelId" form WITHOUT notifying listeners — a storage-format
+    // migration of a value the caller just resolved, not a preference change,
+    // so open sessions must not follow it. Preserves globalModelConfigured.
+    fun upgradeGlobalModelIdSilently(qualifiedId: String) {
+        synchronized(stateLock) {
+            if (state.globalModelId == qualifiedId) return
+            persistStateLocked(newGlobalModelId = qualifiedId)
         }
     }
 
@@ -145,9 +174,18 @@ internal class SessionModelStore(private val project: Project) {
                 CachedModelEntry(it.providerId, it.providerName, it.modelId, it.modelName, it.source)
             }.toMutableList(),
         )
-        runCatching { PluginStateFiles.writeJsonGlobal("model-catalog-cache.json", cachedCatalog) }
-            .onFailure { log.warn("Failed to persist catalog cache", it) }
+        catalogEverFed = true
     }
+
+    // True once any cacheCatalog() call has landed — including an empty list,
+    // which is a legitimate "loaded and found nothing" result, not "not yet
+    // loaded". The cold-start preference guards in SessionController
+    // (selectFallbackModel and the stale-preference clear path) read this
+    // to skip preference mutation during the cold-start window before the
+    // first fetch feeds the catalog; without it they cannot tell an unloaded
+    // catalog from a real empty one and would either never clear a stale
+    // preference (always skip) or wrongly clear a valid one (always proceed).
+    internal fun catalogEverFed(): Boolean = catalogEverFed
 
     fun getCachedCatalog(): List<DevEcoHttpApi.ModelInfo> = cachedCatalog.models.map {
         DevEcoHttpApi.ModelInfo(it.providerId, it.providerName, it.modelId, it.modelName, it.source)
@@ -188,9 +226,12 @@ internal class SessionModelStore(private val project: Project) {
 
     // --- Provider type registry ---
 
-    fun addProviderType(providerId: String, providerName: String, type: String) {
+    fun addProviderType(providerId: String, providerName: String, type: String, protocol: String? = null) {
         val map = providerTypeRegistry.entries.associateBy { it.providerId }.toMutableMap()
-        map[providerId] = ProviderTypeEntry(providerId, providerName, type)
+        // The entry is replaced wholesale, so a caller that omits the protocol
+        // (e.g. the connect path re-registering the same provider id) must not
+        // wipe the persisted protocol of the entry it replaces.
+        map[providerId] = ProviderTypeEntry(providerId, providerName, type, protocol ?: map[providerId]?.protocol)
         providerTypeRegistry = ProviderTypeRegistry(map.values.toMutableList())
         runCatching { PluginStateFiles.writeJsonGlobal("provider-types.json", providerTypeRegistry) }
             .onFailure { log.warn("Failed to persist provider type registry", it) }
@@ -206,6 +247,9 @@ internal class SessionModelStore(private val project: Project) {
 
     fun getProviderType(providerId: String): String? =
         providerTypeRegistry.entries.firstOrNull { it.providerId == providerId }?.type
+
+    fun getProviderProtocol(providerId: String): String? =
+        providerTypeRegistry.entries.firstOrNull { it.providerId == providerId }?.protocol
 
     fun getProviderTypes(): List<ProviderTypeEntry> = providerTypeRegistry.entries.toList()
 
@@ -299,11 +343,11 @@ internal class SessionModelStore(private val project: Project) {
         if (changed) notifyFavoriteListeners()
     }
 
-    // Migrates (providerId, oldId) -> (providerId, newId) for blacklist entries,
-    // favorite keys, and per-session entries[].modelId. Called by
-    // ModelSettingsConfigurable.apply() on a confirmed single-model rename.
-    // globalModelId is migrated separately by the caller via setGlobalModelId
-    // (needs to fire listeners so open sessions follow the rename).
+    // Migrates (providerId, oldId) -> (providerId, newId) for blacklist entries
+    // and favorite keys. Called by ModelSettingsConfigurable.apply() on a
+    // confirmed single-model rename. globalModelId is migrated separately by the
+    // caller via setGlobalModelId (needs to fire listeners so open sessions
+    // follow the rename).
     fun migrateModelId(providerId: String, oldId: String, newId: String) {
         if (oldId == newId) return
         var blacklistChanged = false
@@ -315,24 +359,9 @@ internal class SessionModelStore(private val project: Project) {
             val oldKey = "$providerId/$oldId"
             val newKey = "$providerId/$newId"
             val newFavorites = state.favorites.map { if (it == oldKey) newKey else it }.toMutableList()
-            // ModelEntry has no providerId, so modelId-only matching would
-            // cross-migrate sessions using the same model ID under a different
-            // provider. Only migrate entries when oldId appears under exactly
-            // one provider across the catalog and custom-model registry.
-            val providerCount = (
-                cachedCatalog.models.filter { it.modelId == oldId }.map { it.providerId } +
-                customModelRegistry.entries.filter { it.modelId == oldId }.map { it.providerId }
-            ).toSet().size
-            val newEntries: MutableList<ModelEntry>? = if (providerCount <= 1) {
-                state.entries.map {
-                    if (it.modelId == oldId) ModelEntry(it.sessionId, newId) else it
-                }.toMutableList()
-            } else {
-                null
-            }
             blacklistChanged = newBlacklist != state.blacklist
             favoritesChanged = newFavorites != state.favorites
-            persistStateLocked(newEntries = newEntries, newBlacklist = newBlacklist, newFavorites = newFavorites)
+            persistStateLocked(newBlacklist = newBlacklist, newFavorites = newFavorites)
         }
         if (blacklistChanged) notifyBlacklistListeners()
         if (favoritesChanged) notifyFavoriteListeners()
@@ -357,7 +386,6 @@ internal class SessionModelStore(private val project: Project) {
     // hold a reference to the old State are safe because its lists are never
     // structurally modified after creation.
     private fun persistStateLocked(
-        newEntries: MutableList<ModelEntry>? = null,
         newGlobalModelId: String? = state.globalModelId,
         newGlobalModelConfigured: Boolean = state.globalModelConfigured,
         newManuallySelected: MutableList<String>? = null,
@@ -365,7 +393,6 @@ internal class SessionModelStore(private val project: Project) {
         newFavorites: MutableList<String>? = null,
     ) {
         val snapshot = State(
-            newEntries ?: state.entries.map { it.copy() }.toMutableList(),
             newGlobalModelId,
             newGlobalModelConfigured,
             newManuallySelected ?: state.manuallySelected.toMutableList(),

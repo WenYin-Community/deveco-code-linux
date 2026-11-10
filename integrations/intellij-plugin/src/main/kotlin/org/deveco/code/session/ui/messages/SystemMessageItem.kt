@@ -134,7 +134,7 @@ internal fun SystemItem(
                 color = when (state) {
                     PermissionCardState.SUCCESS -> DevEcoTheme.green
                     PermissionCardState.DENIED -> DevEcoTheme.warning
-                    else -> muted
+                    else -> DevEcoTheme.foreground
                 },
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,

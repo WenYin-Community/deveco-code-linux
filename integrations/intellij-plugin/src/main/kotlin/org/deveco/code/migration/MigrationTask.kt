@@ -4,9 +4,9 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.table.JBTable
-import com.intellij.openapi.ui.DialogWrapper
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.util.devecoStorageRoot
@@ -171,16 +171,13 @@ class MigrationTask(
     }
 
     /** Deterministic marker key: sanitized worktree path (shared with the PromptBar). */
-    private fun resolveProjectId(): String =
-        MigrationDetectorFactory.resolveProjectKey(project)
+    private fun resolveProjectId(): String = MigrationDetectorFactory.resolveProjectKey(project)
 
     /**
      * Sole progress display: pushes ticks to the custom Swing widget.
      * No native ProgressIndicator — see class doc.
      */
-    private class ProgressAdapter(
-        private val project: Project,
-    ) : MigrationExecutor.Progress {
+    private class ProgressAdapter(private val project: Project) : MigrationExecutor.Progress {
         private var total = 0
         private var done = 0
         override fun onTotal(total: Int) {
@@ -219,11 +216,7 @@ class MigrationTask(
 object MigrationNotifier {
     private const val GROUP = "DevEco Code Migration"
 
-    fun notifyResult(
-        project: Project,
-        report: MigrationReport,
-        onIgnoreFailed: (() -> Unit)? = null,
-    ) {
+    fun notifyResult(project: Project, report: MigrationReport, onIgnoreFailed: (() -> Unit)? = null) {
         val summary = report.summary
         val (title, body) = when {
             report.cancelled && summary.failed == 0 ->
@@ -238,7 +231,10 @@ object MigrationNotifier {
                 MyMessageBundle.message("migration.notification.partial.title") to
                     MyMessageBundle.message(
                         "migration.notification.partial.body",
-                        total, summary.migrated, summary.skippedTotal, summary.failed,
+                        total,
+                        summary.migrated,
+                        summary.skippedTotal,
+                        summary.failed,
                     )
             }
 

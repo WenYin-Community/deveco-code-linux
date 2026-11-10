@@ -21,7 +21,7 @@ import java.nio.file.StandardCopyOption
  * Key names must match `packages/opencode/src/cli/deveco-privacy-settings.ts`:
  * - `analytics_enabled` — statistics collection (default: enabled)
  * - `deveco_tool_improvement_enabled` — experience-improvement collection,
- *   effective only when a Huawei-provided model is used (default: enabled)
+ *   effective only when a Huawei-provided model is used (default: disabled)
  *
  * The CLI reads these keys lazily (per session collection and per model
  * request), so changes apply without restarting the subprocess.
@@ -42,17 +42,17 @@ object PrivacySettingsStore {
 
     private fun kvFile(): Path = devecoStorageRoot.resolve("state").resolve("kv.json")
 
-    fun readAnalyticsEnabled(): Boolean = readBoolean(ANALYTICS_ENABLED_KEY)
+    fun readAnalyticsEnabled(): Boolean = readBoolean(ANALYTICS_ENABLED_KEY, fallback = true)
 
-    fun readToolImprovementEnabled(): Boolean = readBoolean(TOOL_IMPROVEMENT_ENABLED_KEY)
+    fun readToolImprovementEnabled(): Boolean = readBoolean(TOOL_IMPROVEMENT_ENABLED_KEY, fallback = false)
 
-    /**
-     * Persists both switches. Preserves unrelated keys already present in
-     * `kv.json` (crash-upload flag, language, upgrade state, ...). Throws
-     * [java.io.IOException] so callers can surface the failure.
-     */
     @Throws(java.io.IOException::class)
-    fun write(analyticsEnabled: Boolean, toolImprovementEnabled: Boolean) {
+    fun writeAnalyticsEnabled(enabled: Boolean) = writeSingle(ANALYTICS_ENABLED_KEY, enabled)
+
+    @Throws(java.io.IOException::class)
+    fun writeToolImprovementEnabled(enabled: Boolean) = writeSingle(TOOL_IMPROVEMENT_ENABLED_KEY, enabled)
+
+    private fun writeSingle(key: String, value: Boolean) {
         val file = kvFile()
         Files.createDirectories(file.parent)
         val existing = try {
@@ -66,9 +66,8 @@ object PrivacySettingsStore {
             null
         }
         val merged = buildJsonObject {
-            existing?.forEach { (key, value) -> put(key, value) }
-            put(ANALYTICS_ENABLED_KEY, analyticsEnabled)
-            put(TOOL_IMPROVEMENT_ENABLED_KEY, toolImprovementEnabled)
+            existing?.forEach { (k, v) -> put(k, v) }
+            put(key, value)
         }
         val tmp = file.resolveSibling("kv.json.${ProcessHandle.current().pid()}.tmp")
         Files.writeString(tmp, merged.toString(), StandardCharsets.UTF_8)
@@ -79,16 +78,16 @@ object PrivacySettingsStore {
         }
     }
 
-    private fun readBoolean(key: String): Boolean {
+    private fun readBoolean(key: String, fallback: Boolean): Boolean {
         return try {
             val file = kvFile()
-            if (!Files.isRegularFile(file)) return true
+            if (!Files.isRegularFile(file)) return fallback
             val kv =
-                json.parseToJsonElement(Files.readString(file, StandardCharsets.UTF_8)) as? JsonObject ?: return true
-            (kv[key] as? JsonPrimitive)?.booleanOrNull ?: true
+                json.parseToJsonElement(Files.readString(file, StandardCharsets.UTF_8)) as? JsonObject ?: return fallback
+            (kv[key] as? JsonPrimitive)?.booleanOrNull ?: fallback
         } catch (e: Exception) {
-            log.warn("Failed to read privacy setting $key, using default: ${e.message}")
-            true
+            log.warn("Failed to read privacy setting $key, using default $fallback: ${e.message}")
+            fallback
         }
     }
 }

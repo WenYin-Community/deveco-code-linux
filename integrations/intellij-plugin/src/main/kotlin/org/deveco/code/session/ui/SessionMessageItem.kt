@@ -7,6 +7,7 @@ import org.deveco.code.session.model.ChatItem
 import org.deveco.code.session.model.ChatRole
 import org.deveco.code.session.model.PermissionChoice
 import org.deveco.code.session.ui.messages.AgentMessage
+import org.deveco.code.session.ui.messages.CompactionDividerItem
 import org.deveco.code.session.ui.messages.SystemItem
 import org.deveco.code.session.ui.messages.ThoughtItem
 import org.deveco.code.session.ui.messages.ToolItem
@@ -30,10 +31,15 @@ internal fun SessionMessageItem(
     children: List<ChatItem> = emptyList(),
     showHeader: Boolean = true,
     isChild: Boolean = false,
+    onOverlayLift: ((Boolean) -> Unit)? = null,
 ) {
+    if (item.compactionDivider) {
+        CompactionDividerItem(muted)
+        return
+    }
     when (item.role) {
-        ChatRole.USER -> UserMessage(item, accent, conversationBackground, controller)
-        ChatRole.AGENT -> AgentMessage(item, muted, controller)
+        ChatRole.USER -> UserMessage(item, accent, conversationBackground, controller, onOverlayLift)
+        ChatRole.AGENT -> AgentMessage(item)
         ChatRole.THOUGHT -> ThoughtItem(item, muted, expandedThoughts, preserveScroll, showHeader, showTreeLine = !isChild)
         ChatRole.TOOL -> ToolItem(item, card, muted, expandedTools, preserveScroll, onOpenFile, children, isChild)
         ChatRole.SYSTEM -> SystemItem(

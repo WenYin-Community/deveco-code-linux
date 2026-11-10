@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -52,18 +53,24 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
-import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.fileEditor.impl.FileEditorManagerImpl
+import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.deveco.code.session.SessionStorage
+import org.deveco.code.session.SessionControllerRegistry
 import org.deveco.code.session.SessionTitlePolicy
 import org.deveco.code.session.SESSION_REFRESH_TOPIC
 import org.deveco.code.session.SessionRefreshListener
 import org.deveco.code.session.SessionViewStateStore
 import org.deveco.code.acp.AcpSessionUpdate
-import org.deveco.code.session.editor.SessionVirtualFile
 import org.deveco.code.session.editor.SessionFileEditor
+import org.deveco.code.session.editor.SessionVirtualFile
+import org.deveco.code.session.editor.SessionEditorRegistry
+import org.deveco.code.session.editor.SessionTabPolicy
+import org.deveco.code.session.editor.placeChatTabFirst
+import org.deveco.code.session.editor.revealChatTab
 import org.deveco.code.session.model.FileReference
 import org.deveco.code.sessions.ui.CollapsibleMenu
 import org.deveco.code.sessions.ui.ConfigTab
@@ -73,11 +80,7 @@ import org.deveco.code.sessions.ui.SessionListCallbacks
 import org.deveco.code.sessions.ui.SessionsSection
 import org.deveco.code.sessions.ui.SessionsUiState
 import org.deveco.code.sessions.ui.showRenameDialog
-import org.deveco.code.sidebar.AgentInfo
-import org.deveco.code.sidebar.McpServerInfo
-import org.deveco.code.sidebar.SkillInfo
 import org.jetbrains.jewel.ui.component.Text
-import java.util.concurrent.ConcurrentHashMap
 
 @Composable
 private fun rememberSelectedSessionId(project: Project): MutableState<String?> {
@@ -95,12 +98,25 @@ private fun rememberSelectedSessionId(project: Project): MutableState<String?> {
             object : FileEditorManagerListener {
                 override fun selectionChanged(event: FileEditorManagerEvent) {
                     val sid = (event.newFile as? SessionVirtualFile)?.sessionId
+                    // Splitting the chat closes the cloned editor it created, which empties that
+                    // group and nulls the current selection; the surviving editor still shows the
+                    // conversation, so keep it selected instead of dropping the sidebar highlight.
+                    // A real close detaches the closing editor first, so an attached editor is
+                    // what tells the two apart.
+                    if (event.newFile == null && SessionEditorRegistry.getInstance(project).hasAttachedEditor()) {
+                        return
+                    }
                     state.value = sid
                     if (sid != null) {
                         SessionStorage.setLastActiveSessionId(project, sid)
                         if (sid in SessionStorage.unreadIds(project)) {
                             SessionStorage.markRead(project, sid)
                             project.messageBus.syncPublisher(SESSION_REFRESH_TOPIC).onSessionsChanged()
+                            val mgr = event.manager
+                            val file = SessionEditorRegistry.getInstance(project).chatEditor()?.sessionFile
+                            if (file != null && file.isValid && mgr is FileEditorManagerImpl) {
+                                mgr.updateFilePresentation(file)
+                            }
                         }
                     }
                 }
@@ -121,15 +137,12 @@ private fun rememberSessionActivityTracking(
     onAbnormalChanged: (String) -> Unit,
 ) {
     DisposableEffect(project) {
-        service.setOnRunningChanged {
-            project.runInEdt { onRunningChanged() }
-        }
-        service.setOnSessionDone { id ->
-            project.runInEdt { onSessionDone(id) }
-        }
-        service.setOnAbnormalChanged { id ->
-            project.runInEdt { onAbnormalChanged(id) }
-        }
+        val runningChanged: () -> Unit = { project.runInEdt { onRunningChanged() } }
+        val sessionDone: (String) -> Unit = { id -> project.runInEdt { onSessionDone(id) } }
+        val abnormalChanged: (String) -> Unit = { id -> project.runInEdt { onAbnormalChanged(id) } }
+        service.addOnRunningChanged(runningChanged)
+        service.addOnSessionDone(sessionDone)
+        service.addOnAbnormalChanged(abnormalChanged)
         val listener: (AcpSessionUpdate) -> Unit = { notification ->
             val id = notification.sessionId.value
             when (val u = notification.update) {
@@ -141,9 +154,9 @@ private fun rememberSessionActivityTracking(
         service.addSessionListener(listener)
         onDispose {
             service.removeSessionListener(listener)
-            service.setOnRunningChanged {}
-            service.setOnSessionDone {}
-            service.setOnAbnormalChanged {}
+            service.removeOnRunningChanged(runningChanged)
+            service.removeOnSessionDone(sessionDone)
+            service.removeOnAbnormalChanged(abnormalChanged)
         }
     }
 }
@@ -161,84 +174,19 @@ private fun rememberRefreshTrigger(project: Project, onRefresh: () -> Unit) {
 
 @Composable
 private fun rememberSessionHandlers(
-    project: Project,
     actions: DevEcoSessionActions,
-    ops: SessionOps,
     onStateChange: ((SessionsUiState) -> SessionsUiState) -> Unit,
     onRefresh: () -> Unit,
 ) {
-    DisposableEffect(actions, ops) {
-        actions.newSessionHandler = {
-            val wrappedOnStateChange: ((SessionsUiState) -> SessionsUiState) -> Unit = { f ->
-                onStateChange { current ->
-                    val newState = f(current)
-                    if (!newState.busy) actions.busy = false
-                    newState
-                }
-            }
-            val existingHandled = ops.createNewSession(onStateChange = wrappedOnStateChange, onRefresh = onRefresh)
-            if (existingHandled) {
-                // If the reused session's tab is already open, init didn't consume
-                // pendingFileReference — add it directly to the live controller.
-                val pendingRef = actions.pendingFileReference
-                if (pendingRef != null) {
-                    val mgr = FileEditorManager.getInstance(project)
-                    val editor = mgr.openFiles.filterIsInstance<SessionVirtualFile>()
-                        .flatMap { mgr.getEditors(it).toList() }
-                        .filterIsInstance<SessionFileEditor>()
-                        .firstOrNull()
-                    if (editor != null) {
-                        editor.controller.addFileReference(pendingRef)
-                        actions.pendingFileReference = null
-                    }
-                }
-                actions.busy = false
-            }
-        }
-        actions.stopSessionHandler = { id -> ops.stopSession(id) }
-        actions.jumpToSessionHandler = { sessionId, fileRef ->
-            ops.jumpToSession(
-                sessionId = sessionId,
-                fileRef = fileRef,
-                onStateChange = { f ->
-                    onStateChange { current ->
-                        val newState = f(current)
-                        if (!newState.busy) actions.busy = false
-                        newState
-                    }
-                },
-                onRefresh = onRefresh,
-            )
-        }
-        actions.promptSentHandler = { sessionId, title ->
-            ops.markInteracted(sessionId)
-            ops.refreshEditorIcon(sessionId)
-            if (title != null) {
-                SessionStorage.setCustomTitle(project, sessionId, title)
-                ops.updateEditorTitle(sessionId, title)
-            }
-            val now = java.time.LocalDateTime.now().toString()
-            onStateChange { current ->
-                current.copy(
-                    sessions = current.sessions.map { item ->
-                        if (item.info.sessionId.value == sessionId)
-                            SessionItem(
-                                info = item.info.copy(
-                                    title = title ?: item.info.title,
-                                    updatedAt = now,
-                                ),
-                                favorite = item.favorite,
-                            )
-                        else item
-                    },
-                )
-            }
-        }
+    // The action handlers live at project level (DevEcoSessionActions registers them in
+    // init) so /new works while the tool window is hidden; the sidebar only lends them
+    // its list state while composed, and takes it back on dispose.
+    DisposableEffect(actions) {
+        actions.uiOnStateChange = onStateChange
+        actions.uiOnRefresh = onRefresh
         onDispose {
-            actions.newSessionHandler = null
-            actions.stopSessionHandler = null
-            actions.jumpToSessionHandler = null
-            actions.promptSentHandler = null
+            actions.uiOnStateChange = null
+            actions.uiOnRefresh = null
         }
     }
 }
@@ -253,54 +201,54 @@ fun DevEcoSessions(project: Project) {
 @OptIn(UnstableApi::class)
 private fun AuthenticatedDevEcoSessions(project: Project) {
     val service = remember(project) { project.getService(AcpClientService::class.java) }
-    val viewStateStore = remember(project) { project.getService(SessionViewStateStore::class.java) }
     val actions = remember(project) { DevEcoSessionActions.forProject(project) }
-    val sessionFiles = remember(project) { ConcurrentHashMap<String, SessionVirtualFile>() }
     var state by remember { mutableStateOf(SessionsUiState()) }
     var refreshKey by remember { mutableStateOf(0) }
     var selectedSessionId by rememberSelectedSessionId(project)
     var firstLoad by remember { mutableStateOf(true) }
 
     var menuCollapsed by remember { mutableStateOf(false) }
-    var agents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
-    var mcps by remember { mutableStateOf<List<McpServerInfo>>(emptyList()) }
-    var skills by remember { mutableStateOf<List<SkillInfo>>(emptyList()) }
-    val mcpAllConnected = remember(mcps) { mcps.isNotEmpty() && mcps.all { it.enabled } }
 
     var runTick by remember { mutableStateOf(0) }
     val startedAtMap = remember(runTick, refreshKey) { service.runningSnapshot() }
     val lastDurationMap = remember(runTick, refreshKey) {
         SessionStorage.loadLastDurations(project) + service.lastDurationSnapshot()
     }
-    val runningIds: Set<String> = startedAtMap.keys
+    // Aggregate: a session stays running while it, a background subagent, or a
+    // notice-triggered server-side turn works — its stop action (which the
+    // backend cascades to the subagents) stays reachable the whole time.
+    val runningIds: Set<String> = remember(runTick, refreshKey) {
+        startedAtMap.keys + service.extraRunningIds()
+    }
     val activityMap = remember { mutableStateMapOf<String, String>() }
 
     val panel = DevEcoTheme.panel
     val muted = DevEcoTheme.muted
     val hoverColor = DevEcoTheme.hover
-    val workingDir = remember(project) { project.basePath ?: "" }
-    val ops = remember(project, service, viewStateStore, workingDir) {
-        SessionOps(project, service, viewStateStore, actions, sessionFiles, workingDir)
-    }
+    val ops = actions.ops
+    // A single chat tab is re-bound on every switch, so switching content does not fire
+    // a FileEditorManager selection event; the ops reports the new session explicitly.
+    // Assigned after composition so a state write during composition cannot loop.
+    SideEffect { ops.onSessionActivated = { id -> selectedSessionId = id } }
     val onStateChange: ((SessionsUiState) -> SessionsUiState) -> Unit = { f -> state = f(state) }
     val onRefresh: () -> Unit = { refreshKey++ }
 
     rememberSessionActivityTracking(
         project, service, activityMap,
-        onRunningChanged = { runTick++ },
+        onRunningChanged = {
+            runTick++
+        },
         onSessionDone = { sessionId ->
             runTick++
             onRefresh()
             if (sessionId == selectedSessionId) SessionStorage.markRead(project, sessionId)
             else SessionStorage.markUnread(project, sessionId)
-            ops.refreshEditorIcon(sessionId)
         },
-        onAbnormalChanged = { sessionId ->
-            ops.refreshEditorIcon(sessionId)
+        onAbnormalChanged = { _ ->
         },
     )
     rememberRefreshTrigger(project, onRefresh)
-    rememberSessionHandlers(project, actions, ops, onStateChange, onRefresh)
+    rememberSessionHandlers(actions, onStateChange, onRefresh)
 
     LaunchedEffect(refreshKey) {
         ops.loadSessions(onStateChange)
@@ -318,13 +266,6 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
         }
     }
 
-    LaunchedEffect(refreshKey) {
-        val (a, m, s) = withContext(Dispatchers.IO) { service.loadSidebarData() }
-        agents = a
-        mcps = m
-        skills = s
-    }
-
     Column(
         modifier = Modifier.fillMaxSize().background(panel)
             .pointerInput(Unit) { detectTapGestures(onTap = { selectedSessionId = null }) },
@@ -337,14 +278,11 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
         )
         CollapsibleMenu(
             menuCollapsed = menuCollapsed,
-            agentCount = agents.size,
-            skillCount = skills.size,
-            mcpAllConnected = mcpAllConnected,
             onToggleMenu = { menuCollapsed = !menuCollapsed },
             onToggleTab = { tab ->
                 when (tab) {
-                    ConfigTab.Skill -> ShowSettingsUtil.getInstance().showSettingsDialog(project, MyMessageBundle.message("settings.skill.displayName"))
-                    ConfigTab.Models -> ShowSettingsUtil.getInstance().showSettingsDialog(project, MyMessageBundle.message("settings.models.displayName"))
+                    ConfigTab.Skill -> ShowSettingsUtilImpl.showSettingsDialog(project, "ai.coding.skill", null)
+                    ConfigTab.Models -> ShowSettingsUtilImpl.showSettingsDialog(project, "ai.coding.models", null)
                 }
             },
         )
@@ -370,7 +308,6 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
                 onStop = { session ->
                     val id = session.sessionId.value
                     SessionStorage.markRead(project, id)
-                    ops.refreshEditorIcon(id)
                     ops.stopSession(id)
                 },
                 onStopAndDelete = { session ->
@@ -385,16 +322,18 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
                     val id = session.sessionId.value
                     SessionStorage.markRead(project, id)
                     SessionStorage.markInteracted(project, id)
-                    ops.refreshEditorIcon(id)
                     SessionStorage.archive(project, session)
                     if (id == actions.lastJumpSessionId) {
                         actions.lastJumpSessionId = null
                     }
                     val mgr = FileEditorManager.getInstance(project)
-                    sessionFiles.remove(id)?.let { mgr.closeFile(it) }
+                    // Close the chat tab only if it is the one rendering this session.
                     mgr.openFiles.filterIsInstance<SessionVirtualFile>()
                         .filter { it.sessionId == id }
                         .forEach { mgr.closeFile(it) }
+                    // Archived sessions leave the visible list; drop any cached controller
+                    // so it is not re-attached with stale content later.
+                    SessionControllerRegistry.getInstance(project).evict(id)
                     state = state.copy(
                         sessions = state.sessions.filter { it.info.sessionId.value != id },
                         status = MyMessageBundle.message("toolwindow.deveco.status.connected", state.sessions.size - 1),
@@ -412,7 +351,6 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
                 onToggleFavorite = { session ->
                     val id = session.sessionId.value
                     SessionStorage.markRead(project, id)
-                    ops.refreshEditorIcon(id)
                     val current = state.sessions.firstOrNull { it.info.sessionId.value == id }?.favorite ?: false
                     val nowFavorite = !current
                     SessionStorage.toggleFavorite(project, session, favorite = nowFavorite)
@@ -427,7 +365,6 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
                         state = state.copy(sessions = state.sessions.map { item ->
                             if (item.info.sessionId.value == id) item.copy(info = item.info.copy(title = newName)) else item
                         })
-                        ops.updateEditorTitle(id, newName)
                         onRefresh()
                     }
                 },
@@ -484,30 +421,68 @@ private fun NewSessionRow(
 
 private val log = com.intellij.openapi.diagnostic.Logger.getInstance("DevEcoSessions")
 
-private class SessionOps(
+internal class SessionOps(
     private val project: Project,
     private val service: AcpClientService,
     private val viewStateStore: SessionViewStateStore,
     private val sessionActions: DevEcoSessionActions,
-    private val sessionFiles: ConcurrentHashMap<String, SessionVirtualFile>,
     private val workingDir: String,
 ) {
+    // One chat tab per project: a session switch re-binds this tab instead of opening a
+    // tab per session, so the tab keeps its position (and its placement) across switches.
+    private var sessionFile: SessionVirtualFile? = null
+
+    // Reports the conversation the chat tab now renders; the sidebar cannot rely on
+    // FileEditorManager selection events because the tab itself never changes.
+    var onSessionActivated: ((String) -> Unit)? = null
+
     fun openSession(id: String, title: String, focusEditor: Boolean = true) {
         val mgr = FileEditorManager.getInstance(project)
-        mgr.openFiles.filterIsInstance<SessionVirtualFile>()
-            .filter { it.sessionId != id }
-            .forEach { mgr.closeFile(it) }
         val normalized = if (SessionTitlePolicy.isUntitled(title)) MyMessageBundle.message("session.new.title") else title
-        val file = mgr.openFiles.filterIsInstance<SessionVirtualFile>().firstOrNull { it.sessionId == id }
-            ?: sessionFiles.computeIfAbsent(id) { SessionVirtualFile(it, normalized, project) }
+        val registry = SessionEditorRegistry.getInstance(project)
+        val live = registry.editors()
+        val currentEditor = registry.chatEditor()
+        // The registry is the only reliable "is the chat open" answer: the file editor
+        // manager lists the editors of a single window, so a chat living in another split
+        // or docked window looked closed and was reopened at the end of the tab bar.
+        val file = SessionTabPolicy.pickChatFile(
+            liveFile = currentEditor?.sessionFile,
+            listedFiles = mgr.openFiles.filterIsInstance<SessionVirtualFile>(),
+            rememberedFile = sessionFile,
+        ) ?: SessionVirtualFile(id, normalized, project)
+        sessionFile = file
         if (SessionTitlePolicy.isUntitled(file.getName())) file.updateTitle(normalized)
-        mgr.openFile(file, focusEditor)
+        if (SessionTabPolicy.requiresRebind(file.sessionId, id)) {
+            // Re-binding the open tab is a switch, not a dismiss: cache the outgoing
+            // controller so switching back reuses it instead of replaying the conversation.
+            if (live.isNotEmpty()) {
+                SessionControllerRegistry.getInstance(project).markSwitchCloses(listOf(file.sessionId))
+            }
+            live.forEach { it.switchTo(id) }
+            file.sessionId = id
+        }
+        if (live.isEmpty()) {
+            // Opening (or reopening) the chat always starts at the first tab of the
+            // leftmost group; selecting it later keeps whatever position it has.
+            placeChatTabFirst(project, file, focusEditor)
+        } else {
+            val revealTarget = registry.attachedChatEditor() ?: currentEditor
+            if (revealTarget != null) revealChatTab(project, file, revealTarget, focusEditor)
+        }
+        SessionStorage.setLastActiveSessionId(project, id)
+        if (id in SessionStorage.unreadIds(project)) {
+            SessionStorage.markRead(project, id)
+            if (mgr is FileEditorManagerImpl) mgr.updateFilePresentation(file)
+            project.messageBus.syncPublisher(SESSION_REFRESH_TOPIC).onSessionsChanged()
+        }
+        onSessionActivated?.invoke(id)
     }
 
     /**
-     * Jump to (reuse) an existing session: activate its tab and update the file reference.
-     * If the tab is open, updates the live SessionController directly (fast path, no IO).
-     * If the tab was closed, checks the ACP server and reopens it or creates a new session.
+     * Jump to (reuse) an existing session: bind the chat tab to it and update the file
+     * reference. If the tab is open, updates the live SessionController directly (fast
+     * path, no IO). If the tab was closed, checks the ACP server and reopens it or
+     * creates a new session.
      */
     fun jumpToSession(
         sessionId: String,
@@ -515,17 +490,13 @@ private class SessionOps(
         onStateChange: ((SessionsUiState) -> SessionsUiState) -> Unit,
         onRefresh: () -> Unit,
     ) {
-        val mgr = FileEditorManager.getInstance(project)
-        val file = mgr.openFiles.filterIsInstance<SessionVirtualFile>().firstOrNull { it.sessionId == sessionId }
-            ?: sessionFiles[sessionId]
-        val existingEditor = file?.let { f ->
-            mgr.getEditors(f).filterIsInstance<SessionFileEditor>().firstOrNull()
-        }
+        val existingEditor = SessionEditorRegistry.getInstance(project).chatEditor()
 
         if (existingEditor != null) {
-            // Fast path: tab is open → update controller directly and activate
+            // Fast path: the chat tab is open → bind it to this session and update the
+            // live controller directly (no server round-trip, no IO).
+            openSession(sessionId, MyMessageBundle.message("toolwindow.deveco.new.title"))
             existingEditor.controller.addFileReference(fileRef)
-            mgr.openFile(file, true)
             sessionActions.lastJumpSessionId = sessionId
             return
         }
@@ -550,28 +521,6 @@ private class SessionOps(
                     createNewSession(onStateChange = onStateChange, onRefresh = onRefresh)
                 }
             }
-        }
-    }
-
-    fun updateEditorTitle(sessionId: String, title: String) {
-        val mgr = FileEditorManager.getInstance(project)
-        val file = mgr.openFiles.filterIsInstance<SessionVirtualFile>().firstOrNull { it.sessionId == sessionId }
-            ?: sessionFiles[sessionId]
-            ?: return
-        file.updateTitle(title)
-        if (mgr is com.intellij.openapi.fileEditor.impl.FileEditorManagerImpl) {
-            ApplicationManager.getApplication().invokeLater {
-                if (!file.isValid) return@invokeLater
-                mgr.updateFilePresentation(file)
-            }
-        }
-    }
-
-    fun refreshEditorIcon(sessionId: String) {
-        val file = sessionFiles[sessionId] ?: return
-        ApplicationManager.getApplication().invokeLater {
-            if (!file.isValid) return@invokeLater
-            file.refresh(false, false)
         }
     }
 
@@ -628,10 +577,12 @@ private class SessionOps(
         SessionStorage.deleteLocalSession(project, sessionId)
         project.runInEdt {
             val mgr = FileEditorManager.getInstance(project)
-            sessionFiles.remove(sessionId)?.let { mgr.closeFile(it) }
+            // Close the chat tab only if it is the one rendering the deleted session.
             mgr.openFiles.filterIsInstance<SessionVirtualFile>()
                 .filter { it.sessionId == sessionId }
                 .forEach { mgr.closeFile(it) }
+            // Drop the cached controller so a deleted session is never re-attached.
+            SessionControllerRegistry.getInstance(project).evict(sessionId)
             onStateChange {
                 it.copy(
                     sessions = it.sessions.filter { item -> item.info.sessionId.value != sessionId },

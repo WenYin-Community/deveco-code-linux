@@ -51,9 +51,6 @@ internal fun Chevron(direction: ChevronDirection, size: Dp = 16.dp) {
 @OptIn(ExperimentalComposeUiApi::class)
 fun CollapsibleMenu(
     menuCollapsed: Boolean,
-    agentCount: Int,
-    skillCount: Int,
-    mcpAllConnected: Boolean,
     onToggleMenu: () -> Unit,
     onToggleTab: (ConfigTab) -> Unit,
 ) {

@@ -1,6 +1,5 @@
 package org.deveco.code.session.ui.messages
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
@@ -14,7 +13,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.deveco.code.util.hoverable
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.session.model.ChatItem
@@ -30,13 +28,7 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
-internal val ChevronIconKey = PathIconKey("/icons/chevron.svg", DevEcoTheme::class.java)
-
 internal val DropdownIconKey = PathIconKey("/icons/dropdown.svg", DevEcoTheme::class.java)
-
-internal val SendIconKey = PathIconKey("/icons/send.svg", DevEcoTheme::class.java)
-
-internal val SendBgIconKey = PathIconKey("/icons/button-icon.svg", DevEcoTheme::class.java)
 
 internal val StopIconKey = PathIconKey("/icons/stop.svg", DevEcoTheme::class.java)
 
@@ -51,25 +43,18 @@ internal fun ThoughtItem(
     showTreeLine: Boolean = true,
 ) {
     val expanded = expandedThoughts[item.id] ?: false
-    var hovered by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         if (showHeader) {
             // Header row
             Row(
                 Modifier.fillMaxWidth().clickable {
                     preserveScroll { expandedThoughts[item.id] = !expanded }
-                }.hoverable { hovered = it },
+                },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(14.dp), contentAlignment = Alignment.Center) {
                     Icon(
-                        key = if (expanded) {
-                            AllIconsKeys.General.ChevronDown
-                        } else if (hovered) {
-                            AllIconsKeys.General.ChevronRight
-                        } else {
-                            ChevronIconKey
-                        },
+                        key = if (expanded) AllIconsKeys.General.ChevronDown else AllIconsKeys.General.ChevronRight,
                         contentDescription = if (expanded) "Collapse thinking" else "Expand thinking",
                         modifier = Modifier.size(12.dp),
                     )

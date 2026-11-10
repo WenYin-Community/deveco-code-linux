@@ -38,6 +38,7 @@ import org.jetbrains.jewel.ui.icon.PathIconKey
 private val ExpandIconKey = PathIconKey("/icons/expand-light.svg", DevEcoTheme::class.java)
 private val CollapseIconKey = PathIconKey("/icons/collapse-light.svg", DevEcoTheme::class.java)
 private val CopyIconKey = PathIconKey("/icons/copy-light.svg", DevEcoTheme::class.java)
+private val CheckmarkIconKey = PathIconKey("/icons/checkmark.svg", DevEcoTheme::class.java)
 
 private const val DEFAULT_VISIBLE_LINES = 5
 private const val EXPANDED_VISIBLE_LINES = 10
@@ -158,11 +159,20 @@ internal fun CodeBlockWrapper(
                 },
                 tooltipText = MyMessageBundle.message("codeblock.copy"),
             ) {
-                Icon(
-                    key = CopyIconKey,
-                    contentDescription = MyMessageBundle.message("codeblock.copy"),
-                    modifier = Modifier.size(16.dp),
-                )
+                if (isCopied) {
+                    Icon(
+                        key = CheckmarkIconKey,
+                        contentDescription = MyMessageBundle.message("codeblock.copied"),
+                        tint = DevEcoTheme.green,
+                        modifier = Modifier.size(16.dp),
+                    )
+                } else {
+                    Icon(
+                        key = CopyIconKey,
+                        contentDescription = MyMessageBundle.message("codeblock.copy"),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
             }
 
             if (needsExpand) {
@@ -189,7 +199,7 @@ internal fun CodeBlockWrapper(
     // Reset copy state after delay
     LaunchedEffect(isCopied) {
         if (isCopied) {
-            delay(2000L)
+            delay(COPIED_INDICATOR_MS)
             isCopied = false
         }
     }

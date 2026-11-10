@@ -1,12 +1,17 @@
 package org.deveco.code.acp
 
+import com.intellij.openapi.diagnostic.Logger
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 internal data class ReadRange(val offset: Int?, val limit: Int?)
+
+/** Parsed `<task …>` wrapper around a background subagent notification or receipt. */
+internal data class TaskWrapper(val id: String, val state: String, val body: String)
 
 internal data class LineDiff(val added: Int, val removed: Int) {
     fun isEmpty(): Boolean = added == 0 && removed == 0
@@ -20,7 +25,42 @@ internal data class LineDiff(val added: Int, val removed: Int) {
 }
 
 internal object AcpToolInputParser {
+    private val log = Logger.getInstance(AcpToolInputParser::class.java)
+
     private val PATH_TAG_REGEX = Regex("<path>([^<]+)</path>")
+
+    private val TASK_WRAPPER_REGEX = Regex(
+        "^<task id=\"([^\"]+)\" state=\"([^\"]+)\">\\s*" +
+            "(?:<summary>[\\s\\S]*?</summary>\\s*)?" +
+            "<(task_result|task_error)>([\\s\\S]*?)</\\3>\\s*</task>$",
+    )
+
+    /** Parses the `<task …>` wrapper; [TaskWrapper.id] is the child session id. */
+    fun parseTaskWrapper(text: String): TaskWrapper? {
+        val trimmed = text.trim()
+        val match = TASK_WRAPPER_REGEX.matchEntire(trimmed)
+        // A task-looking text that fails the shape (prose around the wrapper,
+        // mismatched tags) silently disables the running-card override; leave a
+        // trace so field reports are diagnosable.
+        if (match == null && trimmed.contains("<task ")) {
+            log.debug("parseTaskWrapper: task-like text does not match the wrapper shape (len=${trimmed.length})")
+        }
+        return match?.let { TaskWrapper(it.groupValues[1], it.groupValues[2], it.groupValues[4]) }
+    }
+
+    /** Child session id of a background task tool call, from rawOutput metadata. */
+    fun backgroundJobId(rawOutput: Any?): String? {
+        val meta = rawOutput.field("metadata") ?: return null
+        if (meta.field("background")?.asBool() != true) return null
+        return meta.field("jobId")?.asString() ?: meta.field("sessionId")?.asString()
+    }
+
+    /** Parent session id of a background task tool call, from rawOutput metadata. */
+    fun backgroundParentId(rawOutput: Any?): String? {
+        val meta = rawOutput.field("metadata") ?: return null
+        if (meta.field("background")?.asBool() != true) return null
+        return meta.field("parentSessionId")?.asString()
+    }
 
     /**
      * Tries to compute line diff stats for an in-place file-edit tool call.
@@ -127,7 +167,10 @@ internal object AcpToolInputParser {
             else -> null
         }
 
-        return string("file_path") ?: string("filePath") ?: string("path") ?: string("file")
+        // Section 14: create_new_file-style tools carry the target in
+        // pathInProject; without it they offer no path for matching.
+        return string("file_path") ?: string("filePath") ?: string("path")
+            ?: string("file") ?: string("pathInProject")
     }
 
     /**
@@ -158,6 +201,12 @@ internal object AcpToolInputParser {
     private fun Any?.asString(): String? = when (this) {
         is String -> this.takeIf { it.isNotBlank() }
         is JsonPrimitive -> contentOrNull?.takeIf { it.isNotBlank() }
+        else -> null
+    }
+
+    private fun Any?.asBool(): Boolean? = when (this) {
+        is Boolean -> this
+        is JsonPrimitive -> booleanOrNull
         else -> null
     }
 }

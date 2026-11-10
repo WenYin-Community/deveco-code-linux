@@ -47,7 +47,7 @@ internal object CliBinaryExtractor {
             resourceUrl.openStream().use { input ->
                 Files.copy(input, destFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
-            if (entry.startsWith("bin/")) {
+            if (entry.startsWith("bin/") || entry.startsWith("vendor/ripgrep/")) {
                 destFile.setExecutable(true, false)
             }
         }
@@ -60,7 +60,7 @@ internal object CliBinaryExtractor {
             entry.writeText("${cliJs.absolutePath}\n")
         }
 
-        log.info("Extracted bundled CLI to: ${binary.absolutePath} (version=$pluginVersion)")
+        log.debug("Extracted bundled CLI: ${binary.name} (version=$pluginVersion)")
         return binary.absolutePath
     }
 

@@ -53,14 +53,28 @@ object SkillStore {
         // /skill has settled the backend has re-discovered the skills, so the
         // PATCH can finally succeed.
         syncPendingSkillPrefs(project, backend.map { it.name }.toSet())
+        val disk = diskUserSkillEntries(project, service, backend)
+        // The backend may still report user-scope skills (GLOBAL/PROJECT) whose
+        // folders were deleted from disk without a refreshInstance (e.g. the user
+        // removed them manually). filterSlashSkills already sources user skills
+        // from the disk scan only; listAll must cross-check backend user-scope
+        // entries against the on-disk SKILL.md so the Settings page doesn't show
+        // ghost rows for deleted skills. Built-in skills are exempt — their
+        // location may be inside the CLI bundle.
+        val validBackend = backend.filter {
+            it.scope == DevEcoHttpApi.SkillScope.BUILTIN ||
+            runCatching {
+                Files.isRegularFile(Path.of(it.location), LinkOption.NOFOLLOW_LINKS)
+            }.getOrDefault(false)
+        }
         // DevEco Code's /skill de-duplicates skills by name across scopes,
         // preferring the built-in location: a project/global skill whose name
         // collides with a built-in is returned as built-in (built-in location)
         // and never as PROJECT/GLOBAL — so it would vanish from the Settings
         // table. Recover by also scanning the user-managed skill dirs on disk.
-        val entries = backend + diskUserSkillEntries(project, service, backend)
+        val entries = validBackend + disk
         if (log.isDebugEnabled) {
-            log.debug("listAll: backend=${backend.size} disk-merged=${entries.size} " +
+            log.debug("listAll: backend=${backend.size} valid=${validBackend.size} disk-merged=${entries.size} " +
                 backend.joinToString { "${it.name}:${it.scope}" })
         }
         return entries
@@ -280,7 +294,7 @@ object SkillStore {
                 deleteTreeSafe(skillDir)
             } else {
                 runCatching { Files.deleteIfExists(entry.skillMdPath) }.onFailure {
-                    log.warn("Could not delete ${entry.skillMdPath} (locked?)", it)
+                    log.warn("Could not delete ${entry.skillMdPath.parent?.fileName}/${entry.skillMdPath.fileName} (locked?)", it)
                 }
             }
         } catch (e: Exception) {
@@ -517,14 +531,14 @@ object SkillStore {
             override fun visitFile(file: Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
                 if (!Files.isSymbolicLink(file)) {
                     runCatching { Files.deleteIfExists(file) }.onFailure {
-                        log.warn("Could not delete $file (locked?)", it)
+                        log.warn("Could not delete ${file.fileName} (locked?)", it)
                     }
                 }
                 return java.nio.file.FileVisitResult.CONTINUE
             }
             override fun postVisitDirectory(dir: Path, exc: java.io.IOException?): java.nio.file.FileVisitResult {
                 runCatching { Files.deleteIfExists(dir) }.onFailure {
-                    log.warn("Could not delete $dir (locked?)", it)
+                    log.warn("Could not delete ${dir.fileName} (locked?)", it)
                 }
                 return java.nio.file.FileVisitResult.CONTINUE
             }

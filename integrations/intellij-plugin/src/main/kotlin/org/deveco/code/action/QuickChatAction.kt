@@ -5,18 +5,15 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.wm.ToolWindowManager
 import org.deveco.code.MyMessageBundle
-import org.deveco.code.session.editor.SessionFileEditor
-import org.deveco.code.session.editor.SessionVirtualFile
+import org.deveco.code.session.editor.SessionEditorRegistry
+import org.deveco.code.session.editor.revealChatTab
 import org.deveco.code.session.model.FileReference
 import javax.swing.Icon
-
-private const val MAX_SELECTION_LINES = 500
 
 /**
  * Sends selected code to the currently open DevEco Code session tab,
@@ -40,17 +37,7 @@ class QuickChatAction :
         val selection = editor.selectionModel
         val document = editor.document
         val startLine = document.getLineNumber(selection.selectionStart) + 1
-        var endLine = document.getLineNumber(selection.selectionEnd) + 1
-
-        val lineCount = endLine - startLine + 1
-        if (lineCount > MAX_SELECTION_LINES) {
-            Messages.showInfoMessage(
-                project,
-                MyMessageBundle.message("action.jump.to.chat.truncated.message", lineCount, MAX_SELECTION_LINES),
-                MyMessageBundle.message("action.jump.to.chat.truncated.title"),
-            )
-            endLine = startLine + MAX_SELECTION_LINES - 1
-        }
+        val endLine = document.getLineNumber(selection.selectionEnd) + 1
 
         val fileRef = FileReference(
             path = virtualFile.path,
@@ -60,15 +47,10 @@ class QuickChatAction :
 
         activateToolWindow(project)
 
-        val mgr = FileEditorManager.getInstance(project)
-        val existingFile = mgr.openFiles.filterIsInstance<SessionVirtualFile>().firstOrNull()
-        val existingEditor = existingFile?.let { f ->
-            mgr.getEditors(f).filterIsInstance<SessionFileEditor>().firstOrNull()
-        }
-
-        if (existingEditor != null && existingFile != null) {
+        val existingEditor = SessionEditorRegistry.getInstance(project).chatEditor()
+        if (existingEditor != null) {
             existingEditor.controller.addFileReference(fileRef)
-            mgr.openFile(existingFile, true)
+            revealChatTab(project, existingEditor.sessionFile, existingEditor, focusEditor = true)
             return
         }
 

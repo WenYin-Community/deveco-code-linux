@@ -11,11 +11,13 @@ internal fun isSupportedImageFile(name: String): Boolean =
 // MIME prefixes for application/* types that are actually text and can be safely inlined.
 private val TEXT_BASED_MIME_PREFIXES = listOf(
     "application/json",
+    "application/json5",
     "application/xml",
     "application/javascript",
     "application/typescript",
     "application/sql",
     "application/vnd.dart",
+    "application/toml",
 )
 
 // Exact-match MIME set for formats whose IANA type isn't covered by a prefix.
@@ -64,12 +66,58 @@ private val MIME_TYPE_MAP: Map<String, String> = mapOf(
     "py" to "text/x-python",
     "go" to "text/x-go",
     "rs" to "text/x-rust",
+    // C/C++
     "c" to "text/x-c",
     "h" to "text/x-c",
     "cpp" to "text/x-c++",
     "cxx" to "text/x-c++",
     "cc" to "text/x-c++",
     "hpp" to "text/x-c++",
+    "hxx" to "text/x-c++",
+    "c++" to "text/x-c++",
+    "h++" to "text/x-c++",
+    "hh" to "text/x-c++",
+    "tcc" to "text/x-c++",
+    "icc" to "text/x-c++",
+    "ipp" to "text/x-c++",
+    "inl" to "text/x-c",
+    // Objective-C/C++
+    "m" to "text/x-objective-c",
+    "mm" to "text/x-objective-cpp",
+    // C++20 modules
+    "ixx" to "text/x-c++",
+    "mpp" to "text/x-c++",
+    "mxx" to "text/x-c++",
+    // HarmonyOS
+    "ets" to "text/x-arkts",
+    "json5" to "application/json5",
+    // JS/TS module variants
+    "cjs" to "application/javascript",
+    "mjs" to "application/javascript",
+    "cts" to "application/typescript",
+    "mts" to "application/typescript",
+    // Config
+    "env" to "text/plain",
+    "toml" to "application/toml",
+    "ini" to "text/plain",
+    "properties" to "text/plain",
+    "conf" to "text/plain",
+    // Web
+    "scss" to "text/x-scss",
+    "sass" to "text/x-sass",
+    "vue" to "text/x-vue",
+    "mdx" to "text/markdown",
+    // API
+    "graphql" to "text/graphql",
+    "gql" to "text/graphql",
+    "proto" to "text/x-proto",
+    // Scripts
+    "bat" to "text/plain",
+    "cmd" to "text/plain",
+    "ps1" to "text/plain",
+    "zsh" to "text/x-shellscript",
+    "lua" to "text/x-lua",
+    "r" to "text/x-r",
     "rb" to "text/x-ruby",
     "sh" to "text/x-shellscript",
     "bash" to "text/x-shellscript",
@@ -100,7 +148,9 @@ internal fun detectMimeType(name: String): String {
 }
 
 // 所有 agent 支持的文本/代码文件扩展名（从 MIME_TYPE_MAP 中筛选 text-like 类型）。
-// 用于文件选择对话框的 withExtensionFilter，仅显示这些类型的文件。
 internal val SUPPORTED_TEXT_EXTENSIONS: Set<String> = MIME_TYPE_MAP
     .filterValues { isTextLikeMimeType(it) }
     .keys
+
+// 文件选择对话框的扩展名白名单：文本/代码/PDF（PDF 非文本但可被模型直接处理）。
+internal val SUPPORTED_FILE_CHOOSER_EXTENSIONS: Set<String> = SUPPORTED_TEXT_EXTENSIONS + setOf("pdf")

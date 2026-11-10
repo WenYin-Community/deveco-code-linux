@@ -1,5 +1,6 @@
 package org.deveco.code.migration
 
+import kotlinx.serialization.json.put
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -56,7 +57,7 @@ object FlockKit {
             try {
                 release(lockDir, token)
             } catch (e: IOException) {
-                LOG.warn("codegenie migration: ${e.message} (lock dir $lockDir)")
+                LOG.warn("codegenie migration: ${e.message} (lock dir ${lockDir.fileName})")
             }
         }
     }
@@ -207,7 +208,15 @@ object FlockKit {
             deleteTree(lockDir)
             return false
         }
-        val meta = """{"token":"$token","pid":${ProcessHandle.current().pid()},"hostname":"${hostLabel()}","createdAt":"${java.time.Instant.now()}"}"""
+        // Serialize with kotlinx.serialization, not a string template: the
+        // hostname can contain quotes/backslashes that would produce invalid
+        // JSON and break the token regex in release() (lock stuck forever).
+        val meta = kotlinx.serialization.json.buildJsonObject {
+            put("token", token)
+            put("pid", ProcessHandle.current().pid())
+            put("hostname", hostLabel())
+            put("createdAt", java.time.Instant.now().toString())
+        }.toString()
         try {
             Files.writeString(metaPath, meta, java.nio.file.StandardOpenOption.CREATE_NEW)
         } catch (_: Exception) {

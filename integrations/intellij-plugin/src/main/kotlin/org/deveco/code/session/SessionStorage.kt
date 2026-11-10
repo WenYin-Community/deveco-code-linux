@@ -4,6 +4,8 @@ import com.agentclientprotocol.annotations.UnstableApi
 import com.agentclientprotocol.model.SessionInfo
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
+import org.deveco.code.session.model.AttachmentItem
+import org.deveco.code.session.model.FileReference
 import org.deveco.code.util.PluginStateFiles
 
 private val log = Logger.getInstance("SessionStorage")
@@ -24,6 +26,12 @@ object SessionStorage {
     private const val UNREAD_KEY = "deveco.sessions.unread"
     private const val TITLE_KEY = "deveco.sessions.titles"
     private const val LAST_ACTIVE_KEY = "deveco.sessions.lastActive"
+    private const val ATTACHMENTS_KEY = "deveco.sessions.attachments"
+    private const val FILE_REFS_KEY = "deveco.sessions.filerefs"
+    private const val ORIG_TEXT_KEY = "deveco.sessions.origtext"
+    private const val BACKEND_MSG_COUNT_KEY = "deveco.sessions.backendmsgcount"
+    private const val PROMPT_HISTORY_KEY = "deveco.sessions.prompthistory"
+    private const val INTERRUPTED_KEY = "deveco.sessions.interrupted"
     private const val ITEM_SEP = "\n"
     private const val FIELD_SEP = "\t"
     private const val STATE_FILE = "sessions.properties"
@@ -199,13 +207,222 @@ object SessionStorage {
         }
     }
 
+    /**
+     * Saves attachments for a session, keyed by USER message index (0-based).
+     * Each attachment is stored as a line: index|name|path|mimeType|isImage
+     */
+    internal fun saveAttachments(
+        project: Project,
+        sessionId: String,
+        attachmentsByIndex: Map<Int, List<AttachmentItem>>,
+    ) {
+        if (attachmentsByIndex.isEmpty()) {
+            putValue(project, "$ATTACHMENTS_KEY.$sessionId", null)
+            return
+        }
+        val lines = mutableListOf<String>()
+        for ((idx, items) in attachmentsByIndex) {
+            for (item in items) {
+                val safeName = item.name.replace("%", "%25").replace("|", "%7C")
+                val safePath = item.path.replace("%", "%25").replace("|", "%7C")
+                lines.add("$idx|$safeName|$safePath|${item.mimeType}|${item.isImage}")
+            }
+        }
+        putValue(project, "$ATTACHMENTS_KEY.$sessionId", lines.joinToString("\n"))
+    }
+
+    internal fun loadAttachmentsByIndex(project: Project, sessionId: String): Map<Int, List<AttachmentItem>> {
+        val raw = value(project, "$ATTACHMENTS_KEY.$sessionId").orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        val result = mutableMapOf<Int, MutableList<AttachmentItem>>()
+        for (line in raw.split("\n").filter { it.isNotBlank() }) {
+            val parts = line.split("|")
+            if (parts.size < 5) continue
+            val idx = parts[0].toIntOrNull() ?: continue
+            val name = parts[1].replace("%7C", "|").replace("%25", "%")
+            val path = parts[2].replace("%7C", "|").replace("%25", "%")
+            val mimeType = parts[3]
+            val isImage = parts[4].toBoolean()
+            result.getOrPut(idx) {
+                mutableListOf()
+            }.add(AttachmentItem(name = name, path = path, mimeType = mimeType, isImage = isImage))
+        }
+        return result.mapValues { it.value.toList() }.toMap()
+    }
+
+    internal fun removeAttachments(project: Project, sessionId: String) {
+        putValue(project, "$ATTACHMENTS_KEY.$sessionId", null)
+    }
+
+    /**
+     * Saves file references for a session, keyed by USER message index (0-based).
+     * Each file reference is stored as a line: index|path|startLine|endLine
+     */
+    internal fun saveFileRefs(project: Project, sessionId: String, fileRefsByIndex: Map<Int, List<FileReference>>) {
+        if (fileRefsByIndex.isEmpty()) {
+            putValue(project, "$FILE_REFS_KEY.$sessionId", null)
+            return
+        }
+        val lines = mutableListOf<String>()
+        for ((idx, refs) in fileRefsByIndex) {
+            for (ref in refs) {
+                val safePath = ref.path.replace("%", "%25").replace("|", "%7C")
+                lines.add("$idx|$safePath|${ref.startLine}|${ref.endLine}")
+            }
+        }
+        putValue(project, "$FILE_REFS_KEY.$sessionId", lines.joinToString("\n"))
+    }
+
+    internal fun loadFileRefsByIndex(project: Project, sessionId: String): Map<Int, List<FileReference>> {
+        val raw = value(project, "$FILE_REFS_KEY.$sessionId").orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        val result = mutableMapOf<Int, MutableList<FileReference>>()
+        for (line in raw.split("\n").filter { it.isNotBlank() }) {
+            val parts = line.split("|")
+            if (parts.size < 4) continue
+            val idx = parts[0].toIntOrNull() ?: continue
+            val path = parts[1].replace("%7C", "|").replace("%25", "%")
+            val startLine = parts[2].toIntOrNull() ?: 0
+            val endLine = parts[3].toIntOrNull() ?: 0
+            result.getOrPut(idx) {
+                mutableListOf()
+            }.add(FileReference(path = path, startLine = startLine, endLine = endLine))
+        }
+        return result.mapValues { it.value.toList() }.toMap()
+    }
+
+    internal fun removeFileRefs(project: Project, sessionId: String) {
+        putValue(project, "$FILE_REFS_KEY.$sessionId", null)
+    }
+
+    /**
+     * Saves original user message texts, keyed by USER message index (0-based).
+     * Used during replay to replace promptText (which includes file content) with the original text.
+     * Format: index\toriginalText (tab-separated, index is numeric)
+     */
+    internal fun saveOriginalTexts(project: Project, sessionId: String, textsByIndex: Map<Int, String>) {
+        if (textsByIndex.isEmpty()) {
+            putValue(project, "$ORIG_TEXT_KEY.$sessionId", null)
+            return
+        }
+        val lines = textsByIndex.entries.sortedBy { it.key }.map { (idx, text) ->
+            "$idx\t${escapeText(text)}"
+        }
+        putValue(project, "$ORIG_TEXT_KEY.$sessionId", lines.joinToString("\n"))
+    }
+
+    internal fun loadOriginalTexts(project: Project, sessionId: String): Map<Int, String> {
+        val raw = value(project, "$ORIG_TEXT_KEY.$sessionId").orEmpty()
+        if (raw.isBlank()) return emptyMap()
+        val result = mutableMapOf<Int, String>()
+        for (line in raw.split("\n").filter { it.isNotBlank() }) {
+            val tabIdx = line.indexOf("\t")
+            if (tabIdx <= 0) continue
+            val idx = line.substring(0, tabIdx).toIntOrNull() ?: continue
+            val text = unescapeText(line.substring(tabIdx + 1))
+            result[idx] = text
+        }
+        return result.toMap()
+    }
+
+    internal fun removeOriginalTexts(project: Project, sessionId: String) {
+        putValue(project, "$ORIG_TEXT_KEY.$sessionId", null)
+    }
+
+    /**
+     * Persistent counter for user messages actually sent to the backend.
+     * Used as the save key for fileRefs/attachments/origTexts so it matches
+     * the replay index (which only counts backend-replayed messages, not
+     * local-only messages like failed prompts or rejected attachments).
+     */
+    internal fun getBackendUserMsgCount(project: Project, sessionId: String): Int =
+        value(project, "$BACKEND_MSG_COUNT_KEY.$sessionId")?.toIntOrNull() ?: 0
+
+    internal fun setBackendUserMsgCount(project: Project, sessionId: String, count: Int) {
+        putValue(project, "$BACKEND_MSG_COUNT_KEY.$sessionId", count.toString())
+    }
+
+    /**
+     * Saves prompt history entries so Up/Down navigation survives IDE restart.
+     * Each entry is a line: text<TAB>attachments<TAB>fileReferences
+     * Attachments joined by ";;", fields by "|"; file references likewise.
+     * Text/paths escape backslash, newline, pipe, tab to avoid delimiter collision.
+     */
+    internal fun savePromptHistory(project: Project, sessionId: String, history: List<PromptHistoryEntry>) {
+        if (history.isEmpty()) {
+            putValue(project, "$PROMPT_HISTORY_KEY.$sessionId", null)
+            return
+        }
+        val lines = history.map { entry ->
+            val text = escapeDelimiters(entry.text)
+            val atts = entry.attachments.joinToString(";;") { a ->
+                listOf(a.name, a.path, a.mimeType, a.isImage.toString()).joinToString("|") { escapeDelimiters(it) }
+            }
+            val refs = entry.fileReferences.joinToString(";;") { r ->
+                listOf(r.path, r.startLine.toString(), r.endLine.toString()).joinToString("|") { escapeDelimiters(it) }
+            }
+            "$text\t$atts\t$refs"
+        }
+        putValue(project, "$PROMPT_HISTORY_KEY.$sessionId", lines.joinToString("\n"))
+    }
+
+    internal fun loadPromptHistory(project: Project, sessionId: String): List<PromptHistoryEntry> {
+        val raw = value(project, "$PROMPT_HISTORY_KEY.$sessionId").orEmpty()
+        if (raw.isBlank()) return emptyList()
+        val result = mutableListOf<PromptHistoryEntry>()
+        for (line in raw.split("\n").filter { it.isNotBlank() }) {
+            val parts = line.split("\t")
+            if (parts.size < 3) continue
+            val text = unescapeDelimiters(parts[0])
+            val attachments = parts[1].split(";;").filter { it.isNotBlank() }.mapNotNull { att ->
+                val f = att.split("|")
+                if (f.size < 4) return@mapNotNull null
+                AttachmentItem(
+                    name = unescapeDelimiters(f[0]),
+                    path = unescapeDelimiters(f[1]),
+                    mimeType = unescapeDelimiters(f[2]),
+                    isImage = f[3].toBoolean(),
+                )
+            }
+            val fileRefs = parts[2].split(";;").filter { it.isNotBlank() }.mapNotNull { ref ->
+                val f = ref.split("|")
+                if (f.size < 3) return@mapNotNull null
+                FileReference(
+                    path = unescapeDelimiters(f[0]),
+                    startLine = f[1].toIntOrNull() ?: 0,
+                    endLine = f[2].toIntOrNull() ?: 0,
+                )
+            }
+            result.add(PromptHistoryEntry(text, attachments, fileRefs))
+        }
+        return result
+    }
+
+    internal fun loadInterruptedIndices(project: Project, sessionId: String): Set<Int> {
+        val raw = value(project, "$INTERRUPTED_KEY.$sessionId").orEmpty()
+        if (raw.isBlank()) return emptySet()
+        return raw.split(",").mapNotNull { it.trim().toIntOrNull() }.toSet()
+    }
+
+    internal fun saveInterruptedIndices(project: Project, sessionId: String, indices: Set<Int>) {
+        if (indices.isEmpty()) {
+            putValue(project, "$INTERRUPTED_KEY.$sessionId", null)
+        } else {
+            putValue(project, "$INTERRUPTED_KEY.$sessionId", indices.joinToString(","))
+        }
+    }
+
     fun deleteLocalSession(project: Project, sessionId: String) {
         unarchive(project, sessionId)
         removeFavorite(project, sessionId)
         removeCustomTitle(project, sessionId)
         removeNewSession(project, sessionId)
         removeLastDuration(project, sessionId)
-        runCatching { project.getService(SessionMessageStore::class.java)?.clearMessages(sessionId) }
+        removeAttachments(project, sessionId)
+        removeFileRefs(project, sessionId)
+        removeOriginalTexts(project, sessionId)
+        putValue(project, "$INTERRUPTED_KEY.$sessionId", null)
+        putValue(project, "$BACKEND_MSG_COUNT_KEY.$sessionId", null)
         runCatching { project.getService(TokenUsageStore::class.java)?.clearUsage(sessionId) }
         runCatching { project.getService(SessionModelStore::class.java)?.removeSession(sessionId) }
         runCatching { project.getService(SessionViewStateStore::class.java)?.remove(sessionId) }
@@ -273,6 +490,82 @@ object SessionStorage {
                 },
             )
         }
+    }
+
+    // Escape text for pipe/tab-delimited storage: backslash first, then newline.
+    // Prevents literal \n in user text from being confused with escaped newlines.
+    private fun escapeText(s: String): String = s.replace("\\", "\\\\").replace("\n", "\\n")
+
+    // Escape for prompt-history pipe/tab-delimited storage: backslash, newline, pipe, tab.
+    private fun escapeDelimiters(s: String): String =
+        s.replace("\\", "\\\\").replace("\n", "\\n").replace("|", "\\p").replace("\t", "\\t")
+
+    private fun unescapeDelimiters(s: String): String {
+        val sb = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            if (s[i] == '\\' && i + 1 < s.length) {
+                when (s[i + 1]) {
+                    '\\' -> {
+                        sb.append('\\')
+                        i += 2
+                    }
+
+                    'n' -> {
+                        sb.append('\n')
+                        i += 2
+                    }
+
+                    'p' -> {
+                        sb.append('|')
+                        i += 2
+                    }
+
+                    't' -> {
+                        sb.append('\t')
+                        i += 2
+                    }
+
+                    else -> {
+                        sb.append(s[i])
+                        i++
+                    }
+                }
+            } else {
+                sb.append(s[i])
+                i++
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun unescapeText(s: String): String {
+        val sb = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            if (s[i] == '\\' && i + 1 < s.length) {
+                when (s[i + 1]) {
+                    '\\' -> {
+                        sb.append('\\')
+                        i += 2
+                    }
+
+                    'n' -> {
+                        sb.append('\n')
+                        i += 2
+                    }
+
+                    else -> {
+                        sb.append(s[i])
+                        i++
+                    }
+                }
+            } else {
+                sb.append(s[i])
+                i++
+            }
+        }
+        return sb.toString()
     }
 
     @Synchronized

@@ -12,19 +12,25 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.PopupProperties
+import com.intellij.openapi.ui.popup.JBPopup
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.openapi.util.text.StringUtil
+import com.intellij.ui.awt.RelativePoint
+import com.intellij.ui.components.JBLabel
+import com.intellij.util.ui.JBUI
+import java.awt.BorderLayout
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.MouseInfo
+import java.awt.Point
+import java.awt.RenderingHints
+import java.awt.geom.RoundRectangle2D
+import javax.swing.JPanel
 import kotlinx.coroutines.delay
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.session.model.FileReference
@@ -33,18 +39,14 @@ import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 
-private object AboveChipTooltipProvider : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: LayoutDirection,
-        popupContentSize: IntSize,
-    ): IntOffset {
-        val x = anchorBounds.left
-        val y = maxOf(0, anchorBounds.top - popupContentSize.height - 4)
-        return IntOffset(x, y)
-    }
-}
+private const val TOOLTIP_DELAY_MS = 400L
+private const val CURSOR_OFFSET_PX = 12
+private const val TOOLTIP_HEIGHT_PX = 32
+private const val TOOLTIP_CORNER_PX = 4
+// Monospaced 11px cap so a deep path can't make the popup wider than the
+// screen — the platform fits an oversized popup's position but not its size.
+// trimMiddle keeps head and tail, which is what makes a path recognizable.
+private const val TOOLTIP_MAX_CHARS = 90
 
 /**
  * Container for file reference chips with a shared tooltip.
@@ -57,18 +59,45 @@ internal fun FileReferenceChipRow(
     onRemove: (FileReference) -> Unit,
     onClick: (FileReference) -> Unit,
     modifier: Modifier = Modifier,
+    trailing: @Composable FlowRowScope.() -> Unit = {},
 ) {
     var hoveredRef by remember { mutableStateOf<FileReference?>(null) }
-    var hoveredBounds by remember { mutableStateOf(IntRect.Zero) }
     var showTooltip by remember { mutableStateOf(false) }
+    // Plain holder, not mutableStateOf: nothing reads the popup during
+    // composition, so snapshot writes would only cause useless recompositions.
+    val tooltipPopup = remember { arrayOfNulls<JBPopup>(1) }
 
     LaunchedEffect(hoveredRef) {
-        if (hoveredRef != null) {
-            delay(400)
-            showTooltip = hoveredRef != null
-        } else {
-            showTooltip = false
-        }
+        showTooltip = false
+        if (hoveredRef == null) return@LaunchedEffect
+        delay(TOOLTIP_DELAY_MS)
+        showTooltip = true
+    }
+
+    // A chip removed while hovered (X click) leaves the composition without a
+    // hover-exit callback, stranding hoveredRef — drop it so the popup cancels.
+    LaunchedEffect(fileRefs) {
+        val hovered = hoveredRef
+        if (hovered != null && fileRefs.none { it == hovered }) hoveredRef = null
+    }
+
+    // The tooltip lives in the Swing popup layer so long paths can extend past
+    // the tool window panel, which clips everything drawn inside Compose.
+    // It anchors to the cursor position at show time and never follows it.
+    LaunchedEffect(showTooltip, hoveredRef) {
+        tooltipPopup[0]?.cancel()
+        tooltipPopup[0] = null
+        if (!showTooltip || hoveredRef == null) return@LaunchedEffect
+        // getPointerInfo() is null when no screen reports the cursor (headless,
+        // monitor unplugged mid-hover) — skip the tooltip instead of NPE-ing.
+        val cursor = MouseInfo.getPointerInfo()?.location ?: return@LaunchedEffect
+        val popup = createPathTooltip(hoveredRef!!.path)
+        tooltipPopup[0] = popup
+        popup.show(RelativePoint(Point(cursor.x + CURSOR_OFFSET_PX, cursor.y + CURSOR_OFFSET_PX)))
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { tooltipPopup[0]?.cancel() }
     }
 
     FlowRow(
@@ -79,10 +108,9 @@ internal fun FileReferenceChipRow(
         fileRefs.forEach { fileRef ->
             ChipWithHover(
                 fileRef = fileRef,
-                onHover = { isHover, bounds ->
+                onHover = { isHover ->
                     if (isHover) {
                         hoveredRef = fileRef
-                        hoveredBounds = bounds
                     } else if (hoveredRef == fileRef) {
                         hoveredRef = null
                     }
@@ -91,40 +119,48 @@ internal fun FileReferenceChipRow(
                 onClick = { onClick(fileRef) },
             )
         }
+        trailing()
     }
+}
 
-    if (showTooltip && hoveredRef != null) {
-        val tooltipBounds = hoveredBounds
-        val positionProvider = remember(tooltipBounds) {
-            object : PopupPositionProvider {
-                override fun calculatePosition(
-                    anchorBounds: IntRect,
-                    windowSize: IntSize,
-                    layoutDirection: LayoutDirection,
-                    popupContentSize: IntSize,
-                ): IntOffset {
-                    val x = tooltipBounds.left
-                    val y = maxOf(0, tooltipBounds.top - popupContentSize.height - 4)
-                    return IntOffset(x, y)
-                }
-            }
+/**
+ * Swing-layer tooltip so the path can extend beyond the tool window panel,
+ * which clips everything drawn inside the Compose hierarchy.
+ */
+private fun createPathTooltip(path: String): JBPopup {
+    val label = JBLabel(StringUtil.trimMiddle(path, TOOLTIP_MAX_CHARS)).apply {
+        font = Font(Font.MONOSPACED, Font.PLAIN, JBUI.scaleFontSize(11f))
+        foreground = DevEcoTheme.tooltipForeground
+        border = JBUI.Borders.empty(0, 8)
+    }
+    val content = object : JPanel(BorderLayout()) {
+        init {
+            isOpaque = false
+            add(label, BorderLayout.CENTER)
+            preferredSize = JBUI.size(label.preferredSize.width + 1, JBUI.scale(TOOLTIP_HEIGHT_PX))
         }
-        Popup(
-            popupPositionProvider = positionProvider,
-            onDismissRequest = {},
-            properties = PopupProperties(focusable = false),
-        ) {
-            Text(
-                text = hoveredRef!!.path,
-                color = DevEcoTheme.tooltipForeground,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier
-                    .background(DevEcoTheme.tooltipBackground, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            )
+
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.color = DevEcoTheme.tooltipBackground
+            val arc = JBUI.scale(TOOLTIP_CORNER_PX) * 2f
+            g2.fill(RoundRectangle2D.Float(0f, 0f, width.toFloat(), height.toFloat(), arc, arc))
+            g2.dispose()
         }
     }
+    return JBPopupFactory.getInstance()
+        .createComponentPopupBuilder(content, null)
+        .setFocusable(false)
+        .setRequestFocus(false)
+        .setCancelKeyEnabled(false)
+        .setShowShadow(false)
+        .setShowBorder(false)
+        .setMaskProvider { dimension ->
+            val arc = JBUI.scale(TOOLTIP_CORNER_PX) * 2f
+            RoundRectangle2D.Float(0f, 0f, dimension.width.toFloat(), dimension.height.toFloat(), arc, arc)
+        }
+        .createPopup()
 }
 
 /**
@@ -135,7 +171,7 @@ internal fun FileReferenceChipRow(
 @Composable
 private fun ChipWithHover(
     fileRef: FileReference,
-    onHover: (Boolean, IntRect) -> Unit,
+    onHover: (Boolean) -> Unit,
     onRemove: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -144,7 +180,7 @@ private fun ChipWithHover(
     val hovered by interactionSource.collectIsHoveredAsState()
 
     LaunchedEffect(hovered) {
-        onHover(hovered, IntRect.Zero)
+        onHover(hovered)
     }
 
     ChipContent(
@@ -152,13 +188,7 @@ private fun ChipWithHover(
         interactionSource = interactionSource,
         onRemove = onRemove,
         onClick = onClick,
-        modifier = modifier.onGloballyPositioned { coordinates ->
-            if (hovered) {
-                val pos = coordinates.positionInWindow()
-                val size = coordinates.size
-                onHover(true, IntRect(pos.x.toInt(), pos.y.toInt(), pos.x.toInt() + size.width, pos.y.toInt() + size.height))
-            }
-        },
+        modifier = modifier,
     )
 }
 
@@ -174,7 +204,7 @@ private fun ChipContent(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val backgroundColor = Color(0x0DFFFFFF)
+    val backgroundColor = DevEcoTheme.fileRefChipBg
 
     Row(
         modifier = modifier
@@ -218,57 +248,6 @@ private fun ChipContent(
                 contentDescription = "Remove file reference",
                 modifier = Modifier.size(10.dp),
                 tint = Color(0xFF64748B),
-            )
-        }
-    }
-}
-
-/**
- * Standalone chip with its own tooltip. Used in read-only contexts
- * (e.g. message history) where there's no FlowRow-level shared tooltip.
- */
-@Composable
-internal fun FileReferenceChip(
-    fileRef: FileReference,
-    onRemove: () -> Unit,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isHovered by interactionSource.collectIsHoveredAsState()
-    var showTooltip by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isHovered) {
-        if (isHovered) {
-            delay(400)
-            showTooltip = true
-        } else {
-            showTooltip = false
-        }
-    }
-
-    ChipContent(
-        fileRef = fileRef,
-        interactionSource = interactionSource,
-        onRemove = onRemove,
-        onClick = onClick,
-        modifier = modifier,
-    )
-
-    if (showTooltip) {
-        Popup(
-            popupPositionProvider = AboveChipTooltipProvider,
-            onDismissRequest = {},
-            properties = PopupProperties(focusable = false),
-        ) {
-            Text(
-                text = fileRef.path,
-                color = DevEcoTheme.tooltipForeground,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier
-                    .background(DevEcoTheme.tooltipBackground, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
     }

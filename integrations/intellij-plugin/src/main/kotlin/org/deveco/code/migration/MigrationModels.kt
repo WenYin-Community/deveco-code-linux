@@ -62,13 +62,22 @@ data class MigrationInventory(
     /** Scopes whose source side was looked for but not present (report "not found"). */
     val missingScopes: Set<MigrationScope>,
     /**
-     * IDE version directory name that actually carried the detected data
-     * (e.g. "DevEcoStudio6.1"), when it differs from the currently running
-     * IDE version. Null when data comes from the current IDE (or no data).
-     * Used by the prompt bar to annotate the source (方案 B) so the user
-     * understands why the migration prompt appeared.
+     * RAW origin: the bare IDE version number ("6.1") of the codegenie root
+     * that carried the global skills. Skills and MCP pick roots independently
+     * (newest-first per data kind), so the two can differ. Null when that
+     * kind contributed no data. Whether and how this is displayed is a
+     * RENDERING-LAYER decision: a version equal to the running IDE's is not
+     * annotated on its own, but it is still named in the paired "both"
+     * template once the OTHER kind is foreign.
      */
-    val sourceVersion: String? = null,
+    val skillsSourceVersion: String? = null,
+    /**
+     * Same RAW origin as [skillsSourceVersion] for the global MCP root. Only
+     * set when that root actually contributed items or read failures — a root
+     * picked merely because DB files exist (zero rows, zero failures) must
+     * not claim to be a data source.
+     */
+    val mcpSourceVersion: String? = null,
 ) {
     // mcpFailures counts as "global source present": the user HAS CodeGenie
     // MCP data that could not be read — the prompt must surface that, not

@@ -18,7 +18,7 @@ SDK 来源由构建宿主和所选平台依赖处理；`cliTarget` 是最终插�
 
 ## 命令
 
-在 integrations/deveco-code 下执行。Windows 用 `gradlew.bat` 替换 `./gradlew`，并按 PowerShell/CMD 的规则换行。
+在 integrations/intellij-plugin 下执行。Windows 用 `gradlew.bat` 替换 `./gradlew`，并按 PowerShell/CMD 的规则换行。
 
 ```sh
 # 只下载/准备 243 SDK，不构建后端、不启动 IDE
@@ -65,16 +65,26 @@ Linux 无法从宿主系统自动推断最终插件资源的操作系统和 CPU�
 
 也可以设置 `IDE_SDK_PATH_243` 和 `IDE_SDK_PATH_261`。聚合任务会清除子构建继承的通用 `IDE_SDK_PATH` 和 `DEVECO_STUDIO_HOME`，避免同一 SDK 被错误用于两个 IDE 版本。
 
+需要一次只构建一个底座时，传 `-Pplatform=243` 或 `-Pplatform=261`，聚合任务只执行该底座的三个包，并先清空 `build/compatibility-packages`：
+
+```sh
+./gradlew --no-daemon buildCompatibilityPackages \
+  -Pversion=1.0.0-243.build1 \
+  -Pplatform=243
+```
+
+发布流水线按底座分两次运行，各自传不同的版本号。单底座产物的文件名不再带 243/261 段（版本号已能区分），例如 `deveco-code-core-plugin-<version>-macos-arm64.zip`；只有一次构建两个底座时才保留平台段。
+
 汇总产物位于：
 
 ```text
 build/compatibility-packages/
-  deveco-code-jetbrains-plugin-<version>-243-macos-arm64.zip
-  deveco-code-jetbrains-plugin-<version>-261-macos-arm64.zip
-  deveco-code-jetbrains-plugin-<version>-243-macos-x64.zip
-  deveco-code-jetbrains-plugin-<version>-261-macos-x64.zip
-  deveco-code-jetbrains-plugin-<version>-243-windows-x64.zip
-  deveco-code-jetbrains-plugin-<version>-261-windows-x64.zip
+  deveco-code-core-plugin-<version>-243-macos-arm64.zip
+  deveco-code-core-plugin-<version>-261-macos-arm64.zip
+  deveco-code-core-plugin-<version>-243-macos-x64.zip
+  deveco-code-core-plugin-<version>-261-macos-x64.zip
+  deveco-code-core-plugin-<version>-243-windows-x64.zip
+  deveco-code-core-plugin-<version>-261-windows-x64.zip
 ```
 
 为兼容已有流水线，Linux 上调用 `buildPlugin`、`buildPlatformPackages`、`build` 或 `assemble` 且不传 `cliTarget` 时，会自动转为上述 `buildCompatibilityPackages` 六包构建。传入 `cliTarget` 后仍只构建指定的单包。其他任务（例如 `help`、`tasks`、格式检查）无需 `cliTarget`，也不会触发打包。

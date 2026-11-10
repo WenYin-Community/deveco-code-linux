@@ -138,7 +138,7 @@ internal fun SessionsSection(
             if (state.busy && state.sessions.isEmpty()) {
                 SessionLoadingState(state.status, muted)
             } else if (state.sessions.isEmpty() && state.error == null) {
-                SessionEmptyState(muted)
+                SessionEmptyState()
             } else {
                 SessionListContent(
                     favoriteSessions, newSessions, otherSessions, titleFg, muted,
@@ -158,21 +158,13 @@ private fun SessionLoadingState(status: String, muted: Color) {
 }
 
 @Composable
-private fun SessionEmptyState(muted: Color) {
+private fun SessionEmptyState() {
     Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                MyMessageBundle.message("toolwindow.deveco.empty"),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                MyMessageBundle.message("sessions.empty.hint"),
-                color = muted,
-                fontSize = 12.sp,
-            )
-        }
+        Text(
+            MyMessageBundle.message("toolwindow.deveco.empty"),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
@@ -279,8 +271,8 @@ private fun SessionListItem(
         state = SessionCardState(
             item = item, isRunning = running, isNew = isNew, isNormal = isNormal, isUnread = isUnread,
             startedAt = displayData.startedAtMap[id], activity = displayData.activityMap[id],
-            selected = interaction.selectedSessionId == id && interaction.menuOpenId == null,
             hovered = (interaction.hoveredId == id && interaction.menuOpenId == null) || interaction.menuOpenId == id,
+            selected = interaction.selectedSessionId == id,
             lastDuration = displayData.lastDurationMap[id],
         ),
         colors = colors,
