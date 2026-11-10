@@ -39,8 +39,18 @@ anyway; they arrive with upstream syncs rather than through `git add`.
 
 Built-in and user skills live in **separate, non-overlapping directories**, and
 the location is part of the contract: a skill placed in the wrong directory
-silently stops working at the next upgrade. The only source of built-in skills
-is `packages/opencode/resources/skills/`.
+silently stops working at the next upgrade.
+
+Built-in skills have two sources, merged at build time into one embedded map:
+
+- `packages/opencode/resources/skills/` — skills this repository owns.
+- `<deveco-cli>-common/skills/` — skills the CLI package ships, under either the
+  `@deveco/` or `@deveco-test/` scope. Only the names in `CLI_BUNDLED_SKILLS`
+  (`packages/opencode/script/skill-sources.ts`) are read.
+
+The merged content is fingerprinted into `DEVECO_DEFAULT_SKILLS_HASH`, so the
+runtime `.version` marker is `${version}+${hash}` and a same-version rebuild with
+changed skill content still re-extracts.
 
 See [docs/skill-authoring.md](docs/skill-authoring.md) for the directory layout
 and the authoring convention.

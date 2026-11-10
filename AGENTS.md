@@ -157,8 +157,10 @@ const table = sqliteTable("session", {
 
 Skills come in two modes. Decide by intent:
 
-- **Built-in** — the project maintains it and ships it to every user. Source
-  lives in `packages/opencode/resources/skills/`.
+- **Built-in** — ships to every user. Two sources, merged at build time:
+  `packages/opencode/resources/skills/` (this repo) and the CLI package's
+  `skills/` (either `@deveco/` or `@deveco-test/` scope), restricted to
+  `CLI_BUNDLED_SKILLS` in `packages/opencode/script/skill-sources.ts`.
 - **User** — personal or temporary. Lives in a user directory: global
   `~/.config/deveco/skills/`, or project `.deveco/skills/`.
 

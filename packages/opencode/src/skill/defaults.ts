@@ -8,6 +8,7 @@ import { Global } from "@opencode-ai/core/global"
 type EmbeddedSkillFile = string | { encoding: "base64"; content: string }
 
 declare const DEVECO_DEFAULT_SKILLS: Record<string, Record<string, EmbeddedSkillFile>> | undefined
+declare const DEVECO_DEFAULT_SKILLS_HASH: string | undefined
 
 /**
  * Dev-mode fallback: read skills from resources/skills/ on disk when the
@@ -40,10 +41,25 @@ async function walk(root: string, current: string, result: Record<string, string
   }
 }
 
+function embeddedSkillsHash(): string | undefined {
+  // `typeof` is the only safe read: the define is absent under `bun dev` and in tests.
+  return typeof DEVECO_DEFAULT_SKILLS_HASH === "string" ? DEVECO_DEFAULT_SKILLS_HASH : undefined
+}
+
+/**
+ * Content-aware `.version` marker: a same-version rebuild (hotfix, nightly) must
+ * refresh the extracted skills when their embedded content changed. Dev has no
+ * injected hash and keeps the plain version, so "local" always re-extracts.
+ */
+export function versionMarker(version: string, hash: string | undefined = embeddedSkillsHash()): string {
+  return hash === undefined ? version : `${version}+${hash}`
+}
+
 export namespace Defaults {
   export const ensure = Effect.fn("Skill.Defaults.ensure")(function* (version: string, fsys: FSUtil.Interface) {
     const dir = path.join(Global.Path.data, "skills")
     const versionFile = path.join(dir, ".version")
+    const marker = versionMarker(version)
 
     // Version match check - skip if already extracted for this version
     const current = yield* Effect.gen(function* () {
@@ -52,7 +68,7 @@ export namespace Defaults {
       const buf = yield* fsys.readFile(versionFile)
       return new TextDecoder().decode(buf)
     }).pipe(Effect.catch(() => Effect.succeed("")))
-    if (current === version && current !== "local") {
+    if (current === marker && current !== "local") {
       return dir
     }
 
@@ -123,7 +139,7 @@ export namespace Defaults {
     }
 
     // Write version marker
-    yield* fsys.writeWithDirs(versionFile, version)
+    yield* fsys.writeWithDirs(versionFile, marker)
 
     return dir
   })

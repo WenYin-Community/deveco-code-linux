@@ -1,8 +1,8 @@
-import { describe, expect, beforeEach } from "bun:test"
+import { describe, expect, beforeEach, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "node:path"
 import fs from "fs/promises"
-import { Defaults } from "../../src/skill/defaults"
+import { Defaults, versionMarker } from "../../src/skill/defaults"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Global } from "@opencode-ai/core/global"
 import { testEffect } from "../lib/effect"
@@ -481,4 +481,14 @@ describe("return value", () => {
       expect(result).toBe(skillsDir)
     }),
   )
+})
+
+describe("versionMarker", () => {
+  test("falls back to the plain version when no hash is embedded", () => {
+    expect(versionMarker("1.0.0")).toBe("1.0.0")
+  })
+
+  test("appends the content hash when one is embedded", () => {
+    expect(versionMarker("1.0.0", "abc123def456")).toBe("1.0.0+abc123def456")
+  })
 })

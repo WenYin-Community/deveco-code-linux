@@ -23,6 +23,16 @@ import {
   type DevecoCliVendorTarget,
 } from "./vendor-deveco-cli"
 import { copyHomegraphRuntime } from "./vendor-homegraph.ts"
+import {
+  CLI_BUNDLED_SKILLS,
+  digestSkill,
+  digestSkills,
+  loadCliSkills,
+  loadResourceSkills,
+  mergeSkills,
+  validateSkills,
+  type SkillsData,
+} from "./skill-sources"
 
 const require = createRequire(import.meta.url)
 
@@ -67,30 +77,30 @@ const migrations = await Promise.all(
 )
 console.log(`Loaded ${migrations.length} migrations`)
 
-// Load default skills from resources/skills/
-// Structure: { skillName: { relPath: content } } — must match defaults.ts extraction
-const defaultSkillsDir = path.join(dir, "resources/skills")
-const defaultSkillsData: Record<string, Record<string, string>> = {}
-if (fs.existsSync(defaultSkillsDir)) {
-  for (const entry of await fs.promises.readdir(defaultSkillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue
-    const files: Record<string, string> = {}
-    const skillPath = path.join(defaultSkillsDir, entry.name)
-    await (async function recurse(d: string) {
-      for (const e of await fs.promises.readdir(d, { withFileTypes: true })) {
-        if (e.isSymbolicLink()) continue
-        const full = path.join(d, e.name)
-        if (e.isDirectory()) {
-          await recurse(full)
-        } else if (e.name !== ".DS_Store") {
-          files[path.relative(skillPath, full).replaceAll("\\", "/")] = await Bun.file(full).text()
-        }
-      }
-    })(skillPath)
-    defaultSkillsData[entry.name] = files
-  }
+// Load default skills from resources/skills/ and the installed CLI package.
+// Structure: { skillName: { relPath: content } } — must match defaults.ts extraction.
+// The CLI package is the source of truth for CLI_BUNDLED_SKILLS only; repository
+// skills it also ships (REPO_OWNED_SKILLS, e.g. `deveco-cli`) keep the repo copy.
+const localSkills = await loadResourceSkills(path.join(dir, "resources/skills"))
+const cliSkills = await loadCliSkills(dir)
+const defaultSkillsData: SkillsData = mergeSkills(localSkills, cliSkills.skills)
+
+const skillProblems = validateSkills(defaultSkillsData, CLI_BUNDLED_SKILLS)
+if (skillProblems.length > 0) {
+  console.error(`ERROR: invalid default skills:\n${skillProblems.map((p) => `  - ${p}`).join("\n")}`)
+  process.exit(1)
 }
-console.log(`Loaded ${Object.keys(defaultSkillsData).length} default skills`)
+
+const defaultSkillsHash = digestSkills(defaultSkillsData)
+const skillDigests = Object.keys(defaultSkillsData)
+  .sort()
+  .map((name) => `${name}=${digestSkill(defaultSkillsData[name])}`)
+  .join(" ")
+console.log(
+  `Loaded ${Object.keys(defaultSkillsData).length} default skills ` +
+    `(${Object.keys(localSkills).length} local + ${Object.keys(cliSkills.skills).length} ${cliSkills.packageName}@${cliSkills.version}, ` +
+    `hash=${defaultSkillsHash}) [${skillDigests}]`,
+)
 
 // Load default spec resources
 //
@@ -342,6 +352,7 @@ for (const item of targets) {
       DEVECO_SCOPE: `'${scope}'`,
       DEVECO_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       DEVECO_DEFAULT_SKILLS: JSON.stringify(defaultSkillsData),
+      DEVECO_DEFAULT_SKILLS_HASH: JSON.stringify(defaultSkillsHash),
       DEVECO_DEFAULT_SPEC_RESOURCES: JSON.stringify(defaultSpecData),
       DEVECO_SKIP_AGREEMENT: skipAgreementFlag ? "true" : "false",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),

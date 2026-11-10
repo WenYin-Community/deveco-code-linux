@@ -8,7 +8,8 @@ Decide by intent, not by convenience:
 
 | Kind | Source you edit | Runtime location | Use for |
 | --- | --- | --- | --- |
-| **Built-in** | `packages/opencode/resources/skills/<name>/SKILL.md` — the project owns it | `~/.local/share/deveco/skills/<name>/`, extracted from the binary at startup | Skills that must evolve with releases, be reviewed in a PR, or reach every user |
+| **Built-in (repo)** | `packages/opencode/resources/skills/<name>/SKILL.md` — the project owns it | `~/.local/share/deveco/skills/<name>/`, extracted from the binary at startup | Skills that must evolve with releases, be reviewed in a PR, or reach every user |
+| **Built-in (CLI)** | `@deveco/deveco-cli-common/skills/<name>/` — the CLI team owns it | Same directory | Skills the CLI ships and updates with its own release |
 | **User (global)** | `~/.config/deveco/skills/<name>/SKILL.md` — you own it | The same directory | Personal skills for one machine |
 | **User (project)** | `<repo>/.deveco/skills/<name>/SKILL.md` — you own it | The same directory | Skills that travel with a repository |
 
@@ -48,11 +49,29 @@ never loads.
 
 ## How built-in skills are delivered
 
-`packages/opencode/resources/skills/` is the **source of truth**. Nothing else can
-produce a built-in skill.
+Two sources are merged at build time; a CLI copy wins over a repository copy of
+the same name:
 
-- Build-time embedding: `packages/opencode/script/build.ts` → `DEVECO_DEFAULT_SKILLS`
+1. `packages/opencode/resources/skills/` — this repository.
+2. `<deveco-cli>-common/skills/` — the installed CLI package, restricted to the
+   names in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`).
+   A whitelisted skill missing from the package fails the build.
+
+The CLI publishes under both `@deveco/` (releases) and `@deveco-test/`
+(pre-release builds). The shell name pinned in `packages/opencode/package.json`
+is tried first; the other scope is a fallback, so switching a test build needs no
+code change. The package is resolved through the shell first because
+`deveco-cli-common` is its `optionalDependency` and package managers may hoist it.
+
+- Build-time embedding: `packages/opencode/script/skill-sources.ts` (used by
+  `build.ts`) → `DEVECO_DEFAULT_SKILLS` + `DEVECO_DEFAULT_SKILLS_HASH`
 - Runtime extraction: `packages/opencode/src/skill/defaults.ts`
+
+The hash covers the merged content, so the runtime marker is
+`${version}+${hash}`: a same-version rebuild whose skill content changed still
+re-extracts. Under `bun dev` there is no injected hash, the marker stays `local`,
+and only `resources/skills/` is read — CLI-sourced skills are absent by design.
+Link them into `.deveco/skills/` when you need them while developing.
 
 ## Adding a built-in skill
 
@@ -61,7 +80,9 @@ a new skill automatically, but several **hand-maintained lists** do not — upda
 all of them:
 
 1. **`packages/opencode/resources/skills/<name>/SKILL.md`** — the skill itself
-   (see format below).
+   (see format below). For a CLI-sourced skill, add its name to
+   `CLI_BUNDLED_SKILLS` in `packages/opencode/script/skill-sources.ts` instead
+   and bump `@deveco/deveco-cli` to a release that ships it.
 2. **`packages/opencode/src/tool/skill.ts`** — `DevEcoRequiredSkills`. Add the
    skill **only if** it needs the HarmonyOS SDK; membership makes the skill fail
    to load when `DEVECO_HOME` is unset.
@@ -80,7 +101,9 @@ Verify:
 cd packages/opencode && bun run build
 ```
 
-The log must print `Loaded N default skills` with N one higher than before.
+The log must print `Loaded N default skills (L local + C @<scope>/deveco-cli-common@<version>, hash=…)`
+with N unchanged — the two bundled skills moved from the repository to the CLI
+package, so the total stays the same — plus a per-skill digest.
 
 > **These lists have drifted before.** The runtime handles a rename by rebuilding
 > the directory wholesale, but the lists above are not rebuilt — a rename or a
