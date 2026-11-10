@@ -49,6 +49,42 @@ describe("devecocli proxy router", () => {
     expect(result.stdout).toBe("raw")
   })
 
+  test.each(["log", "run", "build"])("handles trailing help before enhancing %s", async (command) => {
+    const cli = runner({ [`${command} --help`]: { stdout: `Usage: devecocli ${command} [options]\n` } })
+    const result = await executeDevecoCliProxy([command, "help"], "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([[command, "--help"]])
+    expect(result).toEqual({ stdout: `Usage: devecocli ${command} [options]\n`, stderr: "", exitCode: 0 })
+  })
+
+  test("handles trailing help before validating log tail", async () => {
+    const args = ["log", "--tail", "0", "--help"]
+    const cli = runner({ [args.join(" ")]: { stdout: "Usage: devecocli log [options]\n" } })
+    const result = await executeDevecoCliProxy(["log", "--tail", "0", "help"], "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("Usage:")
+  })
+
+  test("preserves a non-trailing help search keyword", async () => {
+    const args = ["docs", "search", "help", "extra"]
+    const cli = runner({ [args.join(" ")]: { stdout: "search results" } })
+    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result.stdout).toBe("search results")
+  })
+
+  test("adds the proxy merge option to trailing create help", async () => {
+    const cli = runner({ "create --help": { stdout: "Usage: devecocli create [options]\n" } })
+    const result = await executeDevecoCliProxy(["create", "--merge", "help"], "/project", cli.run)
+
+    expect(cli.calls).toEqual([["create", "--help"]])
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain("--merge")
+  })
+
   test("intercepts docs search and forwards its arguments unchanged", async () => {
     const args = ["docs", "search", "@State", "lifecycle", "--format", "json"]
     const cli = runner({ "docs search @State lifecycle --format json": { stdout: "[]" } })

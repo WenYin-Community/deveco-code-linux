@@ -66,6 +66,9 @@ export async function executeDevecoCliProxy(
   runner: CliRunner = runBundledDevecoCli,
   dependencies: ProxyDependencies = {},
 ): Promise<CliResult & { fullOutput?: string }> {
+  // The native CLI rewrites trailing `help` to `--help` before parsing commands.
+  if (args.length >= 2 && args.at(-1) === "help") args = [...args.slice(0, -1), "--help"]
+
   if (args[0] === "log" && args[1] === "clear") {
     return executeLogClear(args.slice(2), cwd, runner, dependencies)
   }
@@ -517,9 +520,7 @@ async function waitEmulatorReady(name: string, before: Device[]): Promise<string
   const known = new Set(before.flatMap((device) => [device.serial, device.name]).filter((v): v is string => Boolean(v)))
   const deadline = Date.now() + EMULATOR_READY_TIMEOUT_MS
   while (Date.now() < deadline) {
-    const fresh = (await probeHdcTargets(hdc, EMULATOR_READY_PROBE_TIMEOUT_MS)).find(
-      (serial) => !known.has(serial),
-    )
+    const fresh = (await probeHdcTargets(hdc, EMULATOR_READY_PROBE_TIMEOUT_MS)).find((serial) => !known.has(serial))
     if (fresh) return `Emulator "${name}" is reachable on hdc target ${fresh}.`
     await Bun.sleep(EMULATOR_READY_POLL_INTERVAL_MS)
   }

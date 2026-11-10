@@ -204,14 +204,15 @@ async function installDevecoCliVendor(destRoot: string, version: string, target:
   }
 
   // Ensure optionalDependencies declared for this package that match target naming are present when possible.
+  const installedVersion = await readPackageVersion(cliRoot)
   const optionalNames = (await readOptionalDependencyNames(cliRoot)).filter((name) => matchesVendorTarget(name, target))
   for (const name of optionalNames) {
     if (hasPackage(destRoot, name)) continue
     // Best-effort: install the exact release version without touching the vendor manifest, so
     // package.json only lists what the primary install resolved. Ignore unrelated failures.
     try {
-      console.log(`  Ensuring optional ${name}@${version} for ${target.os}-${target.arch}...`)
-      await $`bun add --production --no-save --os=${target.os} --cpu=${target.arch} ${registryArgs()} ${name}@${version}`.cwd(
+      console.log(`  Ensuring optional ${name}@${installedVersion} for ${target.os}-${target.arch}...`)
+      await $`bun add --production --no-save --os=${target.os} --cpu=${target.arch} ${registryArgs()} ${name}@${installedVersion}`.cwd(
         destRoot,
       )
     } catch (error) {
@@ -294,9 +295,7 @@ export function resolveDevecoCliVersionFromPackageJson(pkg: { dependencies?: Rec
   if (!raw) {
     throw new Error(`Missing dependency "${PACKAGE_NAME}" in package.json`)
   }
-  // Support "1.3.4" and "npm:@deveco/deveco-cli@1.3.4"
-  const npmAlias = raw.match(/@([^@]+)$/)
-  if (raw.startsWith("npm:") && npmAlias) return npmAlias[1]
+  // Preserve npm aliases so vendoring installs the selected package as well as its version.
   return raw
 }
 
