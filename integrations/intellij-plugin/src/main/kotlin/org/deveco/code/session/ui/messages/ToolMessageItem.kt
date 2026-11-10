@@ -27,6 +27,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agentclientprotocol.model.ToolCallStatus
@@ -534,13 +535,20 @@ internal fun ToolItem(
                                 .fillMaxWidth(),
                         ) {
                             Box(Modifier.padding(start = 16.dp)) {
-                                FileTreeList(
-                                    filePaths = filePaths,
-                                    onFileClick = { path ->
-                                        val syntheticItem = item.copy(toolPath = path)
-                                        onOpenFile(syntheticItem)
-                                    },
-                                )
+                                val sections = remember(item.id, item.text) {
+                                    FileTreeParser.parseSearchSections(processedText)
+                                }
+                                if (item.toolKind == ToolKind.SEARCH && sections.sections.isNotEmpty()) {
+                                    SearchSectionsList(sections, item, onOpenFile)
+                                } else {
+                                    FileTreeList(
+                                        filePaths = filePaths,
+                                        onFileClick = { path ->
+                                            val syntheticItem = item.copy(toolPath = path)
+                                            onOpenFile(syntheticItem)
+                                        },
+                                    )
+                                }
                             }
                         }
                     } else if (leafReadPath != null) {
@@ -1245,6 +1253,134 @@ private fun SearchToolOutput(item: ChatItem) {
 }
 
 // ── THINK — bordered card with markdown body ───────────────────────────────
+
+/**
+ * SEARCH results as per-file sections: one header row per grep `<path>:` header whose
+ * chevron expands the verbatim `Line N: <text>` match lines. Clicking the header opens
+ * the file at its first match; clicking a match line opens the file at that line.
+ */
+@Composable
+private fun SearchSectionsList(
+    sections: SearchSections,
+    item: ChatItem,
+    onOpenFile: (ChatItem) -> Unit,
+) {
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val previewedFilePath = LocalPreviewedFilePath.current
+    Column(Modifier.fillMaxWidth()) {
+        sections.sections.forEach { section ->
+            val isExpanded = expanded[section.path] ?: false
+            SearchSectionHeader(
+                section = section,
+                isExpanded = isExpanded,
+                isPreviewed = previewedFilePath == section.path,
+                onToggle = { expanded[section.path] = !isExpanded },
+                onOpen = {
+                    val firstLine = section.matches.firstOrNull()?.line
+                    onOpenFile(item.copy(toolPath = section.path, toolLine = firstLine))
+                },
+            )
+            if (isExpanded) {
+                section.matches.forEach { match ->
+                    SearchMatchRow(
+                        match = match,
+                        onClick = {
+                            onOpenFile(item.copy(toolPath = section.path, toolLine = match.line))
+                        },
+                    )
+                }
+            }
+        }
+        sections.note?.let { note ->
+            Text(
+                text = note,
+                color = DevEcoTheme.muted,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(start = 6.dp, top = 2.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchSectionHeader(
+    section: SearchSection,
+    isExpanded: Boolean,
+    isPreviewed: Boolean,
+    onToggle: () -> Unit,
+    onOpen: () -> Unit,
+) {
+    var isHovered by remember { mutableStateOf(false) }
+    val backgroundColor = when {
+        isPreviewed -> DevEcoTheme.previewedFileBg
+        isHovered -> Color(0x33FFFFFF)
+        else -> Color.Transparent
+    }
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(backgroundColor)
+            .hoverable { isHovered = it }
+            .clickable { onOpen() }
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(12.dp), contentAlignment = Alignment.Center) {
+            if (section.matches.isNotEmpty()) {
+                Icon(
+                    key = if (isExpanded) AllIconsKeys.General.ChevronDown else AllIconsKeys.General.ChevronRight,
+                    contentDescription = if (isExpanded) "Collapse matches" else "Expand matches",
+                    modifier = Modifier
+                        .size(12.dp)
+                        .clickable { onToggle() },
+                    tint = DevEcoTheme.muted,
+                )
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        FileIcon(filePath = section.path)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = FileTreeParser.normalizePath(section.path),
+            color = if (isPreviewed) DevEcoTheme.previewedFileFg else DevEcoTheme.muted,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (section.matches.isNotEmpty()) {
+            Text(
+                text = "(${section.matches.size})",
+                color = DevEcoTheme.muted,
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchMatchRow(match: SearchMatch, onClick: () -> Unit) {
+    var isHovered by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (isHovered) Color(0x33FFFFFF) else Color.Transparent)
+            .hoverable { isHovered = it }
+            .clickable(onClick = onClick)
+            .padding(start = 26.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Line ${match.line}: ${match.text}",
+            color = DevEcoTheme.muted,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
 
 @Composable
 private fun ThinkToolOutput(item: ChatItem) {

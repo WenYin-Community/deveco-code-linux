@@ -29,9 +29,14 @@ fun Project.runInEdt(action: () -> Unit) {
  * Must not be called on the EDT — it blocks until the EDT write action completes.
  */
 fun Project.resolveVirtualFileWithRefresh(path: String): VirtualFile? {
-    val trimmed = path.trim()
+    // Search rows keep the grep "<path>:" header verbatim, so persisted toolPath values carry
+    // exactly one separator colon; Windows Path.of rejects any colon outside the drive letter,
+    // so strip that one colon and degrade any other malformed path to "not found" instead of
+    // throwing. Stripping a single colon keeps a POSIX file whose name really ends in ":"
+    // (header "<path::>") resolvable.
+    val trimmed = path.trim().removeSuffix(":")
     if (trimmed.isEmpty()) return null
-    val rawPath = Path.of(trimmed)
+    val rawPath = runCatching { Path.of(trimmed) }.getOrNull() ?: return null
     val resolved = if (rawPath.isAbsolute) {
         rawPath
     } else {

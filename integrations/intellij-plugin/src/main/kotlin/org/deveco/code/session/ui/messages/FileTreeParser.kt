@@ -1,5 +1,14 @@
 package org.deveco.code.session.ui.messages
 
+/** One `  Line N: <text>` entry under a grep file header. */
+internal data class SearchMatch(val line: Int, val text: String)
+
+/** One grep file section: the verbatim `<path>:` header plus its match lines. */
+internal data class SearchSection(val path: String, val matches: List<SearchMatch>)
+
+/** Parsed grep output: per-file sections plus the optional truncation notice. */
+internal data class SearchSections(val sections: List<SearchSection>, val note: String?)
+
 /**
  * Parses file paths from tool output text.
  *
@@ -21,6 +30,37 @@ internal object FileTreeParser {
             .map { it.trim() }
             .filter { it.isNotBlank() && isFilePath(it) }
     }
+
+    /**
+     * Parses grep-style search output into per-file sections so the UI can show each
+     * `<path>:` header with its `  Line N: <text>` match lines instead of dropping them.
+     * Headers are kept verbatim (same contract as [parseFilePaths]); lines that belong to
+     * no section and are not the truncation notice are ignored.
+     */
+    fun parseSearchSections(text: String): SearchSections {
+        val sections = mutableListOf<SearchSection>()
+        var matches: MutableList<SearchMatch>? = null
+        var note: String? = null
+        for (raw in text.lines()) {
+            val line = stripTreePrefix(raw).trim()
+            if (line.isBlank()) continue
+            if (line.startsWith("(Results truncated")) {
+                note = line
+                continue
+            }
+            val matchLine = MATCH_LINE_REGEX.find(line)
+            if (matchLine != null && matches != null) {
+                matches.add(SearchMatch(matchLine.groupValues[1].toInt(), matchLine.groupValues[2]))
+                continue
+            }
+            if (isFilePath(line)) {
+                matches = mutableListOf<SearchMatch>().also { sections.add(SearchSection(line, it)) }
+            }
+        }
+        return SearchSections(sections, note)
+    }
+
+    private val MATCH_LINE_REGEX = Regex("^Line (\\d+): (.*)$")
 
     /**
      * Strips tree-drawing characters, markdown list markers, and descriptive
@@ -45,44 +85,50 @@ internal object FileTreeParser {
      * Valid file paths contain at least one path separator or file extension.
      * Rejects task descriptions that contain Chinese characters (e.g., "创建 HomeView.ets 支付宝首页").
      * Rejects log messages with colons (except Windows drive letters), brackets, and other non-path patterns.
+     *
+     * grep-style search output terminates each file header with a ":" separator and rows are
+     * displayed verbatim, so the check runs on the colon-stripped form; the separator itself is
+     * removed only where a [java.nio.file.Path] is constructed. On POSIX the trailing colon can
+     * also be part of a real file name, which then shows up as a double colon here.
      */
     internal fun isFilePath(text: String): Boolean {
-        val hasSeparator = text.contains('/') || text.contains('\\')
-        val hasExtension = text.contains('.') && !text.startsWith('.')
+        val path = text.trimEnd(':')
+        val hasSeparator = path.contains('/') || path.contains('\\')
+        val hasExtension = path.contains('.') && !path.startsWith('.')
 
         // Check for colon not part of Windows drive letter (e.g., "C:/")
-        val hasColonNotInDrive = text.indexOf(':').let { idx ->
-            idx >= 0 && !(idx == 1 && text.length > 2 && text[idx - 1].isLetter() &&
-                (text.getOrNull(idx + 1) == '/' || text.getOrNull(idx + 1) == '\\'))
+        val hasColonNotInDrive = path.indexOf(':').let { idx ->
+            idx >= 0 && !(idx == 1 && path.length > 2 && path[idx - 1].isLetter() &&
+                (path.getOrNull(idx + 1) == '/' || path.getOrNull(idx + 1) == '\\'))
         }
 
         // Reject descriptive text: contains spaces but doesn't look like a path
         // Pure file paths don't contain spaces (unless quoted), and start with /, \, letter:, or "
-        val hasSpaces = text.contains(' ')
-        val startsWithPath = text.startsWith('/') || text.startsWith('\\') ||
-            text.matches(Regex("^[A-Za-z]:[/\\\\]")) || text.startsWith("\"") || text.startsWith("'")
+        val hasSpaces = path.contains(' ')
+        val startsWithPath = path.startsWith('/') || path.startsWith('\\') ||
+            path.matches(Regex("^[A-Za-z]:[/\\\\]")) || path.startsWith("\"") || path.startsWith("'")
         val isDescriptiveText = hasSpaces && !startsWithPath
 
-        val isNotFile = text.startsWith("#") ||
-            text.startsWith("//") ||
-            text.startsWith("/*") ||
-            text.contains("error", ignoreCase = true) && text.contains(":") ||
-            text.any { it in '一'..'龥' } ||
-            text.contains('[') || text.contains(']') ||
+        val isNotFile = path.startsWith("#") ||
+            path.startsWith("//") ||
+            path.startsWith("/*") ||
+            path.contains("error", ignoreCase = true) && path.contains(":") ||
+            path.any { it in '一'..'龥' } ||
+            path.contains('[') || path.contains(']') ||
             hasColonNotInDrive ||
-            text.endsWith("...") ||
-            text.contains("@") ||
-            text.contains("(") ||
-            text.contains("{") ||
-            text.contains("}") ||
-            text.contains("'") ||
-            text.contains("\"") ||
-            text.contains("=") ||
+            path.endsWith("...") ||
+            path.contains("@") ||
+            path.contains("(") ||
+            path.contains("{") ||
+            path.contains("}") ||
+            path.contains("'") ||
+            path.contains("\"") ||
+            path.contains("=") ||
             // Reject lines with tree-drawing characters (├──, └──, │, ─)
-            text.any { it.code in 0x2500..0x257F } ||
+            path.any { it.code in 0x2500..0x257F } ||
             // Reject descriptive text (e.g., "Update build-profile.json5 to API 26")
             isDescriptiveText ||
-            Regex("\\b\\w+\\s+in\\s+\\w+").containsMatchIn(text)
+            Regex("\\b\\w+\\s+in\\s+\\w+").containsMatchIn(path)
 
         return (hasSeparator || hasExtension) && !isNotFile
     }
