@@ -11,6 +11,15 @@ on:
     branches: ["**"]
   workflow_dispatch:
 
+concurrency:
+  # 禁止并发：新运行抢占同一 MR 的旧运行，其余排队等待
+  enable: true
+  max: 1
+  exceed-action: QUEUE
+  preemption:
+    enable: true
+    events: [mr_id]
+
 permissions:
   repository: read
   pr: read
@@ -22,6 +31,8 @@ stages:
       test:
         name: unit-test
         runs-on: [self-hosted, deveco_k8s]
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         steps:
           - name: 检出代码
             uses: checkout

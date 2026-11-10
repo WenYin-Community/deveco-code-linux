@@ -18,6 +18,15 @@ on:
         default: "false"
         type: string
 
+concurrency:
+  # 定时轮询：单轮耗时短，允许并行；超过上限的周期触发直接丢弃，等下一轮，避免积压
+  enable: true
+  max: 5
+  exceed-action: IGNORE
+  preemption:
+    # 定时触发没有 mr_id 维度，也不希望打断正在派发的实例
+    enable: false
+
 permissions:
   repository: read
   issue: write

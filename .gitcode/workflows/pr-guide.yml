@@ -11,6 +11,15 @@ on:
         required: true
         type: string
 
+concurrency:
+  # 禁止并发：新运行抢占同一 MR 的旧运行，其余排队等待
+  enable: true
+  max: 1
+  exceed-action: QUEUE
+  preemption:
+    enable: true
+    events: [mr_id]
+
 permissions:
   repository: read
   issue: write
@@ -23,6 +32,8 @@ stages:
       post-guide:
         name: 发布 PR 命令使用指南
         runs-on: [self-hosted, deveco_k8s]
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}

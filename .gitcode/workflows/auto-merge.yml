@@ -15,6 +15,15 @@ on:
         required: true
         type: string
 
+concurrency:
+  # 允许并行合入不同 PR；/merge 触发不丢弃，超过上限时排队
+  enable: true
+  max: 5
+  exceed-action: QUEUE
+  preemption:
+    # 合入与发评论之间被取消会留下"已合入但没有结果"，因此不抢占
+    enable: false
+
 permissions:
   repository: read
   issue: write
@@ -27,6 +36,8 @@ stages:
       auto-merge:
         name: 检查并合入 PR
         runs-on: [self-hosted, deveco_k8s]
+        container:
+          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
