@@ -318,10 +318,15 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
      * sees its pending input.
      */
     private fun consumePending(): String? {
+        // A handoff keyed to another session stays put: this editor may have been
+        // constructed against a stale file.sessionId, and the keyed handoff belongs to
+        // the session a later re-bind (or the selectNotify reconcile) switches it to.
+        if (!actions.pendingTargets(boundSessionId)) return null
         val pending = actions.pendingDraft
         val pendingFileRef = actions.pendingFileReference
         val fullPrompt = actions.pendingFullPrompt
         actions.pendingFullPrompt = null
+        actions.pendingSessionId = null
         if (pending == null && pendingFileRef == null) return fullPrompt
         actions.pendingDraft = null
         actions.pendingFileReference = null
@@ -347,9 +352,21 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
     private fun attachController() {
         pendingFullPrompt?.let { controller.pendingPrompt = it }
         pendingFullPrompt = null
-        actions.autoSendPrompt?.let { prompt ->
-            actions.autoSendPrompt = null
-            controller.autoSendOnReady = prompt
+        if (actions.pendingTargets(boundSessionId)) {
+            actions.autoSendPrompt?.let { prompt ->
+                actions.autoSendPrompt = null
+                controller.autoSendOnReady = prompt
+            }
+            actions.pendingMode?.let { mode ->
+                actions.pendingMode = null
+                // A headless-reused controller is already past load-complete, where the
+                // ready hook never fires again — mirror immediately in that case.
+                if (controller.ready) {
+                    controller.mirrorModeSelection(mode)
+                } else {
+                    controller.onReady = { controller.mirrorModeSelection(mode) }
+                }
+            }
         }
         // A headless-reused controller skips loadSession()/onLoaded, so restore the
         // saved file preview here instead (deferred: openFilePreview may read disk).
@@ -464,6 +481,18 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
     override fun isValid() = !disposed && file.isValid
     override fun addPropertyChangeListener(listener: PropertyChangeListener) = Unit
     override fun removePropertyChangeListener(listener: PropertyChangeListener) = Unit
+
+    // This editor may have been constructed against a stale file.sessionId: the chat tab
+    // opens without waiting for the async editor load (waitForCompositeOpen = false), so
+    // openSession can re-bind the tab — file.sessionId = id — while this editor is still
+    // materializing, and construction took whatever value it found at that moment. The
+    // platform calls selectNotify on the EDT right after applying the editor, and again on
+    // every tab selection, so re-checking here converges the binding to the session the
+    // tab actually renders. No cross-thread ordering is involved: file.sessionId's writers
+    // all run on the EDT, like this callback.
+    override fun selectNotify() {
+        if (!disposed && file.sessionId != boundSessionId) switchTo(file.sessionId)
+    }
 
     override fun dispose() {
         colorsConnection.disconnect()

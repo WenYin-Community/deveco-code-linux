@@ -192,18 +192,21 @@ object DevEcoCodeBridge {
             }
             project.runInEdt {
                 if (project.isDisposed) return@runInEdt
+                // Stage the handoff before openSession: when the chat tab is already open,
+                // openSession's re-bind consumes the mailbox from switchTo — staging after
+                // it would strand the handoff, since nothing re-consumes the mailbox for a
+                // session the editor already renders. When the tab is closed, the editor
+                // constructed by the async open picks the mailbox up at attach time, with
+                // no ordering assumption between staging and construction left to hold.
+                // A just-created session's controller is never ready yet, hence the
+                // auto-send parking; the load serves the configOptions cached at
+                // session/new, which still name the default mode, so the mirror is what
+                // keeps the selector showing the mode applyMode landed.
+                actions.pendingSessionId = sessionId
+                actions.pendingMode = request.mode
+                if (request.sendImmediately) actions.autoSendPrompt = prompt else actions.pendingFullPrompt = prompt
                 actions.ops.openSession(sessionId, MyMessageBundle.message("toolwindow.deveco.new.title"), true)
                 actions.uiOnRefresh?.invoke()
-                val controller = SessionEditorRegistry.getInstance(project).chatEditor()?.controller
-                if (controller == null) {
-                    report(project, MyMessageBundle.message("bridge.delivery.no.editor"), error = true)
-                    return@runInEdt
-                }
-                // The load serves the configOptions cached at session/new, which still name the default
-                // mode, and set_mode pushes no update of its own — so without this the selector would
-                // show the default while the backend runs the requested mode.
-                controller.onReady = { mirrorMode(controller, request.mode) }
-                handOff(controller, prompt, request.sendImmediately)
             }
         } finally {
             project.runInEdt { actions.busy = false }
@@ -239,7 +242,7 @@ object DevEcoCodeBridge {
                 return@pooled
             }
             project.runInEdt {
-                mirrorMode(controller, request.mode)
+                controller.mirrorModeSelection(request.mode)
                 handOff(controller, prompt, request.sendImmediately)
             }
         }
@@ -260,18 +263,6 @@ object DevEcoCodeBridge {
             return null
         }
         return MyMessageBundle.message("bridge.delivery.mode.failed", mode, errorMessage(failure))
-    }
-
-    /**
-     * `session/set_mode` does not push `current_mode_update` — only the plan_enter/plan_exit tools
-     * do (`packages/opencode/src/acp/event.ts`, `syncMode`) — so without this the selector would keep
-     * showing the mode the user left it in even though the backend already switched. Going through
-     * the controller is what a click on the dropdown does; the write it fires carries the value
-     * [applyMode] just landed, so it is idempotent. A no-op while the mode list is unloaded.
-     */
-    private fun mirrorMode(controller: SessionController, mode: String?) {
-        if (mode == null || controller.selectedMode?.id == mode) return
-        controller.selectMode(mode)
     }
 
     /**

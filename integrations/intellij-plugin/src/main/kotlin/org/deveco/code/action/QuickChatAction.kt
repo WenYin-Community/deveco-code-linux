@@ -55,6 +55,9 @@ class QuickChatAction :
         }
 
         val actions = DevEcoSessionActions.forProject(project)
+        // The handoff addresses whichever editor the new session's open constructs —
+        // clearing any stale key so it cannot be pinned to an unrelated session.
+        actions.pendingSessionId = null
         actions.pendingFileReference = fileRef
         val handler = actions.newSessionHandler
         if (handler != null) {

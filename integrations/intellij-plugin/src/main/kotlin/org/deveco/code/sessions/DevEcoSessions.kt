@@ -515,13 +515,17 @@ internal class SessionOps(
             project.runInEdt {
                 if (alive) {
                     // Reopen the tab; SessionFileEditor.init will consume pendingFileReference
-                    // and set lastJumpSessionId
+                    // and set lastJumpSessionId. Keyed to the session so only the editor that
+                    // binds it can take the handoff while the tab is still loading.
                     sessionActions.pendingFileReference = fileRef
+                    sessionActions.pendingSessionId = sessionId
                     openSession(sessionId, MyMessageBundle.message("toolwindow.deveco.new.title"))
                 } else {
-                    // Session was deleted → create a new one
+                    // Session was deleted → create a new one; its id does not exist yet, so
+                    // the handoff addresses whichever editor constructs next.
                     sessionActions.lastJumpSessionId = null
                     sessionActions.pendingFileReference = fileRef
+                    sessionActions.pendingSessionId = null
                     createNewSession(onStateChange = onStateChange, onRefresh = onRefresh)
                 }
             }

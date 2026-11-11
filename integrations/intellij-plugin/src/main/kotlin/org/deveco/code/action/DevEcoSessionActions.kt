@@ -45,6 +45,26 @@ class DevEcoSessionActions(private val project: Project) {
     @Volatile
     internal var pendingFileReference: FileReference? = null
 
+    /**
+     * Session the pending handoff (draft/full prompt/auto-send/file reference/mode) targets.
+     * Null addresses whichever editor the next open constructs — the only option for
+     * writers that stage the handoff before the session id exists (e.g. "Quick Chat"),
+     * last-writer-wins. A set key pins the handoff to that session, so an editor constructed
+     * against a stale file.sessionId (an openSession re-bind racing the async editor load)
+     * cannot claim another session's handoff: it stays for the editor that actually binds
+     * the keyed session.
+     */
+    @Volatile
+    var pendingSessionId: String? = null
+
+    /**
+     * Mode an external delivery put the next-bound session in. Mirrored into the selector
+     * when the binding editor attaches its controller — the session may still be loading
+     * then, so the mirror rides the controller's ready hook.
+     */
+    @Volatile
+    var pendingMode: String? = null
+
     /** Last session ID targeted by a "Jump to DevEco Code" action, for sticky reuse. */
     @Volatile
     var lastJumpSessionId: String? = null
@@ -55,6 +75,9 @@ class DevEcoSessionActions(private val project: Project) {
 
     @Volatile
     internal var uiOnRefresh: (() -> Unit)? = null
+
+    /** True when the editor binding [sessionId] may consume the pending handoff. */
+    internal fun pendingTargets(sessionId: String): Boolean = pendingSessionId == null || pendingSessionId == sessionId
 
     // Project-level session operations: /new and the other action handlers must work
     // while the sidebar tool window is hidden — its Compose UI used to own them and is
@@ -98,7 +121,8 @@ class DevEcoSessionActions(private val project: Project) {
             )
             if (existingHandled) {
                 // If the reused session's tab is already open, init didn't consume
-                // pendingFileReference — add it directly to the live controller.
+                // pendingFileReference — add it directly to the live controller. The
+                // session guard keeps a handoff keyed to another session unconsumed.
                 val pendingRef = pendingFileReference
                 if (pendingRef != null) {
                     val mgr = FileEditorManager.getInstance(project)
@@ -106,7 +130,7 @@ class DevEcoSessionActions(private val project: Project) {
                         .flatMap { mgr.getEditors(it).toList() }
                         .filterIsInstance<SessionFileEditor>()
                         .firstOrNull()
-                    if (editor != null) {
+                    if (editor != null && pendingTargets(editor.sessionFile.sessionId)) {
                         editor.controller.addFileReference(pendingRef)
                         pendingFileReference = null
                     }

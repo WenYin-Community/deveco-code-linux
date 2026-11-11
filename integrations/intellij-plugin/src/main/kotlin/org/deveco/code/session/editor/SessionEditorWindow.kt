@@ -41,7 +41,18 @@ internal fun windowOf(project: Project, editor: FileEditor): EditorWindow? {
 internal fun placeChatTabFirst(project: Project, file: SessionVirtualFile, focusEditor: Boolean) {
     val manager = FileEditorManager.getInstance(project) as? FileEditorManagerImpl ?: return
     // A null window opens in the focused group, which is the best fallback available.
-    manager.openFile(file, leftmostWindow(manager), FileEditorOpenOptions(index = 0, requestFocus = focusEditor))
+    // waitForCompositeOpen = false: with the platform default (true) openFile blocks the EDT
+    // in a nested event pump (runBlocking + IdeEventQueue.pumpEventsForHierarchy) until the
+    // async editor-loading job finishes, freezing the UI for as long as cold provider
+    // resolution plus the chat panel's first composition take — with the composition itself
+    // running inside that pump. false takes the platform's async branch instead: the tab and
+    // its skeleton composite are still placed synchronously, the editor materializes on its
+    // own, and an empty composite is auto-closed by scheduleCloseIfEmpty.
+    manager.openFile(
+        file,
+        leftmostWindow(manager),
+        FileEditorOpenOptions(index = 0, requestFocus = focusEditor, waitForCompositeOpen = false),
+    )
 }
 
 // Neither the Swing tree nor the creation order of the editor groups matches their visual
@@ -75,5 +86,11 @@ internal fun revealChatTab(project: Project, file: SessionVirtualFile, editor: F
         Logger.getInstance("SessionEditorWindow").warn("chat-tab: no window for the chat editor, leaving the tab as is")
         return
     }
-    window.manager.openFile(file, window, FileEditorOpenOptions(requestFocus = focusEditor))
+    // waitForCompositeOpen = false for the same reason as placeChatTabFirst: revealing an
+    // editor whose composite is still applying must not park the EDT in the blocking pump.
+    window.manager.openFile(
+        file,
+        window,
+        FileEditorOpenOptions(requestFocus = focusEditor, waitForCompositeOpen = false),
+    )
 }

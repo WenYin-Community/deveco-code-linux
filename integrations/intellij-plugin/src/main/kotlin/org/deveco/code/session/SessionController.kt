@@ -2398,6 +2398,19 @@ internal class SessionController(
         setSelected = { selectedMode = it },
     ) { mode -> service.setSessionMode(sessionId, mode.id) }
 
+    /**
+     * Mirrors a mode an external writer already landed on the backend into the selector.
+     * `session/set_mode` does not push `current_mode_update` — only the plan_enter/plan_exit
+     * tools do (`packages/opencode/src/acp/event.ts`, `syncMode`) — so without this the
+     * selector would keep showing the mode the user left it in even though the backend
+     * already switched. Idempotent by design: the write it fires carries the value the
+     * external writer just landed, and a no-op while the mode list is unloaded.
+     */
+    fun mirrorModeSelection(mode: String?) {
+        if (mode == null || selectedMode?.id == mode) return
+        selectMode(mode)
+    }
+
     private fun <T : LabeledChoice> selectOption(
         id: String,
         options: List<T>,
