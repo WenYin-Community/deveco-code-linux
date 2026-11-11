@@ -21,9 +21,7 @@ stages:
     jobs:
       typecheck:
         name: typecheck
-        runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
+        runs-on: ubuntu-latest
         steps:
           - name: 检出代码
             uses: checkout

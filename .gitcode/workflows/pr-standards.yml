@@ -26,9 +26,7 @@ stages:
     jobs:
       check-standards:
         name: 标题格式与关联 Issue
-        runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
+        runs-on: ubuntu-latest
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -154,9 +152,7 @@ stages:
     jobs:
       check-compliance:
         name: PR 模板合规检查
-        runs-on: [self-hosted, deveco_k8s]
-        container:
-          image: swr.cn-north-4.myhuaweicloud.com/deveco_code/nginx:v1
+        runs-on: ubuntu-latest
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
