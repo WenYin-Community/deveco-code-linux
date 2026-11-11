@@ -1,30 +1,46 @@
 import { describe, expect, test } from "bun:test"
-import { readSource } from "../lib/source-reader"
+import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { LLMRequestPrep } from "@/session/llm/request"
 
-describe("LLM deveco proxy headers regression guard", () => {
-  const DEVECO_HEADERS = ["x-deveco-project", "x-deveco-session", "x-deveco-request", "x-deveco-client"]
+const deveco = LLMRequestPrep.devecoAffinityHeaders
 
-  for (const header of DEVECO_HEADERS) {
-    test(`contains "${header}" proxy header injection`, () => {
-      const llmSource = readSource("packages/opencode/src/session/llm.ts")
-      const requestSource = readSource("packages/opencode/src/session/llm/request.ts")
-      const source = llmSource.includes(header) ? llmSource : requestSource
-      expect(source).toContain(header)
+describe("deveco proxy headers", () => {
+  test("main agent request carries task, session, client and project headers", () => {
+    const headers = deveco({ sessionID: "ses_main", messageID: "msg_abc" }, "prj_abc")
+    expect(headers).toEqual({
+      "x-deveco-project": "prj_abc",
+      "x-deveco-session": "ses_main",
+      "x-deveco-task": "msg_abc",
+      "x-deveco-client": `deveco-code@${InstallationVersion}`,
+      "User-Agent": `deveco/${InstallationVersion}`,
     })
-  }
-
-  test("injects User-Agent with deveco brand", () => {
-    const llmSource = readSource("packages/opencode/src/session/llm.ts")
-    const requestSource = readSource("packages/opencode/src/session/llm/request.ts")
-    const source = llmSource.match(/User-Agent.*deveco/) ? llmSource : requestSource
-    expect(source).toMatch(/User-Agent.*deveco|USER_AGENT.*deveco/)
   })
 
-  test("detects deveco provider prefix for project ID routing", () => {
-    const llmSource = readSource("packages/opencode/src/session/llm.ts")
-    const requestSource = readSource("packages/opencode/src/session/llm/request.ts")
-    const hasProviderCheck = (s: string) => s.includes('startsWith("opencode")') && s.includes('startsWith("deveco")')
-    const source = hasProviderCheck(llmSource) ? llmSource : requestSource
-    expect(source).toMatch(/providerID\.startsWith\("opencode"\)[\s\S]*\|\|[\s\S]*providerID\.startsWith\("deveco"\)/)
+  test("no longer emits the legacy x-deveco-request header", () => {
+    const headers = deveco({ sessionID: "ses_main", messageID: "msg_abc" }, undefined)
+    expect(headers).not.toHaveProperty("x-deveco-request")
+  })
+
+  test("labels the client as deveco-code with the running version", () => {
+    const headers = deveco({ sessionID: "ses_main", messageID: "msg_abc" }, undefined)
+    expect(headers["x-deveco-client"]).toMatch(/^deveco-code@\S+$/)
+    expect(headers["x-deveco-client"]).toBe(`deveco-code@${InstallationVersion}`)
+    expect(["cli", "intellij", "desktop", "acp"]).not.toContain(headers["x-deveco-client"])
+  })
+
+  test("subagent request points x-deveco-parent-session at the spawning session", () => {
+    const headers = deveco({ sessionID: "ses_child", parentSessionID: "ses_main", messageID: "msg_abc" }, undefined)
+    expect(headers["x-deveco-session"]).toBe("ses_child")
+    expect(headers["x-deveco-parent-session"]).toBe("ses_main")
+  })
+
+  test("main agent request omits the parent session header", () => {
+    const headers = deveco({ sessionID: "ses_main", messageID: "msg_abc" }, undefined)
+    expect(headers).not.toHaveProperty("x-deveco-parent-session")
+  })
+
+  test("omits the project header when the project is unknown", () => {
+    const headers = deveco({ sessionID: "ses_main", messageID: "msg_abc" }, undefined)
+    expect(headers).not.toHaveProperty("x-deveco-project")
   })
 })

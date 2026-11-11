@@ -144,6 +144,20 @@ function ensureCopilotNoopTool(input: PrepareInput, tools: Record<string, Tool>)
   })
 }
 
+export function devecoAffinityHeaders(
+  input: { sessionID: string; parentSessionID?: string; messageID: string },
+  projectID: string | undefined,
+): Record<string, string> {
+  return {
+    ...(projectID ? { "x-deveco-project": projectID } : {}),
+    "x-deveco-session": input.sessionID,
+    ...(input.parentSessionID ? { "x-deveco-parent-session": input.parentSessionID } : {}),
+    "x-deveco-task": input.messageID,
+    "x-deveco-client": `deveco-code@${InstallationVersion}`,
+    "User-Agent": USER_AGENT,
+  }
+}
+
 function affinityHeaders(input: PrepareInput, projectID: string | undefined): Record<string, string> {
   if (input.model.providerID.startsWith("opencode")) {
     return {
@@ -155,13 +169,10 @@ function affinityHeaders(input: PrepareInput, projectID: string | undefined): Re
     }
   }
   if (input.model.providerID.startsWith("deveco")) {
-    return {
-      ...(projectID ? { "x-deveco-project": projectID } : {}),
-      "x-deveco-session": input.sessionID,
-      "x-deveco-request": input.user.id,
-      "x-deveco-client": input.flags.client,
-      "User-Agent": USER_AGENT,
-    }
+    return devecoAffinityHeaders(
+      { sessionID: input.sessionID, parentSessionID: input.parentSessionID, messageID: input.user.id },
+      projectID,
+    )
   }
   return {
     "x-session-affinity": input.sessionID,
