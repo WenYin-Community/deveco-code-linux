@@ -277,6 +277,32 @@ tasks.named<ProcessResources>("processResources") {
     from(tasks.named<BuildLocalCliTask>("bundleLocalCli").flatMap { it.cliResourceDir }) { into("cli") }
 }
 
+// The CLI test fixture used by CliBinaryExtractorTest contains placeholder files
+// whose names/paths are forbidden file types for the repository static gate
+// (an ".exe" suffix and a node_modules/ path), so only manifest.txt and
+// vendor/info.txt live in src/test/resources; the binary-like entries are
+// generated into an extra test resource dir at build time instead. The extra
+// dir is "generated-test-resources" (NOT ".../cli") so the fixture keeps its
+// "cli/" classpath prefix: a SourceDirectorySet copies a dir's contents to the
+// resource root, so srcDir(".../cli") would flatten "cli/" away.
+val cliTestFixtureDir = layout.buildDirectory.dir("generated-test-resources")
+val generateCliTestFixtures = tasks.register("generateCliTestFixtures") {
+    description = "Generates the placeholder CLI entries extracted by CliBinaryExtractorTest"
+    val fixtureDir = cliTestFixtureDir
+    outputs.dir(fixtureDir)
+    doLast {
+        val cliDir = fixtureDir.get().asFile.resolve("cli")
+        cliDir.resolve("bin/deveco").let { it.parentFile.mkdirs(); it.writeText("fake-unix-binary\n") }
+        cliDir.resolve("bin/deveco.exe").let { it.parentFile.mkdirs(); it.writeText("fake-windows-binary\n") }
+        cliDir
+            .resolve("node_modules/@deveco/deveco-cli/dist/cli.js")
+            .let { it.parentFile.mkdirs(); it.writeText("fake-cli-entry\n") }
+    }
+}
+sourceSets.test {
+    resources.srcDir(generateCliTestFixtures.map { it.outputs.files })
+}
+
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html
 // New neutral name, with backward-compatible aliases. A supplied invalid path fails;
 // it never silently falls back to a downloaded SDK.

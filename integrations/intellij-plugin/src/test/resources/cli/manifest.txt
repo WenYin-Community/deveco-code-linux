@@ -1,0 +1,5 @@
+bin/deveco.exe
+bin/deveco
+vendor/info.txt
+node_modules/@deveco/deveco-cli/dist/cli.js
+missing/no-resource.txt
