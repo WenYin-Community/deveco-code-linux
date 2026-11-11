@@ -16,6 +16,7 @@ import com.intellij.ui.OnePixelSplitter
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.action.DevEcoSessionActions
+import org.deveco.code.action.PendingChatHandoff
 import org.deveco.code.platform.devEcoComposePanel
 import org.deveco.code.session.SessionController
 import org.deveco.code.session.SessionControllerRegistry
@@ -61,11 +62,13 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
     // session switch re-binds this editor instead of closing and reopening the tab.
     private var boundSessionId = file.sessionId
 
-    // Consumed pending draft from "Jump to Chat" action before restoredViewState is read.
-    private var pendingFullPrompt: String? = null
+    // The handoff this editor took over, before restoredViewState is read: its draft and
+    // file reference are already merged into the view state, its prompt delivery and mode
+    // mirror apply when the controller attaches.
+    private var pendingHandoff: PendingChatHandoff? = null
 
     init {
-        pendingFullPrompt = consumePending()
+        pendingHandoff = consumePending()
     }
 
     private var restoredViewState = viewStateStore.get(boundSessionId)
@@ -287,7 +290,7 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
         SessionControllerRegistry.getInstance(project).release(controller)
         boundSessionId = sessionId
         file.sessionId = sessionId
-        pendingFullPrompt = consumePending()
+        pendingHandoff = consumePending()
         restoredViewState = viewStateStore.get(sessionId)
         composeRestoredState = restoredViewState
         draftText.value = restoredViewState?.draft.orEmpty()
@@ -313,52 +316,42 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
         }
 
     /**
-     * Consumes the "Jump to Chat" hand-off (draft, file reference, full prompt) into the
-     * bound session's view state. Called before [restoredViewState] is read so a jump
-     * sees its pending input.
+     * Atomically takes the handoff staged for the bound session (the next-session slot as
+     * fallback) and merges its draft and file reference into the session's view state —
+     * called before [restoredViewState] is read so a jump sees its pending input. The
+     * handoff's prompt delivery and mode mirror are applied when the controller attaches;
+     * the take is what makes the whole consumption atomic, so a writer replacing another
+     * session's handoff can never tear fields into this one.
      */
-    private fun consumePending(): String? {
-        // A handoff keyed to another session stays put: this editor may have been
-        // constructed against a stale file.sessionId, and the keyed handoff belongs to
-        // the session a later re-bind (or the selectNotify reconcile) switches it to.
-        if (!actions.pendingTargets(boundSessionId)) return null
-        val pending = actions.pendingDraft
-        val pendingFileRef = actions.pendingFileReference
-        val fullPrompt = actions.pendingFullPrompt
-        actions.pendingFullPrompt = null
-        actions.pendingSessionId = null
-        if (pending == null && pendingFileRef == null) return fullPrompt
-        actions.pendingDraft = null
-        actions.pendingFileReference = null
+    private fun consumePending(): PendingChatHandoff? {
+        val handoff = actions.takeHandoff(boundSessionId) ?: return null
+        // The bridge holds the creation guard until its delivery is consumed.
+        if (handoff.releaseBusyOnConsume) actions.busy = false
         // Record this session as the last jump target for sticky reuse
-        if (pendingFileRef != null) {
+        if (handoff.fileReference != null) {
             actions.lastJumpSessionId = boundSessionId
         }
+        if (handoff.draft == null && handoff.fileReference == null) return handoff
         // Atomic merge-write like every other SessionViewState writer: a
         // plain get+save pair could drop a concurrent field update.
         viewStateStore.update(boundSessionId) { existing ->
             (existing ?: SessionViewState.initial()).copy(
-                draft = pending ?: (existing?.draft ?: ""),
-                fileReferences = if (pendingFileRef != null) {
-                    (existing?.fileReferences ?: emptyList()) + pendingFileRef
+                draft = handoff.draft ?: (existing?.draft ?: ""),
+                fileReferences = if (handoff.fileReference != null) {
+                    (existing?.fileReferences ?: emptyList()) + handoff.fileReference
                 } else {
                     existing?.fileReferences ?: emptyList()
                 },
             )
         }
-        return fullPrompt
+        return handoff
     }
 
     private fun attachController() {
-        pendingFullPrompt?.let { controller.pendingPrompt = it }
-        pendingFullPrompt = null
-        if (actions.pendingTargets(boundSessionId)) {
-            actions.autoSendPrompt?.let { prompt ->
-                actions.autoSendPrompt = null
-                controller.autoSendOnReady = prompt
-            }
-            actions.pendingMode?.let { mode ->
-                actions.pendingMode = null
+        pendingHandoff?.let { handoff ->
+            handoff.fullPrompt?.let { controller.pendingPrompt = it }
+            handoff.autoSendPrompt?.let { controller.autoSendOnReady = it }
+            handoff.mode?.let { mode ->
                 // A headless-reused controller is already past load-complete, where the
                 // ready hook never fires again — mirror immediately in that case.
                 if (controller.ready) {
@@ -368,6 +361,7 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
                 }
             }
         }
+        pendingHandoff = null
         // A headless-reused controller skips loadSession()/onLoaded, so restore the
         // saved file preview here instead (deferred: openFilePreview may read disk).
         // Fresh controllers restore via onLoaded after loadSession().

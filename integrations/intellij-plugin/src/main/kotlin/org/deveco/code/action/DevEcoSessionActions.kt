@@ -1,12 +1,9 @@
 package org.deveco.code.action
 
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.session.SessionStorage
 import org.deveco.code.session.SessionViewStateStore
-import org.deveco.code.session.editor.SessionFileEditor
-import org.deveco.code.session.editor.SessionVirtualFile
 import org.deveco.code.session.model.FileReference
 import org.deveco.code.sessions.SessionOps
 import org.deveco.code.sessions.ui.SessionItem
@@ -29,41 +26,11 @@ class DevEcoSessionActions(private val project: Project) {
     @Volatile
     var busy: Boolean = false
 
-    /** Draft text to pre-fill in the next new session (e.g., from "Jump to Chat" action). */
-    @Volatile
-    var pendingDraft: String? = null
-
-    /** Full prompt to send instead of the draft preview (consumed once on first send). */
-    @Volatile
-    var pendingFullPrompt: String? = null
-
-    /** Prompt to automatically send after session is created (consumed once). */
-    @Volatile
-    var autoSendPrompt: String? = null
-
-    /** File reference to display as a chip in the composer (e.g., from "Jump to Chat" action). */
-    @Volatile
-    internal var pendingFileReference: FileReference? = null
-
-    /**
-     * Session the pending handoff (draft/full prompt/auto-send/file reference/mode) targets.
-     * Null addresses whichever editor the next open constructs — the only option for
-     * writers that stage the handoff before the session id exists (e.g. "Quick Chat"),
-     * last-writer-wins. A set key pins the handoff to that session, so an editor constructed
-     * against a stale file.sessionId (an openSession re-bind racing the async editor load)
-     * cannot claim another session's handoff: it stays for the editor that actually binds
-     * the keyed session.
-     */
-    @Volatile
-    var pendingSessionId: String? = null
-
-    /**
-     * Mode an external delivery put the next-bound session in. Mirrored into the selector
-     * when the binding editor attaches its controller — the session may still be loading
-     * then, so the mirror rides the controller's ready hook.
-     */
-    @Volatile
-    var pendingMode: String? = null
+    // Staged handoffs, keyed by their target session. Keyed entries are isolated: a jump
+    // or bridge delivery for one session never clobbers another's. The next-session slot
+    // addresses whichever session a creation flow produces (Quick Chat, a jump whose
+    // target was deleted) and is promoted to a keyed entry by that flow before its tab opens.
+    private val handoffs = ChatHandoffMailbox()
 
     /** Last session ID targeted by a "Jump to DevEco Code" action, for sticky reuse. */
     @Volatile
@@ -76,8 +43,30 @@ class DevEcoSessionActions(private val project: Project) {
     @Volatile
     internal var uiOnRefresh: (() -> Unit)? = null
 
-    /** True when the editor binding [sessionId] may consume the pending handoff. */
-    internal fun pendingTargets(sessionId: String): Boolean = pendingSessionId == null || pendingSessionId == sessionId
+    /** Stages [handoff] for the editor that binds [sessionId]. */
+    internal fun stageHandoff(sessionId: String, handoff: PendingChatHandoff) {
+        // A superseded bridge delivery held the creation guard until consumption; the
+        // replacing handoff will not release it, so release it here.
+        if (handoffs.stage(sessionId, handoff)?.releaseBusyOnConsume == true) busy = false
+    }
+
+    /** Stages [handoff] for whichever session the next creation produces. */
+    internal fun stageNextSessionHandoff(handoff: PendingChatHandoff) = handoffs.stageNext(handoff)
+
+    /** Drops the next-session handoff; for callers that know no creation will consume it. */
+    internal fun removeNextSessionHandoff() {
+        handoffs.takeNext()
+    }
+
+    /** Promotes the next-session slot to a keyed entry once the created session id is known. */
+    internal fun rekeyNextSessionHandoff(sessionId: String) = handoffs.rekeyNext(sessionId)
+
+    /** Atomically takes the handoff staged for [sessionId], next-session slot as fallback. */
+    internal fun takeHandoff(sessionId: String): PendingChatHandoff? = handoffs.take(sessionId)
+
+    /** Removes [handoff] for [sessionId] only if it is still the staged instance. */
+    internal fun removeHandoff(sessionId: String, handoff: PendingChatHandoff): Boolean =
+        handoffs.remove(sessionId, handoff)
 
     // Project-level session operations: /new and the other action handlers must work
     // while the sidebar tool window is hidden — its Compose UI used to own them and is
@@ -115,28 +104,10 @@ class DevEcoSessionActions(private val project: Project) {
 
     init {
         newSessionHandler = {
-            val existingHandled = ops.createNewSession(
+            ops.createNewSession(
                 onStateChange = effectiveOnStateChange,
                 onRefresh = effectiveOnRefresh,
             )
-            if (existingHandled) {
-                // If the reused session's tab is already open, init didn't consume
-                // pendingFileReference — add it directly to the live controller. The
-                // session guard keeps a handoff keyed to another session unconsumed.
-                val pendingRef = pendingFileReference
-                if (pendingRef != null) {
-                    val mgr = FileEditorManager.getInstance(project)
-                    val editor = mgr.openFiles.filterIsInstance<SessionVirtualFile>()
-                        .flatMap { mgr.getEditors(it).toList() }
-                        .filterIsInstance<SessionFileEditor>()
-                        .firstOrNull()
-                    if (editor != null && pendingTargets(editor.sessionFile.sessionId)) {
-                        editor.controller.addFileReference(pendingRef)
-                        pendingFileReference = null
-                    }
-                }
-                busy = false
-            }
         }
         stopSessionHandler = { id -> ops.stopSession(id) }
         jumpToSessionHandler = { sessionId, fileRef ->
@@ -173,9 +144,15 @@ class DevEcoSessionActions(private val project: Project) {
         }
     }
 
-    fun newSession() {
-        if (busy) return
-        val handler = newSessionHandler ?: return
+    /**
+     * Runs the new-session handler under the shared creation guard. Returns false while a
+     * creation is already in flight or when no handler is registered (the tool window is
+     * not composed yet); a staged next-session handoff then simply waits for a later
+     * creation to consume it.
+     */
+    fun newSession(): Boolean {
+        if (busy) return false
+        val handler = newSessionHandler ?: return false
         busy = true
         try {
             handler.invoke()
@@ -183,6 +160,7 @@ class DevEcoSessionActions(private val project: Project) {
             busy = false
             throw error
         }
+        return true
     }
 
     fun stopSession(sessionId: String) {

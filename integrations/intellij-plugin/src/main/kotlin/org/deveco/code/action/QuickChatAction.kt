@@ -55,14 +55,13 @@ class QuickChatAction :
         }
 
         val actions = DevEcoSessionActions.forProject(project)
-        // The handoff addresses whichever editor the new session's open constructs —
-        // clearing any stale key so it cannot be pinned to an unrelated session.
-        actions.pendingSessionId = null
-        actions.pendingFileReference = fileRef
-        val handler = actions.newSessionHandler
-        if (handler != null) {
-            handler.invoke()
-        } else {
+        // The handoff addresses whichever session the creation flow produces; the guarded
+        // entry serializes it against an in-flight bridge or toolbar creation — a busy
+        // rejection leaves the handoff staged, and a later creation consumes it.
+        actions.stageNextSessionHandoff(PendingChatHandoff(fileReference = fileRef))
+        if (!actions.newSession() && actions.newSessionHandler == null) {
+            // No creation will consume the handoff; drop it before showing the hint.
+            actions.removeNextSessionHandoff()
             Messages.showInfoMessage(
                 project,
                 MyMessageBundle.message("toolwindow.deveco.action.open.window"),
