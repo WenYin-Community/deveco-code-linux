@@ -9,8 +9,9 @@ import com.intellij.ide.plugins.PluginManagerCore
  * Starts the background UI class preload once per plugin classloader lifetime: at app
  * creation for a normal startup, and again when this plugin is dynamically (re)loaded with
  * a fresh classloader (the preloader's once-guard lives in the old loader and cannot carry
- * over). Registered via `<applicationListeners>` so the platform subscribes and
- * unsubscribes it with the plugin's own lifetime.
+ * over). A dynamic unload stops the preload thread early so it does not hold the old
+ * classloader for the rest of its enumeration. Registered via `<applicationListeners>` so
+ * the platform subscribes and unsubscribes it with the plugin's own lifetime.
  */
 class ToolWindowPreloadLifecycle :
     AppLifecycleListener,
@@ -25,6 +26,14 @@ class ToolWindowPreloadLifecycle :
             pluginDescriptor.pluginId
         ) {
             ToolWindowPreloader.schedule()
+        }
+    }
+
+    override fun beforePluginUnload(pluginDescriptor: IdeaPluginDescriptor, updateServices: Boolean) {
+        if (PluginManagerCore.getPluginByClassName(ToolWindowPreloadLifecycle::class.java.name) ==
+            pluginDescriptor.pluginId
+        ) {
+            ToolWindowPreloader.stop()
         }
     }
 }

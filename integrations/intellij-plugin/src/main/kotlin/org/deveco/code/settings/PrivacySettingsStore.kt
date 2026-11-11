@@ -52,6 +52,11 @@ object PrivacySettingsStore {
     @Throws(java.io.IOException::class)
     fun writeToolImprovementEnabled(enabled: Boolean) = writeSingle(TOOL_IMPROVEMENT_ENABLED_KEY, enabled)
 
+    // One lock covers the whole read-merge-write: the settings page applies on the EDT
+    // while the one-time consent migration runs on a pooled thread, so without this
+    // lock their concurrent cycles could lose updates or race on the temp file. This
+    // restores the serialization the EDT provided before the migration went async.
+    @Synchronized
     private fun writeSingle(key: String, value: Boolean) {
         val file = kvFile()
         Files.createDirectories(file.parent)
@@ -69,12 +74,19 @@ object PrivacySettingsStore {
             existing?.forEach { (k, v) -> put(k, v) }
             put(key, value)
         }
-        val tmp = file.resolveSibling("kv.json.${ProcessHandle.current().pid()}.tmp")
-        Files.writeString(tmp, merged.toString(), StandardCharsets.UTF_8)
+        // A unique temp name per write: concurrent IDE writers can no longer collide on
+        // the same temporary path, and a failed write cleans up after itself. The atomic
+        // move still lands every reader on either the old or the new file.
+        val tmp = Files.createTempFile(file.parent, "kv", ".tmp")
         try {
-            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE)
-        } catch (e: AtomicMoveNotSupportedException) {
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+            Files.writeString(tmp, merged.toString(), StandardCharsets.UTF_8)
+            try {
+                Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: AtomicMoveNotSupportedException) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(tmp)
         }
     }
 

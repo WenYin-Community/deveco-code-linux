@@ -24,13 +24,17 @@ object ToolImprovementConsentMigrator {
     fun migrate() {
         val props = PropertiesComponent.getInstance()
         val value = props.getValue(CONSENT_KEY) ?: return
-        props.unsetValue(CONSENT_KEY)
+        // Write kv.json first and clear the legacy key only after the write succeeds: a
+        // failed write then retries on the next launch instead of losing the consent
+        // value, and the retry re-reads and re-writes the same value it migrated.
         val enabled = value == "true"
         try {
             PrivacySettingsStore.writeToolImprovementEnabled(enabled)
-            log.info("Migrated tool improvement consent from IDE properties to kv.json (enabled=$enabled)")
         } catch (e: Exception) {
             log.warn("Failed to migrate tool improvement consent", e)
+            return
         }
+        props.unsetValue(CONSENT_KEY)
+        log.info("Migrated tool improvement consent from IDE properties to kv.json (enabled=$enabled)")
     }
 }

@@ -28,6 +28,14 @@ object ToolWindowPreloader {
     private val log = Logger.getInstance(ToolWindowPreloader::class.java)
     private val scheduled = AtomicBoolean(false)
 
+    // Flipped by ToolWindowPreloadLifecycle.beforePluginUnload so a dynamically unloaded
+    // plugin does not keep its old classloader alive for the rest of the enumeration.
+    // Class.forName itself is not interruptible, so a plain flag check bounds the
+    // retention to the definition currently in flight; interrupting the thread would
+    // only inject nondeterministic IO exceptions without shortening it further.
+    @Volatile
+    private var stopping = false
+
     // Resolved by name so an absent entry degrades to "keep loading lazily" instead of a
     // compile-time dependency. On the 261 line these locate the platform module jars that
     // hold Jewel, Compose and Skiko; on 243 those ship inside this plugin and are already
@@ -68,6 +76,10 @@ object ToolWindowPreloader {
         }
     }
 
+    fun stop() {
+        stopping = true
+    }
+
     private fun preload() {
         val startedAt = System.currentTimeMillis()
         try {
@@ -76,12 +88,16 @@ object ToolWindowPreloader {
             names.addAll(platformClassNames(loader))
             var defined = 0
             for (name in names) {
+                if (stopping) return
                 try {
                     Class.forName(name, false, loader)
                     defined++
-                } catch (e: Throwable) {
-                    // A class that cannot resolve off the EDT could not resolve on the EDT
-                    // either; skipping keeps first-use behavior identical.
+                } catch (e: ClassNotFoundException) {
+                    // A class that cannot resolve off the EDT could not resolve on the
+                    // EDT either; skipping keeps first-use behavior identical.
+                } catch (e: LinkageError) {
+                    // Optional-dependency failures (NoClassDefFoundError, ClassFormatError,
+                    // ...) resolve no better on the EDT; skip.
                 }
             }
             log.info(
