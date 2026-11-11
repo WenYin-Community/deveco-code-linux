@@ -23,9 +23,11 @@ internal fun SessionComposer(
     initialDraft: String,
     onDraftChanged: (String) -> Unit,
 ) {
-    // String (not TextFieldValue): the TextFieldValue overload of BasicTextField
-    // breaks CJK composition on the second keystroke (CMP-9380 / JBR-9928), while
-    // the String overload lets Compose own selection and composition internally.
+    // This String state mirrors the composer field for logic and drafts; the field
+    // itself is a state-based BasicTextField (see ComposerContent), whose internal
+    // buffer takes IME events directly and exposes explicit selection edits for
+    // programmatic writes (CMP-9380 / JBR-9928 only corrupt the TextFieldValue
+    // overload, not this path).
     var input by remember(controller.sessionId) { mutableStateOf(initialDraft) }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current

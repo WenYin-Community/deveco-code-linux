@@ -1,15 +1,18 @@
 package org.deveco.code.session.ui.composer
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldDecorator
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,7 +71,7 @@ private val log = Logger.getInstance("ComposerContent")
 private const val OPENCODE_TERMS_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/terms.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
 private const val OPENCODE_PRIVACY_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/privacy-statement.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
 
-@OptIn(ExperimentalTextApi::class)
+@OptIn(ExperimentalTextApi::class, ExperimentalFoundationApi::class)
 @Composable
 internal fun ComposerContent(
     controller: SessionController,
@@ -112,33 +116,48 @@ internal fun ComposerContent(
     var popupMaxHeight by remember { mutableStateOf(240.dp) }
     var composerBounds by remember { mutableStateOf(IntRect.Zero) }
 
-    // The String overload of BasicTextField keeps the previous selection when the
-    // text is replaced programmatically, leaving the caret mid-text (e.g. right
-    // after the slash of an inserted command), and exposes no API to move it —
-    // a remount only resets the selection to zero. Synthesize an End key on the
-    // focused component instead; the desktop key mapping turns it into LINE_END,
-    // which for these single-line inserts is the end of the text. User typing
-    // never takes this path, so IME composition stays untouched.
-    var userEdit by remember { mutableStateOf(true) }
-    val fieldFocused by interactionSource.collectIsFocusedAsState()
+    // TUI invariant via Compose's state-based text field: the component owns the
+    // text AND the caret. IME events land in its internal buffer with no controlled
+    // round-trip (the path CMP-9380 / JBR-9928 corrupt on macOS Wubi under the
+    // TextFieldValue overload), while every programmatic write goes through
+    // setInputText, which places the selection at the end of the new text — exactly
+    // like the TUI assigns cursorOffset after insertText.
+    val fieldState = remember(controller.sessionId) { TextFieldState(input) }
+    var mirroredText by remember(controller.sessionId) { mutableStateOf(input) }
+    var lastProgrammatic by remember(controller.sessionId) { mutableStateOf<String?>(null) }
+    fun setInputText(new: String) {
+        lastProgrammatic = new
+        fieldState.edit {
+            replace(0, length, new)
+            selection = TextRange(new.length)
+        }
+    }
+    LaunchedEffect(Unit) {
+        snapshotFlow { fieldState.text.toString() }.collect { t ->
+            if (t == mirroredText) return@collect
+            mirroredText = t
+            onInputChanged(t)
+            onDraftChanged(t)
+            if (t != lastProgrammatic) {
+                slashDismissed = false
+                mentionDismissed = false
+            }
+        }
+    }
+    // Parent string is authoritative for programmatic writes that bypass
+    // setInputText (send-clear, draft restore, future external writes); sync it
+    // into the field buffer only on divergence so user-edit echoes from the
+    // snapshotFlow above never reset the selection here.
+    LaunchedEffect(input) {
+        if (input != fieldState.text.toString()) setInputText(input)
+    }
+
+    // Cleanup: previously a synthetic End key was dispatched here to move the caret
+    // after programmatic inserts. With state-based fields the selection is written
+    // inside setInputText, so no synthetic key machinery remains.
     // Marks the synthetic bare-Enter dispatch below so onPreviewKeyEvent lets it
     // through to the text field (NEW_LINE) instead of treating it as a send.
     var pendingSyntheticNewline by remember { mutableStateOf(false) }
-    LaunchedEffect(input) {
-        if (userEdit) {
-            userEdit = false
-            return@LaunchedEffect
-        }
-        userEdit = false
-        if (!fieldFocused) return@LaunchedEffect
-        SwingUtilities.invokeLater {
-            val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
-                ?: return@invokeLater
-            val timestamp = System.currentTimeMillis()
-            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, timestamp, 0, KeyEvent.VK_END, KeyEvent.CHAR_UNDEFINED))
-            target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, timestamp, 0, KeyEvent.VK_END, KeyEvent.CHAR_UNDEFINED))
-        }
-    }
 
     val slashItems = remember(input, slashDismissed, controller.models, controller.commands) {
         if (slashDismissed) emptyList()
@@ -199,33 +218,29 @@ internal fun ComposerContent(
                     // instead so the user can add arguments before sending.
                     "compact" -> {
                         if (controller.ready) controller.sendPrompt("/compact")
-                        onInputChanged("")
-                        onDraftChanged("")
+                        setInputText("")
                     }
                     "new" -> {
-                        onInputChanged("")
-                        onDraftChanged("")
+                        setInputText("")
                         DevEcoSessionActions.forProject(project).newSession()
                     }
                     "models" -> {
-                        onInputChanged("/models ")
-                        onDraftChanged("/models ")
+                        setInputText("/models ")
                         slashDismissed = false
                     }
                 }
             }
             SlashItemKind.MODEL -> {
                 item.payload?.let { controller.selectModel(it) }
-                onInputChanged("")
-                onDraftChanged("")
+                setInputText("")
             }
             SlashItemKind.SERVER_COMMAND -> {
                 item.payload?.let { commandName ->
-                    // No trailing space: a leftover space after the command name would
-                    // read as an empty argument and keep the caret racing the synthetic
-                    // End key, suppressing completions while the user backspaces.
-                    onInputChanged("/$commandName")
-                    onDraftChanged("/$commandName")
+                    // Trailing space: without it, text typed right after selection fuses
+                    // with the command name ("/cmd" + "foo" -> invalid "/cmdfoo"). A
+                    // leftover space reads as no argument in computeSlashItems, so
+                    // completions keep working while the user backspaces.
+                    setInputText("/$commandName ")
                     slashDismissed = true
                 }
             }
@@ -237,8 +252,7 @@ internal fun ComposerContent(
         val atIndex = input.lastIndexOf('@')
         if (atIndex < 0) return false
         val newText = input.substring(0, atIndex)
-        onInputChanged(newText)
-        onDraftChanged(newText)
+        setInputText(newText)
         // Check if file already exists in fileReferences or attachments
         val existingFileRef = (localFileReferences ?: controller.fileReferences).any { it.path == item.path }
         val existingAttachment = (localAttachments ?: controller.attachments).any { it.path == item.path }
@@ -385,158 +399,161 @@ internal fun ComposerContent(
                     }
                 }
             }
-            BasicTextField(
-                value = input,
-                onValueChange = {
-                    val textChanged = it != input
-                    onInputChanged(it)
-                    onDraftChanged(it)
-                    if (textChanged) {
-                        userEdit = true
-                        slashDismissed = false
-                        mentionDismissed = false
+            val fieldTextStyle = TextStyle(color = if (!enabled) muted else textColor, fontSize = 13.sp, lineHeight = 19.sp)
+            val fieldModifier = Modifier.fillMaxWidth().heightIn(min = 52.dp, max = 140.dp)
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    // Our own synthetic bare Enter (dispatched below to turn Shift+Enter
+                    // into a newline): bypass every branch — including the mention/slash
+                    // popup Enter handlers — so it reaches the text field and the desktop
+                    // key mapping turns it into NEW_LINE at the real caret.
+                    if (pendingSyntheticNewline) {
+                        pendingSyntheticNewline = false
+                        return@onPreviewKeyEvent false
                     }
-                },
-                enabled = enabled,
-                textStyle = TextStyle(color = if (!enabled) muted else textColor, fontSize = 13.sp, lineHeight = 19.sp),
-                cursorBrush = SolidColor(caretColor),
-                interactionSource = interactionSource,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp, max = 140.dp)
-                    .focusRequester(focusRequester)
-                    .onPreviewKeyEvent { event ->
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        // Our own synthetic bare Enter (dispatched below to turn Shift+Enter
-                        // into a newline): bypass every branch — including the mention/slash
-                        // popup Enter handlers — so it reaches the text field and the desktop
-                        // key mapping turns it into NEW_LINE at the real caret.
-                        if (pendingSyntheticNewline) {
-                            pendingSyntheticNewline = false
-                            return@onPreviewKeyEvent false
+                    // Recalled slash/mention text must not reopen its completion
+                    // popup: while a popup is visible Up/Down navigate the popup
+                    // instead of the history, freezing recall at the first slash
+                    // entry. Suppress until the next real keystroke resets the
+                    // flags in the snapshotFlow above.
+                    fun applyRecalledInput(text: String) {
+                        setInputText(text)
+                        slashDismissed = true
+                        mentionDismissed = true
+                    }
+                    when {
+                        mentionVisible && event.key == Key.DirectionUp -> {
+                            if (mentionItems.isNotEmpty()) {
+                                mentionIndex = (mentionIndex - 1 + mentionItems.size) % mentionItems.size
+                            }
+                            true
                         }
-                        when {
-                            mentionVisible && event.key == Key.DirectionUp -> {
-                                if (mentionItems.isNotEmpty()) {
-                                    mentionIndex = (mentionIndex - 1 + mentionItems.size) % mentionItems.size
-                                }
-                                true
+                        mentionVisible && event.key == Key.DirectionDown -> {
+                            if (mentionItems.isNotEmpty()) {
+                                mentionIndex = (mentionIndex + 1) % mentionItems.size
                             }
-                            mentionVisible && event.key == Key.DirectionDown -> {
-                                if (mentionItems.isNotEmpty()) {
-                                    mentionIndex = (mentionIndex + 1) % mentionItems.size
-                                }
-                                true
+                            true
+                        }
+                        mentionVisible && event.key == Key.Escape -> {
+                            mentionDismissed = true
+                            true
+                        }
+                        mentionVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
+                            if (mentionItems.isNotEmpty()) selectMentionItem(mentionItems[effectiveMentionIndex])
+                            else false
+                        }
+                        slashVisible && event.key == Key.DirectionUp -> {
+                            if (slashItems.isNotEmpty()) {
+                                slashIndex = (slashIndex - 1 + slashItems.size) % slashItems.size
                             }
-                            mentionVisible && event.key == Key.Escape -> {
-                                mentionDismissed = true
-                                true
+                            true
+                        }
+                        slashVisible && event.key == Key.DirectionDown -> {
+                            if (slashItems.isNotEmpty()) {
+                                slashIndex = (slashIndex + 1) % slashItems.size
                             }
-                            mentionVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
-                                if (mentionItems.isNotEmpty()) selectMentionItem(mentionItems[effectiveMentionIndex])
-                                else false
-                            }
-                            slashVisible && event.key == Key.DirectionUp -> {
-                                if (slashItems.isNotEmpty()) {
-                                    slashIndex = (slashIndex - 1 + slashItems.size) % slashItems.size
-                                }
-                                true
-                            }
-                            slashVisible && event.key == Key.DirectionDown -> {
-                                if (slashItems.isNotEmpty()) {
-                                    slashIndex = (slashIndex + 1) % slashItems.size
-                                }
-                                true
-                            }
-                            slashVisible && event.key == Key.Escape -> {
-                                slashDismissed = true
-                                true
-                            }
-                            slashVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
-                                if (slashItems.isNotEmpty()) selectSlashItem(slashItems[effectiveSlashIndex])
-                                else false
-                            }
-                            !mentionVisible && !slashVisible && event.key == Key.DirectionUp && !event.isShiftPressed -> {
-                                val prev = controller.navigateHistory(-1)
-                                if (prev != null) {
-                                    onInputChanged(prev.text)
-                                    onDraftChanged(prev.text)
-                                    val target = localAttachments ?: controller.attachments
-                                    target.clear()
-                                    target.addAll(prev.attachments)
-                                    val targetRefs = localFileReferences ?: controller.fileReferences
-                                    targetRefs.clear()
-                                    targetRefs.addAll(prev.fileReferences)
-                                    true
-                                } else false
-                            }
-                            !mentionVisible && !slashVisible && event.key == Key.DirectionDown && !event.isShiftPressed -> {
-                                val next = controller.navigateHistory(1)
+                            true
+                        }
+                        slashVisible && event.key == Key.Escape -> {
+                            slashDismissed = true
+                            true
+                        }
+                        slashVisible && (event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.Tab) && !event.isShiftPressed -> {
+                            if (slashItems.isNotEmpty()) selectSlashItem(slashItems[effectiveSlashIndex])
+                            else false
+                        }
+                        !mentionVisible && !slashVisible && event.key == Key.DirectionUp && !event.isShiftPressed -> {
+                            // Multi-line input: let the caret move up through earlier lines;
+                            // history recall only fires once the caret already sits on the
+                            // first line (TUI parity: "if (cursorOffset !== 0) return false").
+                            val textBeforeCaret = fieldState.text.toString()
+                                .substring(0, fieldState.selection.min)
+                            val caretAtFirstLine = '\n' !in textBeforeCaret
+                            if (!caretAtFirstLine) return@onPreviewKeyEvent false
+                            val prev = controller.navigateHistory(-1)
+                            if (prev != null) {
+                                applyRecalledInput(prev.text)
                                 val target = localAttachments ?: controller.attachments
+                                target.clear()
+                                target.addAll(prev.attachments)
                                 val targetRefs = localFileReferences ?: controller.fileReferences
-                                if (next != null) {
-                                    onInputChanged(next.text)
-                                    onDraftChanged(next.text)
-                                    target.clear()
-                                    target.addAll(next.attachments)
-                                    targetRefs.clear()
-                                    targetRefs.addAll(next.fileReferences)
-                                } else {
-                                    onInputChanged("")
-                                    onDraftChanged("")
-                                    target.clear()
-                                    targetRefs.clear()
-                                }
+                                targetRefs.clear()
+                                targetRefs.addAll(prev.fileReferences)
                                 true
+                            } else false
+                        }
+                        !mentionVisible && !slashVisible && event.key == Key.DirectionDown && !event.isShiftPressed -> {
+                            // Mirror of Up: caret moves down through later lines first; the
+                            // next-history recall only fires from the last line.
+                            val textAfterCaret = fieldState.text.toString()
+                                .substring(fieldState.selection.max)
+                            val caretAtLastLine = '\n' !in textAfterCaret
+                            if (!caretAtLastLine) return@onPreviewKeyEvent false
+                            val next = controller.navigateHistory(1)
+                            val target = localAttachments ?: controller.attachments
+                            val targetRefs = localFileReferences ?: controller.fileReferences
+                            if (next != null) {
+                                applyRecalledInput(next.text)
+                                target.clear()
+                                target.addAll(next.attachments)
+                                targetRefs.clear()
+                                targetRefs.addAll(next.fileReferences)
+                            } else {
+                                applyRecalledInput("")
+                                target.clear()
+                                targetRefs.clear()
                             }
-                            event.key == Key.Enter || event.key == Key.NumPadEnter -> {
-                                when {
-                                    // Shift+Enter / Shift+NumPadEnter inserts a newline. The
-                                    // platform key mapping only maps a *bare* Enter/NumPadEnter to
-                                    // NEW_LINE (Shift+Enter maps to null, and we'd otherwise send),
-                                    // so consume the shifted key and re-dispatch a modifier-free
-                                    // Enter KEY_PRESSED — the same synthetic-key mechanism the End
-                                    // caret fix above already relies on. The pendingSyntheticNewline
-                                    // guard at the top of this handler keeps that bare Enter from
-                                    // being interpreted as a send or as a popup selection.
-                                    event.isShiftPressed -> {
-                                        // Capture the focus owner during the real key event (it is
-                                        // the Compose host); re-resolving inside invokeLater could
-                                        // hand the bare Enter to a different component if focus moved
-                                        // in between. Compose key dispatch inside dispatchEvent is
-                                        // synchronous, so the preview guard above has already
-                                        // consumed the flag by the time it returns — the finally only
-                                        // covers a dispatch that never reached the guard, since a
-                                        // stale flag would swallow the user's next real Enter as a
-                                        // newline instead of a send.
-                                        val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
-                                        if (target != null) {
-                                            pendingSyntheticNewline = true
-                                            SwingUtilities.invokeLater {
-                                                try {
-                                                    val timestamp = System.currentTimeMillis()
-                                                    target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
-                                                    target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
-                                                } finally {
-                                                    pendingSyntheticNewline = false
-                                                }
+                            true
+                        }
+                        event.key == Key.Enter || event.key == Key.NumPadEnter -> {
+                            when {
+                                // Shift+Enter / Shift+NumPadEnter inserts a newline. The
+                                // platform key mapping only maps a *bare* Enter/NumPadEnter to
+                                // NEW_LINE (Shift+Enter maps to null, and we'd otherwise send),
+                                // so consume the shifted key and re-dispatch a modifier-free
+                                // Enter KEY_PRESSED. The pendingSyntheticNewline guard at the
+                                // top of this handler keeps that bare Enter from being
+                                // interpreted as a send or as a popup selection.
+                                event.isShiftPressed -> {
+                                    // Capture the focus owner during the real key event (it is
+                                    // the Compose host); re-resolving inside invokeLater could
+                                    // hand the bare Enter to a different component if focus moved
+                                    // in between. Compose key dispatch inside dispatchEvent is
+                                    // synchronous, so the preview guard above has already
+                                    // consumed the flag by the time it returns — the finally only
+                                    // covers a dispatch that never reached the guard, since a
+                                    // stale flag would swallow the user's next real Enter as a
+                                    // newline instead of a send.
+                                    val target = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                                    if (target != null) {
+                                        pendingSyntheticNewline = true
+                                        SwingUtilities.invokeLater {
+                                            try {
+                                                val timestamp = System.currentTimeMillis()
+                                                target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_PRESSED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
+                                                target.dispatchEvent(KeyEvent(target, KeyEvent.KEY_RELEASED, timestamp, 0, KeyEvent.VK_ENTER, KeyEvent.CHAR_UNDEFINED))
+                                            } finally {
+                                                pendingSyntheticNewline = false
                                             }
                                         }
-                                        true
                                     }
-                                    // No composition check here (unavailable on the String
-                                    // overload); on Windows the IME consumes Enter while
-                                    // composing, so this only fires on committed input.
-                                    else -> {
-                                        if (!isResponding) onSend()
-                                        true
-                                    }
+                                    true
+                                }
+                                else -> {
+                                    if (!isResponding) onSend()
+                                    true
                                 }
                             }
-                            else -> false
                         }
-                    },
-                decorationBox = { innerTextField ->
+                        else -> false
+                    }
+                }
+            val fieldDecorator = object : TextFieldDecorator {
+                @Composable
+                override fun Decoration(innerTextField: @Composable () -> Unit) {
                     Box(Modifier.fillMaxWidth().heightIn(min = 38.dp)) {
-                        val hasContent = input.isNotEmpty() ||
+                        val hasContent = fieldState.text.isNotEmpty() ||
                             !localAttachments.isNullOrEmpty() || controller.attachments.isNotEmpty() ||
                             !localFileReferences.isNullOrEmpty() || controller.fileReferences.isNotEmpty()
                         if (!hasContent) {
@@ -576,7 +593,17 @@ internal fun ComposerContent(
                             popupMaxHeight = popupMaxHeight,
                         )
                     }
-                },
+                }
+            }
+            BasicTextField(
+                state = fieldState,
+                enabled = enabled,
+                textStyle = fieldTextStyle,
+                interactionSource = interactionSource,
+                cursorBrush = SolidColor(caretColor),
+                decorator = fieldDecorator,
+                scrollState = rememberScrollState(),
+                modifier = fieldModifier,
             )
             Spacer(Modifier.height(2.dp))
             Box(Modifier.fillMaxWidth()) {
