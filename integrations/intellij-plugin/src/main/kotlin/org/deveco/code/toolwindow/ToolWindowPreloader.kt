@@ -37,8 +37,12 @@ object ToolWindowPreloader {
     // and its CoreTextField/KeyboardActions defineClass cost is what the freeze reports
     // captured. The chat theme also constructs the markdown processor, the GFM table
     // extension and the markdown styling bridge directly, so those jars need seeds too.
-    private val platformSeedClasses = listOf(
+    // The two jewel bridge names seed one jar across platform lines: 243 ships Jewel 0.27,
+    // where JewelComposePanel is a class, while 261 renamed the wrapper composable and
+    // has no such class — whichever name the running line cannot resolve is skipped.
+    internal val platformSeedClasses = listOf(
         "org.jetbrains.jewel.bridge.JewelComposePanel",
+        "org.jetbrains.jewel.bridge.JewelComposePanelWrapperKt",
         "androidx.compose.foundation.text.CoreTextFieldKt",
         "androidx.compose.runtime.Composable",
         "androidx.compose.ui.Modifier",
