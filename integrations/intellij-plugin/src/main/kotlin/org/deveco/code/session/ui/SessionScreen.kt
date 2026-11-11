@@ -175,14 +175,14 @@ private fun SessionContent(
                 it.parent.id !in terminalAnchorIds)
     }
     // Item keys in LazyColumn content order, feeding the scrollbar's persistent height cache.
-    val itemKeys by remember {
-        derivedStateOf {
-            buildList<Any> {
-                groups.forEach { add(it.parent.id) }
-                if (controller.responding || controller.serverTurn) add("loading-indicator")
-                add("conversation-bottom-anchor")
-            }
-        }
+    // Rebuilt on every composition: a remember/derivedStateOf cache here goes stale —
+    // the lambda only reads plain locals (groups, controller.responding), so the derived
+    // value is computed once and never invalidated, leaving the scrollbar adapter with a
+    // 1-key list and a content height of ~30px forever (thumb never drawn).
+    val itemKeys = buildList<Any> {
+        groups.forEach { add(it.parent.id) }
+        if (controller.responding || controller.serverTurn) add("loading-indicator")
+        add("conversation-bottom-anchor")
     }
     val editorBackground = com.intellij.openapi.editor.colors.EditorColorsManager.getInstance().globalScheme.defaultBackground.toComposeColor()
     val conversationBackground = editorBackground
