@@ -16,8 +16,8 @@
 {
   "preCheckCompleted": true,
   "clarificationTimestamp": "",
-  "designSource": "pixso | figma | mastergo",
-  "acquisitionMethod": "pixso-link | selected-design-node | developer-provided | figma-link | mastergo-link | mastergo-selection | mastergo-d2c",
+  "designSource": "pixso | figma | mastergo | lanhu | others-html | others-visual",
+  "acquisitionMethod": "pixso-link | selected-design-node | developer-provided | figma-link | mastergo-link | mastergo-selection | mastergo-d2c | lanhu-link | html-upload | screenshot-upload",
   "targetPage": {
     "pageId": "",
     "pageName": "",
@@ -56,7 +56,7 @@
     "occurrencePath": "",
     "fullPath": ""
   },
-  "assetProvisionMode": "developer-provided | pixso-mcp-export | anchor-local-assets",
+  "assetProvisionMode": "developer-provided | pixso-mcp-export | anchor-local-assets | html-bundled",
   "assetRootPath": "",
   "assetMappingTablePath": ""
 }
@@ -70,8 +70,8 @@
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `designSource` | string | 设计平台，只允许 `pixso`、`figma` 或 `mastergo`。开发者提供 Pixso DSL 仍属于 `pixso` |
-| `acquisitionMethod` | string | `pixso` 可用 `pixso-link`、`selected-design-node`、`developer-provided`；`figma` 当前只允许 `figma-link`；`mastergo` 可用 `mastergo-link`、`mastergo-selection`、`mastergo-d2c` |
+| `designSource` | string | 设计平台，只允许 `pixso`、`figma`、`mastergo`、`lanhu`、`others-html` 或 `others-visual`。开发者提供 Pixso DSL 仍属于 `pixso`；蓝湖链接属于 `lanhu`；用户给出 HTML 设计源路径属于 `others-html`；用户给出整页截图图片属于 `others-visual` |
+| `acquisitionMethod` | string | `pixso` 可用 `pixso-link`、`selected-design-node`、`developer-provided`；`figma` 当前只允许 `figma-link`；`mastergo` 可用 `mastergo-link`、`mastergo-selection`、`mastergo-d2c`；`lanhu` 固定为 `lanhu-link`；`others-html` 固定为 `html-upload`；`others-visual` 固定为 `screenshot-upload` |
 | `targetPage` | object | 目标页面信息 |
 | `targetPage.pageName` | string | 目标页面名称，用户指定或由当前来源工具读取 |
 | `targetPage.nodeName` | string | 目标节点名称，用户指定时可填 |
@@ -96,12 +96,12 @@
 | `systemUiPreference.drawGestureBar` | boolean | `false` | 是否绘制手势条作为业务 UI |
 | `systemUiPreference.immersiveRequired` | boolean | `true` | 是否需要沉浸式 |
 | `systemUiPreference.userOverrides` | object | `{}` | 用户指定的其它系统 UI 字段覆盖 |
-| `assetProvisionMode` | string | 按来源 | Pixso 默认为 `pixso-mcp-export`；Figma 固定为 `anchor-local-assets`；用户提供 Pixso资源时为 `developer-provided`。MasterGo 资源以其 input-contract 与资源 manifest 为准，不套用其他来源枚举 |
+| `assetProvisionMode` | string | 按来源 | Pixso 默认为 `pixso-mcp-export`；Figma 固定为 `anchor-local-assets`；用户提供 Pixso资源时为 `developer-provided`。MasterGo 资源以其 input-contract 与资源 manifest 为准，不套用其他来源枚举；others-html 固定为 `html-bundled`（资源随设计源目录一起提供）；others-visual 无设计源资源目录，默认 `developer-provided`（素材按设计文档推导或复用工程现有资源）；蓝湖见下节（`lanhu-mcp-bundle`） |
 | `assetRootPath` | string | `""` | 开发者提供时的资源根目录 |
 | `assetMappingTablePath` | string | `""` | 开发者提供时的对照表路径 |
-| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma/MasterGo/蓝湖 为阶段 5。用户明确跳过则为 `false` |
-| `visualCalibration.scoreThreshold` | number | `80` | 每轮评分达标阈值；轮数上限见 `visualCalibration.maxRounds`（默认 5） |
-| `visualCalibration.maxRounds` | number | `5` | 仅 Full 使用；最多有效评分轮数（含 Round 1 基线轮），1–5 的整数，仅可下调不可超过 5。用户明确提及轮数上限时写入 |
+| `visualCalibration.enabled` | boolean | `true` | 仅 Full 使用；Pixso 为阶段 9，Figma/MasterGo/蓝湖/others-html/others-visual 为阶段 5。用户明确跳过则为 `false`——others-html 下 `false` 表示**用户显式放弃画面复核**（只写 skipped 报告），与「工具或环境故障」严格区分：故障必须 blocked，不得靠 skipped 通过 |
+| `visualCalibration.scoreThreshold` | number | `80`（六来源一致） | 每轮评分达标阈值。六个设计来源的视觉校准均为评分制且缺省一致；用户明确指定时写入（如 90） |
+| `visualCalibration.maxRounds` | number | `5`（六来源一致） | 最多有效评分轮数（含 Round 1 基线轮），1–5 的整数，仅可下调不可超过 5。用户明确提及轮数上限时写入；others-html 每轮构建成本高，需要收紧时由用户按轮下调 |
 
 ### 阶段自动判定项
 

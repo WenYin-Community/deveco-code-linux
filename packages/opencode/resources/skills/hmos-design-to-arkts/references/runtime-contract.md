@@ -19,7 +19,7 @@
 
 只有 `workflow-state.json` 能决定：
 
-- 当前设计来源（Pixso 或 Figma）；
+- 当前设计来源（`pixso` / `figma` / `mastergo` / `others-html` / `others-visual`）；
 - 当前 variant；
 - 当前阶段；
 - 已完成阶段；
@@ -38,7 +38,7 @@ Agent 在开始某阶段前必须执行 `stage-start`。正常阶段执行只有
 - 根据阶段编号自行拼接文件路径；
 - 提前读取下一阶段；
 - 同时读取 Full 和 Fast 阶段；
-- 同时读取 Pixso 和 Figma 阶段；
+- 同时读取多个设计来源的阶段（Pixso / Figma / MasterGo / others-html / others-visual）；
 - 依赖对旧 monolithic workflow 的记忆执行阶段。
 
 阶段文件不需要互相链接。跨阶段数据必须从运行产物、gate 或 workflow-state 读取。
@@ -59,7 +59,7 @@ Controller 脚本路径：`<designToArktsSkillRoot>/scripts/workflow.mjs`。
 ### init
 
 ```text
-node scripts/workflow.mjs --mode init --source pixso|figma|mastergo --variant full|fast --run-dir <runDir>
+node scripts/workflow.mjs --mode init --source pixso|figma|mastergo|lanhu|others-html|others-visual --variant full|fast --run-dir <runDir>
 ```
 
 校验设计来源、variant 和对应 catalog，校验所有阶段文件存在且路径未越界，计算 `workflowDigest`，创建 `stage-gates/`，创建 `workflow-state.json`（当前阶段为 1），生成初始 Todo payload。省略 `--source` 仅为旧 Pixso 调用兼容，默认 `pixso`；新调用必须显式传入。返回 `nextRequiredAction: stage_start`，不要求立即调用 `todowrite`。
@@ -189,7 +189,9 @@ passed 流程：
 2. 校验 `requestedStage === currentStage`（或进入幂等重放判断）。
 3. 拒绝 `blocked`、`completed` 以及 passed 专属的 `awaiting_confirmation` 状态。
 4. 需要确认的阶段必须已经记录在 `confirmedStages`；该确认要求仅约束通过。
-5. 执行阶段特有确定性校验：Pixso Full 阶段 9 视觉校准证据、Figma Full 阶段 5 视觉校准证据；所有来源的阶段 1 必须存在合法需求澄清证据（见下）；Pixso 阶段 3 现场完成时必须存在通过 repo-context 断言的 `stage2/repo-context.json`，Pixso 阶段 5 现场完成时 `design-doc.md` 必须包含与 repo-context 一致的存量复用结论（契约见 [repo-context.md](repo-context.md)；两者均为 live-only，已完成阶段的重放不追溯）。
+5. 执行阶段特有确定性校验：Pixso Full 阶段 9 视觉校准证据、Figma Full 阶段 5 视觉校准证据；others-html 与 others-visual 的 Full 阶段 5 都走**评分**校验——报告 schema、轮次、结束原因、评分产物与 checks 与 Figma 阶段 5 同构，另加评分输入完整性校验（candidate / reference 规范路径与哈希对账、各轮截图互不相同、单轮评分目录唯一、报告分数与脚本产物一致、忽略带取值受上限约束）与源独特护栏（临时预览必须字节恢复、确认快照不得变化、参考帧不得为拼接图或解裁预览，工程根缺失时修复对账拒收）；其余按来源：others-visual 阶段 1 校验截图/`visual_probe`/识别三份证据与 spec↔probe 对账、阶段 2 校验六文件确认快照、`stage2/initial-build-report.json`（success/command/exitCode/completedAt）与实现保真（确认字号/圆角/色值必须落盘）、阶段 4 复核实现保真；所有来源的阶段 1 必须存在合法需求澄清证据（见下）；Pixso 阶段 3 现场完成时必须存在通过 repo-context 断言的 `stage2/repo-context.json`，Pixso 阶段 5 现场完成时 `design-doc.md` 必须包含与 repo-context 一致的存量复用结论（契约见 [repo-context.md](repo-context.md)；两者均为 live-only，已完成阶段的重放不追溯）。
+
+   **源独特策略（不影响主流源行为）**：others-html 额外执行时间戳文件窗（`clarificationTimestamp` 不得为整分零秒、不得早于文件写入 15 分钟以上或晚于写入）、ledger 时序校验（首笔 `invokedAt` 不得晚于 ledger 文件创建、末笔 `completedAt` 不得晚于 ledger 最后写入）；others-visual 的构建报告与确认记录也执行文件时间窗。这些是有意的源独特加固，不是主流源的通用要求；主流源只要求合法 ISO 字段。
 6. 构造 canonical passed Gate 并写入。
 7. Figma 阶段 2 passed 时，由 Controller 在 Gate 之后、state 推进之前原子更新 run-index 当前记录（见 [Figma run-index 语义](#figma-run-index-语义)）。
 8. 推进 `completedStages/currentStage/status`。
@@ -264,7 +266,7 @@ awaiting_confirmation
 
 Agent 不得直接修改 `workflow-state.json`。等待确认、接受、要求修订和 blocked 状态均由 Controller 原子写入。
 
-Pixso Full 阶段 5 使用完成前确认；Figma Full 阶段 2 使用实现前中段确认；Fast 不需要确认。
+Pixso Full 阶段 5 使用完成前确认；Figma/others-html/others-visual Full 阶段 2 使用实现前中段确认；Fast 不需要确认。
 
 确认阶段不得跳过：组件树不正确时停留修订；用户确认后调用 `stage-complete --result passed`，由 Controller 生成 Gate 并推进阶段。
 
@@ -378,11 +380,11 @@ Gate 路径由 Controller 内部 `gatePath(runDir, stage)` 生成：
 
 该路径不返回给 `stage-start`，也不要求 Agent 读取或写入。Gate 文件作为 Controller 内部的恢复与审计记录。
 
-Controller 在 `stage-complete` 时根据 `--result` 决定推进或阻塞。阶段特有的确定性校验（Pixso Full 阶段 9 视觉校准报告、Figma Full 阶段 5 视觉校准报告）由 Controller 在生成 passed Gate 前保留执行。
+Controller 在 `stage-complete` 时根据 `--result` 决定推进或阻塞。阶段特有的确定性校验（Pixso Full 阶段 9 视觉校准报告、Figma/others-visual/others-html Full 阶段 5 视觉校准报告）由 Controller 在生成 passed Gate 前保留执行。
 
 ## 需求澄清证据
 
-`<runDir>/requirement-clarification.json` 由阶段 1 创建（Pixso、Figma、MasterGo一致），是后续阶段的需求输入源。阶段 1 `stage-complete --result passed` 前必须存在该文件，且通过最小结构校验：根值必须是非 null、非数组的 JSON 对象（JSON `null`、`false`、`0`、字符串和数组均拒绝）、`preCheckCompleted=true`、`designSource` 与当前 catalog 一致（Pixso 为 `pixso`、Figma 为 `figma`、MasterGo 为 `mastergo`）；`visualCalibration` 存在时必须是非 null、非数组的对象（字段不存在时跳过可选校验，`visualCalibration: null` 是类型错误），其 `enabled` 存在时必须为 boolean、`scoreThreshold` 存在时必须为有限 number；`enabled` 和 `scoreThreshold` 保持可选语义，默认启用与默认阈值行为不变。该文件在 `stage-start 1` 之前不要求存在，由阶段 1 执行过程生成；Controller 只验证证据，不生成、修复或回写该文件，也不为缺失字段补默认值。阶段 1 完成后，后续 `status`、`stage-start`、`confirm` 和 `stage-complete` 的 completed-stage 复核会持续校验该证据，文件被删除、损坏或根值/字段类型非法时按 completed-stage evidence 问题拒绝。字段定义与各阶段的补全职责以 `references/requirement-clarification.md` 为准。
+`<runDir>/requirement-clarification.json` 由阶段 1 创建（各设计来源一致），是后续阶段的需求输入源。阶段 1 `stage-complete --result passed` 前必须存在该文件，且通过最小结构校验：根值必须是非 null、非数组的 JSON 对象（JSON `null`、`false`、`0`、字符串和数组均拒绝）、`preCheckCompleted=true`、`designSource` 与当前 catalog 一致（Pixso 为 `pixso`、Figma 为 `figma`、MasterGo 为 `mastergo`、蓝湖为 `lanhu`、others-html 为 `others-html`、others-visual 为 `others-visual`）；`visualCalibration` 存在时必须是非 null、非数组的对象（字段不存在时跳过可选校验，`visualCalibration: null` 是类型错误），其 `enabled` 存在时必须为 boolean、`scoreThreshold` 存在时必须为有限 number；`enabled` 和 `scoreThreshold` 保持可选语义，默认启用与默认阈值行为不变；`scoreThreshold` / `maxRounds` 被全部六源（`pixso` / `figma` / `mastergo` / `lanhu` / `others-visual` / `others-html`）的评分阶段消费，缺省一致（80/5）。该文件在 `stage-start 1` 之前不要求存在，由阶段 1 执行过程生成；Controller 只验证证据，不生成、修复或回写该文件，也不为缺失字段补默认值。阶段 1 完成后，后续 `status`、`stage-start`、`confirm` 和 `stage-complete` 的 completed-stage 复核会持续校验该证据，文件被删除、损坏或根值/字段类型非法时按 completed-stage evidence 问题拒绝。字段定义与各阶段的补全职责以 `references/requirement-clarification.md` 为准。
 
 ## Figma run-index 语义
 
@@ -418,6 +420,6 @@ Full 运行目录为 `.deveco/design-to-arkts/runs/{runId}/`，Fast 运行目录
 - 不得用自然语言总结、对话历史或 TodoList 状态替代 gate。
 - `blocked` 状态不得由恢复逻辑静默改回 `running`。
 - Pixso 不得删除或绕过 `Index.ets` 稳定启动入口；Figma 也不得生成竞争性独立 `@Entry` 壳，不得覆盖既有 Index/默认页，新页面必须以可导出 `@Component` 注册到 Index 或项目现有集中路由结构，并遵循能力 `hmos-d2a-react-to-arkui`（注册表 → references/capabilities/hmos-d2a-react-to-arkui/INSTRUCTIONS.md）的 Figma 编排输出契约。
-- 不得用替代链路绕过当前来源的硬依赖：Pixso 固定脚本/Pixso MCP，Figma Anchor MCP/能力 `hmos-d2a-react-to-arkui`（注册表 → references/capabilities/hmos-d2a-react-to-arkui/INSTRUCTIONS.md）。
+- 不得用替代链路绕过当前来源的硬依赖：Pixso 固定脚本/Pixso MCP，Figma Anchor MCP/能力 `hmos-d2a-react-to-arkui`（注册表 → references/capabilities/hmos-d2a-react-to-arkui/INSTRUCTIONS.md），others-html 能力 `hmos-d2a-html-to-arkui`，others-visual 固定 `scripts/visual_probe.mjs` 单次取样 + `recognize_ui_components`（或 M1 主模型一次性读图）+ `hmos-d2a-solution-design` 的 others-visual 分支。
 - Agent 不得自行创建、修改或覆盖 `stageNN-gate.json`。
 - 不得把 DSL 文本、工具原始输出或其它不可信长文本直接作为 `--reason-code` 命令行参数。
