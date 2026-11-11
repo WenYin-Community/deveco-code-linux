@@ -71,21 +71,7 @@ export const SkillTool = Tool.define(
             const entries = [...notes, ...existing.filter((f): f is string => f !== null)];
             return {
               title: `Loaded skill: ${info.name}`,
-              output: [
-                `<skill_content name="${info.name}">`,
-                `# Skill: ${info.name}`,
-                "",
-                info.content.trim(),
-                "",
-                `Base directory for this skill: ${base}`,
-                "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-                "Note: file list is sampled.",
-                "",
-                "<skill_files>",
-                entries.map((e) => `<file>${e}</file>`).join("\n"),
-                "</skill_files>",
-                "</skill_content>",
-              ].join("\n"),
+              output: render(info.name, info.content, base, entries),
               metadata: {
                 name: info.name,
                 dir,
@@ -105,21 +91,7 @@ export const SkillTool = Tool.define(
 
           return {
             title: `Loaded skill: ${info.name}`,
-            output: [
-              `<skill_content name="${info.name}">`,
-              `# Skill: ${info.name}`,
-              "",
-              info.content.trim(),
-              "",
-              `Base directory for this skill: ${base}`,
-              "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-              "Note: file list is sampled.",
-              "",
-              "<skill_files>",
-              entries.map((e) => `<file>${e}</file>`).join("\n"),
-              "</skill_files>",
-              "</skill_content>",
-            ].join("\n"),
+            output: render(info.name, info.content, base, entries),
             metadata: {
               name: info.name,
               dir,
@@ -129,3 +101,28 @@ export const SkillTool = Tool.define(
     }
   }),
 )
+
+/**
+ * The companion list goes **before** the skill body on purpose: tool output is
+ * capped (50 KB / 2000 lines by default) and a skill whose SKILL.md alone exceeds
+ * that cap — `hmos-dfx-analyzer` is ~52 KB — would otherwise lose its whole
+ * `<skill_files>` block to truncation, which silently degrades the skill instead
+ * of failing.
+ */
+function render(name: string, content: string, base: string, entries: string[]) {
+  return [
+    `<skill_content name="${name}">`,
+    `# Skill: ${name}`,
+    "",
+    `Base directory for this skill: ${base}`,
+    "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+    "Note: file list is sampled.",
+    "",
+    "<skill_files>",
+    entries.map((entry) => `<file>${entry}</file>`).join("\n"),
+    "</skill_files>",
+    "",
+    content.trim(),
+    "</skill_content>",
+  ].join("\n")
+}

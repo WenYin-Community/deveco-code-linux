@@ -62,6 +62,23 @@ The package is resolved from the `@deveco/deveco-cli` shell dependency pinned in
 `optionalDependency`. The lookup order and pre-release scope handling live in
 `packages/opencode/script/skill-sources.ts`.
 
+### Overlays: repository-owned companion files
+
+A CLI copy replaces the **whole** skill, so a file this repository owns but the
+CLI does not publish cannot survive the merge. Such a file belongs in an
+**overlay**: a directory under `packages/opencode/resources/skills/<name>/`
+containing no `SKILL.md`. Overlay files are applied on top of the merged skill
+(the same path wins), fail the build when they match no built-in skill, and are
+part of the embedded hash.
+
+`hmos-dfx-analyzer/FILES.md` is the only overlay today. It is a **deveco-code
+convention**: `src/tool/skill.ts` reads it to list exactly those companion paths
+in `<skill_files>` when the skill loads. The CLI package does not ship it (CLI
+1.0.0 folded the same list into its `SKILL.md`), and without the overlay the tool
+falls back to a sampled `rg --files` list — the skill still loads, but the
+curated paths (the four `analyzer.md` routes, the collect scripts) are replaced
+by whatever sorts first, including `test-cases/` and `.version`.
+
 - Build-time embedding: `packages/opencode/script/skill-sources.ts` (used by
   `build.ts`) → `DEVECO_DEFAULT_SKILLS` + `DEVECO_DEFAULT_SKILLS_HASH`
 - Runtime extraction: `packages/opencode/src/skill/defaults.ts`
@@ -81,7 +98,9 @@ all of them:
 1. **`packages/opencode/resources/skills/<name>/SKILL.md`** — the skill itself
    (see format below). For a CLI-sourced skill, add its name to
    `CLI_BUNDLED_SKILLS` in `packages/opencode/script/skill-sources.ts` instead
-   and bump `@deveco/deveco-cli` to a release that ships it.
+   and bump `@deveco/deveco-cli` to a release that ships it. Repository-owned
+   companion files for a CLI-sourced skill go in the same directory **without**
+   a `SKILL.md` (see "Overlays" above).
 2. **`packages/opencode/src/tool/skill.ts`** — `DevEcoRequiredSkills`. Add the
    skill **only if** it needs the HarmonyOS SDK; membership makes the skill fail
    to load when `DEVECO_HOME` is unset.
@@ -100,9 +119,10 @@ Verify:
 cd packages/opencode && bun run build
 ```
 
-The log must print `Loaded N default skills (L local + C @<scope>/deveco-cli-common@<version>, hash=…)`
+The log must print `Loaded N default skills (L local + C @<scope>/deveco-cli-common@<version> + O overlay, hash=…)`
 with N unchanged — the two bundled skills moved from the repository to the CLI
-package, so the total stays the same — plus a per-skill digest.
+package, so the total stays the same — plus a per-skill digest. `O` counts the
+overlay directories; it must not inflate `L`.
 
 > **These lists have drifted before.** The runtime handles a rename by rebuilding
 > the directory wholesale, but the lists above are not rebuilt — a rename or a

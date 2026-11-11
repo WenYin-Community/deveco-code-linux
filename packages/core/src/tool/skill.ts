@@ -13,6 +13,7 @@ import { Tools } from "./tools"
 
 export const name = "skill"
 const FILE_LIMIT = 10
+const FILES_WHITELIST = "FILES.md"
 
 export const Input = Schema.Struct({
   name: Schema.String.annotate({ description: "The name of the skill from the available skills list" }),
@@ -38,8 +39,6 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
     `<skill_content name="${skill.name}">`,
     `# Skill: ${skill.name}`,
     "",
-    skill.content.trim(),
-    "",
     `Base directory for this skill: ${pathToFileURL(directory).href}`,
     "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
     "Note: file list is sampled.",
@@ -47,9 +46,43 @@ export const toModelOutput = (skill: SkillV2.Info, files: ReadonlyArray<string>)
     "<skill_files>",
     ...files.map((file) => `<file>${file}</file>`),
     "</skill_files>",
+    "",
+    skill.content.trim(),
     "</skill_content>",
   ].join("\n")
 }
+
+/**
+ * Companion list for a skill directory. A `FILES.md` whitelist, when present, is
+ * the single source of truth for which paths the skill exposes (comments and
+ * `@note ` lines are supported); otherwise fall back to a limited listing of the
+ * skill's files, which is just a sample.
+ */
+const listSkillFiles = (fs: FSUtil.Interface, directory: string) =>
+  Effect.gen(function* () {
+    const whitelist = path.join(directory, FILES_WHITELIST)
+    if (yield* fs.existsSafe(whitelist)) {
+      const content = yield* fs.readFileString(whitelist)
+      const { notes, files } = content.split("\n").reduce(
+        (acc, line) => {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith("#")) return acc
+          if (trimmed.startsWith("@note ")) acc.notes.push(trimmed.slice(6))
+          else acc.files.push(path.resolve(directory, trimmed))
+          return acc
+        },
+        { notes: [] as string[], files: [] as string[] },
+      )
+      const existing = yield* Effect.all(
+        files.map((file) => fs.existsSafe(file).pipe(Effect.map((ok) => (ok ? file : null)))),
+        { concurrency: "unbounded" },
+      )
+      return [...notes, ...existing.filter((file): file is string => file !== null)]
+    }
+    return yield* fs
+      .glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true })
+      .pipe(Effect.map((all) => all.filter((file) => path.basename(file) !== "SKILL.md").toSorted().slice(0, FILE_LIMIT)))
+  })
 
 const unableToLoad = (name: string, error?: unknown) =>
   new ToolFailure({ message: `Unable to load skill ${name}`, error })
@@ -84,13 +117,7 @@ export const layer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 })
                 const directory = path.dirname(skill.location)
-                const files =
-                  path.basename(skill.location) === "SKILL.md"
-                    ? (yield* fs.glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
-                        .filter((file) => path.basename(file) !== "SKILL.md")
-                        .toSorted()
-                        .slice(0, FILE_LIMIT)
-                    : []
+                const files = path.basename(skill.location) === "SKILL.md" ? yield* listSkillFiles(fs, directory) : []
                 return {
                   name: skill.name,
                   directory,

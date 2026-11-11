@@ -7,6 +7,7 @@ import {
   digestSkills,
   loadCliSkills,
   loadResourceSkills,
+  loadSkillOverlays,
   mergeSkills,
   REPO_OWNED_SKILLS,
   readSkillFile,
@@ -66,8 +67,10 @@ describe("CLI_BUNDLED_SKILLS", () => {
   })
 
   test("no bundled skill still lives in resources/skills", () => {
+    // A repository copy of a CLI-bundled skill would drift. A directory without
+    // SKILL.md is allowed: that is the overlay for repository-owned companion files.
     for (const name of CLI_BUNDLED_SKILLS) {
-      expect(fs.existsSync(path.join(packageDir, "resources/skills", name))).toBe(false)
+      expect(fs.existsSync(path.join(packageDir, "resources/skills", name, "SKILL.md"))).toBe(false)
     }
   })
 })
@@ -302,6 +305,22 @@ describe("mergeSkills", () => {
       expect(bundled).not.toContain(name)
     }
   })
+
+  test("overlay files survive the CLI copy they are merged onto", () => {
+    // The CLI copy replaces the whole skill, which is how `FILES.md` disappeared
+    // when hmos-dfx-analyzer moved to the CLI package.
+    const local: SkillsData = { a: { "FILES.md": "repo whitelist" } }
+    const cli: SkillsData = { a: { "SKILL.md": "cli copy" } }
+    const overlays: SkillsData = { a: { "FILES.md": "repo whitelist" } }
+    const merged = mergeSkills(local, cli, overlays)
+    expect(merged.a["SKILL.md"]).toBe("cli copy")
+    expect(merged.a["FILES.md"]).toBe("repo whitelist")
+  })
+
+  test("an overlay never creates a skill on its own", () => {
+    const merged = mergeSkills({}, { a: { "SKILL.md": "cli copy" } }, { ghost: { "FILES.md": "x" } })
+    expect(Object.keys(merged)).toEqual(["a"])
+  })
 })
 
 describe("digestSkills", () => {
@@ -352,6 +371,35 @@ describe("validateSkills", () => {
     expect(problems).toContain('unsafe path "../escape.md"')
     expect(problems).toContain('unsafe path "/abs.md"')
   })
+
+  test("accepts an overlay that lands on a built-in skill", () => {
+    const data: SkillsData = { demo: { "SKILL.md": "---\nname: demo\ndescription: x\n---\n" } }
+    expect(validateSkills(data, ["demo"], { demo: { "FILES.md": "a.md" } })).toEqual([])
+  })
+
+  test("reports an overlay that matches no skill", () => {
+    expect(validateSkills({}, [], { ghost: { "FILES.md": "a.md" } })).toEqual(['overlay "ghost" matches no built-in skill'])
+  })
+
+  test("reports an overlay that carries its own SKILL.md", () => {
+    const data: SkillsData = { demo: { "SKILL.md": "---\nname: demo\ndescription: x\n---\n" } }
+    const problems = validateSkills(data, [], { demo: { "SKILL.md": "hijacked" } }).join("\n")
+    expect(problems).toContain('overlay "demo" must not carry SKILL.md')
+  })
+
+  test("reports an overlay that carries a nested SKILL.md", () => {
+    const data: SkillsData = { demo: { "SKILL.md": "---\nname: demo\ndescription: x\n---\n" } }
+    const problems = validateSkills(data, [], { demo: { "references/SKILL.md": "nested" } }).join("\n")
+    expect(problems).toContain('overlay "demo" must not carry SKILL.md')
+  })
+
+  test("reports an empty and an unsafe overlay", () => {
+    const data: SkillsData = { demo: { "SKILL.md": "---\nname: demo\ndescription: x\n---\n" } }
+    const problems = validateSkills(data, [], { demo: { "../escape.md": "x" } }).join("\n")
+    expect(problems).toContain('overlay "demo" contains unsafe path "../escape.md"')
+    const empty = validateSkills(data, [], { demo: {} }).join("\n")
+    expect(empty).toContain('overlay "demo" is empty')
+  })
 })
 
 describe("loadResourceSkills", () => {
@@ -366,5 +414,77 @@ describe("loadResourceSkills", () => {
 
   test("returns an empty map when the directory is absent", async () => {
     expect(await loadResourceSkills(path.join(packageDir, "resources/does-not-exist"))).toEqual({})
+  })
+})
+
+describe("loadSkillOverlays", () => {
+  test("reads a directory without SKILL.md as an overlay", async () => {
+    const dir = await tempRoot("skill-sources-overlay-")
+    try {
+      await writeSkill(dir, "bundled", { "FILES.md": "references/a.md\n" })
+      await writeSkill(dir, "local", { "SKILL.md": "---\nname: local\ndescription: x\n---\n" })
+      expect(Object.keys(await loadSkillOverlays(dir))).toEqual(["bundled"])
+      expect(Object.keys(await loadResourceSkills(dir))).toEqual(["local"])
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("returns an empty map when the directory is absent", async () => {
+    expect(await loadSkillOverlays(path.join(packageDir, "resources/does-not-exist"))).toEqual({})
+  })
+})
+
+describe("bundled skill overlays (real package)", () => {
+  // Regression guard: `hmos-dfx-analyzer/FILES.md` is a repository-owned companion
+  // file the CLI package deliberately does not ship (they folded the list into
+  // SKILL.md). Without the overlay the skill still builds, but `src/tool/skill.ts`
+  // falls back to a sampled `rg --files` list and silently drops the curated paths.
+  async function merged() {
+    const resources = path.join(packageDir, "resources/skills")
+    const overlays = await loadSkillOverlays(resources)
+    const cli = await loadCliSkills(packageDir)
+    return {
+      overlays,
+      data: mergeSkills(await loadResourceSkills(resources), cli.skills, overlays),
+    }
+  }
+
+  function whitelist(files: SkillsData[string]): string[] {
+    const content = files["FILES.md"]
+    if (typeof content !== "string") throw new Error("hmos-dfx-analyzer has no FILES.md")
+    return content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("@note "))
+  }
+
+  test("hmos-dfx-analyzer keeps its FILES.md whitelist after the CLI copy", async () => {
+    const { data, overlays } = await merged()
+    expect(data["hmos-dfx-analyzer"]?.["FILES.md"]).toBeString()
+    expect(validateSkills(data, CLI_BUNDLED_SKILLS, overlays)).toEqual([])
+  })
+
+  test("every whitelisted path exists in the merged skill", async () => {
+    // `skill.ts` resolves these with `existsSafe` and drops misses without an error,
+    // so a CLI rename would degrade the skill silently. Fail the build here instead.
+    const { data } = await merged()
+    const files = data["hmos-dfx-analyzer"]
+    const listed = whitelist(files)
+    expect(listed.length).toBeGreaterThan(0)
+    expect(listed.filter((entry) => files[entry] === undefined)).toEqual([])
+  })
+
+  test("the whitelist keeps the analyzer routes the skill routes to", async () => {
+    const { data } = await merged()
+    const listed = whitelist(data["hmos-dfx-analyzer"])
+    for (const route of [
+      "references/appfreeze/analyzer.md",
+      "references/cppcrash/analyzer.md",
+      "references/jscrash/analyzer.md",
+      "references/white-screen/analyzer.md",
+    ]) {
+      expect(listed).toContain(route)
+    }
   })
 })

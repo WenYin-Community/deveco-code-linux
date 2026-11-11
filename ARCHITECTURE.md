@@ -47,6 +47,13 @@ Built-in skills have two sources, merged at build time into one embedded map:
 - `<deveco-cli>-common/skills/` — skills the CLI package ships. Only the names
   in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`) are read.
 
+Because a CLI copy replaces the whole skill, a repository-owned companion file
+that the CLI does not publish would disappear at build time. Such files live in
+an **overlay**: a directory under `resources/skills/` with no `SKILL.md`, merged
+on top of the CLI copy and counted in the fingerprint. `hmos-dfx-analyzer/FILES.md`
+is the only overlay today — it is the companion-path whitelist that
+`src/tool/skill.ts` reads when the skill loads.
+
 The merged content is fingerprinted into `DEVECO_DEFAULT_SKILLS_HASH`, so the
 runtime `.version` marker is `${version}+${hash}` and a same-version rebuild with
 changed skill content still re-extracts.

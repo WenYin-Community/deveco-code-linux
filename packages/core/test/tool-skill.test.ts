@@ -104,6 +104,9 @@ describe("SkillTool", () => {
             expect(SkillTool.toModelOutput(info, [reference])).toContain(
               `Base directory for this skill: ${pathToFileURL(directory).href}`,
             )
+            const rendered = SkillTool.toModelOutput(info, [reference])
+            expect(rendered.indexOf("<skill_files>")).toBeGreaterThan(-1)
+            expect(rendered.indexOf("<skill_files>")).toBeLessThan(rendered.indexOf("# Effect"))
             expect(
               yield* settleTool(registry, {
                 sessionID,

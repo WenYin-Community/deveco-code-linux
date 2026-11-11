@@ -195,14 +195,48 @@ export async function loadCliSkills(fromDir: string, names: readonly string[] = 
   return { packageName, version, root, skills }
 }
 
-/** Read every skill directory under `resources/skills/`. */
-export async function loadResourceSkills(resourcesDir: string): Promise<SkillsData> {
-  if (!fs.existsSync(resourcesDir)) return {}
-  const dirs = (await fs.promises.readdir(resourcesDir, { withFileTypes: true })).filter((entry) => entry.isDirectory())
-  const pairs = await Promise.all(
-    dirs.map(async (entry) => [entry.name, await walkSkillDir(path.join(resourcesDir, entry.name))] as [string, SkillFileMap]),
+function skillDirs(resourcesDir: string, hasSkillFile: boolean): Promise<[string, string][]> {
+  if (!fs.existsSync(resourcesDir)) return Promise.resolve([])
+  return fs.promises.readdir(resourcesDir, { withFileTypes: true }).then((entries) =>
+    entries
+      .filter(
+        (entry) => entry.isDirectory() && fs.existsSync(path.join(resourcesDir, entry.name, "SKILL.md")) === hasSkillFile,
+      )
+      .map((entry) => [entry.name, path.join(resourcesDir, entry.name)] as [string, string]),
   )
+}
+
+async function readSkillDirs(dirs: [string, string][]): Promise<SkillsData> {
+  const pairs = await Promise.all(dirs.map(async ([name, dir]) => [name, await walkSkillDir(dir)] as [string, SkillFileMap]))
   return Object.fromEntries(pairs)
+}
+
+/**
+ * Read every skill directory under `resources/skills/`.
+ *
+ * A directory without `SKILL.md` is not a skill: it is a repository-owned
+ * companion overlay for a skill the CLI package ships (`loadSkillOverlays`), so
+ * it is skipped here instead of being embedded as a skill without an entry point.
+ */
+export async function loadResourceSkills(resourcesDir: string): Promise<SkillsData> {
+  return readSkillDirs(await skillDirs(resourcesDir, true))
+}
+
+/**
+ * Read the repository-owned companion overlays under `resources/skills/`.
+ *
+ * An overlay exists because `mergeSkills` replaces a CLI-sourced skill wholesale:
+ * any file this repository owns but the CLI does not publish cannot survive that
+ * copy. `hmos-dfx-analyzer/FILES.md` is such a file — `src/tool/skill.ts` reads it
+ * to decide which companion paths it lists when the skill loads, so losing it
+ * degrades the skill silently instead of failing the build.
+ *
+ * An overlay directory is exactly a directory under `resources/skills/` with no
+ * `SKILL.md`. Its files win over the merged skill for the same path, and they are
+ * part of the embedded digest, so changing one re-extracts the runtime copy.
+ */
+export async function loadSkillOverlays(resourcesDir: string): Promise<SkillsData> {
+  return readSkillDirs(await skillDirs(resourcesDir, false))
 }
 
 /**
@@ -220,12 +254,21 @@ export const REPO_OWNED_SKILLS: readonly string[] = ["deveco-cli"]
 /**
  * Merge repository skills with CLI skills. CLI copies win for whitelisted names,
  * except for REPO_OWNED_SKILLS, which always stay as the repository version.
+ *
+ * `overlays` are repository-owned companion files for an already-merged skill and
+ * are applied last, so they survive a CLI copy that does not ship them. An overlay
+ * never creates a skill — `validateSkills` reports one that matches no skill.
  */
-export function mergeSkills(local: SkillsData, cli: SkillsData): SkillsData {
+export function mergeSkills(local: SkillsData, cli: SkillsData, overlays: SkillsData = {}): SkillsData {
   const merged = { ...local }
   for (const [name, files] of Object.entries(cli)) {
     if (REPO_OWNED_SKILLS.includes(name)) continue
     merged[name] = files
+  }
+  for (const [name, files] of Object.entries(overlays)) {
+    const base = merged[name]
+    if (!base) continue
+    merged[name] = { ...base, ...files }
   }
   return merged
 }
@@ -257,11 +300,23 @@ export function digestSkill(data: SkillFileMap): string {
 
 const FRONTMATTER_NAME = /^---\r?\n([\s\S]*?)\r?\n---/
 
+function unsafePaths(files: SkillFileMap): string[] {
+  return Object.keys(files).filter((file) => file.startsWith("/") || file.split("/").includes(".."))
+}
+
+function skillMdPaths(files: SkillFileMap): string[] {
+  return Object.keys(files).filter((file) => file === "SKILL.md" || file.endsWith("/SKILL.md"))
+}
+
 /**
  * Structural checks for embedded skills. Runs at build time so a malformed
  * package fails the build instead of silently disappearing at runtime.
  */
-export function validateSkills(data: SkillsData, required: readonly string[] = []): string[] {
+export function validateSkills(
+  data: SkillsData,
+  required: readonly string[] = [],
+  overlays: SkillsData = {},
+): string[] {
   const problems: string[] = []
   for (const name of required) {
     if (!data[name]) problems.push(`missing required skill "${name}"`)
@@ -284,10 +339,21 @@ export function validateSkills(data: SkillsData, required: readonly string[] = [
     if (declared !== name) {
       problems.push(`skill "${name}" declares frontmatter name "${declared ?? "<none>"}"`)
     }
-    for (const file of Object.keys(files)) {
-      if (file.startsWith("/") || file.split("/").includes("..")) {
-        problems.push(`skill "${name}" contains unsafe path "${file}"`)
-      }
+    for (const file of unsafePaths(files)) {
+      problems.push(`skill "${name}" contains unsafe path "${file}"`)
+    }
+  }
+  for (const [name, files] of Object.entries(overlays)) {
+    if (!data[name]) {
+      problems.push(`overlay "${name}" matches no built-in skill`)
+      continue
+    }
+    if (Object.keys(files).length === 0) problems.push(`overlay "${name}" is empty`)
+    if (skillMdPaths(files).length > 0) {
+      problems.push(`overlay "${name}" must not carry SKILL.md (the skill directory owns it)`)
+    }
+    for (const file of unsafePaths(files)) {
+      problems.push(`overlay "${name}" contains unsafe path "${file}"`)
     }
   }
   return problems

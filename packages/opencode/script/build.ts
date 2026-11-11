@@ -29,6 +29,7 @@ import {
   digestSkills,
   loadCliSkills,
   loadResourceSkills,
+  loadSkillOverlays,
   mergeSkills,
   validateSkills,
   type SkillsData,
@@ -81,11 +82,15 @@ console.log(`Loaded ${migrations.length} migrations`)
 // Structure: { skillName: { relPath: content } } — must match defaults.ts extraction.
 // The CLI package is the source of truth for CLI_BUNDLED_SKILLS only; repository
 // skills it also ships (REPO_OWNED_SKILLS, e.g. `deveco-cli`) keep the repo copy.
+// A `resources/skills/<name>/` directory without SKILL.md is an overlay: files this
+// repository owns that the CLI package does not ship (e.g. `FILES.md`), merged on
+// top of the CLI copy so a CLI upgrade cannot silently drop them.
 const localSkills = await loadResourceSkills(path.join(dir, "resources/skills"))
+const skillOverlays = await loadSkillOverlays(path.join(dir, "resources/skills"))
 const cliSkills = await loadCliSkills(dir)
-const defaultSkillsData: SkillsData = mergeSkills(localSkills, cliSkills.skills)
+const defaultSkillsData: SkillsData = mergeSkills(localSkills, cliSkills.skills, skillOverlays)
 
-const skillProblems = validateSkills(defaultSkillsData, CLI_BUNDLED_SKILLS)
+const skillProblems = validateSkills(defaultSkillsData, CLI_BUNDLED_SKILLS, skillOverlays)
 if (skillProblems.length > 0) {
   console.error(`ERROR: invalid default skills:\n${skillProblems.map((p) => `  - ${p}`).join("\n")}`)
   process.exit(1)
@@ -98,7 +103,8 @@ const skillDigests = Object.keys(defaultSkillsData)
   .join(" ")
 console.log(
   `Loaded ${Object.keys(defaultSkillsData).length} default skills ` +
-    `(${Object.keys(localSkills).length} local + ${Object.keys(cliSkills.skills).length} ${cliSkills.packageName}@${cliSkills.version}, ` +
+    `(${Object.keys(localSkills).length} local + ${Object.keys(cliSkills.skills).length} ${cliSkills.packageName}@${cliSkills.version} + ` +
+    `${Object.keys(skillOverlays).length} overlay, ` +
     `hash=${defaultSkillsHash}) [${skillDigests}]`,
 )
 

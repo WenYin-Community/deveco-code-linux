@@ -162,6 +162,12 @@ Skills come in two modes. Decide by intent:
   - `<deveco-cli>-common/skills/` — skills the CLI package ships. Only the
     names in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`)
     are read from it.
+
+  A directory under `packages/opencode/resources/skills/` **without**
+  `SKILL.md` is an overlay: repository-owned companion files for a CLI-sourced
+  skill, applied on top of the CLI copy so a CLI upgrade cannot drop them.
+  `hmos-dfx-analyzer/FILES.md` (the companion-path whitelist `src/tool/skill.ts`
+  reads) is the only one today.
 - **User** — personal or temporary. Lives in a user directory: global
   `~/.config/deveco/skills/`, or project `.deveco/skills/`.
 
