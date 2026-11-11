@@ -6,6 +6,7 @@ import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.util.errorMessage
 import org.deveco.code.util.hoverable
+import org.deveco.code.util.openProductSettings
 import org.deveco.code.util.runInEdt
 import com.agentclientprotocol.annotations.UnstableApi
 import com.agentclientprotocol.model.SessionId
@@ -54,7 +55,6 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.fileEditor.impl.FileEditorManagerImpl
-import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.project.Project
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -280,9 +280,13 @@ private fun AuthenticatedDevEcoSessions(project: Project) {
             menuCollapsed = menuCollapsed,
             onToggleMenu = { menuCollapsed = !menuCollapsed },
             onToggleTab = { tab ->
+                // Deferred (see openProductSettings): opening the settings
+                // dialog synchronously builds the whole configurable tree on
+                // the EDT, which must not happen inside the Compose click
+                // dispatch that invoked this handler.
                 when (tab) {
-                    ConfigTab.Skill -> ShowSettingsUtilImpl.showSettingsDialog(project, "ai.coding.skill", null)
-                    ConfigTab.Models -> ShowSettingsUtilImpl.showSettingsDialog(project, "ai.coding.models", null)
+                    ConfigTab.Skill -> project.openProductSettings("ai.coding.skill")
+                    ConfigTab.Models -> project.openProductSettings("ai.coding.models")
                 }
             },
         )

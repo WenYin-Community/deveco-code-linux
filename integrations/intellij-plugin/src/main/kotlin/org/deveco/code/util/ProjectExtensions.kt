@@ -1,5 +1,6 @@
 package org.deveco.code.util
 
+import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.PathManager
@@ -18,6 +19,19 @@ fun Project.runInEdt(action: () -> Unit) {
     ApplicationManager.getApplication().invokeLater {
         if (!isDisposed) action()
     }
+}
+
+/**
+ * Opens a DevEco Studio product settings page (e.g. "ai.coding.models") on the
+ * next top-level EDT dispatch instead of inside the caller's dispatch.
+ * showSettingsDialog builds the whole configurable tree on the EDT — seconds
+ * of work that must not run inside a Compose pointer/key handler from the chat
+ * panel (the nested modal's event pump would then interleave with the model
+ * dropdown popup's disposal and focus handoff). Dropped if the project closes
+ * before the dispatch runs.
+ */
+fun Project.openProductSettings(id: String) {
+    runInEdt { ShowSettingsUtilImpl.showSettingsDialog(this, id, null) }
 }
 
 /**

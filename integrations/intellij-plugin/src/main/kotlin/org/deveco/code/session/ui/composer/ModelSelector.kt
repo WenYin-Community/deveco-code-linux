@@ -46,7 +46,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.intellij.ide.actions.ShowSettingsUtilImpl
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
 import kotlinx.coroutines.launch
@@ -54,6 +53,7 @@ import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.session.SessionController
 import org.deveco.code.session.ui.messages.DropdownIconKey
+import org.deveco.code.util.openProductSettings
 import org.jetbrains.jewel.bridge.toComposeColor
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
@@ -90,6 +90,26 @@ internal fun ModelSelector(
             withFrameNanos { }
             withFrameNanos { }
             inputFocusRequester.requestFocus()
+        }
+    }
+
+    // The "add model" row defers opening the settings dialog until the popup
+    // window has fully left composition (same two-frame settling as the refocus
+    // path above): the dialog builds the whole configurable tree on the EDT
+    // and then enters a modal event pump, which must not interleave with the
+    // popup's disposal and focus handoff. The pendingOpenSettings guard makes
+    // the deferral single-flight: a second trigger before recomposition (double
+    // click, double Enter) sees expanded == false and does nothing. If this
+    // composable is unmounted during the wait (session switch, tool window
+    // teardown), the click is dropped by design — a modal dialog popping over
+    // an in-progress teardown would be worse than a lost click.
+    var pendingOpenSettings by remember { mutableStateOf(false) }
+    LaunchedEffect(expanded) {
+        if (!expanded && pendingOpenSettings) {
+            pendingOpenSettings = false
+            withFrameNanos { }
+            withFrameNanos { }
+            project.openProductSettings("ai.coding.models")
         }
     }
 
@@ -142,8 +162,10 @@ internal fun ModelSelector(
             var listHeightPx by remember { mutableStateOf(0) }
             val searchFocusRequester = remember { FocusRequester() }
             val openModelSettings = {
-                expanded = false
-                ShowSettingsUtilImpl.showSettingsDialog(project, "ai.coding.models", null)
+                if (expanded) {
+                    expanded = false
+                    pendingOpenSettings = true
+                }
             }
 
             // Keyboard navigation over filteredModels plus the pinned "add
