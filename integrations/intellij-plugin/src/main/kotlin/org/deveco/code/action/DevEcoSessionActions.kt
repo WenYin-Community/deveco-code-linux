@@ -23,8 +23,18 @@ class DevEcoSessionActions(private val project: Project) {
     @Volatile
     internal var jumpToSessionHandler: ((String, FileReference) -> Unit)? = null
 
+    // Toolbar creation guard: set by newSession(), cleared by sidebar state updates
+    // (every list refresh ends with busy = false) and by its own failure paths. It spans
+    // only the toolbar's own creation flow — bridge deliveries hold [deliveryGuard]
+    // instead, precisely because this flag's lifetime is not theirs to own.
     @Volatile
     var busy: Boolean = false
+
+    // Creation guard for a staged bridge delivery, claimed at dispatch and released by
+    // the handoff lifecycle alone (consumption, supersession, settlement, pre-staging
+    // failure). Separate from [busy] by construction: the sidebar's state writes can
+    // clear busy mid-delivery, but no code path from them reaches this guard.
+    internal val deliveryGuard = HandoffDeliveryGuard()
 
     // Staged handoffs, keyed by their target session. Keyed entries are isolated: a jump
     // or bridge delivery for one session never clobbers another's. The next-session slot
@@ -45,9 +55,9 @@ class DevEcoSessionActions(private val project: Project) {
 
     /** Stages [handoff] for the editor that binds [sessionId]. */
     internal fun stageHandoff(sessionId: String, handoff: PendingChatHandoff) {
-        // A superseded bridge delivery held the creation guard until consumption; the
+        // A superseded bridge delivery held the delivery guard until consumption; the
         // replacing handoff will not release it, so release it here.
-        if (handoffs.stage(sessionId, handoff)?.releaseBusyOnConsume == true) busy = false
+        if (handoffs.stage(sessionId, handoff)?.releaseGuardOnConsume == true) deliveryGuard.release()
     }
 
     /** Stages [handoff] for whichever session the next creation produces. */
@@ -145,13 +155,13 @@ class DevEcoSessionActions(private val project: Project) {
     }
 
     /**
-     * Runs the new-session handler under the shared creation guard. Returns false while a
-     * creation is already in flight or when no handler is registered (the tool window is
-     * not composed yet); a staged next-session handoff then simply waits for a later
-     * creation to consume it.
+     * Runs the new-session handler under the creation guards: rejected while a toolbar
+     * creation is already in flight or while a bridge delivery is staged and unconsumed,
+     * and when no handler is registered (the tool window is not composed yet); a staged
+     * next-session handoff then simply waits for a later creation to consume it.
      */
     fun newSession(): Boolean {
-        if (busy) return false
+        if (busy || deliveryGuard.inFlight) return false
         val handler = newSessionHandler ?: return false
         busy = true
         try {

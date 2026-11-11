@@ -107,12 +107,19 @@ object DevEcoCodeBridge {
             }
 
             // Creating a conversation takes seconds (connect, then session/new); a second trigger
-            // in that window would create another one and fight over the single chat tab. Set here
-            // on the EDT and cleared by createAndDeliver once the tab is bound, so the guard spans
-            // the whole placement instead of just the backend call.
+            // in that window would create another one and fight over the single chat tab. The
+            // delivery guard spans the whole async placement — until its handoff is consumed,
+            // superseded or settled — and unlike the toolbar's busy flag it is never cleared
+            // by the sidebar's own list refreshes, which start right here via uiOnRefresh.
             Target.CreateNew -> {
                 if (actions.busy) return report(project, MyMessageBundle.message("bridge.delivery.busy"), error = false)
-                actions.busy = true
+                if (!actions.deliveryGuard.begin()) {
+                    return report(
+                        project,
+                        MyMessageBundle.message("bridge.delivery.busy"),
+                        error = false,
+                    )
+                }
                 pooled { createAndDeliver(project, actions, request, prompt) }
             }
 
@@ -165,7 +172,7 @@ object DevEcoCodeBridge {
      * process is not in this connection's `sessions` map, so `setSessionMode` would fail on it with
      * "ACP session is not loaded" — and it would stay in the pool, failing every later call too.
      *
-     * Owns `actions.busy` from here on; dispatch set it on the EDT.
+     * Owns the delivery guard from here on; dispatch claimed it on the EDT.
      */
     private fun createAndDeliver(
         project: Project,
@@ -173,7 +180,7 @@ object DevEcoCodeBridge {
         request: BridgeRequest,
         prompt: String,
     ) {
-        // dispatch set busy = true on the EDT. Pre-staging failures release it here; once
+        // dispatch claimed the delivery guard. Pre-staging failures release it here; once
         // a delivery is staged the guard spans the whole async placement instead and is
         // released by consumption, supersession or timeout — a second delivery arriving in
         // that window is rejected rather than allowed to clobber the first one's handoff.
@@ -215,7 +222,7 @@ object DevEcoCodeBridge {
                     fullPrompt = if (request.sendImmediately) null else prompt,
                     autoSendPrompt = if (request.sendImmediately) prompt else null,
                     mode = request.mode,
-                    releaseBusyOnConsume = true,
+                    releaseGuardOnConsume = true,
                 )
                 actions.stageHandoff(sessionId, handoff)
                 scheduleHandoffSettlement(project, actions, sessionId, handoff)
@@ -224,7 +231,7 @@ object DevEcoCodeBridge {
             }
             handedOff = true
         } finally {
-            if (!handedOff) project.runInEdt { actions.busy = false }
+            if (!handedOff) actions.deliveryGuard.release()
         }
     }
 
@@ -244,7 +251,7 @@ object DevEcoCodeBridge {
     ) {
         AppExecutorUtil.getAppScheduledExecutorService().schedule({
             if (!actions.removeHandoff(sessionId, handoff)) return@schedule
-            actions.busy = false
+            actions.deliveryGuard.release()
             report(project, MyMessageBundle.message("bridge.delivery.no.editor"), error = true)
         }, HANDOFF_SETTLE_SECONDS, TimeUnit.SECONDS)
     }

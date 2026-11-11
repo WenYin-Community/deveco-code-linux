@@ -9,8 +9,9 @@ import org.deveco.code.session.model.FileReference
  * staging, so a consumer always sees a complete snapshot even while another writer
  * replaces the entry.
  *
- * [releaseBusyOnConsume] is set by the bridge, which holds the shared creation guard from
- * its delivery until this handoff is consumed, superseded or settled by timeout.
+ * [releaseGuardOnConsume] is set by the bridge, which claims the delivery guard for
+ * the placement and hands its release to whichever of consumption, supersession or
+ * settlement ends this handoff.
  */
 internal class PendingChatHandoff(
     val draft: String? = null,
@@ -18,5 +19,5 @@ internal class PendingChatHandoff(
     val fullPrompt: String? = null,
     val autoSendPrompt: String? = null,
     val mode: String? = null,
-    val releaseBusyOnConsume: Boolean = false,
+    val releaseGuardOnConsume: Boolean = false,
 )

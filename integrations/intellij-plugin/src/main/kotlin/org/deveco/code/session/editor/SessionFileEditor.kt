@@ -325,8 +325,9 @@ class SessionFileEditor(private val project: Project, private val file: SessionV
      */
     private fun consumePending(): PendingChatHandoff? {
         val handoff = actions.takeHandoff(boundSessionId) ?: return null
-        // The bridge holds the creation guard until its delivery is consumed.
-        if (handoff.releaseBusyOnConsume) actions.busy = false
+        // The bridge holds the delivery guard until its delivery is consumed; this runs on
+        // the async editor-loading thread, which is why the guard's release is atomic.
+        if (handoff.releaseGuardOnConsume) actions.deliveryGuard.release()
         // Record this session as the last jump target for sticky reuse
         if (handoff.fileReference != null) {
             actions.lastJumpSessionId = boundSessionId
