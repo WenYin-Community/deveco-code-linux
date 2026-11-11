@@ -90,4 +90,16 @@ export const Flag = {
   get DEVECO_CLIENT() {
     return process.env["DEVECO_CLIENT"] ?? "cli"
   },
+  /**
+   * Kill-switch for TMS signing in plugin mode.
+   *
+   * Dual-check design: alwaysAcceptAgreement() requires both
+   * Runtime.current.mode === "deveco-studio" AND this flag.
+   * This prevents silent fallback to the old deadlock behavior if the plugin
+   * forgets to set the flag — the mode check alone would not catch that bug.
+   * If DEVECO_RUNTIME_MODE is unset or not "deveco-studio", this flag is ignored.
+   */
+  get DEVECO_ALWAYS_ACCEPT_AGREEMENT() {
+    return truthy("DEVECO_ALWAYS_ACCEPT_AGREEMENT")
+  },
 }

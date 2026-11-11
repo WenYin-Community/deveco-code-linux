@@ -2,7 +2,9 @@ import path from "path"
 import { createHash, randomUUID } from "crypto"
 import { rename } from "fs/promises"
 import { Schema } from "effect"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { Global } from "@opencode-ai/core/global"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { Flock } from "@opencode-ai/core/util/flock"
 import { AgreementService, AgreementStatus } from "./deveco-agreement"
 import { AGREEMENT_DEFAULTS } from "./deveco-legal"
@@ -44,6 +46,12 @@ type Account = { jwtHash: string; state: string; file: string }
 let entry: { owner: Account; upload?: typeof AgreementUpload.Type } | undefined
 let checking: Promise<void> | undefined
 const attempts = new WeakMap<Account, Promise<void>>()
+
+// The host signs TMS itself, so a revision observed here could never be cleared
+// by this process. Local acceptance stays the only gate.
+function alwaysAcceptAgreement() {
+  return Runtime.current.mode === "deveco-studio" && Flag.DEVECO_ALWAYS_ACCEPT_AGREEMENT
+}
 
 async function account() {
   const owner = await readAccount()
@@ -124,6 +132,9 @@ export async function agreementUploadStatus(): Promise<typeof AgreementUpload.Ty
   // revision the service still expects before consent exists. Without it the
   // acceptance would carry nothing and the panel would have to ask again.
   if (!product.accepted) return unacceptedStatus(stored, product.version)
+  // Below the not-signed check on purpose: the host owning TMS signing must
+  // never swallow a missing local consent.
+  if (alwaysAcceptAgreement()) return { state: "local" }
   if (!owner) return { state: "local" }
   return cachedUpload(owner) ?? statusFrom(stored, product.version)
 }
@@ -173,6 +184,10 @@ export async function waitForAgreementSync() {
 
 /** Explicit acceptance of an observed service revision, never implicit acceptance on retry. */
 export async function acceptServiceRevision(revision: string) {
+  if (alwaysAcceptAgreement()) {
+    logWarn("acceptServiceRevision skipped: host plugin manages TMS signing", { revision })
+    return
+  }
   await waitForAgreementSync()
   const owner = await account()
   if (!owner) throw new ProductAgreementVersionError("Sign in again before accepting updated service agreements.")
@@ -228,6 +243,14 @@ export async function uploadAgreement() {
 }
 
 async function runAgreementSync(check: boolean) {
+  // Skip TMS query/upload when host plugin owns signing.
+  //
+  // Host contract: IntelliJ plugin writes `product-agreement.json` with
+  // `version: PRODUCT_AGREEMENT_VERSION` after user accepts in IDE UI.
+  // CLI reads this file on every access; host updates take effect immediately
+  // without CLI restart. Version alignment: both use compile-time constant
+  // `PRODUCT_AGREEMENT_VERSION` from `deveco-product-agreement.ts`.
+  if (alwaysAcceptAgreement()) return
   const owner = await account()
   if (!owner || !(await productAgreement()).accepted) return
   return attempts.get(owner) ?? startAttempt(owner, check)

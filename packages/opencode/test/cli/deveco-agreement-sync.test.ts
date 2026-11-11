@@ -1,4 +1,10 @@
-import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
+
+const runtimeState = { mode: "default" as string }
+mock.module("@opencode-ai/core/runtime", () => ({
+  Runtime: { current: runtimeState },
+}))
+
 import { Global } from "@opencode-ai/core/global"
 import { createHash } from "crypto"
 import { Effect } from "effect"
@@ -35,6 +41,8 @@ afterEach(async () => {
   await tokenStorage.clearToken()
   Global.Path.state = original.state
   Global.Path.data = original.data
+  runtimeState.mode = "default"
+  delete process.env.DEVECO_ALWAYS_ACCEPT_AGREEMENT
 })
 afterAll(() => {
   query.mockRestore()
@@ -405,4 +413,38 @@ test("never uploads without local product consent", async () => {
   expect((await agreementUploadStatus()).state).toBe("not_signed")
   expect(query).not.toHaveBeenCalled()
   expect(sign).not.toHaveBeenCalled()
+})
+
+test("plugin mode with flag skips TMS query and returns local status", async () => {
+  await using tmp = await setup()
+  await login()
+  runtimeState.mode = "deveco-studio"
+  process.env.DEVECO_ALWAYS_ACCEPT_AGREEMENT = "true"
+  await syncAgreement()
+  expect(query).not.toHaveBeenCalled()
+  expect(sign).not.toHaveBeenCalled()
+  expect((await agreementUploadStatus()).state).toBe("local")
+  await syncAgreement()
+  expect(query).not.toHaveBeenCalled()
+})
+
+test("plugin mode without flag behaves like CLI mode", async () => {
+  await using tmp = await setup()
+  await login()
+  runtimeState.mode = "deveco-studio"
+  query.mockResolvedValue({ status: AgreementStatus.NEED_RE_SIGN, signInfo: null, versionInfo: null })
+  await syncAgreement()
+  expect(query).toHaveBeenCalledTimes(1)
+  expect((await agreementUploadStatus()).state).toBe("review_required")
+})
+
+test("plugin mode returns not_signed when product not accepted locally", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.state = tmp.path
+  Global.Path.data = tmp.path
+  runtimeState.mode = "deveco-studio"
+  process.env.DEVECO_ALWAYS_ACCEPT_AGREEMENT = "true"
+  await login()
+  expect((await agreementUploadStatus()).state).toBe("not_signed")
+  expect(query).not.toHaveBeenCalled()
 })
