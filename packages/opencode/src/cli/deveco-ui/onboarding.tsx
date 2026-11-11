@@ -5,6 +5,7 @@ import { useKeyboard, useTerminalDimensions } from '@opentui/solid';
 import { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
 import { useTheme } from '@opencode-ai/tui/context/theme';
 import { useSync } from '@opencode-ai/tui/context/sync';
+import { markReservedProviderNoticeShown, reservedProviderNoticePending, reservedProviderConfigFileName } from './reserved-provider-notice';
 import { useProject } from '@opencode-ai/tui/context/project';
 import { useExit } from '@opencode-ai/tui/context/exit';
 import { useDialog } from '@opencode-ai/tui/ui/dialog';
@@ -270,6 +271,17 @@ export function DevEcoOnboarding(props: {
   const { theme } = useTheme();
   const { t } = useI18n();
   const sync = useSync();
+  // Latch the hint: marking the notice delivered flips the shared pending flag, so the rendered
+  // state must be remembered separately from it.
+  const [reservedProviderHint, setReservedProviderHint] = createSignal(false)
+  // The schema lets the user keep either extension, so name the file they actually have.
+  const [reservedProviderFile, setReservedProviderFile] = createSignal<string | null>(null)
+  createEffect(() => {
+    if (!reservedProviderNoticePending(sync.data.config)) return
+    markReservedProviderNoticeShown()
+    setReservedProviderFile(reservedProviderConfigFileName())
+    setReservedProviderHint(true)
+  })
   const project = useProject();
   const exit = useExit();
   const dialog = useDialog();
@@ -884,6 +896,10 @@ if (st === 'entry') {
         </OnboardingContent>
       </Show>
       <Show when={step() === 'entry'}>
+        {/* The notice lives outside the padded content column so the sentence fits one line, but
+            it must stay in the same flex column as the content: the root layout's 2-row gap
+            would otherwise add an extra blank line between the two. */}
+        <box flexDirection='column' alignItems='center' width='100%' gap={1}>
         <OnboardingContent>
             <text fg={theme.text} attributes={1} selectable={false} marginBottom={2}>
               {t("account.setup_title")}
@@ -907,6 +923,13 @@ if (st === 'entry') {
               </text>
             </Show>
         </OnboardingContent>
+        {/* One-shot notice: if the entry page shows it, the signed-in home dialog stays silent. */}
+        <Show when={reservedProviderHint()}>
+          <text fg={theme.error} selectable={false}>
+            {t("account.reserved_provider_message", { file: reservedProviderFile() ?? '' })}
+          </text>
+        </Show>
+        </box>
       </Show>
       <Show when={step() === 'auth'}>
         <OnboardingContent>

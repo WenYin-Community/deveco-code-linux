@@ -1,7 +1,7 @@
 import { afterEach, expect, spyOn, test } from "bun:test"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
@@ -1884,7 +1884,7 @@ it.instance(
 )
 
 it.instance(
-  "cloud catalog wins over user config for built-in deveco models",
+  "ignores the whole user provider.deveco entry and keeps cloud catalog models",
   () =>
     Effect.gen(function* () {
       const { devecoAuth } = yield* Effect.promise(() => import("@/plugin/deveco/auth"))
@@ -1892,7 +1892,9 @@ it.instance(
       yield* Effect.addFinalizer(() => Effect.sync(() => refresh.mockRestore()))
       const cache = Global.Path.cache
       const isolatedCache = yield* tmpdirScoped().pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
-      const { clearDevecoModelCache } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+      const { clearDevecoModelCache, DEVECO_API_URL } = yield* Effect.promise(() =>
+        import("@/plugin/deveco-models"),
+      )
       const fetch = spyOn(globalThis, "fetch").mockImplementation(
         Object.assign(
           async () =>
@@ -1959,12 +1961,22 @@ it.instance(
       )
       expect(untouched.limit).toEqual({ context: 16_384, input: undefined, output: 4_096 })
 
+      // A model that exists only in the user entry disappears along with the
+      // rest of it instead of being served from the user's endpoint.
       const custom = yield* Provider.use.getModel(
         ProviderV2.ID.make("deveco"),
         ModelV2.ID.make("custom-deveco-model"),
-      )
-      expect(custom.limit).toEqual({ context: 128_000, input: undefined, output: 16_384 })
-      expect(ProviderTransform.maxOutputTokens(custom)).toBe(16_384)
+      ).pipe(Effect.exit)
+      expect(Exit.isFailure(custom)).toBe(true)
+
+      // Nothing of the user entry survives: the provider keeps its catalog name,
+      // env, endpoint and the OAuth apiKey installed by the deveco auth loader.
+      const provider = yield* Provider.use.getProvider(ProviderV2.ID.make("deveco"))
+      expect(provider.name).toBe("DevEco Code")
+      expect(provider.env).toEqual([])
+      expect(provider.options.baseURL).toBeUndefined()
+      expect(provider.options.apiKey).toBe("test-login-access")
+      expect(builtIn.api.url).toBe(DEVECO_API_URL)
     }),
   {
     config: {
@@ -1972,14 +1984,119 @@ it.instance(
       enabled_providers: ["openai", "deveco"],
       provider: {
         deveco: {
+          name: "My Custom Gateway",
           npm: "@ai-sdk/openai-compatible",
           api: "https://api.example.com/v1",
+          env: ["MY_DEVECO_KEY"],
+          options: { baseURL: "https://api.example.com/v1", apiKey: "user-api-key" },
           models: {
             "test-deveco-model": { limit: { context: 200_000, output: 64_000 } },
+            "untouched-deveco-model": { limit: { context: 555, output: 111 } },
             "custom-deveco-model": { tool_call: true, limit: { context: 128_000, output: 16_384 } },
           },
         },
       },
+    },
+  },
+)
+
+// Signs in as deveco, isolates the catalog cache and serves a minimal cloud
+// catalog, so provider.deveco behaviour can be asserted without the network.
+const withDevecoCloudCatalog = (modelIDs: string[]) =>
+  Effect.gen(function* () {
+    const { devecoAuth } = yield* Effect.promise(() => import("@/plugin/deveco/auth"))
+    const refresh = spyOn(devecoAuth, "refreshToken").mockResolvedValue(null)
+    const cache = Global.Path.cache
+    const isolatedCache = yield* tmpdirScoped().pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+    const { clearDevecoModelCache } = yield* Effect.promise(() => import("@/plugin/deveco-models"))
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(
+      Object.assign(
+        async () =>
+          Response.json({
+            code: 200,
+            body: {
+              version: 1,
+              inner_models: [
+                {
+                  protocol: "openai",
+                  group_name: "default",
+                  model_configs: modelIDs.map((modelID, index) => ({
+                    id: index + 1,
+                    model_id: modelID,
+                    context_window: 32768,
+                    output: 8192,
+                  })),
+                },
+              ],
+            },
+          }),
+        { preconnect: globalThis.fetch.preconnect },
+      ),
+    )
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        refresh.mockRestore()
+        fetch.mockRestore()
+        clearDevecoModelCache()
+        Global.Path.cache = cache
+      }),
+    )
+    Global.Path.cache = isolatedCache
+    clearDevecoModelCache()
+    yield* setProcessEnv("DEVECO_AUTH_CONTENT", "")
+    yield* withAuthJson(
+      JSON.stringify({
+        deveco: {
+          type: "oauth",
+          access: "test-login-access",
+          refresh: "test-refresh",
+          expires: Date.now() + 60000,
+          isRealName: true,
+        },
+        openai: { type: "api", key: "test-third-party-key" },
+      }),
+    )
+  })
+
+it.instance(
+  "ignores a config model missing from the built-in deveco catalog",
+  () =>
+    Effect.gen(function* () {
+      yield* withDevecoCloudCatalog(["test-deveco-model", "untouched-deveco-model"])
+      // `custom-deveco-model` only existed in the ignored user entry. Rather than
+      // selecting a model that cannot resolve, the default model is resolved.
+      const resolved = yield* Provider.use.defaultModel()
+      expect(resolved.providerID).toBe(ProviderV2.ID.make("deveco"))
+      expect(resolved.modelID).not.toBe(ModelV2.ID.make("custom-deveco-model"))
+      const model = yield* Provider.use.getModel(resolved.providerID, resolved.modelID)
+      expect(model.id).toBe(resolved.modelID)
+    }),
+  {
+    config: {
+      model: "deveco/custom-deveco-model",
+      enabled_providers: ["deveco"],
+      provider: {
+        deveco: {
+          models: { "custom-deveco-model": { tool_call: true, limit: { context: 128_000, output: 16_384 } } },
+        },
+      },
+    },
+  },
+)
+
+it.instance(
+  "keeps a config model that exists in the built-in deveco catalog",
+  () =>
+    Effect.gen(function* () {
+      yield* withDevecoCloudCatalog(["test-deveco-model", "untouched-deveco-model"])
+      const resolved = yield* Provider.use.defaultModel()
+      expect(resolved.providerID).toBe(ProviderV2.ID.make("deveco"))
+      expect(resolved.modelID).toBe(ModelV2.ID.make("untouched-deveco-model"))
+    }),
+  {
+    config: {
+      model: "deveco/untouched-deveco-model",
+      enabled_providers: ["deveco"],
     },
   },
 )

@@ -1162,7 +1162,9 @@
     "loading_project": "Loading project data...",
     "key_loading_failed": "API key saved, but provider loading failed. Please try again.",
     "invalid_studio": "Invalid path. Please enter a directory containing DevEco Studio (v6.1 or later).",
-    "studio_placeholder": " e.g. D:\\DevEco Studio"
+    "studio_placeholder": " e.g. D:\\DevEco Studio",
+    "reserved_provider_title": "Custom Models Unavailable",
+    "reserved_provider_message": "The providerId value \"deveco\" in {{file}} is reserved for built-in models. To use custom models, set providerId to another value."
   },
   "skill": {
     "hmos-dfx-analyzer": {

@@ -33,6 +33,13 @@ import { Prompt, type PromptRef } from "@opencode-ai/tui/component/prompt"
 import { usePluginRuntime } from "@opencode-ai/tui/plugin/runtime"
 import { HomeSessionDestinationProvider } from "@opencode-ai/tui/routes/home/session-destination"
 import { Toast } from "@opencode-ai/tui/ui/toast"
+import { DialogAlert } from "@opencode-ai/tui/ui/dialog-alert"
+import {
+  markReservedProviderNoticeShown,
+  reservedProviderConfigFileName,
+  reservedProviderNoticePending,
+  wrapNoticeMessage,
+} from "./reserved-provider-notice"
 import { useDialog } from "@opencode-ai/tui/ui/dialog"
 import { getDevEcoExtensions, type SyncObject } from "@opencode-ai/tui/deveco-extensions"
 import {
@@ -82,6 +89,7 @@ export function DevEcoHomeBody(props: HomeProps) {
   const gate = createHomeGate(props.sync)
   const prompt = createHomePrompt(props.sync)
   createImprovementPrompt(props.sync, gate.ready)
+  createReservedProviderWarning(props.sync, gate.ready)
   return (
     <HomeSessionDestinationProvider>
       <HomeLayout {...props} gate={gate} prompt={prompt} bodySlotHeight={homeBodySlotRows(dimensions().height)} />
@@ -214,6 +222,42 @@ async function homeCheckFailure(error: unknown): Promise<GateDestination> {
     error: error instanceof Error ? error.message : String(error),
   })
   return expiredEntry()
+}
+
+/**
+ * The provider layer drops a user `provider.deveco` entry because that id belongs to the
+ * built-in model catalog. Announce it on the home screen: a toast emitted from the server's
+ * config hook races the TUI event subscription, so it never reaches the user at startup.
+ */
+function createReservedProviderWarning(sync: SyncObject, ready: () => boolean) {
+  const dialog = useDialog()
+  const { t } = useI18n()
+  // The schema lets the user keep either extension, so name the file they actually have.
+  const configFile = reservedProviderConfigFileName()
+  createEffect(() => {
+    if (!ready()) return
+    if (!reservedProviderNoticePending(sync.data.config)) return
+    markReservedProviderNoticeShown()
+    // Rendered directly instead of DialogAlert.show so the short alert can drop its extra
+    // vertical padding; the title/message follow the TUI locale like every other dialog.
+    void new Promise<void>((resolve) => {
+      dialog.replace(
+        () => (
+          <DialogAlert
+            title={t("account.reserved_provider_title")}
+            message={wrapNoticeMessage(t("account.reserved_provider_message", { file: configFile }), 48)}
+            wrapMode="none"
+            onConfirm={() => resolve()}
+          />
+        ),
+        () => resolve(),
+      )
+      // replace() resets the panel to medium/top, so re-apply the layout we want for this short
+      // one-paragraph notice: centered, and 80% of the default width.
+      dialog.setAlign("center")
+      dialog.setSize("narrow")
+    })
+  })
 }
 
 function createImprovementPrompt(sync: SyncObject, ready: () => boolean) {

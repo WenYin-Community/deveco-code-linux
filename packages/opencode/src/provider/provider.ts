@@ -18,7 +18,7 @@ import { iife } from "@/util/iife"
 import { Global } from "@opencode-ai/core/global"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context, Schema, Types } from "effect"
+import { Effect, Exit, Layer, Context, Schema, Types } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { EffectPromise } from "@/effect/promise"
@@ -1188,6 +1188,10 @@ interface State {
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
+  /** `cfg.model` dropped during load because it named a model missing from the
+   * built-in deveco catalog (it could only have come from the ignored user
+   * `provider.deveco` entry). `defaultModel` must not select it. */
+  ignoredModel?: string
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
@@ -1418,10 +1422,28 @@ export const layer = Layer.effect(
         // load plugins first so config() hook runs before reading cfg.provider
         const plugins = yield* plugin.list()
 
+        // A user `provider.deveco` entry never applies. This provider is bound to
+        // the built-in OAuth auth loader, which always injects `Authorization`, so a
+        // user-supplied baseURL/apiKey can only 401; user `models` entries would
+        // also overwrite catalog capabilities/limits with arbitrary values. Drop
+        // the entry before either config merge pass below so its `options`,
+        // `api`, `env`, `name` and `models` are all ignored and only the cloud
+        // catalog injected further down can define this provider.
+        const userDeveco = cfg.provider?.deveco
+        if (userDeveco) {
+          yield* Effect.logWarning("ignored user provider.deveco config", {
+            hasModels: Object.keys(userDeveco.models ?? {}).length > 0,
+            hasOptions: Object.keys(userDeveco.options ?? {}).length > 0,
+          })
+        }
+
         // now read config providers - includes any modifications from plugin config() hook
-        const configProviders = Object.entries(cfg.provider ?? {})
+        const configProviderConfig = omit(cfg.provider ?? {}, ["deveco"])
+        const configProviders = Object.entries(configProviderConfig)
 
         // === DevEco Code: inject provider config if authenticated ===
+        // Set when `cfg.model` names a model the built-in catalog does not have.
+        let ignoredModel: string | undefined
         const devecoAuth = yield* auth.get("deveco").pipe(Effect.orElseSucceed(() => undefined))
         if (devecoAuth?.type === "oauth" && !cfg.disabled_providers?.includes("deveco") && (!cfg.enabled_providers || cfg.enabled_providers.includes("deveco"))) {
           const otherCredentials = Object.keys(yield* auth.all().pipe(Effect.orDie)).some((id) => id !== "deveco")
@@ -1442,6 +1464,18 @@ export const layer = Layer.effect(
             ? yield* Effect.promise(() => getDevecoProviderConfig(accessToken))
             : null)
           if (config) {
+            // The user's `provider.deveco` entry is ignored above, so a model that
+            // only existed there cannot resolve any more. Drop the config model
+            // (default model resolution then picks a catalog one) instead of
+            // selecting a model that will fail on every request. Only the built-in
+            // catalog is authoritative: when it could not be loaded (`config` is
+            // null) the user's model setting is left alone.
+            if (cfg.model?.startsWith("deveco/") && !Object.keys(config.models).includes(cfg.model.slice("deveco/".length))) {
+              ignoredModel = cfg.model
+              yield* Effect.logWarning("ignored config model missing from built-in deveco catalog", {
+                model: cfg.model,
+              })
+            }
             configProviders.push(["deveco", config as unknown as Partial<Info>])
           }
         }
@@ -1680,7 +1714,7 @@ export const layer = Layer.effect(
             continue
           }
 
-          const configProvider = cfg.provider?.[providerID]
+          const configProvider = configProviderConfig[providerID]
 
           // Detach the models record from the shared `database` tree: the
           // deletes below must only filter what `providers` exposes, while
@@ -1750,6 +1784,7 @@ export const layer = Layer.effect(
           sdk,
           modelLoaders,
           varsLoaders,
+          ignoredModel,
         }
       }),
     )
@@ -2066,7 +2101,19 @@ export const layer = Layer.effect(
 
     const defaultModel = Effect.fn("Provider.defaultModel")(function* () {
       const cfg = yield* config.get()
-      if (cfg.model) return parseModel(cfg.model)
+      // A `deveco/<model>` config model absent from the built-in catalog was
+      // dropped during load (it could only come from the ignored user
+      // `provider.deveco` entry), so resolve the default model instead of
+      // returning a model that cannot be found. Non-deveco config models and
+      // environments without instance state keep the previous behavior.
+      const dropped = cfg.model?.startsWith("deveco/")
+        ? yield* InstanceState.get(state).pipe(
+            Effect.map((s) => s.ignoredModel),
+            Effect.exit,
+            Effect.map((exit) => (Exit.isSuccess(exit) ? exit.value : undefined)),
+          )
+        : undefined
+      if (cfg.model && cfg.model !== dropped) return parseModel(cfg.model)
 
       const s = yield* InstanceState.get(state)
       const recent = yield* fs.readJson(path.join(Global.Path.state, "model.json")).pipe(

@@ -8,6 +8,12 @@ export type DialogAlertProps = {
   title: string
   message: string
   onConfirm?: () => void
+  /**
+   * Line-break mode for the message. CJK needs "char" (word wrapping treats a whole run between
+   * punctuation as one unbreakable word and leaves lines half empty); latin text needs "word" so
+   * identifiers such as `deveco.jsonc` are not split mid-token.
+   */
+  wrapMode?: "word" | "char" | "none"
 }
 
 export function DialogAlert(props: DialogAlertProps) {
@@ -39,7 +45,9 @@ export function DialogAlert(props: DialogAlertProps) {
         </text>
       </box>
       <box paddingBottom={1}>
-        <text fg={theme.textMuted}>{props.message}</text>
+        <text fg={theme.textMuted} wrapMode={props.wrapMode}>
+          {props.message}
+        </text>
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
         <box

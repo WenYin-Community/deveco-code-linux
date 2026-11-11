@@ -12,7 +12,7 @@ import * as Selection from "../util/selection"
 
 export function Dialog(
   props: ParentProps<{
-    size?: "medium" | "large" | "xlarge"
+    size?: "narrow" | "medium" | "large" | "xlarge"
     align?: "top" | "center"
     onClose: () => void
   }>,
@@ -26,6 +26,9 @@ export function Dialog(
   const width = () => {
     if (props.size === "xlarge") return 116
     if (props.size === "large") return 88
+    // Slightly narrower than medium so a one-paragraph notice is not a wide, flat strip, but wide
+    // enough that latin sentences wrap without leaving half-empty lines.
+    if (props.size === "narrow") return 52
     return 60
   }
 
@@ -74,7 +77,7 @@ function init() {
       element: JSX.Element
       onClose?: () => void
     }[],
-    size: "medium" as "medium" | "large" | "xlarge",
+    size: "medium" as "narrow" | "medium" | "large" | "xlarge",
     align: "top" as "top" | "center",
   })
 
@@ -175,7 +178,7 @@ function init() {
     get size() {
       return store.size
     },
-    setSize(size: "medium" | "large" | "xlarge") {
+    setSize(size: "narrow" | "medium" | "large" | "xlarge") {
       setStore("size", size)
     },
     get align() {

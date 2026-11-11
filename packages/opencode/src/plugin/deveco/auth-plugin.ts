@@ -4,7 +4,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { OAUTH_DUMMY_KEY } from "@/auth"
 import { Global } from "@opencode-ai/core/global"
 import { GlobalBus } from "@/bus/global"
-import { logError } from "./log"
+import { logError, logWarn } from "./log"
 import { TOOL_IMPROVEMENT_HEADER } from "@/cli/deveco-privacy-settings"
 import { isImprovementConsentGranted } from "./improvement-consent"
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
@@ -19,6 +19,21 @@ import type { AgreementConfig } from "@/cli/deveco-legal"
 
 export { TOOL_IMPROVEMENT_HEADER }
 
+// Once per process: the config hook may run again on reload, and one log line is enough.
+let reservedProviderWarned = false
+
+/**
+ * The deveco provider is reserved for the built-in model catalog, so a user supplied
+ * `provider.deveco` entry is ignored by the provider layer. The user-facing notice is rendered by
+ * the TUI home screen (it reads the synced config); a toast from here would fire before the TUI
+ * subscribes to events and never reach the user, and it could not follow the TUI locale.
+ */
+function logReservedProviderConfig() {
+  if (reservedProviderWarned) return
+  reservedProviderWarned = true
+  logWarn("ignored user provider.deveco config: providerId deveco is reserved", { service: "deveco" })
+}
+
 export function isHuaweiInferenceRequest(input: RequestInfo | URL) {
   const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url)
   return (
@@ -28,11 +43,14 @@ export function isHuaweiInferenceRequest(input: RequestInfo | URL) {
   )
 }
 
-export async function DevEcoAuthPlugin(_input: PluginInput): Promise<Hooks> {
+export async function DevEcoAuthPlugin(input: PluginInput): Promise<Hooks> {
   let agreement: AgreementConfig | undefined
   return {
     async config(config) {
       agreement = (config as { agreement?: AgreementConfig }).agreement
+      // Every config source is filtered, including managed/console config: the filter is
+      // "the id deveco is reserved", not "this particular file type is disallowed".
+      if (config.provider?.deveco !== undefined) logReservedProviderConfig()
       // Best effort and fire-and-forget: a missing country/region file must never delay or
       // fail startup, and the promise never rejects.
       void devecoAuth.syncCountryRegion()

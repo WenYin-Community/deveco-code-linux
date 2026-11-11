@@ -48,6 +48,7 @@
     "./deveco-links": "./src/deveco-links.ts",
     "./deveco-extensions": "./src/deveco-extensions.ts",
     "./ui/dialog": "./src/ui/dialog.tsx",
+    "./ui/dialog-alert": "./src/ui/dialog-alert.tsx",
     "./ui/dialog-confirm": "./src/ui/dialog-confirm.tsx",
     "./ui/dialog-select": "./src/ui/dialog-select.tsx",
     "./ui/dialog-prompt": "./src/ui/dialog-prompt.tsx",

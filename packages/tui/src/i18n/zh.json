@@ -1163,7 +1163,9 @@
     "loading_project": "正在加载项目数据…",
     "key_loading_failed": "API 密钥已保存，但服务商加载失败，请重试。",
     "invalid_studio": "路径无效，请输入 DevEco Studio（6.1 或更高版本）的安装目录。",
-    "studio_placeholder": " 例如 D:\\DevEco Studio"
+    "studio_placeholder": " 例如 D:\\DevEco Studio",
+    "reserved_provider_title": "自定义模型不可用",
+    "reserved_provider_message": "{{file}} 配置文件中的 providerId 值 \"deveco\" 已预留给内置模型；如需使用自定义模型，请将该字段改为其他值。"
   },
   "skill": {
     "hmos-dfx-analyzer": {
