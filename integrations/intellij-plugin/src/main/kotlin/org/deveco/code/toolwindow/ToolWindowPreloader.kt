@@ -31,13 +31,23 @@ object ToolWindowPreloader {
     // Resolved by name so an absent entry degrades to "keep loading lazily" instead of a
     // compile-time dependency. On the 261 line these locate the platform module jars that
     // hold Jewel, Compose and Skiko; on 243 those ship inside this plugin and are already
-    // covered by the plugin-loader enumeration.
+    // covered by the plugin-loader enumeration. One seed per jar the chat editor's first
+    // composition loads from. foundation-desktop is reached through CoreTextFieldKt:
+    // layout.Box is a composable function, so no class of that name exists to seed with,
+    // and its CoreTextField/KeyboardActions defineClass cost is what the freeze reports
+    // captured. The chat theme also constructs the markdown processor, the GFM table
+    // extension and the markdown styling bridge directly, so those jars need seeds too.
     private val platformSeedClasses = listOf(
         "org.jetbrains.jewel.bridge.JewelComposePanel",
-        "androidx.compose.foundation.layout.Box",
+        "androidx.compose.foundation.text.CoreTextFieldKt",
         "androidx.compose.runtime.Composable",
         "androidx.compose.ui.Modifier",
         "org.jetbrains.skiko.SkiaLayer",
+        "org.jetbrains.jewel.ui.theme.JewelThemeKt",
+        "org.jetbrains.jewel.foundation.theme.JewelThemeKt",
+        "org.jetbrains.jewel.intui.markdown.bridge.BridgeProvideMarkdownStylingKt",
+        "org.jetbrains.jewel.markdown.MarkdownBlock",
+        "org.jetbrains.jewel.markdown.extensions.github.tables.GfmTableColors",
     )
 
     private val platformUiPackages = listOf(
