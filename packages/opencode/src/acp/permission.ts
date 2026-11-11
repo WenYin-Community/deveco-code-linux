@@ -24,6 +24,7 @@ export class Handler {
       sdk: OpencodeClient
       connection: Connection
       session: ACPSession.Interface
+      resolveSubagentParent?: (sessionId: string) => string | undefined
     },
   ) {}
 
@@ -43,8 +44,14 @@ export class Handler {
 
   private async process(event: PermissionEvent) {
     const permission = event.properties
-    const session = await Effect.runPromise(this.input.session.tryGet(permission.sessionID))
+    // Section 23: task subagents are not ACP-registered sessions — their
+    // permission asks were silently dropped here, leaving the subagent
+    // waiting forever. Re-target the ask to the owning parent session so the
+    // client actually sees it; the reply is routed back by requestID.
+    const parentId = this.input.resolveSubagentParent?.(permission.sessionID)
+    const session = await Effect.runPromise(this.input.session.tryGet(parentId ?? permission.sessionID))
     if (!session) return
+    const clientSessionId = parentId ?? permission.sessionID
 
     if (!this.input.connection.requestPermission) {
       await this.reply(permission.id, "reject", session.cwd)
@@ -53,7 +60,7 @@ export class Handler {
 
     const result = await this.input.connection
       .requestPermission({
-        sessionId: permission.sessionID,
+        sessionId: clientSessionId,
         toolCall: {
           toolCallId: permission.tool?.callID ?? permission.id,
           status: "pending",

@@ -14,6 +14,7 @@ export class Handler {
       sdk: OpencodeClient
       connection: Connection
       session: ACPSession.Interface
+      resolveSubagentParent?: (sessionId: string) => string | undefined
     },
   ) {}
 
@@ -33,13 +34,18 @@ export class Handler {
 
   private async process(event: QuestionEvent) {
     const question = event.properties
-    const session = await Effect.runPromise(this.input.session.tryGet(question.sessionID))
+    // Task-tool subagents are not ACP-registered sessions; their questions
+    // are re-targeted to the owning parent session so the client actually
+    // sees them. A dropped question used to leave the subagent waiting forever.
+    const parentId = this.input.resolveSubagentParent?.(question.sessionID)
+    const session = await Effect.runPromise(this.input.session.tryGet(parentId ?? question.sessionID))
     if (!session) return
+    const clientSessionId = parentId ?? question.sessionID
 
     if (question.questions.length === 0) return
     const fields = question.questions.map((item, index) => ({ key: `question_${index}`, question: item }))
-    const result = await this.input.connection
-      .unstable_createElicitation(buildElicitationRequest(question, fields))
+const result = await this.input.connection
+      .unstable_createElicitation(buildElicitationRequest(clientSessionId, question, fields))
       .catch(async () => {
         await this.reject(question.id, session.cwd)
         return undefined
@@ -71,7 +77,7 @@ export class Handler {
 
 type Field = { key: string; question: QuestionEvent["properties"]["questions"][number] }
 
-function buildElicitationRequest(question: QuestionEvent["properties"], fields: Field[]): CreateElicitationRequest {
+function buildElicitationRequest(sessionId: string, question: QuestionEvent["properties"], fields: Field[]): CreateElicitationRequest {
   const properties = Object.fromEntries(fields.map((field) => [field.key, propertySchema(field)]))
   const metaFields = fields.map((field) => ({
     key: field.key,
@@ -84,7 +90,7 @@ function buildElicitationRequest(question: QuestionEvent["properties"], fields: 
   }))
   const title = question.questions[0]?.header || "Question"
   return {
-    sessionId: question.sessionID,
+    sessionId,
     mode: "form",
     message: title,
     requestedSchema: {

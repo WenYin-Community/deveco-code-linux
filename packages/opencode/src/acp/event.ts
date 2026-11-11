@@ -144,6 +144,39 @@ function debugStateChunk(part: DebugStatePart) {
   }
 }
 
+// Section 22: task subagents are not ACP-registered sessions, so their events
+// never reach the wire on their own. The link (built from the parent task
+// tool part's state.metadata.sessionId) routes their tool events to the
+// parent session, and the parent's reverse requests (permission/question)
+// back to a session the client can actually route.
+type SubagentLink = { parentSessionId: string; toolCallId: string }
+
+const SUBAGENT_LOG_LINES = 12
+
+function truncateProgress(text: string, max: number): string {
+  if (text.length <= max) return text
+  return text.slice(0, max - 1) + "…"
+}
+
+function subagentToolTarget(part: ToolPart): string {
+  const input = "input" in part.state ? (part.state.input as Record<string, unknown>) : undefined
+  const command = input?.command
+  if (typeof command === "string" && command.trim()) {
+    return truncateProgress(command.replace(/\s+/g, " ").trim(), 60)
+  }
+  const raw = input?.filePath ?? input?.file_path ?? input?.path ?? input?.pathInProject ?? input?.pattern ?? input?.query
+  if (typeof raw !== "string" || !raw.trim()) return ""
+  const normalized = raw.replace(/\\/g, "/")
+  return truncateProgress(normalized.split("/").pop() ?? normalized, 60)
+}
+
+function subagentProgressLine(part: ToolPart): string {
+  const mark = part.state.status === "completed" ? "✓" : part.state.status === "error" ? "✗" : "…"
+  const time = new Date().toTimeString().slice(0, 5)
+  const target = subagentToolTarget(part)
+  return `${time} ${mark} ${part.tool}${target ? " " + target : ""}`
+}
+
 export function start(input: {
   sdk: OpencodeClient
   connection: Connection
@@ -160,6 +193,8 @@ export class Subscription {
   private readonly shellSnapshots = new Map<string, string>()
   private readonly toolStarts = new Set<string>()
   private readonly usagePushes = new Map<string, { messageId: string; used: number; at: number }>()
+  private readonly subagentLinks = new Map<string, SubagentLink>()
+  private readonly subagentLogs = new Map<string, string[]>()
   private readonly permission: ACPPermission.Handler
   private readonly elicitation: ACPElicitation.Handler
   private started = false
@@ -172,8 +207,10 @@ export class Subscription {
       usage: UsageService.Interface
     },
   ) {
-    this.permission = new ACPPermission.Handler(input)
-    this.elicitation = new ACPElicitation.Handler(input)
+    const resolveSubagentParent = (sessionId: string): string | undefined =>
+      this.subagentLinks.get(sessionId)?.parentSessionId
+    this.permission = new ACPPermission.Handler({ ...input, resolveSubagentParent })
+    this.elicitation = new ACPElicitation.Handler({ ...input, resolveSubagentParent })
   }
 
   start() {
@@ -341,7 +378,14 @@ export class Subscription {
     const part = event.properties.part
     const sessionId = part.sessionID || event.properties.sessionID
     const session = await Effect.runPromise(this.input.session.tryGet(sessionId))
-    if (!session) return
+    if (!session) {
+      // Unregistered session: a task subagent. Compress its tool events into
+      // rolling progress lines on the parent's task card — silently dropped
+      // events are what made Phase 4 a black box.
+      await this.forwardSubagentPart(sessionId, part)
+      return
+    }
+    if (part.type === "tool") this.recordSubagentLink(session.id, part)
 
     await Effect.runPromise(
       this.input.session.recordPartMetadata({
@@ -365,6 +409,44 @@ export class Subscription {
     if (part.type === "tool") {
       await this.handleToolPart(session.id, part, session.cwd)
     }
+  }
+
+  // Task tool parts carry the child session id in state.metadata (task.ts
+  // stores it in ctx.metadata). Only the parent's events pass through here,
+  // so this is the single race-free place to learn the link.
+  private recordSubagentLink(parentSessionId: string, part: ToolPart) {
+    const metadata = "metadata" in part.state ? (part.state.metadata as { sessionId?: string }) : undefined
+    const childSessionId = metadata?.sessionId
+    if (!childSessionId || childSessionId === parentSessionId) return
+    this.subagentLinks.set(childSessionId, { parentSessionId, toolCallId: part.callID })
+  }
+
+  private clearSubagentLink(toolCallId: string) {
+    for (const [child, link] of this.subagentLinks) {
+      if (link.toolCallId !== toolCallId) continue
+      this.subagentLinks.delete(child)
+      this.subagentLogs.delete(link.toolCallId)
+    }
+  }
+
+  private async forwardSubagentPart(sessionId: string, part: Part) {
+    if (part.type !== "tool") return
+    const link = this.subagentLinks.get(sessionId)
+    if (!link) return
+    const line = subagentProgressLine(part)
+    const lines = this.subagentLogs.get(link.toolCallId) ?? []
+    if (lines[lines.length - 1] !== line) lines.push(line)
+    while (lines.length > SUBAGENT_LOG_LINES) lines.shift()
+    this.subagentLogs.set(link.toolCallId, lines)
+    await this.input.connection.sessionUpdate({
+      sessionId: link.parentSessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: link.toolCallId,
+        status: "in_progress",
+        content: [{ type: "content", content: { type: "text", text: lines.join("\n") } }],
+      },
+    })
   }
 
   private async handlePartDelta(event: EventMessagePartDelta) {
@@ -552,6 +634,7 @@ export class Subscription {
   private clearTool(toolCallId: string) {
     this.toolStarts.delete(toolCallId)
     this.shellSnapshots.delete(toolCallId)
+    this.clearSubagentLink(toolCallId)
   }
 }
 
