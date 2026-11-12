@@ -83,7 +83,8 @@ stages:
             # 镜像缓存的 bin 缺 +x，bun 会把它当成 missing script
             run: find . -path '*/node_modules/.bin/*' -type l -exec chmod +x {} +
           - name: 运行单元测试
-            run: bun turbo test --output-logs=errors-only --log-order=grouped --log-prefix=task
+            # 限制包级并发，避免多个测试包同时运行造成内存和进程压力
+            run: bun turbo test --concurrency=4 --output-logs=errors-only --log-order=grouped --log-prefix=task
             env:
               OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
               DEVECO_DISABLE_MODELS_FETCH: "true"

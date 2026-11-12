@@ -26,7 +26,7 @@ export function loadAccessTokenFromDisk(): string {
 }
 
 export interface Interface {
-  readonly exit: (sessionID: string, modelId: string) => Effect.Effect<void>
+  readonly exit: (sessionID: string, modelId: string, taskID: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ExitQueue") {}
@@ -37,6 +37,7 @@ export const layer = Layer.effect(
     const exit: Interface["exit"] = Effect.fn("ExitQueue.exit")(function* (
       sessionID: string,
       modelId: string,
+      taskID: string,
     ) {
       const chatId = sessionChatIdMap.get(sessionID)
       const url = `${HuaweiEndpoints.devecoApiExitQueue}?modelId=${encodeURIComponent(modelId)}`
@@ -50,6 +51,8 @@ export const layer = Layer.effect(
             headers: {
               "Content-Type": "application/json",
               "Session-Id": sessionID,
+              "x-deveco-session": sessionID,
+              "x-deveco-task": taskID,
               ...(chatId ? { "Chat-Id": chatId } : {}),
               ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
             },

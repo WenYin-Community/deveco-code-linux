@@ -1045,7 +1045,9 @@ export const layer = Layer.effect(
                 aborted = true
                 // Exit queue on interrupt
                 if (ctx.model?.providerID === "deveco" && ctx.model.id) {
-                  yield* exitQueue.exit(ctx.sessionID, ctx.model.id).pipe(Effect.forkIn(scope), Effect.ignore)
+                  yield* exitQueue
+                    .exit(ctx.sessionID, ctx.model.id, streamInput.user.id)
+                    .pipe(Effect.forkIn(scope), Effect.ignore)
                 }
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
@@ -1094,7 +1096,9 @@ export const layer = Layer.effect(
 
           // Exit queue on success
           if (ctx.model?.providerID === "deveco" && ctx.model.id) {
-            yield* exitQueue.exit(ctx.sessionID, ctx.model.id).pipe(Effect.forkIn(scope), Effect.ignore)
+            yield* exitQueue
+              .exit(ctx.sessionID, ctx.model.id, streamInput.user.id)
+              .pipe(Effect.forkIn(scope), Effect.ignore)
           }
 
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"

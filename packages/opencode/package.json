@@ -8,7 +8,7 @@
   "scripts": {
     "postinstall": "bun run script/postinstall.ts",
     "typecheck": "tsgo --noEmit",
-    "test": "bun test --isolate --timeout 30000 --only-failures 2>&1 | tee /tmp/deveco-test-stdout.log; code=${PIPESTATUS[0]}; echo EXIT_CODE=$code; if grep -q ' 0 fail' /tmp/deveco-test-stdout.log; then exit 0; else exit $code; fi",
+    "test": "bun test --isolate --max-concurrency=4 --timeout 30000 --only-failures 2>&1 | tee /tmp/deveco-test-stdout.log; code=${PIPESTATUS[0]}; echo EXIT_CODE=$code; if grep -q ' 0 fail' /tmp/deveco-test-stdout.log; then exit 0; else exit $code; fi",
     "test:live-e2e": "bun run test/live-e2e/runner.ts",
     "test:httpapi": "bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode auth --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode effect --fail-on-missing --fail-on-skip",
     "bench:test": "bun run script/bench-test-suite.ts",

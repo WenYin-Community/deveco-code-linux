@@ -156,7 +156,7 @@ describe("exit", () => {
     sessionChatIdMap.set("sess-1", "chat-1")
     const captured = installFetchMock()
 
-    await Effect.runPromise(svc.exit("sess-1", "model/glm-5"))
+    await Effect.runPromise(svc.exit("sess-1", "model/glm-5", "msg-1"))
 
     expect(captured.url).toContain("exitSessionQueue")
     expect(captured.url).toContain(encodeURIComponent("model/glm-5"))
@@ -164,6 +164,8 @@ describe("exit", () => {
     const headers = captured.init?.headers as Record<string, string>
     expect(headers["Content-Type"]).toBe("application/json")
     expect(headers["Session-Id"]).toBe("sess-1")
+    expect(headers["x-deveco-session"]).toBe("sess-1")
+    expect(headers["x-deveco-task"]).toBe("msg-1")
     expect(headers["Chat-Id"]).toBe("chat-1")
     expect(headers["authorization"]).toBe("Bearer mytoken")
   })
@@ -172,12 +174,14 @@ describe("exit", () => {
     seedAuthProvider({ type: "oauth", access: "tok", refresh: "r", expires: 99999 })
     const captured = installFetchMock()
 
-    await Effect.runPromise(svc.exit("unknown-sess", "model1"))
+    await Effect.runPromise(svc.exit("unknown-sess", "model1", "msg-2"))
 
     const headers = captured.init?.headers as Record<string, string>
     expect(headers["Chat-Id"]).toBeUndefined()
     expect(headers["authorization"]).toBe("Bearer tok")
     expect(headers["Session-Id"]).toBe("unknown-sess")
+    expect(headers["x-deveco-session"]).toBe("unknown-sess")
+    expect(headers["x-deveco-task"]).toBe("msg-2")
   })
 
   it("omits authorization header when no token exists on disk", async () => {
@@ -187,25 +191,29 @@ describe("exit", () => {
     sessionChatIdMap.set("sess-2", "chat-2")
     const captured = installFetchMock()
 
-    await Effect.runPromise(svc.exit("sess-2", "model1"))
+    await Effect.runPromise(svc.exit("sess-2", "model1", "msg-3"))
 
     const headers = captured.init?.headers as Record<string, string>
     expect(headers["Chat-Id"]).toBe("chat-2")
     expect(headers["authorization"]).toBeUndefined()
     expect(headers["Session-Id"]).toBe("sess-2")
+    expect(headers["x-deveco-session"]).toBe("sess-2")
+    expect(headers["x-deveco-task"]).toBe("msg-3")
   })
 
-  it("sends only base headers when both chatId and token are absent", async () => {
+  it("sends base and session headers when both chatId and token are absent", async () => {
     try {
       fs.unlinkSync(authFilePath)
     } catch {}
     const captured = installFetchMock()
 
-    await Effect.runPromise(svc.exit("bare-sess", "model1"))
+    await Effect.runPromise(svc.exit("bare-sess", "model1", "msg-4"))
 
     const headers = captured.init?.headers as Record<string, string>
     expect(headers["Content-Type"]).toBe("application/json")
     expect(headers["Session-Id"]).toBe("bare-sess")
+    expect(headers["x-deveco-session"]).toBe("bare-sess")
+    expect(headers["x-deveco-task"]).toBe("msg-4")
     expect(headers["Chat-Id"]).toBeUndefined()
     expect(headers["authorization"]).toBeUndefined()
   })
@@ -216,7 +224,7 @@ describe("exit", () => {
     } catch {}
     installFetchMock(undefined, new Error("Network is unreachable"))
 
-    await expect(Effect.runPromise(svc.exit("err-sess", "model1"))).resolves.toBeUndefined()
+    await expect(Effect.runPromise(svc.exit("err-sess", "model1", "msg-5"))).resolves.toBeUndefined()
   })
 
   it("wraps non-Error exception and completes gracefully", async () => {
@@ -225,7 +233,7 @@ describe("exit", () => {
     } catch {}
     installFetchMock(undefined, "string error")
 
-    await expect(Effect.runPromise(svc.exit("str-sess", "model1"))).resolves.toBeUndefined()
+    await expect(Effect.runPromise(svc.exit("str-sess", "model1", "msg-6"))).resolves.toBeUndefined()
   })
 
   it("encodes special characters in modelId via encodeURIComponent", async () => {
@@ -235,7 +243,7 @@ describe("exit", () => {
     const captured = installFetchMock()
 
     const specialModelId = "model/special value&param=1"
-    await Effect.runPromise(svc.exit("enc-sess", specialModelId))
+    await Effect.runPromise(svc.exit("enc-sess", specialModelId, "msg-7"))
 
     const encoded = encodeURIComponent(specialModelId)
     expect(captured.url).toContain(encoded)
@@ -249,6 +257,6 @@ describe("exit", () => {
     } catch {}
     installFetchMock(new Response("Internal Server Error", { status: 500 }))
 
-    await expect(Effect.runPromise(svc.exit("http-err", "model1"))).resolves.toBeUndefined()
+    await expect(Effect.runPromise(svc.exit("http-err", "model1", "msg-8"))).resolves.toBeUndefined()
   })
 })
