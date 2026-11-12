@@ -168,6 +168,155 @@ stages:
           - name: 确保 jq 可用
             run: bash .gitcode/scripts/ensure-jq.sh
 
+          # 以下两个软提醒只发评论，永远 exit 0，不影响本 job 的硬门禁结论。
+          # 放在硬门禁之前，避免合规检查中途 exit 1 把它们跳过。
+          - name: 提醒根 CHANGELOG 改动
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              GITCODE_TYPE: pulls
+            run: |
+              set +e
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "No PR number found"
+                exit 0
+              fi
+
+              # 非 /recheck 评论触发时不重复检查，避免刷评论
+              if [ -n "$COMMENT_USER" ]; then
+                TRIMMED=$(printf '%s' "${COMMENT_BODY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "$TRIMMED" in
+                  '/recheck'*) ;;
+                  *) echo "非 /recheck 评论，跳过"; exit 0 ;;
+                esac
+              fi
+
+              PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
+              HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref // ""' 2>/dev/null)
+
+              # 发版分支（*-changelog）是唯一允许改动根 CHANGELOG.md 的通道
+              case "$HEAD_REF" in
+                *-changelog | *-changelog/*)
+                  echo "Release branch '$HEAD_REF' — skipping CHANGELOG guard."
+                  exit 0
+                  ;;
+              esac
+
+              TOUCHED=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER/files" \
+                | jq -r 'if type == "array" then ([.[] | .filename] | index("CHANGELOG.md") != null) else false end' 2>/dev/null)
+
+              COMMENTS=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER")
+              OLD=$(echo "$COMMENTS" | jq -r '.[] | select(.body | contains("pr-advisory:changelog")) | .id' 2>/dev/null)
+
+              # CHANGELOG 从改动里撤掉后，顺手删掉旧提醒，别留成永久污点
+              if [ "$TOUCHED" != "true" ]; then
+                for CID in $OLD; do
+                  bash .gitcode/scripts/gitcode-api.sh delete-comment "$CID"
+                done
+                echo "CHANGELOG.md not touched — OK."
+                exit 0
+              fi
+
+              echo "PR #$PR_NUMBER touches root CHANGELOG.md."
+              echo "## Changelog Guard" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "⚠️ PR #$PR_NUMBER 改动了根 CHANGELOG.md（已提醒，未阻断合并）" >> "$ATOMGIT_STEP_SUMMARY"
+
+              if [ -n "$OLD" ]; then
+                echo "已提醒过，跳过重复评论"
+                exit 0
+              fi
+
+              {
+                echo '<!-- pr-advisory:changelog -->'
+                echo '## ℹ️ 这个 PR 改动了根 `CHANGELOG.md`'
+                echo ''
+                echo '根 `CHANGELOG.md` 由发版负责人基于 commit 统一生成，日常开发请勿顺手改动，'
+                echo '否则下次发版会重复或漏掉条目。'
+                echo ''
+                echo '建议：`git restore --staged CHANGELOG.md` 后重新提交，把用户可见的变更'
+                echo '写进 commit message / PR 描述。'
+                echo ''
+                echo '若本次确实是发版，请从 `*-changelog` 分支发起 PR（例如 `v0.2.6-changelog`），此检查会自动跳过。'
+                echo ''
+                echo '详见 [AGENTS.md - CHANGELOG Ownership](https://atomgit.com/openharmony-sig/deveco-code/blob/develop/AGENTS.md#changelog-ownership)。'
+              } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
+              exit 0
+
+          - name: 提醒 PR commit 数量
+            env:
+              GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+              GITCODE_TYPE: pulls
+            run: |
+              set +e
+              PR_NUMBER="${{ inputs.pr_number || atomgit.event.pull_request.number || atomgit.event.issue.number }}"
+
+              if [ -z "$PR_NUMBER" ]; then
+                echo "No PR number found"
+                exit 0
+              fi
+
+              # 非 /recheck 评论触发时不重复检查，避免刷评论
+              if [ -n "$COMMENT_USER" ]; then
+                TRIMMED=$(printf '%s' "${COMMENT_BODY:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "$TRIMMED" in
+                  '/recheck'*) ;;
+                  *) echo "非 /recheck 评论，跳过"; exit 0 ;;
+                esac
+              fi
+
+              PR_DATA=$(bash .gitcode/scripts/gitcode-api.sh get-issue "$PR_NUMBER")
+              if [ "$(echo "$PR_DATA" | jq -r '.draft // false')" = "true" ]; then
+                echo "Draft PR — skipping."
+                exit 0
+              fi
+
+              COUNT=$(curl -sS -H "Authorization: Bearer $GITCODE_TOKEN" \
+                "$GITCODE_API/repos/$GITCODE_REPO/pulls/$PR_NUMBER/commits?per_page=100" \
+                | jq -r 'if type == "array" then length else 0 end' 2>/dev/null)
+              COUNT=${COUNT:-0}
+
+              COMMENTS=$(bash .gitcode/scripts/gitcode-api.sh list-comments "$PR_NUMBER")
+              OLD=$(echo "$COMMENTS" | jq -r '.[] | select(.body | contains("pr-advisory:commits")) | .id' 2>/dev/null)
+
+              # 压回 10 个以内后删掉旧提醒，避免评论变成永久污点
+              if [ "$COUNT" -le 10 ]; then
+                for CID in $OLD; do
+                  bash .gitcode/scripts/gitcode-api.sh delete-comment "$CID"
+                done
+                echo "PR #$PR_NUMBER has $COUNT commits — OK."
+                exit 0
+              fi
+
+              echo "PR #$PR_NUMBER has $COUNT commits (> 10)."
+              echo "## PR Commit 数" >> "$ATOMGIT_STEP_SUMMARY"
+              echo "⚠️ $COUNT 个 commit（已提醒，未阻断合并）" >> "$ATOMGIT_STEP_SUMMARY"
+
+              if [ -n "$OLD" ]; then
+                echo "已提醒过，跳过重复评论"
+                exit 0
+              fi
+
+              {
+                echo '<!-- pr-advisory:commits -->'
+                echo "## ℹ️ 这个 PR 有 $COUNT 个 commit，超过建议上限 10 个"
+                echo ''
+                echo '通常是「写一点提交一点」留下的，合入后 develop 历史会难 bisect / revert。'
+                echo ''
+                echo '建议合入前按功能聚合：'
+                echo '```'
+                echo 'git rebase -i $(git merge-base HEAD origin/develop)   # 同功能用 fixup/squash'
+                echo 'git push --force-with-lease'
+                echo '```'
+                echo '或直接用平台的 Squash merge 合入。'
+                echo ''
+                echo '按功能/特性分到 10 个以内完全允许，不需要压成 1 个。'
+              } | bash .gitcode/scripts/gitcode-api.sh post-comment "$PR_NUMBER"
+
+              exit 0
+
           - name: 检查 PR 模板合规性
             env:
               GITCODE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -337,3 +486,4 @@ stages:
 
               echo "## PR 标准检查" >> "$ATOMGIT_STEP_SUMMARY"
               echo "✅ PR #$PR_NUMBER 检查完成" >> "$ATOMGIT_STEP_SUMMARY"
+

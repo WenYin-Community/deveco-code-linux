@@ -1,0 +1,44 @@
+#!/usr/bin/env sh
+# Guard the release-owned root CHANGELOG.md.
+#
+# The root CHANGELOG.md is written only by the release owner when cutting a
+# release. Ordinary feature work must not touch it, otherwise the next release
+# either duplicates entries or silently drops them.
+#
+# Bypass for the release owner: set DEVECO_CHANGELOG_RELEASE=1, or commit from
+# a branch whose name ends in "-changelog".
+#
+# See AGENTS.md -> "CHANGELOG Ownership".
+
+if [ "$DEVECO_CHANGELOG_RELEASE" = "1" ]; then
+  exit 0
+fi
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+case "$branch" in
+  *-changelog | *-changelog/*) exit 0 ;;
+esac
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null || echo "")
+
+for file in $staged; do
+  if [ "$file" = "CHANGELOG.md" ]; then
+    cat >&2 <<'EOF'
+CHANGELOG.md is staged, but the root changelog is release-owned.
+
+Why: entries are generated from commit messages when a release is cut.
+     Editing it now makes the next release duplicate or drop entries.
+
+Fix: git restore --staged CHANGELOG.md
+     then commit again. The file stays unchanged in your working tree,
+     so nothing is lost. Put user-facing details in the commit message
+     or PR body instead.
+
+Releases are handled by the release owner on a *-changelog branch.
+See AGENTS.md -> "CHANGELOG Ownership".
+EOF
+    exit 1
+  fi
+done
+
+exit 0

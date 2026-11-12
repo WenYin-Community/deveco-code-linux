@@ -24,6 +24,22 @@ Every commit **must** include a `Signed-off-by` trailer. Read the name and email
 Signed-off-by: <git config user.name> <git config user.email>
 ```
 
+## Commit Granularity
+
+Group changes by feature; do not commit after every small edit. Keep each PR
+within 10 commits so the history stays easy to bisect and revert.
+
+## CHANGELOG Ownership
+
+Root `CHANGELOG.md` is generated from commits at release time — do not edit it
+during development. Put user-facing details in the commit message / PR body.
+
+If a commit is rejected: `git restore --staged CHANGELOG.md`, then commit again
+(no working-tree changes lost). Do not bypass with `--no-verify`.
+
+Only the release owner updates it, on a `*-changelog` branch via
+`bun script/changelog.ts`.
+
 ## Style Guide
 
 ### General Principles
