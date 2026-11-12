@@ -83,6 +83,34 @@ test("dialog usage renders stats overview with heatmap and stat block", async ()
   }
 })
 
+test("models tab hides models whose requests never produced tokens", async () => {
+  const withFailedModel = {
+    ...statsFixture,
+    models: [
+      ...statsFixture.models,
+      {
+        providerID: "deveco",
+        modelID: "failed-model",
+        messages: 3,
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        daily: [],
+      },
+    ],
+  }
+  const panel = await mountUsagePanel({ initialTab: "stats", statsFixture: withFailedModel })
+  try {
+    await panel.frameWith("Favorite model")
+    panel.setup.mockInput.pressKey("ARROW_RIGHT")
+    const frame = await panel.frameWith("Tokens per Day")
+    expect(frame).toContain("GLM-5.1")
+    expect(frame).not.toContain("failed-model")
+    expect(frame).not.toContain("0.0%")
+  } finally {
+    panel.cleanup()
+  }
+})
+
 test("cycling the date range refreshes overview values", async () => {
   const tokensAll = { input: 900_000, output: 40_000, reasoning: 0, cache: { read: 500_000, write: 0 } }
   const tokensWeek = { input: 5_000, output: 500, reasoning: 0, cache: { read: 1_000, write: 0 } }
@@ -139,6 +167,26 @@ const quotaFixture = {
   hourly: { enabled: true, total: 50_000_000, used: 41_500_000 },
   monthly: { enabled: true, total: 50_000_000, used: 84_300_000 },
 }
+
+test("usage tab asks the user to log in when quota is unavailable", async () => {
+  const panel = await mountUsagePanel({ initialTab: "usage", statsFixture })
+  try {
+    const frame = await panel.frameWith("Current User")
+    expect(frame).toContain("Log in to view your quota.")
+  } finally {
+    panel.cleanup()
+  }
+})
+
+test("usage tab hides the login prompt when quota windows are present", async () => {
+  const panel = await mountUsagePanel({ initialTab: "usage", statsFixture, quotaFixture })
+  try {
+    const frame = await panel.frameWith("Weekly Quota:")
+    expect(frame).not.toContain("Log in to view your quota.")
+  } finally {
+    panel.cleanup()
+  }
+})
 
 test("quota rows show remaining percentage, warning threshold and overspend text", async () => {
   const panel = await mountUsagePanel({ initialTab: "usage", statsFixture, quotaFixture })

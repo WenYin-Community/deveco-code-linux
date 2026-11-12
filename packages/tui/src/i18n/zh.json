@@ -441,6 +441,7 @@
     "usage_placeholder_config": "配置信息即将上线。",
     "usage_session": "当前会话",
 "usage_user": "当前用户",
+    "usage_login_required": "请先登录再查看相关额度信息",
         "usage_total_cost": "总成本",
     "usage_duration_api": "API 总时长",
     "usage_duration_wall": "实际总时长",

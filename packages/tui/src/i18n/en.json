@@ -440,6 +440,7 @@
     "usage_placeholder_config": "Configuration info is coming soon.",
     "usage_session": "Current Session",
 "usage_user": "Current User",
+    "usage_login_required": "Log in to view your quota.",
         "usage_total_cost": "Total cost",
     "usage_duration_api": "Total duration (API)",
     "usage_duration_wall": "Total duration (wall)",

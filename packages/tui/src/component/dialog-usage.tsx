@@ -94,6 +94,14 @@ export function DialogUsage(props: DialogUsageProps) {
 
   const sessionID = () => (route.data.type === "session" ? route.data.sessionID : undefined)
   const rangeDays = () => (range() === "7d" ? 7 : range() === "30d" ? 30 : undefined)
+  // /stats/quota answers an empty body when no deveco token is available, so that
+  // shape is the logged-out signal. Windows the cloud reports as disabled still
+  // carry their key, so they never trigger the login prompt.
+  const quotaUnavailable = () => {
+    const current = quota()
+    if (current === undefined) return false
+    return current.hourly === undefined && current.weekly === undefined && current.monthly === undefined
+  }
 
   const fetchStats = () => {
     setStatsState("loading")
@@ -242,14 +250,17 @@ export function DialogUsage(props: DialogUsageProps) {
     ] as Array<[UsageSegment[], UsageSegment[]]>
   })
 
+  // Models that only ever produced failed requests keep zero tokens; they are
+  // not usage, so the legend, chart and cards all ignore them.
+  const activeModels = createMemo(() => (stats()?.models ?? []).filter((model) => totalTokens(model.tokens) > 0))
   // Claude Code chart: top-3 non-zero models; the builder sizes itself.
   const chartModels = createMemo(() =>
-    (stats()?.models ?? []).filter((model) => model.daily.some((entry) => entry.tokens > 0)).slice(0, 3),
+    activeModels().filter((model) => model.daily.some((entry) => entry.tokens > 0)).slice(0, 3),
   )
   const modelChart = createMemo(() => buildTokenChart(chartModels().map((model) => model.daily), dimensions().width, 8))
 
   const modelCards = createMemo(() => {
-    const models = stats()?.models ?? []
+    const models = activeModels()
     const total = models.reduce((acc, model) => acc + totalTokens(model.tokens), 0) || 1
     const cards = models.map((model, index) => ({
       model,
@@ -319,6 +330,9 @@ export function DialogUsage(props: DialogUsageProps) {
               </Show>
               <Show when={quota()?.monthly?.enabled}>
                 <QuotaRow label={t("dialog.usage_quota_monthly")} window={quota()?.monthly} />
+              </Show>
+              <Show when={quotaUnavailable()}>
+                <text fg={theme.textMuted}>{t("dialog.usage_login_required")}</text>
               </Show>
 
               <text fg={theme.text} attributes={TextAttributes.BOLD}>
@@ -436,7 +450,7 @@ export function DialogUsage(props: DialogUsageProps) {
                     <Match when={statsState() === "loading" && !stats()}>
                       <text fg={theme.textMuted}>{t("dialog.usage_loading")}</text>
                     </Match>
-                    <Match when={stats()?.models.length === 0}>
+                    <Match when={activeModels().length === 0}>
                       <text fg={theme.textMuted}>{t("dialog.usage_no_models")}</text>
                     </Match>
                     <Match when={stats()}>
@@ -679,7 +693,7 @@ function totalTokens(tokens: StatsUsage["total"]["tokens"]) {
 }
 
 function favoriteModel(data: StatsUsage) {
-  const first = data.models[0]
+  const first = data.models.find((model) => totalTokens(model.tokens) > 0) ?? data.models[0]
   return first ? `${first.providerID}/${first.modelID}` : "—"
 }
 
@@ -852,7 +866,9 @@ export function buildTokenChart(
 ): { rows: ChartRun[][]; yLabels: string[]; xLabels: string } | null {
   const active = series.filter((daily) => daily.some((entry) => entry.tokens > 0)).slice(0, 3)
   const allDates = Array.from(new Set(active.flatMap((item) => item.map((entry) => entry.date)))).sort()
-  if (active.length === 0 || allDates.length < 2) return null
+  // A single day is still worth plotting: stretchDates repeats the only date
+  // into a flat run, which is what a range looks like when just today has data.
+  if (active.length === 0 || allDates.length === 0) return null
 
   const chartWidth = Math.min(52, Math.max(20, terminalWidth - 7))
   const dateIndices = stretchDates(allDates, chartWidth)

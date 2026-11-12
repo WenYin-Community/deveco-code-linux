@@ -180,9 +180,20 @@ describe("buildTokenChart (asciichart port)", () => {
     expect(colors.size).toBe(3)
   })
 
-  test("returns null without enough data", () => {
-    expect(buildTokenChart([[{ date: dayIso(0), tokens: 1 }]], 40, 8)).toBeNull()
+  test("a single day still plots as a flat run", () => {
+    const chart = buildTokenChart([[{ date: dayIso(0), tokens: 43_951 }]], 40, 8)!
+    // One date stretches across the full width: rows stay aligned and the
+    // single date keeps its label, which is the 7-day range with only today.
+    const widths = new Set(chart.rows.map((row) => row.reduce((acc, run) => acc + run.text.length, 0)))
+    expect(widths.size).toBe(1)
+    expect(flatOf(chart)).toContain("──────")
+    expect(chart.xLabels).toContain("8.24")
+    expect(chart.yLabels[0]).toBe("   44k")
+  })
+
+  test("returns null without data", () => {
     expect(buildTokenChart([], 40, 8)).toBeNull()
+    expect(buildTokenChart([[]], 40, 8)).toBeNull()
     expect(buildTokenChart([[{ date: dayIso(1), tokens: 0 }, { date: dayIso(0), tokens: 0 }]], 40, 8)).toBeNull()
   })
 
