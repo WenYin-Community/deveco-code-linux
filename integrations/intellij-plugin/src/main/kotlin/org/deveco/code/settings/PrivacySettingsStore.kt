@@ -52,12 +52,31 @@ object PrivacySettingsStore {
     @Throws(java.io.IOException::class)
     fun writeToolImprovementEnabled(enabled: Boolean) = writeSingle(TOOL_IMPROVEMENT_ENABLED_KEY, enabled)
 
+    /**
+     * Fills the key only when kv.json does not carry a value yet, under the same lock as
+     * [writeToolImprovementEnabled]. Returns false when a value already existed and was
+     * kept: an existing value is a newer deliberate choice (the settings page applied it
+     * after the legacy property was written), so the one-time consent migration must not
+     * overwrite it with the legacy value.
+     */
+    @Throws(java.io.IOException::class)
+    fun writeToolImprovementEnabledIfAbsent(enabled: Boolean): Boolean =
+        writeSingleIfAbsent(TOOL_IMPROVEMENT_ENABLED_KEY, enabled)
+
     // One lock covers the whole read-merge-write: the settings page applies on the EDT
     // while the one-time consent migration runs on a pooled thread, so without this
     // lock their concurrent cycles could lose updates or race on the temp file. This
-    // restores the serialization the EDT provided before the migration went async.
+    // restores the serialization the EDT provided before the migration went async, and
+    // makes a conditional write and a plain write order each other deterministically.
     @Synchronized
     private fun writeSingle(key: String, value: Boolean) {
+        writeMerged(key, value, onlyIfAbsent = false)
+    }
+
+    @Synchronized
+    private fun writeSingleIfAbsent(key: String, value: Boolean): Boolean = writeMerged(key, value, onlyIfAbsent = true)
+
+    private fun writeMerged(key: String, value: Boolean, onlyIfAbsent: Boolean): Boolean {
         val file = kvFile()
         Files.createDirectories(file.parent)
         val existing = try {
@@ -70,6 +89,7 @@ object PrivacySettingsStore {
             log.warn("kv.json is unreadable, continuing from an empty object: ${e.message}")
             null
         }
+        if (onlyIfAbsent && existing?.containsKey(key) == true) return false
         val merged = buildJsonObject {
             existing?.forEach { (k, v) -> put(k, v) }
             put(key, value)
@@ -88,6 +108,7 @@ object PrivacySettingsStore {
         } finally {
             Files.deleteIfExists(tmp)
         }
+        return true
     }
 
     private fun readBoolean(key: String, fallback: Boolean): Boolean {

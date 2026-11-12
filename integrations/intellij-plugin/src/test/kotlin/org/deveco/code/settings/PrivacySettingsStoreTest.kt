@@ -58,4 +58,31 @@ class PrivacySettingsStoreTest {
         // two writers interleave; the read must land on a valid state.
         assertFalse(PrivacySettingsStore.readToolImprovementEnabled())
     }
+
+    @Test
+    fun `conditional write adopts the legacy value on a store without a value`() {
+        // Fresh store, as on the first launch after an upgrade: no persisted value yet.
+        java.nio.file.Files.deleteIfExists(kvJsonPath())
+        assertTrue(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(true))
+        assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
+    }
+
+    @Test
+    fun `conditional write ordered after a user write never overwrites it`() {
+        // Deterministic reproduction of the reviewed interleaving: the user applies a
+        // choice (plain write) after the legacy property was written, then the one-time
+        // migration runs its conditional write — sequencing the calls forces exactly
+        // that order, and the newer value must win.
+        PrivacySettingsStore.writeToolImprovementEnabled(false)
+        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(true))
+        assertFalse(PrivacySettingsStore.readToolImprovementEnabled())
+
+        // Symmetric direction: a user-enabled choice must not be turned off either.
+        PrivacySettingsStore.writeToolImprovementEnabled(true)
+        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(false))
+        assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
+    }
+
+    private fun kvJsonPath(): java.nio.file.Path =
+        java.nio.file.Path.of(System.getProperty("idea.system.path"), "deveco-code", "v1", "state", "kv.json")
 }

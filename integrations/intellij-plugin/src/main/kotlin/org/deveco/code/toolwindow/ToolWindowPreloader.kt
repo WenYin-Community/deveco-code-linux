@@ -2,6 +2,7 @@ package org.deveco.code.toolwindow
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.util.PathUtil
+import org.jetbrains.annotations.TestOnly
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipFile
@@ -29,10 +30,11 @@ object ToolWindowPreloader {
     private val scheduled = AtomicBoolean(false)
 
     // Flipped by ToolWindowPreloadLifecycle.beforePluginUnload so a dynamically unloaded
-    // plugin does not keep its old classloader alive for the rest of the enumeration.
-    // Class.forName itself is not interruptible, so a plain flag check bounds the
-    // retention to the definition currently in flight; interrupting the thread would
-    // only inject nondeterministic IO exceptions without shortening it further.
+    // plugin does not keep its old classloader alive for the rest of the run. The flag is
+    // checked between enumeration units and before every definition: Class.forName itself
+    // is not interruptible, so a plain check bounds the retention to the jar enumeration
+    // or definition currently in flight; interrupting the thread would only inject
+    // nondeterministic IO exceptions without shortening it further.
     @Volatile
     private var stopping = false
 
@@ -80,11 +82,18 @@ object ToolWindowPreloader {
         stopping = true
     }
 
+    @TestOnly
+    internal fun resetForTest() {
+        stopping = false
+    }
+
     private fun preload() {
+        if (stopping) return
         val startedAt = System.currentTimeMillis()
         try {
             val loader = ToolWindowPreloader::class.java.classLoader
             val names = LinkedHashSet(pluginClassNames())
+            if (stopping) return
             names.addAll(platformClassNames(loader))
             var defined = 0
             for (name in names) {
@@ -115,21 +124,28 @@ object ToolWindowPreloader {
         // Locate every jar this plugin ships with through our own class's location: the
         // distributed layout is <plugin>/lib/*.jar and the sandbox layout is <plugin>/lib
         // next to a classes/ directory. This stays independent of the loader's internals.
+        // takeWhile lets a dynamic unload truncate the walk and the per-jar enumeration
+        // instead of holding the old classloader until every jar has been read.
         val ourLocation =
             PathUtil.getJarPathForClass(ToolWindowPreloader::class.java)?.let(::File) ?: return emptyList()
         val pluginRoot = ourLocation.parentFile ?: return emptyList()
-        val jars = pluginRoot.walkTopDown().filter { it.isFile && it.name.endsWith(".jar") }.toList()
-        val classes = if (ourLocation.isDirectory) classNames(ourLocation) else emptyList()
-        return jars.flatMap(::classNames) + classes
+        val jars = pluginRoot.walkTopDown().filter { it.isFile && it.name.endsWith(".jar") }
+        val classes = if (ourLocation.isDirectory) sequenceOf(ourLocation) else emptySequence()
+        return (jars + classes)
+            .takeWhile { !stopping }
+            .flatMap { classNames(it).asSequence() }
+            .toList()
     }
 
-    private fun platformClassNames(loader: ClassLoader): List<String> = platformSeedClasses.flatMap { seed ->
-        runCatching { Class.forName(seed, false, loader) }.getOrNull()
-            ?.let { PathUtil.getJarPathForClass(it) }
-            ?.let { classNames(File(it)) }
-            .orEmpty()
-            .filter { name -> platformUiPackages.any { name.startsWith(it) } }
-    }.distinct()
+    internal fun platformClassNames(loader: ClassLoader): List<String> = platformSeedClasses
+        .takeWhile { !stopping }
+        .flatMap { seed ->
+            runCatching { Class.forName(seed, false, loader) }.getOrNull()
+                ?.let { PathUtil.getJarPathForClass(it) }
+                ?.let { classNames(File(it)) }
+                .orEmpty()
+                .filter { name -> platformUiPackages.any { name.startsWith(it) } }
+        }.distinct()
 
     internal fun classNames(file: File): List<String> = runCatching {
         when {
