@@ -1412,10 +1412,16 @@ internal class SessionController(
                     retryNotice = null
                     responding = false
                     stopping = false
-                    // A dispatched turn cancelled with zero visible output retracts
-                    // as a whole (see retractCancelledTurn); hold `ready` until that
-                    // settles so no new prompt can race the backend deletion.
-                    val retracting = cancelled && promptDispatched.get() && messages.size <= userMsgCountBefore + 1
+                    // This turn's own visible output (blank aborted shells and other
+                    // turns' items don't count). Timestamp/content-based so list
+                    // mutations from an earlier retract cannot skew it.
+                    val turnHadOutput = turnStartMs > 0 && messages.any {
+                        it.createdAt >= turnStartMs && it.role != ChatRole.USER &&
+                            (it.role != ChatRole.AGENT || it.text.isNotBlank())
+                    }
+                    val retracting = cancelled && promptDispatched.get() && !turnHadOutput
+                    // Hold `ready` until the retract settles so no new prompt can
+                    // race the backend deletion.
                     ready = !retracting
                     status = MyMessageBundle.message("session.status.connected")
                     // A global model switch that arrived mid-turn was skipped
@@ -1452,24 +1458,24 @@ internal class SessionController(
                             // interrupt-before-output), leaving no ghost user message
                             // that would vanish on reload.
                             !promptDispatched.get() ->
-                                recallDroppedPrompt(userItem.id, text.takeIf { it.isNotBlank() }, pending, attachmentList, fileRefs)
-                            // Dispatched but cancelled with zero visible output:
-                            // retract the whole turn, backend message included.
+                                recallDroppedPrompt(userItem.id, text.takeIf { it.isNotBlank() }, pending, attachmentList, fileRefs, turnStartMs)
+                            // Dispatched with zero visible output: retract the whole
+                            // turn, backend rows included, and recall the prompt into
+                            // the composer (TUI interrupt-before-output parity).
                             retracting ->
                                 retractCancelledTurn(userItem.id, text.takeIf { it.isNotBlank() }, pending, attachmentList, fileRefs, null, turnStartMs)
-                            // A dispatched turn with visible output keeps the usual
-                            // interrupted marker — and only such a turn has todos of
-                            // its own: dropped/retracted turns must not cancel the
-                            // dock items Section 18 carries across turns.
+                            // A dispatched turn with visible output keeps its bubble
+                            // and gets exactly one terminal marker; only such a turn
+                            // owned dock todos, so only such a stop cancels them.
                             else -> {
-                                markLastAgentInterrupted()
+                                markLastAgentInterrupted(turnStartMs)
                                 cancelPendingTodos()
                             }
                         }
                         sendTick++
                     } else {
                         if (turnInterrupted) {
-                            markLastAgentInterrupted()
+                            markLastAgentInterrupted(turnStartMs)
                             cancelPendingTodos()
                         } else {
                             val completed = completeLastAgentMessageNow()
@@ -1725,8 +1731,12 @@ internal class SessionController(
                 retryNotice = null
                 responding = false
                 stopping = false
-                // Same retract gate as the pending path's onDone above.
-                val retracting = cancelled && promptDispatched.get() && messages.size <= userMsgCountBefore + 1
+                // Same visible-output check and retract gate as the pending path.
+                val turnHadOutput = turnStartMs > 0 && messages.any {
+                    it.createdAt >= turnStartMs && it.role != ChatRole.USER &&
+                        (it.role != ChatRole.AGENT || it.text.isNotBlank())
+                }
+                val retracting = cancelled && promptDispatched.get() && !turnHadOutput
                 ready = !retracting
                 status = MyMessageBundle.message("session.status.connected")
                 // A global model switch that arrived mid-turn was skipped
@@ -1762,12 +1772,10 @@ internal class SessionController(
                     // persisted decorations and advanced the replay counter, so the
                     // zero-output retract rolls both back (userMsgIndex handed over).
                     when {
-                        !promptDispatched.get() -> recallDroppedPrompt(userItem.id, value, null, attachmentList, fileRefs)
+                        !promptDispatched.get() -> recallDroppedPrompt(userItem.id, value, null, attachmentList, fileRefs, turnStartMs)
                         retracting -> retractCancelledTurn(userItem.id, value, null, attachmentList, fileRefs, userMsgIndex, turnStartMs)
-                        // Only a dispatched turn with visible output has todos of its
-                        // own to cancel; see the pending path's comment.
                         else -> {
-                            markLastAgentInterrupted()
+                            markLastAgentInterrupted(turnStartMs)
                             cancelPendingTodos()
                         }
                     }
@@ -1782,7 +1790,7 @@ internal class SessionController(
                         }
                     }
                     if (turnInterrupted) {
-                        markLastAgentInterrupted()
+                        markLastAgentInterrupted(turnStartMs)
                         cancelPendingTodos()
                     } else {
                         val completed = completeLastAgentMessageNow()
@@ -1875,17 +1883,31 @@ internal class SessionController(
     // the locally appended USER message (keeping it would show a bubble that
     // vanishes on reload, since replay has nothing for it) and hand the user's
     // content back to the composer — text via [restoreDraft], a flushed pending
+    // The turn-end snapshot projects an aborted turn's assistant shell with
+    // interrupted = aborted (SessionSnapshot), and it can land in [messages]
+    // before the retract's backend delete runs. Such a blank shell is not
+    // visible output: the zero-output retract gate discounts it (otherwise the
+    // injection flips the gate and the turn silently keeps its bubble, blank
+    // band and "Stopped" footer), and the recall sweep removes it so it cannot
+    // survive as an orphan footer.
+    private fun isAbortedAgentShell(item: ChatItem, turnStartMs: Long): Boolean =
+        turnStartMs > 0 && item.role == ChatRole.AGENT && item.interrupted &&
+            item.text.isBlank() && item.createdAt >= turnStartMs
+
     // prompt as its chip, attachment/file-ref chips as before the send. Mirrors
     // the TUI's interrupt-before-output recall. Runs on the EDT (FIFO UI drain);
     // items the user re-added while prep ran are skipped to avoid double chips.
+    // [turnStartMs] bounds the [isAbortedAgentShell] sweep of the dropped turn's
+    // own blank remnant; see the helper for why the snapshot can leave one here.
     private fun recallDroppedPrompt(
         userItemId: String,
         draft: String?,
         pendingRestore: String?,
         attachmentList: List<AttachmentItem>,
         fileRefs: List<FileReference>,
+        turnStartMs: Long,
     ) {
-        messages.removeAll { it.id == userItemId }
+        messages.removeAll { it.id == userItemId || isAbortedAgentShell(it, turnStartMs) }
         if (pendingRestore != null && pendingPrompt == null) pendingPrompt = pendingRestore
         if (!draft.isNullOrBlank() && restoreDraft == null) restoreDraft = draft
         attachmentList.forEach { att ->
@@ -1900,9 +1922,9 @@ internal class SessionController(
     // interrupt-before-output recall: the backend USER message (plus any assistant
     // shell after it) is deleted over HTTP — the storage cascade takes the admitted
     // image parts with it — the replay counter and saved decorations roll back, and
-    // the content returns to the composer. `ready` stays false meanwhile (see the
-    // settle blocks) so no new prompt can race the deletion. Any failure falls back
-    // to the interrupted marker, so the turn still settles visibly.
+    // the content returns to the composer. `ready` stays false meanwhile (settle
+    // blocks) so no new prompt can race the deletion. Any failure falls back to the
+    // interrupted marker, so the turn still settles visibly with exactly one marker.
     private fun retractCancelledTurn(
         userItemId: String,
         draft: String?,
@@ -1932,47 +1954,51 @@ internal class SessionController(
             enqueueSessionUiUpdate {
                 ready = true
                 if (deleted) {
-                    if (!prompting) recallDroppedPrompt(userItemId, draft, pendingRestore, attachmentList, fileRefs)
+                    // Recall unconditionally, also while a newer prompt runs: the
+                    // backend rows are gone, and keeping bubble+shell locally would
+                    // show a ghost turn until the next snapshot refresh. The zero-output
+                    // gate is timestamp/content-based, so removing this turn's rows
+                    // cannot skew a running turn's decisions; draft/pending restore
+                    // stays guarded inside recallDroppedPrompt.
+                    recallDroppedPrompt(userItemId, draft, pendingRestore, attachmentList, fileRefs, notBeforeMs)
                 } else {
-                    markLastAgentInterrupted()
+                    markLastAgentInterrupted(notBeforeMs)
                 }
                 sendTick++
             }
         }
     }
 
-    // Deletes this turn's user message and everything created at or after it (the
-    // aborted turn's assistant shell). The target is the FIRST user message created
-    // at/after turn start — same-machine clocks make the bound reliable, it excludes
-    // earlier turns even on a rapid re-send, and it beats "newest user" when a
-    // background notification slipped in behind ours. An empty window (message never
-    // persisted, or a backwards clock step) touches nothing and reports failure —
-    // the caller then falls back to the interrupted marker rather than risk an
-    // older turn. Safety assertions reject ambiguous tails (same-millisecond user
-    // ties, a second user message in the tail) instead of guessing ownership.
-    // One retry: right after an abort the session can still report busy.
+    // Deletes this turn's user message and everything created from it up to (excluding)
+    // the next user message (the aborted turn's assistant shell). The anchor is the
+    // FIRST user message created at/after turn start — same-machine clocks make the
+    // bound reliable, and it excludes earlier turns AND queued later prompts, whose
+    // tails must survive this retract (anchoring on the newest user instead deleted a
+    // not-yet-run queued turn while the cancelled turn's backend rows survived to be
+    // re-projected by the next snapshot refresh). An empty window (message never
+    // persisted, a backwards clock step, or a turn the backend persisted no user
+    // message for — subtask commands persist no user text part) touches nothing and
+    // reports failure, so the caller falls back to the interrupted marker rather than
+    // risk another turn. The safety assertion rejects same-millisecond user ties
+    // instead of guessing ownership. One retry: right after an abort the session can
+    // still report busy.
     private fun deleteTurnMessagesFromLastUser(notBeforeMs: Long): Boolean {
         repeat(2) { attempt ->
             if (attempt > 0) Thread.sleep(300)
             val msgs = runCatching { service.sessionMessages(sessionId) }
                 .onFailure { log.warn("Retract: listing messages failed, sessionId=$sessionId", it) }
                 .getOrNull() ?: return@repeat
-            val users = msgs.filter { it.hasVisibleUserParts() }
-            val lastUser = users.maxByOrNull { it.createdAt } ?: return false
-            // Safety assertions (review): the anchor is a USER message by
-            // construction and must be the session's LAST one, unambiguously —
-            // a same-millisecond tie between two user messages cannot identify
-            // the turn, and a tail holding a second user message means a newer
-            // prompt (another client, an auto-send) landed during the retract
-            // window. Both cases abort instead of guessing.
-            if (users.count { it.createdAt == lastUser.createdAt } != 1) return false
-            // A turn the backend persisted no user message for (subtask commands
-            // persist no user text part) must not retract an EARLIER turn: bound
-            // the newest user message by this turn's start time.
-            if (notBeforeMs > 0 && lastUser.createdAt < notBeforeMs) return false
-            val scope = msgs.filter { it.createdAt >= lastUser.createdAt }
-            // The deleted tail is exactly this turn: its user message plus any
-            // assistant shells the aborted turn left behind — never an earlier one.
+            val users = msgs.filter { it.hasVisibleUserParts() }.sortedBy { it.createdAt }
+            val anchor = if (notBeforeMs > 0) users.firstOrNull { it.createdAt >= notBeforeMs } else users.lastOrNull()
+            if (anchor == null) return false
+            // A same-millisecond tie between two user messages cannot identify the turn.
+            if (users.count { it.createdAt == anchor.createdAt } != 1) return false
+            val nextUserCreatedAt = users.firstOrNull { it.createdAt > anchor.createdAt }?.createdAt
+            val scope = msgs.filter {
+                it.createdAt >= anchor.createdAt && (nextUserCreatedAt == null || it.createdAt < nextUserCreatedAt)
+            }
+            // The deleted window is exactly this turn: its user message plus any
+            // assistant shells the aborted turn left behind — never a neighbour turn.
             if (scope.count { it.hasVisibleUserParts() } != 1) return false
             val ok = scope
                 .sortedByDescending { it.createdAt }
@@ -4309,18 +4335,27 @@ internal class SessionController(
         return result
     }
 
-    private fun markLastAgentInterrupted() {
+    private fun markLastAgentInterrupted(notBeforeMs: Long = 0) {
         if (terminalErrorHandled) return
-        val idx = messages.indexOfLast { it.role == ChatRole.AGENT && !it.isComplete }
+        val idx = messages.indexOfLast {
+            it.role == ChatRole.AGENT && !it.isComplete &&
+                (notBeforeMs <= 0 || it.createdAt >= notBeforeMs)
+        }
         if (idx >= 0) {
             val updated = messages[idx].copy(
                 interrupted = true,
                 isComplete = true,
                 completedAt = System.currentTimeMillis(),
             )
-            messages.removeAt(idx)
-            messages.add(updated)
-        } else {
+            // Update in place: the footer anchor resolves per turn group, so moving
+            // the shell to the list end would carry its marker past a later prompt's
+            // boundary and stack it at the bottom of the conversation.
+            messages[idx] = updated
+        } else if (notBeforeMs <= 0 || messages.none {
+                // A projected shell that the backend stamped complete already carries
+                // this turn's marker; a second placeholder would stack two footers.
+                it.role == ChatRole.AGENT && it.interrupted && it.createdAt >= notBeforeMs
+            }) {
             val placeholder = ChatItem(
                 "AGENT-${System.nanoTime()}",
                 ChatRole.AGENT,
@@ -4329,7 +4364,16 @@ internal class SessionController(
                 isComplete = true,
                 interrupted = true,
             )
-            messages += placeholder
+            // A bounded call inserts the marker inside its own turn (right after that
+            // turn's prompt) instead of at the list end, so a later prompt's rows keep
+            // their own turn grouping and footer anchor.
+            val anchor = if (notBeforeMs > 0) {
+                messages.indexOfLast { it.role == ChatRole.USER && it.createdAt >= notBeforeMs } + 1
+            } else {
+                messages.size
+            }
+            val at = if (anchor in 1..messages.size) anchor else messages.size
+            messages.add(at, placeholder)
         }
         // 持久化中断标志：记录本轮 USER 消息在回放顺序中的索引；subtask 回合没有
         // 该索引（-1），不能借用上一条消息的索引，否则重开后会误标为中断。
