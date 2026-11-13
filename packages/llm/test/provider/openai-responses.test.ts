@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import { LLM, LLMError, Message, Model, ToolCallPart, ToolChoice, ToolResultPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
@@ -127,6 +127,23 @@ describe("OpenAI Responses route", () => {
           },
         },
       ])
+    }),
+  )
+
+  it.effect("lowers tool choice modes and named tools to tool_choice", () =>
+    Effect.gen(function* () {
+      const withChoice = (toolChoice: ToolChoice.Input) =>
+        LLM.updateRequest(request, {
+          tools: [{ name: "lookup", description: "Lookup data", inputSchema: { type: "object" } }],
+          toolChoice,
+        })
+
+      expect((yield* LLMClient.prepare(withChoice("auto"))).body).toMatchObject({ tool_choice: "auto" })
+      expect((yield* LLMClient.prepare(withChoice("none"))).body).toMatchObject({ tool_choice: "none" })
+      expect((yield* LLMClient.prepare(withChoice("required"))).body).toMatchObject({ tool_choice: "required" })
+      expect((yield* LLMClient.prepare(withChoice(ToolChoice.named("lookup")))).body).toMatchObject({
+        tool_choice: { type: "function", name: "lookup" },
+      })
     }),
   )
 
@@ -836,6 +853,88 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("starts reasoning from a summary part without a preceding output item added", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.reasoning_summary_part.added", item_id: "rs_1", summary_index: 0 },
+              { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "thinking" },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("thinking")
+      expect(response.events).toMatchObject([
+        { type: "step-start", index: 0 },
+        {
+          type: "reasoning-start",
+          id: "rs_1:0",
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: null } },
+        },
+        { type: "reasoning-delta", id: "rs_1:0", text: "thinking" },
+        { type: "reasoning-end", id: "rs_1:0" },
+        { type: "step-finish", index: 0, reason: "stop" },
+        { type: "finish", reason: "stop" },
+      ])
+    }),
+  )
+
+  it.effect("ignores a duplicate summary part zero for the same reasoning item", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.reasoning_summary_part.added", item_id: "rs_1", summary_index: 0 },
+              { type: "response.reasoning_summary_part.added", item_id: "rs_1", summary_index: 0 },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events.filter((event) => event.type === "reasoning-start")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("emits a reasoning start and end pair for reasoning items completed without summary parts", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_1", encrypted_content: "encrypted-state" },
+              },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.events).toMatchObject([
+        { type: "step-start", index: 0 },
+        {
+          type: "reasoning-start",
+          id: "rs_1",
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+        },
+        {
+          type: "reasoning-end",
+          id: "rs_1",
+          providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+        },
+        { type: "step-finish", index: 0, reason: "stop" },
+        { type: "finish", reason: "stop" },
+      ])
+    }),
+  )
+
   it.effect("continues a stateless reasoning conversation", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(
@@ -989,6 +1088,39 @@ describe("OpenAI Responses route", () => {
         { type: "item_reference", id: "ws_1" },
         { role: "user", content: [{ type: "input_text", text: "Continue." }] },
       ])
+    }),
+  )
+
+  it.effect("drops provider-executed tool results when storage is disabled", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolCallPart.make({
+                id: "ws_1",
+                name: "web_search",
+                input: { query: "effect 4" },
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "ws_1" } },
+              }),
+              {
+                type: "tool-result",
+                id: "ws_1",
+                name: "web_search",
+                result: { type: "json", value: { type: "web_search_call", id: "ws_1", status: "completed" } },
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "ws_1" } },
+              },
+            ]),
+            Message.user("Continue."),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "Continue." }] }])
     }),
   )
 
@@ -1255,6 +1387,78 @@ describe("OpenAI Responses route", () => {
       ).pipe(Effect.flip)
 
       expect(error.message).toContain("OpenAI Responses does not support media type application/pdf")
+    }),
+  )
+
+  it.effect("rejects tool-result content in user messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_user_tool_result",
+          model,
+          messages: [Message.user(ToolResultPart.make({ id: "call_1", name: "lookup", result: { forecast: "sunny" } }))],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("user messages only support text and media")
+    }),
+  )
+
+  it.effect("rejects media content in assistant messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_assistant_media",
+          model,
+          messages: [Message.assistant({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("assistant messages only support text, reasoning, tool-call, and tool-result")
+    }),
+  )
+
+  it.effect("maps max_output_tokens incompleteness to a length finish reason", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "response.incomplete",
+              response: { id: "resp_1", incomplete_details: { reason: "max_output_tokens" } },
+            }),
+          ),
+        ),
+      )
+
+      const terminal = response.events.filter((event) => event.type === "step-finish" || event.type === "finish")
+      expect(terminal).toMatchObject([
+        { type: "step-finish", index: 0, reason: "length" },
+        { type: "finish", reason: "length" },
+      ])
+    }),
+  )
+
+  it.effect("maps content_filter incompleteness to a content-filter finish reason", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+              type: "response.incomplete",
+              response: { id: "resp_1", incomplete_details: { reason: "content_filter" } },
+            }),
+          ),
+        ),
+      )
+
+      const terminal = response.events.filter((event) => event.type === "step-finish" || event.type === "finish")
+      expect(terminal).toMatchObject([
+        { type: "step-finish", index: 0, reason: "content-filter" },
+        { type: "finish", reason: "content-filter" },
+      ])
     }),
   )
 

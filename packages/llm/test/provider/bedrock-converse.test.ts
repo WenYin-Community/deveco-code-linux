@@ -355,6 +355,26 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
+  it.effect("maps guardrail_intervened stop reasons to content-filter finishes", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(fixedBytes(eventStreamBody(["messageStop", { stopReason: "guardrail_intervened" }]))),
+      )
+
+      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "content-filter" })
+    }),
+  )
+
+  it.effect("maps content_filtered stop reasons to content-filter finishes", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(baseRequest).pipe(
+        Effect.provide(fixedBytes(eventStreamBody(["messageStop", { stopReason: "content_filtered" }]))),
+      )
+
+      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "content-filter" })
+    }),
+  )
+
   it.effect("emits provider-error for throttlingException", () =>
     Effect.gen(function* () {
       const body = eventStreamBody(
@@ -385,6 +405,24 @@ describe("Bedrock Converse route", () => {
         classification: "context-overflow",
         retryable: false,
       })
+    }),
+  )
+
+  it.effect("emits retryable provider-error for stream exception events", () =>
+    Effect.gen(function* () {
+      const responses = yield* Effect.forEach(
+        ["internalServerException", "modelStreamErrorException", "serviceUnavailableException"],
+        (type) =>
+          LLMClient.generate(baseRequest).pipe(
+            Effect.provide(fixedBytes(eventStreamBody([type, { message: "Stream failed" }]))),
+          ),
+      )
+
+      expect(responses.map((response) => response.events.find((event) => event.type === "provider-error"))).toEqual([
+        { type: "provider-error", message: "Stream failed", retryable: true },
+        { type: "provider-error", message: "Stream failed", retryable: true },
+        { type: "provider-error", message: "Stream failed", retryable: true },
+      ])
     }),
   )
 
@@ -577,6 +615,24 @@ describe("Bedrock Converse route", () => {
       ).pipe(Effect.flip)
 
       expect(error.message).toContain("Bedrock Converse does not support media type application/x-tar")
+    }),
+  )
+
+  it.effect("rejects media parts in assistant messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_assistant_media",
+          model,
+          messages: [Message.assistant([{ type: "media", mediaType: "image/png", data: "AAAA" }])],
+          cache: "none",
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.reason._tag).toBe("InvalidRequest")
+      expect(error.message).toContain(
+        "Bedrock Converse assistant messages only support text, reasoning, and tool-call content for now",
+      )
     }),
   )
 

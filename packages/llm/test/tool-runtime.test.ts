@@ -338,6 +338,150 @@ describe("LLMClient tools", () => {
     }),
   )
 
+  describe("ToolOutput.fromResultValue", () => {
+    it.effect("maps json results to structured output with no content", () =>
+      Effect.sync(() => {
+        expect(ToolOutput.fromResultValue({ type: "json", value: { a: 1 } })).toEqual({
+          structured: { a: 1 },
+          content: [],
+        })
+      }),
+    )
+
+    it.effect("keeps string text verbatim and JSON-stringifies object text", () =>
+      Effect.sync(() => {
+        expect(ToolOutput.fromResultValue({ type: "text", value: "hi" })).toEqual({
+          structured: {},
+          content: [{ type: "text", text: "hi" }],
+        })
+        expect(ToolOutput.fromResultValue({ type: "text", value: { a: 1 } })).toEqual({
+          structured: {},
+          content: [{ type: "text", text: '{"a":1}' }],
+        })
+      }),
+    )
+
+    it.effect("returns undefined for error results", () =>
+      Effect.sync(() => {
+        expect(ToolOutput.fromResultValue({ type: "error", value: "boom" })).toBeUndefined()
+      }),
+    )
+
+    it.effect("stringifies circular text values without throwing", () =>
+      Effect.sync(() => {
+        const circular: Record<string, unknown> = {}
+        circular.self = circular
+
+        expect(ToolOutput.fromResultValue({ type: "text", value: circular })).toEqual({
+          structured: {},
+          content: [{ type: "text", text: "[object Object]" }],
+        })
+      }),
+    )
+  })
+
+  describe("ToolRuntime success schema enforcement", () => {
+    it.effect("emits tool-error when execute fails the success schema", () =>
+      Effect.gen(function* () {
+        const picky = Tool.make({
+          description: "Return a strict boolean.",
+          parameters: Schema.Struct({}),
+          success: Schema.Struct({ ok: Schema.Boolean }),
+          execute: () => Effect.succeed({ ok: "not-a-bool" as unknown as boolean }),
+        })
+
+        const dispatched = yield* ToolRuntime.dispatch(
+          { picky },
+          LLMEvent.toolCall({ id: "call_picky", name: "picky", input: {} }),
+        )
+
+        expect(dispatched.result.type).toBe("error")
+        expect(String(dispatched.result.value)).toContain("success schema")
+        expect(dispatched.events.map((event) => event.type)).toEqual(["tool-error", "tool-result"])
+        const toolError = dispatched.events.find(LLMEvent.is.toolError)
+        expect(toolError?.message).toContain("success schema")
+        const toolResult = dispatched.events.find(LLMEvent.is.toolResult)
+        expect(toolResult?.result.type).toBe("error")
+      }),
+    )
+
+    it.effect("propagates defects instead of swallowing them as tool errors", () =>
+      Effect.gen(function* () {
+        const defective = Tool.make({
+          description: "Die during execution.",
+          parameters: Schema.Struct({}),
+          success: Schema.Struct({ ok: Schema.Boolean }),
+          execute: () => Effect.die("boom"),
+        })
+
+        const exit = yield* ToolRuntime.dispatch(
+          { defective },
+          LLMEvent.toolCall({ id: "call_defect", name: "defective", input: {} }),
+        ).pipe(Effect.exit)
+
+        expect(exit._tag).toBe("Failure")
+      }),
+    )
+  })
+
+  describe("dynamic tool projection", () => {
+    it.effect("applies toStructuredOutput to dynamic tool results", () =>
+      Effect.gen(function* () {
+        const wrapping = Tool.make({
+          description: "Wrap the raw output.",
+          jsonSchema: { type: "object" },
+          execute: () => Effect.succeed({ ok: true }),
+          toStructuredOutput: (output) => ({ wrapped: output }),
+        })
+
+        const dispatched = yield* ToolRuntime.dispatch(
+          { wrapping },
+          LLMEvent.toolCall({ id: "call_wrap", name: "wrapping", input: {} }),
+        )
+
+        expect(dispatched.output?.structured).toEqual({ wrapped: { ok: true } })
+        expect(dispatched.result).toEqual({ type: "json", value: { wrapped: { ok: true } } })
+      }),
+    )
+
+    it.effect("applies toModelOutput to dynamic tool results", () =>
+      Effect.gen(function* () {
+        const narrating = Tool.make({
+          description: "Narrate the raw output.",
+          jsonSchema: { type: "object" },
+          execute: () => Effect.succeed({ ok: true }),
+          toModelOutput: () => [{ type: "text" as const, text: "ok" }],
+        })
+
+        const dispatched = yield* ToolRuntime.dispatch(
+          { narrating },
+          LLMEvent.toolCall({ id: "call_narrate", name: "narrating", input: {} }),
+        )
+
+        expect(dispatched.output?.content).toEqual([{ type: "text", text: "ok" }])
+        expect(dispatched.result).toEqual({ type: "text", value: "ok" })
+      }),
+    )
+
+    it.effect("keeps raw results for dynamic tools without projections", () =>
+      Effect.gen(function* () {
+        const raw = Tool.make({
+          description: "Return the raw value.",
+          jsonSchema: { type: "object" },
+          execute: () => Effect.succeed({ type: "json" as const, value: { ok: true } }),
+        })
+
+        const dispatched = yield* ToolRuntime.dispatch(
+          { raw },
+          LLMEvent.toolCall({ id: "call_raw", name: "raw", input: {} }),
+        )
+
+        expect(dispatched.result).toEqual({ type: "json", value: { ok: true } })
+        expect(dispatched.output).toEqual({ structured: { ok: true }, content: [] })
+      }),
+    )
+  })
+
   it.effect("preserves content tool results from dynamic tools", () =>
     Effect.gen(function* () {
       const screenshot = Tool.make({

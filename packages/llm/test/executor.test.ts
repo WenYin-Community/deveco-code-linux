@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Random, Ref } from "effect"
+import { Cause, Effect, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -64,6 +64,17 @@ const randomMidpoint = {
   nextIntUnsafe: () => 0,
 }
 
+// Simulates a transport whose requests fail before a response exists. The
+// cast lets us also feed non-conforming failures (plain errors, timeouts)
+// through the typed error channel, exercising the executor's defensive
+// mapping rather than FetchHttpClient's wrapping.
+const failingClientLayer = (error: unknown) =>
+  RequestExecutor.layer.pipe(
+    Layer.provide(
+      Layer.succeed(HttpClient.HttpClient, HttpClient.make(() => Effect.fail(error as HttpClientError.HttpClientError))),
+    ),
+  )
+
 const expectLLMError = (error: unknown) => {
   expect(error).toBeInstanceOf(LLMError)
   if (!(error instanceof LLMError)) throw new Error("expected LLMError")
@@ -111,6 +122,55 @@ describe("RequestExecutor", () => {
       expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
       expect("classification" in error.reason ? error.reason.classification : undefined).toBeUndefined()
     }).pipe(Effect.provide(responsesLayer([new Response("invalid parameter", { status: 400 })]))),
+  )
+
+  it.effect("maps content policy rejections", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "ContentPolicy" })
+      expect(error.retryable).toBe(false)
+    }).pipe(
+      Effect.provide(
+        responsesLayer([
+          new Response('{"error":{"code":"content_policy_violation","message":"blocked by safety filter"}}', {
+            status: 400,
+          }),
+        ]),
+      ),
+    ),
+  )
+
+  it.effect("maps forbidden responses to insufficient-permissions authentication", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "Authentication", kind: "insufficient-permissions" })
+      expect(error.retryable).toBe(false)
+    }).pipe(Effect.provide(responsesLayer([new Response("forbidden", { status: 403 })]))),
+  )
+
+  it.effect("maps quota exceeded rate limits", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "QuotaExceeded" })
+      expect(error.retryable).toBe(false)
+    }).pipe(
+      Effect.provide(
+        responsesLayer([
+          new Response('{"error":{"code":"insufficient_quota","message":"billing quota exceeded"}}', {
+            status: 429,
+          }),
+        ]),
+      ),
+    ),
   )
 
   it.effect("returns redacted diagnostics for retryable rate limits", () =>
@@ -385,6 +445,43 @@ describe("RequestExecutor", () => {
     }),
   )
 
+  it.effect("honors Retry-After HTTP dates before retrying", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      const retryAfter = new Date(Date.now() + 600_000).toUTCString()
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(1)
+
+        yield* TestClock.adjust(10_000)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(2)
+
+        yield* TestClock.adjust(10_000)
+        const error = yield* Fiber.join(fiber)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "RateLimit" })
+        expect(error.retryAfterMs ?? 0).toBeGreaterThan(500_000)
+        expect(error.retryAfterMs ?? 0).toBeLessThanOrEqual(600_000)
+        expect(yield* Ref.get(attempts)).toBe(3)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(
+            attempts,
+            Array.from(
+              { length: 3 },
+              () => new Response("rate limited", { status: 429, headers: { "retry-after": retryAfter } }),
+            ),
+          ),
+        ),
+      )
+    }),
+  )
+
   it.effect("uses exponential jittered delay when retry-after is absent", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0)
@@ -425,6 +522,49 @@ describe("RequestExecutor", () => {
     }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
   )
 
+  it.effect("falls back to jittered delay when retry-after is unparseable", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(1)
+
+        yield* TestClock.adjust(499)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(1)
+
+        yield* TestClock.adjust(1)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(2)
+
+        yield* TestClock.adjust(999)
+        yield* Effect.yieldNow
+        expect(yield* Ref.get(attempts)).toBe(2)
+
+        yield* TestClock.adjust(1)
+        const error = yield* Fiber.join(fiber)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "RateLimit" })
+        expect(error.retryAfterMs).toBeUndefined()
+        expect(yield* Ref.get(attempts)).toBe(3)
+      }).pipe(
+        Effect.provide(
+          countedResponsesLayer(
+            attempts,
+            Array.from(
+              { length: 3 },
+              () => new Response("rate limited", { status: 429, headers: { "retry-after": "not-a-date" } }),
+            ),
+          ),
+        ),
+      )
+    }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
+  )
+
   it.effect("does not retry after a successful response reaches stream parsing", () =>
     Effect.gen(function* () {
       const attempts = yield* Ref.make(0)
@@ -454,5 +594,99 @@ describe("RequestExecutor", () => {
       expect(error.reason).toMatchObject({ _tag: "InvalidProviderOutput" })
       expect(yield* Ref.get(attempts)).toBe(1)
     }),
+  )
+})
+
+describe("RequestExecutor transport errors", () => {
+  it.effect("maps HTTP transport failures to typed transport errors with redacted request details", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        message: "connection reset",
+        kind: "TransportError",
+        url: "https://provider.test/v1/chat?api_key=%3Credacted%3E&key=%3Credacted%3E&debug=1",
+      })
+      expect(error.retryable).toBe(false)
+      expect(errorHttp(error)?.request).toEqual({
+        method: "POST",
+        url: "https://provider.test/v1/chat?api_key=%3Credacted%3E&key=%3Credacted%3E&debug=1",
+        headers: { authorization: "<redacted>", "x-safe": "visible" },
+      })
+      expect(errorHttp(error)?.response).toBeUndefined()
+    }).pipe(
+      Effect.provide(
+        failingClientLayer(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request, description: "connection reset" }),
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("falls back to a generic message for undescribed transport failures", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "Transport", message: "HTTP transport failed" })
+    }).pipe(
+      Effect.provide(
+        failingClientLayer(new HttpClientError.HttpClientError({ reason: new HttpClientError.TransportError({ request }) })),
+      ),
+    ),
+  )
+
+  it.effect("maps timeout failures to transport errors with a Timeout kind", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        message: "request timed out",
+        kind: "Timeout",
+      })
+      expect(error.reason._tag === "Transport" ? error.reason.url : undefined).toBeUndefined()
+      expect(errorHttp(error)).toBeUndefined()
+    }).pipe(Effect.provide(failingClientLayer(new Cause.TimeoutError("request timed out")))),
+  )
+
+  it.effect("maps unexpected failures to a generic HTTP transport error", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({ _tag: "Transport", message: "HTTP transport failed" })
+      expect(error.reason._tag === "Transport" ? error.reason.kind : undefined).toBeUndefined()
+    }).pipe(Effect.provide(failingClientLayer(new Error("boom")))),
+  )
+
+  it.effect("names the failure kind for non-transport client errors", () =>
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const error = yield* executor.execute(request).pipe(Effect.flip)
+
+      expectLLMError(error)
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        message: "HTTP transport failed: EncodeError",
+        kind: "EncodeError",
+      })
+      expect(errorHttp(error)?.request?.method).toBe("POST")
+    }).pipe(
+      Effect.provide(
+        failingClientLayer(
+          new HttpClientError.HttpClientError({ reason: new HttpClientError.EncodeError({ request }) }),
+        ),
+      ),
+    ),
   )
 })

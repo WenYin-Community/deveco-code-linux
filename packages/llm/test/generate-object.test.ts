@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { LLM } from "../src"
+import { Usage } from "../src/schema"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import { Auth } from "../src/route"
 import { Tool, toDefinitions } from "../src/tool"
 import { it } from "./lib/effect"
 import { dynamicResponse } from "./lib/http"
-import { finishChunk, toolCallChunk } from "./lib/openai-chunks"
+import { finishChunk, toolCallChunk, usageChunk } from "./lib/openai-chunks"
 import { sseEvents } from "./lib/sse"
 
 type OpenAIChatBody = {
@@ -86,6 +87,7 @@ describe("LLM.generateObject", () => {
 
       expect(response.object).toEqual({ city: "Paris", temp: 22 })
       expect(response.response.toolCalls).toHaveLength(1)
+      expect(response.usage).toBeUndefined()
       expect(bodies).toHaveLength(1)
       expect(bodies[0].tool_choice).toEqual({ type: "function", function: { name: "generate_object" } })
       const tool = bodies[0].tools?.[0]
@@ -135,6 +137,35 @@ describe("LLM.generateObject", () => {
         properties: { name: { type: "string" }, age: { type: "number" } },
         required: ["name", "age"],
       })
+    }),
+  )
+
+  it.effect("exposes the underlying response events and usage", () =>
+    Effect.gen(function* () {
+      const layer = dynamicResponse((input) =>
+        Effect.sync(() =>
+          input.respond(
+            sseEvents(
+              toolCallChunk("call_1", "generate_object", '{"value":1}'),
+              finishChunk("tool_calls"),
+              usageChunk({ prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 }),
+            ),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+        ),
+      )
+
+      const response = yield* LLM.generateObject({
+        model,
+        prompt: "Return a structured value.",
+        schema: Schema.Struct({ value: Schema.Number }),
+      }).pipe(Effect.provide(layer))
+
+      expect(response.events).toBe(response.response.events)
+      expect(response.events.length).toBeGreaterThan(0)
+      expect(response.usage).toBeInstanceOf(Usage)
+      expect(response.usage?.inputTokens).toBe(3)
+      expect(response.usage?.outputTokens).toBe(5)
     }),
   )
 

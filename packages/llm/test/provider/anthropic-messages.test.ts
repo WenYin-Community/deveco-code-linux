@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
-import { CacheHint, LLM, LLMError, Message, ToolCallPart, Usage } from "../../src"
+import { CacheHint, LLM, LLMError, Message, ToolCallPart, ToolResultPart, Usage } from "../../src"
 import { Auth, LLMClient } from "../../src/route"
 import * as AnthropicMessages from "../../src/protocols/anthropic-messages"
 import { continuationRequest, nativeAnthropicMessagesContinuation } from "../continuation-scenarios"
@@ -184,6 +184,67 @@ describe("Anthropic Messages route", () => {
       ).pipe(Effect.flip)
 
       expect(error.message).toContain("system updates cannot split a local tool call from its tool result")
+    }),
+  )
+
+  it.effect("rejects tool-result content in user messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [
+            Message.user([
+              { type: "text", text: "What is the weather?" },
+              ToolResultPart.make({ id: "call_1", name: "lookup", result: "Sunny." }),
+            ]),
+          ],
+          cache: "none",
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("Anthropic Messages user messages only support text and media content for now")
+    }),
+  )
+
+  it.effect("rejects media content in assistant messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              { type: "text", text: "Done." },
+              { type: "media", mediaType: "image/png", data: "AAECAw==" },
+            ]),
+          ],
+          cache: "none",
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain(
+        "Anthropic Messages assistant messages only support text, reasoning, and tool-call content for now",
+      )
+    }),
+  )
+
+  it.effect("lowers empty assistant content as an empty block array", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          messages: [Message.user("Hi."), Message.assistant([])],
+          cache: "none",
+        }),
+      )
+
+      expect(prepared.body.messages).toEqual([
+        { role: "user", content: [{ type: "text", text: "Hi." }] },
+        { role: "assistant", content: [] },
+      ])
     }),
   )
 
@@ -400,6 +461,61 @@ describe("Anthropic Messages route", () => {
         reason: "stop",
         providerMetadata: { anthropic: { stopSequence: "\n\nHuman:" } },
       })
+    }),
+  )
+
+  it.effect("emits an initial text delta when content_block_start carries text", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "Hi" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.text).toBe("Hi")
+      expect(response.events.find((event) => event.type === "text-delta")).toEqual({
+        type: "text-delta",
+        id: "text-0",
+        text: "Hi",
+      })
+    }),
+  )
+
+  it.effect("emits an initial reasoning delta when content_block_start carries thinking", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "think" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.reasoning).toBe("think")
+      expect(response.events.find((event) => event.type === "reasoning-delta")).toEqual({
+        type: "reasoning-delta",
+        id: "reasoning-0",
+        text: "think",
+      })
+    }),
+  )
+
+  it.effect("emits no text events for an empty initial text block", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events.map((event) => event.type)).toEqual(["step-start", "step-finish", "finish"])
     }),
   )
 
@@ -886,6 +1002,72 @@ describe("Anthropic Messages route", () => {
       expect(body.tools.every((t) => t.cache_control !== undefined)).toBe(true)
       expect(body.system[0]?.cache_control).toBeUndefined()
       expect(body.messages[0]?.content[0]?.cache_control).toBeUndefined()
+    }),
+  )
+
+  it.effect("lowers the anthropic thinking budgetTokens provider option", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          prompt: "Think carefully.",
+          providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens: 1024 } } },
+        }),
+      )
+
+      expect(prepared.body.thinking).toEqual({ type: "enabled", budget_tokens: 1024 })
+    }),
+  )
+
+  it.effect("accepts the budget_tokens synonym for the thinking provider option", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          prompt: "Think carefully.",
+          providerOptions: { anthropic: { thinking: { type: "enabled", budget_tokens: 2048 } } },
+        }),
+      )
+
+      expect(prepared.body.thinking).toEqual({ type: "enabled", budget_tokens: 2048 })
+    }),
+  )
+
+  it.effect("rejects enabled thinking without a token budget", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          prompt: "Think carefully.",
+          providerOptions: { anthropic: { thinking: { type: "enabled" } } },
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("Anthropic thinking provider option requires budgetTokens")
+    }),
+  )
+
+  it.effect("leaves thinking unset for disabled and non-record thinking options", () =>
+    Effect.gen(function* () {
+      const disabled = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          providerOptions: { anthropic: { thinking: { type: "disabled" } } },
+        }),
+      )
+      const nonRecord = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          providerOptions: { anthropic: { thinking: "fast" } },
+        }),
+      )
+
+      expect(disabled.body.thinking).toBeUndefined()
+      expect(nonRecord.body.thinking).toBeUndefined()
     }),
   )
 })

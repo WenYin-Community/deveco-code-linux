@@ -153,6 +153,73 @@ describe("OpenAI Chat route", () => {
     ),
   )
 
+  it.effect("strips Azure auth overrides from route defaults", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: Azure.configure({
+            resourceName: "opencode-res",
+            auth: Auth.header("api-key", "azure-secret"),
+          }).chat("gpt-4o-mini"),
+          prompt: "Say hello.",
+        }),
+      )
+
+      expect(prepared.model.route.defaults.headers).toBeUndefined()
+      expect(JSON.stringify({ defaults: prepared.model.route.defaults, body: prepared.body })).not.toContain(
+        "azure-secret",
+      )
+    }),
+  )
+
+  it.effect("derives the Azure chat endpoint from resourceName with an auth override", () =>
+    LLMClient.generate(
+      LLM.updateRequest(request, {
+        model: Azure.configure({
+          resourceName: "opencode-res",
+          auth: Auth.header("api-key", "azure-secret"),
+        }).chat("gpt-4o-mini"),
+      }),
+    ).pipe(
+      Effect.provide(
+        dynamicResponse((input) =>
+          Effect.gen(function* () {
+            const web = yield* HttpClientRequest.toWeb(input.request).pipe(Effect.orDie)
+            expect(web.url).toBe("https://opencode-res.openai.azure.com/openai/v1/chat/completions?api-version=v1")
+            expect(web.headers.get("api-key")).toBe("azure-secret")
+            expect(web.headers.get("authorization")).toBeNull()
+            expect(input.text).not.toContain("azure-secret")
+            return input.respond(sseEvents(deltaChunk({}, "stop")), {
+              headers: { "content-type": "text/event-stream" },
+            })
+          }),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("keeps Azure configure fields out of route defaults without an auth override", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: Azure.configure({ resourceName: "opencode-res", apiKey: "azure-key" }).chat("gpt-4o-mini"),
+          prompt: "Say hello.",
+        }),
+      )
+
+      expect(Object.keys(prepared.model.route.defaults)).toEqual([
+        "headers",
+        "limits",
+        "generation",
+        "providerOptions",
+        "http",
+      ])
+      expect(JSON.stringify({ defaults: prepared.model.route.defaults, body: prepared.body })).not.toContain(
+        "azure-key",
+      )
+    }),
+  )
+
   it.effect("applies serializable HTTP overlays after payload lowering", () =>
     LLMClient.generate(
       LLM.updateRequest(request, {
@@ -379,6 +446,25 @@ describe("OpenAI Chat route", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("rejects tool-result parts in user messages", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [
+            Message.user([
+              { type: "tool-result", id: "call_1", name: "lookup", result: { type: "json", value: { forecast: "sunny" } } },
+            ]),
+          ],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("OpenAI Chat user messages only support text and media content for now")
     }),
   )
 

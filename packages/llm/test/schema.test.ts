@@ -2,7 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import * as OpenAIChat from "../src/protocols/openai-chat"
 import * as OpenAIResponses from "../src/protocols/openai-responses"
-import { ContentPart, LLMEvent, LLMRequest, Model, ModelID, ProviderID, Usage } from "../src/schema"
+import {
+  ContentPart,
+  LLMEvent,
+  LLMRequest,
+  LLMResponse,
+  Model,
+  ModelID,
+  ModelLimits,
+  ProviderID,
+  Usage,
+} from "../src/schema"
 import { ProviderShared } from "../src/protocols/shared"
 
 const model = new Model({
@@ -82,5 +92,67 @@ describe("LLM.Usage", () => {
     expect(new Usage({ outputTokens: 10 }).visibleOutputTokens).toBe(10)
     expect(new Usage({ outputTokens: 4, reasoningTokens: 10 }).visibleOutputTokens).toBe(0)
     expect(new Usage({}).visibleOutputTokens).toBe(0)
+  })
+})
+
+describe("LLMResponse.usage", () => {
+  test("falls back to the latest usage-bearing event", () => {
+    const usage = LLMResponse.usage(
+      new LLMResponse({ events: [LLMEvent.finish({ reason: "stop", usage: { inputTokens: 1, outputTokens: 2 } })] }),
+    )
+
+    expect(usage).toBeInstanceOf(Usage)
+    expect(usage?.inputTokens).toBe(1)
+    expect(usage?.outputTokens).toBe(2)
+  })
+
+  test("returns undefined when no event carries usage", () => {
+    const usage = LLMResponse.usage(new LLMResponse({ events: [LLMEvent.textDelta({ id: "t", text: "hi" })] }))
+
+    expect(usage).toBeUndefined()
+  })
+
+  test("prefers the last usage event when several appear", () => {
+    const usage = LLMResponse.usage(
+      new LLMResponse({
+        events: [
+          LLMEvent.stepFinish({ index: 0, reason: "stop", usage: { inputTokens: 1 } }),
+          LLMEvent.finish({ reason: "stop", usage: { inputTokens: 3, outputTokens: 4 } }),
+        ],
+      }),
+    )
+
+    expect(usage?.inputTokens).toBe(3)
+    expect(usage?.outputTokens).toBe(4)
+  })
+
+  test("prefers an explicit usage field over the event fallback", () => {
+    const explicit = new Usage({ inputTokens: 9 })
+    const usage = LLMResponse.usage(new LLMResponse({ events: [], usage: explicit }))
+
+    expect(usage).toBe(explicit)
+  })
+})
+
+describe("ModelLimits.make", () => {
+  test("normalizes plain input into a ModelLimits instance", () => {
+    const limits = ModelLimits.make({ context: 128000 })
+
+    expect(limits).toBeInstanceOf(ModelLimits)
+    expect(limits.context).toBe(128000)
+  })
+
+  test("normalizes undefined into an empty ModelLimits instance", () => {
+    const limits = ModelLimits.make(undefined)
+
+    expect(limits).toBeInstanceOf(ModelLimits)
+    expect(limits.context).toBeUndefined()
+    expect(limits.output).toBeUndefined()
+  })
+
+  test("returns an existing instance unchanged", () => {
+    const limits = new ModelLimits({})
+
+    expect(ModelLimits.make(limits)).toBe(limits)
   })
 })

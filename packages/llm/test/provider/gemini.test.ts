@@ -36,6 +36,69 @@ describe("Gemini route", () => {
     }),
   )
 
+  it.effect("maps thinkingConfig provider options into generationConfig", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<Gemini.GeminiBody>(
+        LLM.request({
+          model,
+          prompt: "Say hello.",
+          generation: { maxTokens: 20 },
+          providerOptions: { gemini: { thinkingConfig: { thinkingBudget: 128, includeThoughts: true } } },
+        }),
+      )
+
+      expect(prepared.body.generationConfig).toEqual({
+        maxOutputTokens: 20,
+        thinkingConfig: { thinkingBudget: 128, includeThoughts: true },
+      })
+    }),
+  )
+
+  it.effect("omits thinkingConfig when the provider option is an empty object", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<Gemini.GeminiBody>(
+        LLM.request({
+          model,
+          prompt: "Say hello.",
+          generation: { maxTokens: 20 },
+          providerOptions: { gemini: { thinkingConfig: {} } },
+        }),
+      )
+
+      expect(prepared.body.generationConfig).toEqual({ maxOutputTokens: 20 })
+    }),
+  )
+
+  it.effect("ignores mistyped thinkingConfig fields", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<Gemini.GeminiBody>(
+        LLM.request({
+          model,
+          prompt: "Say hello.",
+          generation: { maxTokens: 20 },
+          providerOptions: { gemini: { thinkingConfig: { thinkingBudget: "128" } } },
+        }),
+      )
+
+      expect(prepared.body.generationConfig).toEqual({ maxOutputTokens: 20 })
+    }),
+  )
+
+  it.effect("ignores non-record thinkingConfig values", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<Gemini.GeminiBody>(
+        LLM.request({
+          model,
+          prompt: "Say hello.",
+          generation: { maxTokens: 20 },
+          providerOptions: { gemini: { thinkingConfig: "high" } },
+        }),
+      )
+
+      expect(prepared.body.generationConfig).toEqual({ maxOutputTokens: 20 })
+    }),
+  )
+
   it.effect("lowers chronological system updates to wrapped user text in order", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<Gemini.GeminiBody>(
