@@ -14,6 +14,7 @@
  */
 
 import fs from "fs/promises";
+import fsSync from "fs";
 import path from "path";
 import semver from "semver";
 import { Global } from "@opencode-ai/core/global";
@@ -24,6 +25,13 @@ const savedDevEcoHomeFile = () => path.join(Global.Path.state, "deveco-home.json
 
 function binary(name: string) {
   return process.platform === "win32" ? `${name}.exe` : name;
+}
+
+// The official Command Line Tools use `tool/node` (singular) plus flat `hvigor/`
+// and `ohpm/` directories, while DevEco Studio uses `tools/node`, `tools/hvigor`
+// and `tools/ohpm`. The node binary is the most reliable discriminator.
+function isCltLayout(home: string) {
+  return fsSync.existsSync(path.join(home, "tool", "node", "bin", binary("node")));
 }
 
 function devEcoHomeCandidates(home: string) {
@@ -39,7 +47,7 @@ function devEcoHomeCandidates(home: string) {
 }
 
 function envPath() {
-  return String(process.env.DEVECO_HOME || "").trim();
+  return String(process.env.DEVECO_HOME || process.env.DEVECO_CLI_CLT_PATH || "").trim();
 }
 
 async function isDir(file: string) {
@@ -63,6 +71,8 @@ function defaults() {
     return [
       home ? path.join(home, "devecostudio") : "",
       home ? path.join(home, "DevEco-Studio") : "",
+      home ? path.join(home, "command-line-tools") : "",
+      "/opt/harmony-clt",
     ].filter(Boolean);
   }
   const home = String(process.env.USERPROFILE || "").trim();
@@ -76,13 +86,19 @@ function defaults() {
 }
 
 export function nodePath(home: string) {
-  return process.platform === "win32"
-    ? path.join(home, "tools", "node", "node.exe")
-    : path.join(home, "tools", "node", "bin", "node");
+  if (process.platform === "win32") {
+    return path.join(home, "tools", "node", "node.exe");
+  }
+  if (isCltLayout(home)) {
+    return path.join(home, "tool", "node", "bin", "node");
+  }
+  return path.join(home, "tools", "node", "bin", "node");
 }
 
 export function hvigorPath(home: string) {
-  return path.join(home, "tools", "hvigor", "bin", "hvigorw.js");
+  return isCltLayout(home)
+    ? path.join(home, "hvigor", "bin", "hvigorw.js")
+    : path.join(home, "tools", "hvigor", "bin", "hvigorw.js");
 }
 
 export function sdkPath(home: string) {
@@ -125,6 +141,8 @@ export async function resolveDevEcoHome(home: string): Promise<string | undefine
   for (const candidate of devEcoHomeCandidates(home)) {
     if (!(await isDir(candidate))) continue;
     if (!(await Bun.file(nodePath(candidate)).exists())) continue;
+    // Command Line Tools ship no product-info.json and are versioned separately.
+    if (isCltLayout(candidate)) return candidate;
     const version = await readDevEcoStudioVersion(candidate);
     if (!version || !meetsMinDevEcoVersion(version)) continue;
     return candidate;
@@ -212,11 +230,17 @@ export function buildEnv(home: string, sdk: string) {
   ]
     .filter(Boolean)
     .join(sep);
-  const extra = [
-    path.join(home, "tools", "node", "bin"),
-    path.join(home, "tools", "ohpm", "bin"),
-    path.join(home, "tools", "hvigor", "bin"),
-  ];
+  const extra = isCltLayout(home)
+    ? [
+        path.join(home, "tool", "node", "bin"),
+        path.join(home, "ohpm", "bin"),
+        path.join(home, "hvigor", "bin"),
+      ]
+    : [
+        path.join(home, "tools", "node", "bin"),
+        path.join(home, "tools", "ohpm", "bin"),
+        path.join(home, "tools", "hvigor", "bin"),
+      ];
   const merged = [...extra, current].filter(Boolean).join(sep);
   const cmd = process.platform === "win32" ? process.env.ComSpec || process.env.COMSPEC || path.join(base, "cmd.exe") : "";
   return {

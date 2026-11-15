@@ -33,6 +33,13 @@ async function scaffoldDevEcoHome(base: string, version = "6.1.0") {
   return base
 }
 
+async function scaffoldCltHome(base: string) {
+  const node = path.join(base, "tool", "node", "bin", process.platform === "win32" ? "node.exe" : "node")
+  await fs.mkdir(path.dirname(node), { recursive: true })
+  await Bun.write(node, "")
+  return base
+}
+
 function withDevecoHome(value: string | undefined, run: () => Promise<void>) {
   const previous = process.env.DEVECO_HOME
   if (value === undefined) delete process.env.DEVECO_HOME
@@ -40,6 +47,16 @@ function withDevecoHome(value: string | undefined, run: () => Promise<void>) {
   return run().finally(() => {
     if (previous === undefined) delete process.env.DEVECO_HOME
     else process.env.DEVECO_HOME = previous
+  })
+}
+
+function withCltPath(value: string | undefined, run: () => Promise<void>) {
+  const previous = process.env.DEVECO_CLI_CLT_PATH
+  if (value === undefined) delete process.env.DEVECO_CLI_CLT_PATH
+  else process.env.DEVECO_CLI_CLT_PATH = value
+  return run().finally(() => {
+    if (previous === undefined) delete process.env.DEVECO_CLI_CLT_PATH
+    else process.env.DEVECO_CLI_CLT_PATH = previous
   })
 }
 
@@ -121,6 +138,13 @@ describe("DEVECO_HOME recognition", () => {
       await scaffoldDevEcoHome(contents)
       expect(await resolveDevEcoHome(bundle)).toBe(contents)
     })
+
+    test("accepts a Command Line Tools layout without product-info.json", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const home = await scaffoldCltHome(path.join(tmp.path, "clt"))
+      expect(await resolveDevEcoHome(home)).toBe(home)
+    })
   })
 
   describe("isDevEcoHome()", () => {
@@ -137,6 +161,17 @@ describe("DEVECO_HOME recognition", () => {
     })
   })
 
+  describe("Command Line Tools paths", () => {
+    test("resolves node, hvigor and hdc from the CLT layout", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const home = await scaffoldCltHome(path.join(tmp.path, "clt-paths"))
+      expect(nodePath(home)).toBe(path.join(home, "tool", "node", "bin", "node"))
+      expect(hvigorPath(home)).toBe(path.join(home, "hvigor", "bin", "hvigorw.js"))
+      expect(hdcPath(home)).toBe(path.join(home, "sdk", "default", "openharmony", "toolchains", "hdc"))
+    })
+  })
+
   describe("findDevEcoHome()", () => {
     test("prefers DEVECO_HOME when it points to a valid installation", async () => {
       await using tmp = await tmpdir()
@@ -150,6 +185,18 @@ describe("DEVECO_HOME recognition", () => {
 
       await withDevecoHome(envHome, async () => {
         expect(await findDevEcoHome()).toBe(envHome)
+      })
+    })
+
+    test("uses DEVECO_CLI_CLT_PATH when DEVECO_HOME is unset", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const home = await scaffoldCltHome(path.join(tmp.path, "clt-env"))
+      await useStateDir(tmp.path)
+      await withDevecoHome(undefined, async () => {
+        await withCltPath(home, async () => {
+          expect(await findDevEcoHome()).toBe(home)
+        })
       })
     })
 
@@ -196,9 +243,17 @@ describe("DEVECO_HOME recognition", () => {
       await using tmp = await tmpdir()
       await useStateDir(tmp.path)
 
-      await withDevecoHome(path.join(tmp.path, "missing"), async () => {
-        expect(await findDevEcoHome()).toBeUndefined()
-      })
+      const previousHome = process.env.HOME
+      process.env.HOME = tmp.path
+      try {
+        await withDevecoHome(path.join(tmp.path, "missing"), async () => {
+          await withCltPath(undefined, async () => {
+            expect(await findDevEcoHome()).toBeUndefined()
+          })
+        })
+      } finally {
+        process.env.HOME = previousHome
+      }
     })
   })
 
@@ -247,6 +302,16 @@ describe("DEVECO_HOME recognition", () => {
       expect(env.DEVECO_HOME).toBe(home)
       expect(env.DEVECO_SDK_HOME).toBe(sdk)
       expect(env.PATH).toContain(path.join(home, "tools", "hvigor", "bin"))
+    })
+
+    test("uses the Command Line Tools layout for PATH", async () => {
+      if (process.platform === "win32") return
+      await using tmp = await tmpdir()
+      const home = await scaffoldCltHome(path.join(tmp.path, "clt-env"))
+      const env = buildEnv(home, path.join(home, "sdk"))
+      expect(env.PATH).toContain(path.join(home, "tool", "node", "bin"))
+      expect(env.PATH).toContain(path.join(home, "hvigor", "bin"))
+      expect(env.PATH).not.toContain(path.join(home, "tools", "hvigor", "bin"))
     })
 
     test("win32 includes SystemRoot, ComSpec, and Path keys", async () => {
