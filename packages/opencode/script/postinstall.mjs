@@ -27,7 +27,7 @@ const arch = archMap[os.arch()] ?? os.arch()
 const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.name.split("/")[0] : "@deveco"
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
-const targetBinary = path.join(__dirname, "bin", "deveco.exe")
+const targetBinary = path.join(__dirname, "bin", sourceBinary)
 const devecoCliPackageName = "@deveco/deveco-cli"
 const devecoCliBinName = "devecocli"
 

@@ -38,12 +38,13 @@ const registryBase = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs
 const cacheDir = path.join(dir, ".build-cache")
 const rgCacheDir = path.join(cacheDir, "ripgrep")
 
-const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
+const supportedPlatforms = new Set(["darwin-arm64", "darwin-x64", "linux-x64", "win32-x64"])
 
 // npm package + binary name per platform. Tarball layout: package/bin/<binary>.
 const rgNpmMap: Record<string, { pkg: string; binary: string }> = {
   "darwin-arm64": { pkg: "@vscode/ripgrep-darwin-arm64", binary: "rg" },
   "darwin-x64":   { pkg: "@vscode/ripgrep-darwin-x64",   binary: "rg" },
+  "linux-x64":    { pkg: "@vscode/ripgrep-linux-x64",    binary: "rg" },
   "win32-x64":    { pkg: "@vscode/ripgrep-win32-x64",    binary: "rg.exe" },
 }
 
