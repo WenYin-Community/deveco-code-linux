@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         > [!IMPORTANT]
-        > 感谢反馈问题！提交前请先 [搜索现有 Issue](https://atomgit.com/openharmony-sig/deveco-code/issues)，避免重复提交。
+        > 感谢反馈问题！提交前请先 [搜索现有 Issue](https://github.com/WenYin-Community/deveco-code-linux/issues)，避免重复提交。
         > 请尽量完整填写以下信息，以便我们快速定位和修复。
 
   - type: textarea
