@@ -30,7 +30,7 @@ function binary(name: string) {
 // The official Command Line Tools use `tool/node` (singular) plus flat `hvigor/`
 // and `ohpm/` directories, while DevEco Studio uses `tools/node`, `tools/hvigor`
 // and `tools/ohpm`. The node binary is the most reliable discriminator.
-function isCltLayout(home: string) {
+export function isCltLayout(home: string) {
   return fsSync.existsSync(path.join(home, "tool", "node", "bin", binary("node")));
 }
 

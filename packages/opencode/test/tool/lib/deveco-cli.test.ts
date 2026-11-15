@@ -272,7 +272,7 @@ describe("deveco-cli runtime", () => {
     expect(marker.trim()).toBe(cliEntry)
     const platformMarker = await fs.readFile(path.join(platformRoot, "vendor", ".deveco-cli-entry"), "utf8")
     expect(platformMarker.trim()).toBe(cliEntry)
-    expect(await Bun.file(path.join(mainRoot, "bin", "deveco.exe")).exists()).toBe(true)
+    expect(await Bun.file(path.join(mainRoot, "bin", process.platform === "win32" ? "deveco.exe" : "deveco")).exists()).toBe(true)
   })
 
   test("published postinstall resolves a nested platform-split CLI shell package", async () => {
@@ -366,6 +366,41 @@ describe("deveco-cli runtime", () => {
     expect(env?.DEVECO_CODE_AUTH_DIR).toBe(Global.Path.config)
     expect(env?.DEVECO_CLI_DISABLE_UPDATE).toBe("all")
   })
+
+  test.skipIf(process.platform === "win32")(
+    "buildDevecoCliShellEnv() passes the command line tools root to the CLI",
+    async () => {
+      await using tmp = await tmpdir()
+      const binDir = path.join(tmp.path, "bin")
+      const cli = path.join(tmp.path, "dist", "cli.js")
+      await fs.mkdir(path.dirname(cli), { recursive: true })
+      await Bun.write(cli, "console.log('1.2.3')\n")
+
+      const clt = path.join(tmp.path, "clt")
+      await fs.mkdir(path.join(clt, "tool", "node", "bin"), { recursive: true })
+      await Bun.write(path.join(clt, "tool", "node", "bin", "node"), "")
+
+      Global.Path.bin = binDir
+      const previousState = Global.Path.state
+      Global.Path.state = path.join(tmp.path, "state")
+      __setTestDevecoCliEntry(cli)
+      const previous = process.env.DEVECO_HOME
+      process.env.DEVECO_HOME = clt
+      try {
+        __resetDevecoCliShellEnvCache()
+        const env = await buildDevecoCliShellEnv()
+        expect(env?.DEVECO_CLI_CLT_PATH).toBe(clt)
+        if (process.platform === "linux" && env?.LD_LIBRARY_PATH) {
+          expect(env.LD_LIBRARY_PATH).toContain(path.join(Global.Path.state, "clt-libs"))
+        }
+      } finally {
+        if (previous === undefined) delete process.env.DEVECO_HOME
+        else process.env.DEVECO_HOME = previous
+        Global.Path.state = previousState
+        __resetDevecoCliShellEnvCache()
+      }
+    },
+  )
 
   // 回归：shim 必须能从「非包目录」的 cwd 跑通并写出 CLI 事件。
   // 这条用例同时能抓住两类回归——shim 指向 worker.ts 会挂死（原 bug），

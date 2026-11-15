@@ -4,6 +4,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import { Global } from "@opencode-ai/core/global"
 import { resolveInstallRoot } from "@opencode-ai/core/installation/vendor-path"
+import { findDevEcoHome, isCltLayout } from "./env"
 
 const PACKAGE_NAME = "@deveco/deveco-cli"
 const INSTALL_ENTRY_MARKER = ".deveco-cli-entry"
@@ -18,6 +19,10 @@ export type DevecoCliShellEnv = {
   DEVECO_CODE_AUTH_DIR: string
   /** Bundled CLI must not self-update or show upgrade banners. */
   DEVECO_CLI_DISABLE_UPDATE: "all"
+  /** Command Line Tools root; the CLI does not discover it from PATH. */
+  DEVECO_CLI_CLT_PATH?: string
+  /** Extra library dir for CLT binaries that need libbz2.so.1.0. */
+  LD_LIBRARY_PATH?: string
 }
 
 function pathSep() {
@@ -241,6 +246,30 @@ function devecoCliShimPath(shimDir: string) {
   return path.join(shimDir, process.platform === "win32" ? `${SHIM_NAME}.cmd` : SHIM_NAME)
 }
 
+// Fedora/RHEL ship libbz2.so.1 while the bundled Emulator links against
+// libbz2.so.1.0. Provide a compat symlink instead of modifying the CLT install.
+function cltLibraryPath() {
+  if (process.platform !== "linux") return undefined
+  const source = [
+    "/lib64/libbz2.so.1.0.8",
+    "/usr/lib64/libbz2.so.1.0.8",
+    "/lib64/libbz2.so.1",
+    "/usr/lib64/libbz2.so.1",
+  ].find(exists)
+  if (!source) return undefined
+  const dir = path.join(Global.Path.state, "clt-libs")
+  fsSync.mkdirSync(dir, { recursive: true })
+  const link = path.join(dir, "libbz2.so.1.0")
+  if (!exists(link)) {
+    try {
+      fsSync.symlinkSync(source, link)
+    } catch {
+      return undefined
+    }
+  }
+  return dir
+}
+
 async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliShellEnv } | null> {
   const shimDir = await ensureDevecoCliShim()
   const entry = resolveBundledDevecoCliEntry()
@@ -252,6 +281,14 @@ async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliS
     DEVECO_CLI_AUTH_SOURCE: "deveco-code",
     DEVECO_CODE_AUTH_DIR: Global.Path.config,
     DEVECO_CLI_DISABLE_UPDATE: "all",
+  }
+  const home = await findDevEcoHome()
+  if (home && isCltLayout(home)) {
+    env.DEVECO_CLI_CLT_PATH = home
+    const libDir = cltLibraryPath()
+    if (libDir) {
+      env.LD_LIBRARY_PATH = [libDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(pathSep())
+    }
   }
   if (process.platform === "win32") {
     env.Path = pathValue
