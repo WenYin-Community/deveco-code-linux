@@ -270,26 +270,29 @@ function cltLibraryPath() {
   return dir
 }
 
+async function applyCltEnv(env: DevecoCliShellEnv): Promise<DevecoCliShellEnv> {
+  const home = await findDevEcoHome()
+  if (!home || !isCltLayout(home)) return env
+  env.DEVECO_CLI_CLT_PATH = home
+  const libDir = cltLibraryPath()
+  if (libDir) {
+    env.LD_LIBRARY_PATH = [libDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(pathSep())
+  }
+  return env
+}
+
 async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliShellEnv } | null> {
   const shimDir = await ensureDevecoCliShim()
   const entry = resolveBundledDevecoCliEntry()
   if (!shimDir || !entry) return null
 
   const pathValue = isolatedShellPath(process.env.PATH || process.env.Path, shimDir)
-  const env: DevecoCliShellEnv = {
+  const env = await applyCltEnv({
     PATH: pathValue,
     DEVECO_CLI_AUTH_SOURCE: "deveco-code",
     DEVECO_CODE_AUTH_DIR: Global.Path.config,
     DEVECO_CLI_DISABLE_UPDATE: "all",
-  }
-  const home = await findDevEcoHome()
-  if (home && isCltLayout(home)) {
-    env.DEVECO_CLI_CLT_PATH = home
-    const libDir = cltLibraryPath()
-    if (libDir) {
-      env.LD_LIBRARY_PATH = [libDir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(pathSep())
-    }
-  }
+  })
   if (process.platform === "win32") {
     env.Path = pathValue
   }
@@ -297,14 +300,14 @@ async function prepareBundledDevecoCli(): Promise<{ cli: string; env: DevecoCliS
   return { cli: devecoCliShimPath(shimDir), env }
 }
 
-function devecoCliEnv(): DevecoCliShellEnv {
+async function devecoCliEnv(): Promise<DevecoCliShellEnv> {
   const pathValue = process.env.PATH || process.env.Path || ""
-  const env: DevecoCliShellEnv = {
+  const env = await applyCltEnv({
     PATH: pathValue,
     DEVECO_CLI_AUTH_SOURCE: "deveco-code",
     DEVECO_CODE_AUTH_DIR: Global.Path.config,
     DEVECO_CLI_DISABLE_UPDATE: "all",
-  }
+  })
   if (process.platform === "win32") env.Path = pathValue
   return env
 }
@@ -324,7 +327,7 @@ export async function runBundledDevecoCli(
     cwd,
     env: {
       ...process.env,
-      ...devecoCliEnv(),
+      ...(await devecoCliEnv()),
       ...(options.skipVersionCheck ? { DEVECO_CLI_SKIP_VERSION_CHECK: "1" } : {}),
     },
     stdout: "pipe",
