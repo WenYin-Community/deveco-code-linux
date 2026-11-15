@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: package-linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build linux-x64
+        run: |
+          cd packages/opencode
+          bun run script/build.ts --target=linux-x64 --skip-install
+
+      - name: Package
+        id: package
+        run: |
+          TAG="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
+          ASSET="deveco-linux-x64-${TAG}.tar.gz"
+          tar -czf "$ASSET" -C packages/opencode/dist/deveco-linux-x64 .
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+          ls -lh "$ASSET" "$ASSET.sha256"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+          ASSET: ${{ steps.package.outputs.asset }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" "$ASSET.sha256" --clobber
+          else
+            gh release create "$TAG" "$ASSET" "$ASSET.sha256" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --notes "DevEco Code Linux x64 build (${TAG}). Extract and run \`./bin/deveco\`."
+          fi
