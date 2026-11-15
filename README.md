@@ -7,11 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@deveco/deveco-code"><img alt="NPM Version" src="https://img.shields.io/npm/v/@deveco/deveco-code.svg" /></a>
-  <a href="https://www.npmjs.com/package/@deveco/deveco-code"><img alt="NPM Downloads" src="https://img.shields.io/npm/dm/@deveco/deveco-code.svg" /></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20x64-blue.svg" />
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" />
-  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20(Arm%20%7C%20x64)%20%7C%20Windows%20%7C%20Linux%20x64-blue.svg" />
-  <a href="https://developer.huawei.com/consumer/cn/deveco-studio/"><img alt="DevEco Studio" src="https://img.shields.io/badge/DevEco%20Studio-%3E%3D6.1-orange.svg" /></a>
   <img alt="Command Line Tools" src="https://img.shields.io/badge/Command%20Line%20Tools-%3E%3D26.0.0-orange.svg" />
   <a href="https://github.com/WenYin-Community/deveco-code-linux/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" /></a>
 </p>
@@ -24,65 +21,86 @@
 
 ## 快速开始
 
+> 本仓库只提供 **Linux x64** 版本。Windows 与 macOS 版本请前往上游仓库：
+> [https://atomgit.com/openharmony-sig/deveco-code](https://atomgit.com/openharmony-sig/deveco-code)
+
+### 1. 手动安装 Command Line Tools
+
+Linux 版使用官方 HarmonyOS Command Line Tools（CLT），**不需要安装 DevEco Studio**。请从华为开发者网站手动下载并解压：
+
+[https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos)
+
+推荐解压到 `~/command-line-tools` 或 `/opt/harmony-clt`，DevEco Code 会自动探测这两个位置。放在其他路径时，设置：
+
 ```bash
-# 1. 安装
-npm install -g @deveco/deveco-code
-
-# 2. 启动
-deveco
-
-# 3. 开始对话 —— 在终端中直接描述你的 HarmonyOS 开发需求
-提示词示例：
-- 解释一下代码库的架构
-- 帮我重构login_check这个函数
-- 帮我检查并修复语法错误
+export DEVECO_CLI_CLT_PATH=/path/to/command-line-tools
 ```
 
-> 建议使用 [npm 官方源](https://registry.npmjs.org/) 或 [淘宝镜像源](https://registry.npmmirror.com/) 安装，其他镜像源可能因同步延迟导致安装失败或版本滞后。
+验证 CLT：
 
-> 如需编译构建、设备运行等能力，请先安装 [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/) 并配置 `DEVECO_HOME` 环境变量。
+```bash
+"$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
+```
+
+### 2. 构建并启动
+
+```bash
+git clone https://github.com/WenYin-Community/deveco-code-linux.git
+cd deveco-code-linux
+bun install
+cd packages/opencode
+bun run script/build.ts --target=linux-x64 --skip-install
+./dist/deveco-linux-x64/bin/deveco
+```
+
+构建需要 [Bun](https://bun.sh) **1.4.2 及以上**。
+
+### 3. 开始对话
+
+在终端中直接描述你的 HarmonyOS 开发需求，例如：
+
+- 解释一下代码库的架构
+- 帮我重构 login_check 这个函数
+- 帮我检查并修复语法错误
+
+> Linux 版本不提供 Previewer，也不启用系统级命令沙箱。
 
 ## 简介
 
 DevEco Code 是一款面向 HarmonyOS 开发场景的 AI Agent 工具，支持代码编写、编译构建、设备运行、文档查阅、运行时调试及 ArkTS 问题修复等能力。
 
-DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终端交互、配置体系、 Provider / MCP / Skill / Plugin 等能力，并针对 HarmonyOS 工程增加了 DevEco Studio、Hvigor、HDC、Skill、HarmonyOS 知识库、ArkTS 检查和设备调试相关集成。
+DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终端交互、配置体系、 Provider / MCP / Skill / Plugin 等能力，并针对 HarmonyOS 工程增加了 Command Line Tools、Hvigor、HDC、Skill、HarmonyOS 知识库、ArkTS 检查和设备调试相关集成。
 
 ## 支持平台
 
-DevEco Code 支持以下平台：
-
 | 平台 | 架构 | 说明 |
 | --- | --- | --- |
-| Windows | x64 | Windows 11 |
-| macOS | arm64（Apple Silicon） | M 系列芯片 |
-| macOS | x64（Intel） | Intel 芯片 Mac |
 | Linux | x64 | 官方 Command Line Tools（无需 IDE） |
 
-> Linux x64 版本以独立 tarball 分发，不进入 npm 安装矩阵。它使用官方 HarmonyOS Command Line Tools（CLT）完成构建与设备调试，不需要安装 DevEco Studio。DevEco Code 会自动探测 `~/command-line-tools`、`/opt/harmony-clt`，也可通过 `DEVECO_CLI_CLT_PATH` 指定 CLT 根目录。Fedora/RHEL 上如遇 Emulator 缺少 `libbz2.so.1.0`，运行时会自动创建兼容符号链接。Linux 版本不提供 Previewer，也不启用系统级命令沙箱。
+> Windows 与 macOS 版本请前往上游仓库：[https://atomgit.com/openharmony-sig/deveco-code](https://atomgit.com/openharmony-sig/deveco-code)
+
+> Linux 版本以独立项目分发，不进入 npm 安装矩阵。它使用官方 HarmonyOS Command Line Tools（CLT）完成构建与设备调试，不需要安装 DevEco Studio。DevEco Code 会自动探测 `~/command-line-tools`、`/opt/harmony-clt`，也可通过 `DEVECO_CLI_CLT_PATH` 指定 CLT 根目录。Fedora/RHEL 上如遇 Emulator 缺少 `libbz2.so.1.0`，运行时会自动创建兼容符号链接。Linux 版本不提供 Previewer，也不启用系统级命令沙箱。
 
 ## 推荐配置
 
 **操作系统**
 
-- **Windows**：Windows 11 22H2 及以上
-- **macOS**：macOS 15 Sequoia 及以上
+- **Linux x64**：Fedora、Ubuntu 等主流发行版
 
 **硬件**
 
 - **日常使用**（短会话、单模块改动、以对话与代码编辑为主）：8 GB 及以上内存
-- **重度使用**（大工程、长会话、频繁编译构建与模拟器/真机调试）：16 GB 及以上内存；建议为 DevEco Studio、SDK、模拟器与构建缓存预留 20 GB 及以上可用磁盘空间
+- **重度使用**（大工程、长会话、频繁编译构建与模拟器/真机调试）：16 GB 及以上内存；建议为 SDK、模拟器与构建缓存预留 20 GB 及以上可用磁盘空间
 
 **运行时与工具链**
 
-- [Node.js](https://nodejs.org) **22 及以上**
-- [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/) **6.1 及以上**（编译构建、Hvigor、HDC、模拟器/真机运行）
-- 已配置 `DEVECO_HOME` 环境变量，指向 DevEco Studio 安装目录
+- [Node.js](https://nodejs.org) **22 及以上**（运行内置 devecocli）
+- [Bun](https://bun.sh) **1.4.2 及以上**（仅从源码构建时需要）
+- [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos) **26.0.0 及以上**（需手动安装）
 
 **终端 Shell**
 
-- Windows：PowerShell 7+（推荐）、Windows PowerShell 5.1+
-- macOS：Zsh（推荐）、Bash
+- Zsh 或 Bash
 
 **网络**
 
@@ -90,47 +108,41 @@ DevEco Code 支持以下平台：
 
 ## 安装前置
 
-DevEco Code 通过 npm 分发，安装前请先准备以下环境：
+Linux 版需要以下环境：
 
-1. 安装 [Node.js](https://nodejs.org)，**推荐使用 22 及更高版本**
-2. （可选）安装 [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)，**推荐使用 6.1 及更高版本**；若不安装，HarmonyOS 应用构建、推包等工具将无法使用
-3. （可选）配置 `DEVECO_HOME` 环境变量指向 DevEco Studio 安装目录，默认路径示例：
-   - **macOS**：`/Applications/DevEco-Studio.app`
-   - **Windows**：`C:\Program Files\Huawei\DevEco Studio`
+1. 手动下载并安装 [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos)，**推荐 26.0.0 及以上**
+2. 安装 [Node.js](https://nodejs.org)，**推荐 22 及以上**
+3. 如从源码构建，安装 [Bun](https://bun.sh) **1.4.2 及以上**
 
-可先在终端验证 Node.js 环境：
+CLT 推荐解压到 `~/command-line-tools` 或 `/opt/harmony-clt`；其他路径请设置 `DEVECO_CLI_CLT_PATH`：
+
+```bash
+export DEVECO_CLI_CLT_PATH=/path/to/command-line-tools
+```
+
+验证环境：
 
 ```bash
 node -v
-npm -v
+"$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
 ## 安装与卸载
 
-安装：
+从源码构建后，产物位于 `packages/opencode/dist/deveco-linux-x64/bin/deveco`。可创建软链接方便调用：
 
 ```bash
-npm install -g @deveco/deveco-code
-```
-
-查看版本、启动：
-
-```bash
+sudo ln -sf "$PWD/packages/opencode/dist/deveco-linux-x64/bin/deveco" /usr/local/bin/deveco
 deveco --version
-deveco
 ```
 
-更新：
+更新：拉取最新代码后重新构建。
+
+卸载：删除软链接与构建产物即可。
 
 ```bash
-deveco upgrade
-```
-
-卸载运行时数据与全局包：
-
-```bash
-deveco uninstall
-npm uninstall -g @deveco/deveco-code
+sudo rm -f /usr/local/bin/deveco
+rm -rf packages/opencode/dist
 ```
 
 ## 登录与登出
@@ -324,15 +336,9 @@ npm install -g oh-my-opencode
 
 ## 从 OpenCode 迁移
 
-如果需要从 OpenCode 迁移到 DevEco Code，请将配置文件迁移到 DevEco Code 目录。主配置文件可参考：
-
-```powershell
-# Windows PowerShell
-Copy-Item -Force "{源路径}\opencode.jsonc" "~\.config\deveco\deveco.jsonc"
-```
+如果需要从 OpenCode 迁移到 DevEco Code，请将配置文件迁移到 DevEco Code 目录：
 
 ```bash
-# macOS
 cp {源路径}/opencode.jsonc ~/.config/deveco/deveco.jsonc
 ```
 

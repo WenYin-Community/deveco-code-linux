@@ -7,11 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@deveco/deveco-code"><img alt="NPM Version" src="https://img.shields.io/npm/v/@deveco/deveco-code.svg" /></a>
-  <a href="https://www.npmjs.com/package/@deveco/deveco-code"><img alt="NPM Downloads" src="https://img.shields.io/npm/dm/@deveco/deveco-code.svg" /></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20x64-blue.svg" />
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" />
-  <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20(Arm%20%7C%20x64)%20%7C%20Windows%20%7C%20Linux%20x64-blue.svg" />
-  <a href="https://developer.huawei.com/consumer/en/deveco-studio/"><img alt="DevEco Studio" src="https://img.shields.io/badge/DevEco%20Studio-%3E%3D6.1-orange.svg" /></a>
   <img alt="Command Line Tools" src="https://img.shields.io/badge/Command%20Line%20Tools-%3E%3D26.0.0-orange.svg" />
   <a href="https://github.com/WenYin-Community/deveco-code-linux/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" /></a>
 </p>
@@ -24,65 +21,86 @@
 
 ## Quick Start
 
+> This repository provides the **Linux x64** build only. For Windows and macOS, use the upstream repository:
+> [https://atomgit.com/openharmony-sig/deveco-code](https://atomgit.com/openharmony-sig/deveco-code)
+
+### 1. Install the Command Line Tools manually
+
+The Linux build uses the official HarmonyOS Command Line Tools (CLT) and **does not require DevEco Studio**. Download and extract the CLT from Huawei's developer site:
+
+[https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos)
+
+Extract it to `~/command-line-tools` or `/opt/harmony-clt`; DevEco Code probes both automatically. For other locations, set:
+
 ```bash
-# 1. Install
-npm install -g @deveco/deveco-code
-
-# 2. Launch
-deveco
-
-# 3. Start chatting — describe your HarmonyOS development needs right in the terminal
-Example prompts:
-- Explain the architecture of this repository
-- Help me refactor the login_check function
-- Help me check for and fix syntax errors
+export DEVECO_CLI_CLT_PATH=/path/to/command-line-tools
 ```
 
-> We recommend using the [official npm registry](https://registry.npmjs.org/) or the [npmmirror (Taobao) registry](https://registry.npmmirror.com/) for installation. Other mirrors may have sync delays that cause installation failures or outdated versions.
+Verify the CLT:
 
-> For build, run, and related capabilities, install [DevEco Studio](https://developer.huawei.com/consumer/en/deveco-studio/) and set the `DEVECO_HOME` environment variable.
+```bash
+"$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
+```
+
+### 2. Build and launch
+
+```bash
+git clone https://github.com/WenYin-Community/deveco-code-linux.git
+cd deveco-code-linux
+bun install
+cd packages/opencode
+bun run script/build.ts --target=linux-x64 --skip-install
+./dist/deveco-linux-x64/bin/deveco
+```
+
+Building requires [Bun](https://bun.sh) **1.4.2 or newer**.
+
+### 3. Start a conversation
+
+Describe your HarmonyOS development task directly in the terminal, for example:
+
+- Explain the architecture of this codebase
+- Refactor the login_check function
+- Check and fix syntax errors
+
+> The Linux build does not provide the Previewer and does not enable the OS-level command sandbox.
 
 ## Overview
 
 DevEco Code is an AI Agent tool for HarmonyOS development. It supports code writing, project building, device deployment, documentation lookup, runtime debugging, and ArkTS issue fixing.
 
-DevEco Code extends the open-source project [OpenCode](https://opencode.ai), keeping its terminal UI, configuration system, and Provider / MCP / Skill / Plugin capabilities, and adds HarmonyOS-focused integrations for DevEco Studio, Hvigor, HDC, Skills, the HarmonyOS knowledge base, ArkTS checking, and device debugging.
+DevEco Code extends the open-source project [OpenCode](https://opencode.ai), keeping its terminal UI, configuration system, and Provider / MCP / Skill / Plugin capabilities, and adds HarmonyOS-focused integrations for the Command Line Tools, Hvigor, HDC, Skills, the HarmonyOS knowledge base, ArkTS checking, and device debugging.
 
 ## Supported Platforms
 
-DevEco Code supports the following platforms:
-
 | Platform | Architecture | Notes |
 | --- | --- | --- |
-| Windows | x64 | Windows 11 |
-| macOS | arm64 (Apple Silicon) | M-series chips |
-| macOS | x64 (Intel) | Intel Mac |
 | Linux | x64 | Official Command Line Tools (no IDE required) |
 
-> The Linux x64 build ships as a standalone tarball and is not part of the npm install matrix. It uses the official HarmonyOS Command Line Tools (CLT) for builds and device debugging, so no DevEco Studio installation is required. DevEco Code probes `~/command-line-tools` and `/opt/harmony-clt` automatically, and `DEVECO_CLI_CLT_PATH` can point at the CLT root. On Fedora/RHEL, a compatible `libbz2.so.1.0` symlink is created automatically when the Emulator needs it. The Linux build does not provide the Previewer and does not enable the OS-level command sandbox.
+> For Windows and macOS, use the upstream repository: [https://atomgit.com/openharmony-sig/deveco-code](https://atomgit.com/openharmony-sig/deveco-code)
+
+> The Linux build is distributed as a standalone project and is not part of the npm install matrix. It uses the official HarmonyOS Command Line Tools (CLT) for builds and device debugging, so no DevEco Studio installation is required. DevEco Code probes `~/command-line-tools` and `/opt/harmony-clt` automatically, and `DEVECO_CLI_CLT_PATH` can point at the CLT root. On Fedora/RHEL, a compatible `libbz2.so.1.0` symlink is created automatically when the Emulator needs it. The Linux build does not provide the Previewer and does not enable the OS-level command sandbox.
 
 ## Recommended Configuration
 
 **Operating system**
 
-- **Windows**: Windows 11 22H2 or later
-- **macOS**: macOS 15 Sequoia or later
+- **Linux x64**: Fedora, Ubuntu, and other mainstream distributions
 
 **Hardware**
 
 - **Everyday use** (short sessions, single-module edits, chat and code editing): 8 GB RAM or more
-- **Heavy use** (large projects, long sessions, frequent builds and emulator/device debugging): 16 GB RAM or more; reserve at least 20 GB free disk space for DevEco Studio, SDK, emulators, and build caches
+- **Heavy use** (large projects, long sessions, frequent builds and emulator/device debugging): 16 GB RAM or more; reserve at least 20 GB free disk space for the SDK, emulators, and build caches
 
 **Runtime and toolchain**
 
-- [Node.js](https://nodejs.org) **22 or higher**
-- [DevEco Studio](https://developer.huawei.com/consumer/en/deveco-studio/) **6.1 or higher** (builds, Hvigor, HDC, emulator/device run)
-- `DEVECO_HOME` set to your DevEco Studio installation directory
+- [Node.js](https://nodejs.org) **22 or newer** (runs the bundled devecocli)
+- [Bun](https://bun.sh) **1.4.2 or newer** (only needed to build from source)
+- [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos) **26.0.0 or newer** (manual install)
 
 **Terminal shell**
 
-- Windows: PowerShell 7+ (recommended), Windows PowerShell 5.1+
-- macOS: Zsh (recommended), Bash
+- Zsh or Bash
 
 **Network**
 
@@ -90,47 +108,41 @@ DevEco Code supports the following platforms:
 
 ## Prerequisites
 
-DevEco Code is distributed via npm. Prepare the following before installation:
+The Linux build requires:
 
-1. Install [Node.js](https://nodejs.org); **version 22 or higher is recommended**
-2. (Optional) Install [DevEco Studio](https://developer.huawei.com/consumer/en/deveco-studio/); **version 6.1 or higher is recommended**; if not installed, HarmonyOS app build, deployment, and other tools will be unavailable
-3. (Optional) Set `DEVECO_HOME` to point to your DevEco Studio installation directory. Default path examples:
-   - **macOS**: `/Applications/DevEco-Studio.app`
-   - **Windows**: `C:\Program Files\Huawei\DevEco Studio`
+1. A manual installation of the [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos), **26.0.0 or newer recommended**
+2. [Node.js](https://nodejs.org) **22 or newer**
+3. [Bun](https://bun.sh) **1.4.2 or newer** when building from source
 
-Verify your Node.js environment in the terminal:
+Extract the CLT to `~/command-line-tools` or `/opt/harmony-clt`; for other locations set `DEVECO_CLI_CLT_PATH`:
+
+```bash
+export DEVECO_CLI_CLT_PATH=/path/to/command-line-tools
+```
+
+Verify the environment:
 
 ```bash
 node -v
-npm -v
+"$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
 ## Install & Uninstall
 
-Install:
+After building from source, the binary is at `packages/opencode/dist/deveco-linux-x64/bin/deveco`. Link it into your PATH:
 
 ```bash
-npm install -g @deveco/deveco-code
-```
-
-Check version and launch:
-
-```bash
+sudo ln -sf "$PWD/packages/opencode/dist/deveco-linux-x64/bin/deveco" /usr/local/bin/deveco
 deveco --version
-deveco
 ```
 
-Update:
+Update: pull the latest code and rebuild.
+
+Uninstall: remove the symlink and the build output.
 
 ```bash
-deveco upgrade
-```
-
-Uninstall runtime data and the global package:
-
-```bash
-deveco uninstall
-npm uninstall -g @deveco/deveco-code
+sudo rm -f /usr/local/bin/deveco
+rm -rf packages/opencode/dist
 ```
 
 ## Login & Logout
@@ -324,15 +336,9 @@ Then configure the plugin entry in `deveco.jsonc`:
 
 ## Migrating from OpenCode
 
-To migrate from OpenCode to DevEco Code, move your configuration files to the DevEco Code directory. For the main configuration file:
-
-```powershell
-# Windows PowerShell
-Copy-Item -Force "{source_path}\opencode.jsonc" "~\.config\deveco\deveco.jsonc"
-```
+To migrate from OpenCode to DevEco Code, move your configuration files to the DevEco Code directory:
 
 ```bash
-# macOS
 cp {source_path}/opencode.jsonc ~/.config/deveco/deveco.jsonc
 ```
 
