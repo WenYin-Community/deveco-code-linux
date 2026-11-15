@@ -17,7 +17,6 @@ const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
-import { copyHomegraphRuntime } from "./vendor-homegraph.ts"
 import { digestSkill, digestSkills, loadResourceSkills, validateSkills, type SkillsData } from "./skill-sources"
 
 const require = createRequire(import.meta.url)
@@ -163,7 +162,6 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
   await $`bun install --os="*" --cpu="*" @ff-labs/fff-bun@${pkg.dependencies["@ff-labs/fff-bun"]}`
 }
-let homegraphSmokeDone = false
 for (const item of targets) {
   const name = [
     pkg.name,
@@ -307,29 +305,6 @@ for (const item of targets) {
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`
-
-  await copyHomegraphRuntime({
-    packageDir: dir,
-    destVendorDir: path.join(dir, "dist", name, "vendor", "homegraph"),
-    platform: `${item.os}-${item.arch}`,
-  })
-
-  // Smoke: vendor HomeGraph is plain JS+wasm — run with host `node` on any CI OS
-  // (Linux builders never match mac/win targets, so do not gate on platform).
-  // Once per build is enough; the vendor tree is identical across targets.
-  if (!homegraphSmokeDone) {
-    const hgEntry = path.join(dir, "dist", name, "vendor", "homegraph", "dist", "bin", "homegraph.js")
-    const probeDir = path.join(dir, "dist", name, ".hg-smoke")
-    console.log(`Running homegraph MCP smoke: ${hgEntry}`)
-    const listed = await $`node ${path.join(dir, "script", "homegraph-mcp-smoke.mjs")} ${hgEntry} ${probeDir}`.nothrow()
-    if (listed.exitCode !== 0) {
-      console.error(`HomeGraph MCP smoke failed for ${name}`)
-      process.exit(1)
-    }
-    console.log(`HomeGraph MCP smoke passed`)
-    await fs.promises.rm(probeDir, { recursive: true, force: true }).catch(() => {})
-    homegraphSmokeDone = true
-  }
 
   // Copy ripgrep from cache
   const rgKey = `${item.os}-${item.arch}`

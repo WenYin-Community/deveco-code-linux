@@ -6,7 +6,6 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Skill } from "../skill"
 import * as Tool from "./tool"
 import DESCRIPTION from "./skill.txt"
-import DFX_FILES from "./dfx-files.txt"
 import { loadSavedDevEcoHome } from "./lib/env"
 
 const FILES_WHITELIST = "FILES.md"
@@ -53,14 +52,9 @@ export const SkillTool = Tool.define(
           const dir = path.dirname(info.location)
           const base = pathToFileURL(dir).href
 
-          // Harness supplies DFX resources; retain the host curated companion list
-          // until the installed skill supplies its own FILES.md.
-          const content = (yield* fsys.existsSafe(path.join(dir, FILES_WHITELIST)))
-            ? yield* fsys.readFileString(path.join(dir, FILES_WHITELIST)).pipe(Effect.orDie)
-            : info.name === "hmos-dfx-analyzer"
-              ? DFX_FILES
-              : undefined
-          if (content !== undefined) {
+          const manifest = path.join(dir, FILES_WHITELIST)
+          if (yield* fsys.existsSafe(manifest)) {
+            const content = yield* fsys.readFileString(manifest).pipe(Effect.orDie)
             const { notes, files } = content.split("\n").reduce(
               (acc, line) => {
                 const trimmed = line.trim()
@@ -114,10 +108,8 @@ export const SkillTool = Tool.define(
 
 /**
  * The companion list goes **before** the skill body on purpose: tool output is
- * capped (50 KB / 2000 lines by default) and a skill whose SKILL.md alone exceeds
- * that cap — `hmos-dfx-analyzer` is ~52 KB — would otherwise lose its whole
- * `<skill_files>` block to truncation, which silently degrades the skill instead
- * of failing.
+ * capped (50 KB / 2000 lines by default). Longer skill bodies would otherwise
+ * leave no room for the companion paths.
  */
 function render(name: string, content: string, base: string, entries: string[]) {
   return [

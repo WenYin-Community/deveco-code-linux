@@ -199,4 +199,4 @@ authoring convention.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
 
-The host keeps the DFX companion listing fallback in `packages/opencode/src/tool/dfx-files.txt`. `src/tool/skill.ts` uses it only when the Harness-installed skill has no `FILES.md`; skill resources remain Harness-owned.
+Harness ships the DFX companion file list in the skill's `FILES.md`. The host reads it through the generic skill loader.

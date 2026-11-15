@@ -35,7 +35,6 @@ import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
-import { applyBuiltInHomegraph, HOMEGRAPH_MCP_NAME, isProductDisabledHomegraphStub } from "./homegraph"
 
 const DEFAULT_TIMEOUT = 30_000
 const CLIENT_OPTIONS = {
@@ -475,23 +474,13 @@ export const layer = Layer.effect(
       Effect.fn("MCP.state")(function* () {
         const cfg = yield* cfgSvc.get()
         const bridge = yield* EffectBridge.make()
+        const config = cfg.mcp ?? {}
         const s: State = {
           config: {},
           status: {},
           clients: {},
           defs: {},
         }
-        // Isolate HomeGraph inject failures so MCP.state still comes up without it.
-        const config = (yield* Effect.promise(() =>
-          applyBuiltInHomegraph(cfg.mcp as Record<string, unknown> | undefined, s.config),
-        ).pipe(
-          Effect.catchCause((cause) => {
-            console.warn(
-              `[homegraph] MCP.state inject failed; continuing without HomeGraph: ${Cause.pretty(cause)}`,
-            )
-            return Effect.succeed((cfg.mcp ?? {}) as Record<string, unknown>)
-          }),
-        )) as Record<string, McpEntry>
 
         yield* Effect.forEach(
           Object.entries(config),
@@ -620,12 +609,6 @@ export const layer = Layer.effect(
 
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
       const mcp = yield* requireMcpConfig(name)
-      // Product HomeGraph opt-out stub must stay disabled — do not force-enable / spawn.
-      if (name === HOMEGRAPH_MCP_NAME && isProductDisabledHomegraphStub(mcp)) {
-        const s = yield* InstanceState.get(state)
-        s.status[name] = { status: "disabled" }
-        return
-      }
       yield* createAndStore(name, { ...mcp, enabled: true })
     })
 

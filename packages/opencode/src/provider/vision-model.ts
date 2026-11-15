@@ -58,7 +58,7 @@ export async function resolveVisionModel(worktree: string): Promise<VisionModelP
     return {
       baseURL: DEVECO_API_URL + "/no-stream",
       apiKey: access,
-      modelName: getTaskDefaultModelMap()?.["ui_verification"] ?? "Qwen3_VL_235B_A22B_Instruct",
+      modelName: getTaskDefaultModelMap()?.["ui_verification"] ?? "Qwen3_5_397B_A17B_w8a8_single",
     }
   } catch {}
 

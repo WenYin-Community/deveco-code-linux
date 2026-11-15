@@ -100,8 +100,9 @@ it.instance("build asks and spec-verify allows UI verification tools by default"
     )
 
     const [build, specVerify, specImplementation, goal, plan, general, explore, compaction, title, summary] = agents
-    expect(specVerify?.prompt).toContain("at most 2 verification attempts")
-    expect(goal?.prompt).toContain("Do not run a separate final pass")
+    expect(specVerify?.prompt).toMatch(/max (?:\*\*)?2(?:\*\*)? total verification attempts per story/)
+    expect(goal?.prompt).toContain("spec-verify subagent is invoked **exactly once**")
+    expect(goal?.prompt).toContain("its returned report is the final, authoritative result")
 
     for (const tool of uiTools) {
       expect(evalPerm(build, tool)).toBe("ask")

@@ -28,19 +28,6 @@ const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.n
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", "deveco.exe")
-function writeHomegraphEntryMarker(installRoot) {
-  try {
-    const hgRoot = path.dirname(require.resolve("homegraph/package.json"))
-    const entry = path.join(hgRoot, "dist", "bin", "homegraph.js")
-    if (!fs.existsSync(entry)) return
-    const marker = path.join(installRoot, "vendor", ".homegraph-entry")
-    fs.mkdirSync(path.dirname(marker), { recursive: true })
-    fs.writeFileSync(marker, `${entry}\n`, "utf8")
-  } catch {
-    // optional when homegraph is not a dependency of this install
-  }
-}
-
 function supportsAvx2() {
   if (arch !== "x64") return false
 
@@ -214,7 +201,6 @@ function installPackage(name) {
     const packageDir = path.join(temp, "node_modules", name)
     copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
     copyVendor(packageDir)
-    // Do not write marker into packageDir: it lives under mkdtemp and is deleted in finally.
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
@@ -243,14 +229,11 @@ function verifyBinary() {
 }
 
 function main() {
-  writeHomegraphEntryMarker(__dirname)
-
   for (const name of packageNames()) {
     try {
       const packageDir = resolvePackageDir(name)
       copyBinary(resolveBinary(name), targetBinary)
       copyVendor(packageDir)
-      writeHomegraphEntryMarker(packageDir)
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return

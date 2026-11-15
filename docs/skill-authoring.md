@@ -134,4 +134,4 @@ Frontmatter:
 - [ARCHITECTURE.md](../ARCHITECTURE.md) → "Skill Storage Invariant"
 - [AGENTS.md](../AGENTS.md) → "Skills"
 
-The host keeps the DFX companion listing fallback in `packages/opencode/src/tool/dfx-files.txt`. `src/tool/skill.ts` uses it only when the Harness-installed skill has no `FILES.md`; skill resources remain Harness-owned.
+Harness ships the DFX companion file list in the skill's `FILES.md`. The host reads it through the generic skill loader.

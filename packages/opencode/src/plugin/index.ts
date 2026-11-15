@@ -38,7 +38,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
 import { BuiltinHarness } from "./builtin-harness"
 import { SessionCwdPlugin } from "./session-cwd"
-import { adaptHarnessHooks } from "./harness-compat"
 
 type State = {
   hooks: Hooks[]
@@ -262,12 +261,8 @@ export const layer = Layer.effect(
             try: async () => {
               const isHarness = (load.mod.default as { id?: unknown } | undefined)?.id === BuiltinHarness.ID
               if (isHarness && harnessLoaded) return
-              const start = hooks.length
               await applyPlugin(load, input, hooks)
-              if (isHarness) {
-                for (let index = start; index < hooks.length; index++) hooks[index] = adaptHarnessHooks(hooks[index])
-                harnessLoaded = true
-              }
+              if (isHarness) harnessLoaded = true
             },
             catch: (err) => {
               const message = errorMessage(err)

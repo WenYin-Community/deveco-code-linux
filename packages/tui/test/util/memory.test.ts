@@ -123,9 +123,18 @@ describe("memory directory naming", () => {
 
 describe("memory files", () => {
   test("lists parsed entries newest first and skips files the plugin ignores", async () => {
-    const value = await scope()
-    const dir = Memory.memoryDir({}, value)
-    expect(dir).toBe(path.join(value.data, "memory", slugifyProjectID(path.resolve(value.directory))))
+    const windows = process.platform === "win32"
+    const value = {
+      ...(await scope()),
+      directory: windows ? "C:\\Users\\dev\\my project" : "/Users/dev/my project",
+    }
+    // Seed an existing plugin directory; the fixed Windows hash is for C:/Users/dev/my project.
+    const dir = path.join(
+      value.data,
+      "memory",
+      windows ? "C__Users_dev_myproject_167eae1fccee" : "_Users_dev_myproject_5086e948293f",
+    )
+    expect(Memory.memoryDir({}, value)).toBe(dir)
     expect(Memory.memoryDir({ customMemoryDir: "/tmp/mem" }, value)).toBe("/tmp/mem")
     expect(Memory.memoryDir({ storageMode: "project" }, value)).toBe(path.join(value.directory, ".deveco", "memory"))
 

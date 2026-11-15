@@ -43,12 +43,6 @@ const pkg = (await Bun.file("./package.json").json()) as {
   dependencies: Record<string, string>
   builtinPlugins: Record<string, string>
 }
-// Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
-const homegraphVersion = pkg.dependencies.homegraph
-if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
-if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
-  throw new Error(`Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`)
-}
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
 // HarmonyOS arm64 is prebuilt and published from a separate repo, so it never lands in
@@ -105,7 +99,6 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       },
       dependencies: {
         ...pkg.builtinPlugins,
-        homegraph: homegraphVersion,
       },
     },
     null,

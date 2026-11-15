@@ -4,7 +4,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
 import { tool } from "ai"
-import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
@@ -19,7 +19,7 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -291,7 +291,7 @@ it.live("session.processor effect tests preserve text start time", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
-        const database = yield* Database.Service
+        const events = yield* EventV2Bridge.Service
         const gate = defer<void>()
         const { processors, session, provider } = yield* boot()
 
@@ -330,6 +330,15 @@ it.live("session.processor effect tests preserve text start time", () =>
           model: mdl,
         })
 
+        const started = yield* Deferred.make<number>()
+        const off = yield* events.listen((event) => {
+          if (event.type !== MessageV2.Event.PartUpdated.type) return Effect.void
+          const { part } = event.data as typeof MessageV2.Event.PartUpdated.data.Type
+          if (part.messageID !== msg.id || part.type !== "text" || part.time?.start === undefined) return Effect.void
+          return Deferred.succeed(started, part.time.start)
+        })
+        yield* Effect.addFinalizer(() => off)
+
         const run = yield* handle
           .process({
             user: {
@@ -349,25 +358,23 @@ it.live("session.processor effect tests preserve text start time", () =>
           })
           .pipe(Effect.forkChild)
 
-        yield* waitFor(
-          MessageV2.parts(msg.id).pipe(
-            Effect.map((parts) => parts.find((part): part is SessionV1.TextPart => part.type === "text")),
-            Effect.provideService(Database.Service, database),
-          ),
+        const start = yield* awaitWithTimeout(
+          Deferred.await(started),
           "timed out waiting for text part",
+          "15 seconds",
+        ).pipe(
+          // Give start and end distinct timestamps before letting the provider finish.
+          Effect.tap(() => Effect.sleep("20 millis")),
+          Effect.ensuring(Effect.sync(() => gate.resolve())),
         )
-        yield* Effect.sleep("20 millis")
-        gate.resolve()
 
         const exit = yield* Fiber.await(run)
         const text = (yield* MessageV2.parts(msg.id)).find((part): part is SessionV1.TextPart => part.type === "text")
 
         expect(Exit.isSuccess(exit)).toBe(true)
         expect(text?.text).toBe("hello")
-        expect(text?.time?.start).toBeDefined()
-        expect(text?.time?.end).toBeDefined()
-        if (!text?.time?.start || !text.time.end) return
-        expect(text.time.start).toBeLessThan(text.time.end)
+        expect(text?.time?.start).toBe(start)
+        expect(text?.time?.end).toBeGreaterThan(start)
       }),
     { config: (url) => providerCfg(url) },
   ),

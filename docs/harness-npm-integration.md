@@ -4,12 +4,12 @@ npm、curl/irm、Studio 和源码开发均通过 Harness 提供 CLI、专用工�
 
 ## 版本和安装
 
-`packages/opencode/package.json` 的 `builtinPlugins` 是产品构建清单，使用 `@deveco-test/deveco-harness` 的 `dev` 标签。`script/publish.ts` 和 `script/release.ts` 将这项依赖写入发布主包的标准 `dependencies`：
+`packages/opencode/package.json` 的 `builtinPlugins` 是产品构建清单，指定 `@deveco-test/deveco-harness` 的精确版本。`script/publish.ts` 和 `script/release.ts` 将这项依赖写入发布主包的标准 `dependencies`：
 
 ```json
 {
   "dependencies": {
-    "@deveco-test/deveco-harness": "dev"
+    "@deveco-test/deveco-harness": "0.2.0-test.12"
   }
 }
 ```
@@ -61,7 +61,7 @@ Studio 启动时从插件资源中解压完整的 `node_modules`，在 `<IDE-sys
 
 Harness 在 `config` Hook 中将完整 Skill 及配套资源安装到 `<DEVECO_STORAGE_ROOT>/config/skills/<name>/`，并等待安装完成后再进入宿主 Skill 发现流程。Studio 继续使用原有目录扫描、启用状态和斜杠菜单过滤逻辑，不增加 Harness 专用路径或额外过滤入口。Harness 通过资源哈希管理自身安装的更新，保留用户已有的同名 Skill 和本地修改。
 
-宿主安装时解析 `latest`，源码开发的具体解析版本仍由锁文件记录。更新依赖时同步刷新锁文件；已安装的依赖不会在宿主启动时自动更新。四个 Skill 由 Harness 提供，Studio 通过配置目录发现它们。
+DevEco Code 的发布产物和源码开发均使用清单中指定的 Harness 版本。更新依赖时，同步修改 `builtinPlugins`、`dependencies` 和 `bun.lock`。四个 Skill 由 Harness 提供，Studio 通过配置目录发现它们。
 
 ## 当前边界
 
@@ -77,9 +77,9 @@ Windows x64 实际构建产物另通过隔离目录安装和启动验证：Harne
 
 `switch_cwd`、`plan_write`、`plan_enter`、`plan_exit`、`spec_write`、`verify_ui`、`get_ui_verification_log`、`save_ui_screenshot` 均通过 Harness 的 `tool` 导出进入通用工具适配器。宿主不再注册同名原生实现；关闭 Harness 时也不提供这些工具的原生回退。
 
-ArkTS 规则仅由 Harness 的 `experimental.chat.system.transform` 注入，宿主不再维护 `agent/rules.ts` 或规则副本。HomeGraph 提示词仍由宿主负责。DFX Agent 的定义、权限和提示词以及 `/analyze` 均由 Harness 配置提供；宿主不再保留原生 DFX 定义或提示词副本。通用命令注册表以及原生预算 Goal 命令保留。
+ArkTS 规则与 codebase / HomeGraph 检索路由均由 Harness 的 `experimental.chat.system.transform` 注入，宿主不再维护 `agent/rules.ts`、`agent/prompt-parts` 或规则副本。DFX Agent 的定义、权限和提示词以及 `/analyze` 均由 Harness 配置提供；宿主不再保留原生 DFX 定义或提示词副本。通用命令注册表以及原生预算 Goal 命令保留。
 
-普通模式的 `build.txt` 只标记提示词由 Harness 提供。宿主在生成模型请求时补充代码检索路由，HomeGraph 已连接且提供工具时使用 HomeGraph 路由，否则使用常规检索工具。
+普通模式的 `build.txt` 只标记提示词由 Harness 提供。Harness 在插件 hook 中按 HomeGraph 工具是否已注册（`homegraph_*` 插件工具 + vendor schemas）选择 codebase 路由文案，宿主不再额外注入检索路由。
 
 SDD 的 `goal`、`spec-implementation`、`spec-verify` Agent 由 Harness 配置提供，命令和模板直接读取其 `dist/sdd` 目录。Agent 缓存生成前等待插件配置完成；宿主不再嵌入、解包或维护旧 `resources/spec` 资源。其他 Agent 的原生提示词和 Studio profile 保留。
 
@@ -105,4 +105,4 @@ CLI Shim 写入用户缓存下的 `harness/cli/<安装路径哈希>/`，支持�
 
 ## 当前分支兼容
 
-`src/plugin/harness-compat.ts` 保留当前分支的 UI 验证策略增量：普通 UI 验证最多两次、无额外最终复验，简化验证由 Skill 管理，并限制无法通过 UI 观察的用例。只在 Harness 命令或 Agent 仍包含旧的三次重试、Phase 2 文本时追加，不恢复原生 SDD 资源。路由字段与 ArkTS 规则直接沿用 Harness，不做宿主重写。Harness 更新移除旧策略后，重试兼容自动停止应用。DFX 附件白名单由 `src/tool/dfx-files.txt` 提供后备。
+从 `0.2.0-test.11` 起，Harness 随包交付 UI 验证流程和 DFX 技能的 `FILES.md`。DevEco Code 通过通用插件接口和技能清单加载这些资源。

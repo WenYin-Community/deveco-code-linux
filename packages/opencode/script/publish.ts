@@ -9,15 +9,8 @@ const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
 const scope = process.env.DEVECO_SCOPE || "deveco"
-// Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
-const homegraphVersion = pkg.dependencies.homegraph
-if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
-if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
-  throw new Error(`Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`)
-}
 const registry = process.env.NPM_REGISTRY || "https://registry.npmjs.org"
 const token = process.env.NPM_TOKEN
-
 // HarmonyOS arm64 is prebuilt and published from a separate repo, so it never lands in
 // ./dist and is never compiled here. It gates itself via its own os/cpu fields. That repo
 // must publish this exact version; npm silently skips an optional dependency whose version
@@ -94,7 +87,6 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       },
       dependencies: {
         ...pkg.builtinPlugins,
-        homegraph: homegraphVersion,
       },
     },
     null,

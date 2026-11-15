@@ -179,10 +179,7 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/**
- * HomeGraph vendor tree as shipped into platform packages.
- * Source of truth: committed npm lock used by `vendor-homegraph.ts` (not bun node_modules).
- */
+/** Read the retained HomeGraph vendor lock for third-party license entries. */
 function collectHomegraphVendorFromLock(): PkgInfo[] {
   const lockPath = join(import.meta.dir, "homegraph-vendor-package-lock.json")
   if (!existsSync(lockPath)) {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -23,8 +24,13 @@ export function origin(input: {
   // Source checkouts install the same plugin spec as a normal package dependency.
   if (!input.root) roots.unshift(path.resolve(import.meta.dirname, "../.."))
   for (const root of roots) {
+    const resolve = createRequire(path.join(root, "package.json")).resolve
+    const spec = `${PACKAGE}/server`
+    // Bun can satisfy a missing dependency from its install cache. Only probe
+    // actual npm dependencies so a copied launcher can fall back to its version directory.
+    if (!resolve.paths(spec)?.some((dir) => existsSync(path.join(dir, PACKAGE, "package.json")))) continue
     try {
-      const entry = createRequire(path.join(root, "package.json")).resolve(`${PACKAGE}/server`)
+      const entry = resolve(spec)
       return { spec: pathToFileURL(entry).href, source: "builtin:deveco-harness", scope: "global" }
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND") continue
