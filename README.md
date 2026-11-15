@@ -49,15 +49,16 @@ DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终
 
 ## 支持平台
 
-DevEco Code 当前通过 npm 提供以下平台安装包：
+DevEco Code 支持以下平台：
 
 | 平台 | 架构 | 说明 |
 | --- | --- | --- |
 | Windows | x64 | Windows 11 |
 | macOS | arm64（Apple Silicon） | M 系列芯片 |
 | macOS | x64（Intel） | Intel 芯片 Mac |
+| Linux | x64 | 官方 Command Line Tools（无需 IDE） |
 
-> 暂不支持 Linux。HarmonyOS 编译构建、模拟器与真机调试依赖 [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)，且目前仅提供 Windows 与 macOS 版本。
+> Linux x64 版本以独立 tarball 分发，不进入 npm 安装矩阵。它使用官方 HarmonyOS Command Line Tools（CLT）完成构建与设备调试，不需要安装 DevEco Studio。DevEco Code 会自动探测 `~/command-line-tools`、`/opt/harmony-clt`，也可通过 `DEVECO_CLI_CLT_PATH` 指定 CLT 根目录。Fedora/RHEL 上如遇 Emulator 缺少 `libbz2.so.1.0`，运行时会自动创建兼容符号链接。Linux 版本不提供 Previewer，也不启用系统级命令沙箱。
 
 ## 推荐配置
 

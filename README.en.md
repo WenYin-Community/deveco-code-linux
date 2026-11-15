@@ -49,15 +49,16 @@ DevEco Code extends the open-source project [OpenCode](https://opencode.ai), kee
 
 ## Supported Platforms
 
-DevEco Code is distributed via npm for the following platforms:
+DevEco Code supports the following platforms:
 
 | Platform | Architecture | Notes |
 | --- | --- | --- |
 | Windows | x64 | Windows 11 |
 | macOS | arm64 (Apple Silicon) | M-series chips |
 | macOS | x64 (Intel) | Intel Mac |
+| Linux | x64 | Official Command Line Tools (no IDE required) |
 
-> Linux is not supported. HarmonyOS builds, emulators, and on-device debugging require [DevEco Studio](https://developer.huawei.com/consumer/en/deveco-studio/), which is currently available for Windows and macOS only.
+> The Linux x64 build ships as a standalone tarball and is not part of the npm install matrix. It uses the official HarmonyOS Command Line Tools (CLT) for builds and device debugging, so no DevEco Studio installation is required. DevEco Code probes `~/command-line-tools` and `/opt/harmony-clt` automatically, and `DEVECO_CLI_CLT_PATH` can point at the CLT root. On Fedora/RHEL, a compatible `libbz2.so.1.0` symlink is created automatically when the Emulator needs it. The Linux build does not provide the Previewer and does not enable the OS-level command sandbox.
 
 ## Recommended Configuration
 
