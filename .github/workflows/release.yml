@@ -48,7 +48,10 @@ jobs:
         run: |
           TAG="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
           ASSET="deveco-linux-x64-${TAG}.tar.gz"
-          tar -czf "$ASSET" -C packages/opencode/dist/deveco-linux-x64 .
+          DIST="packages/opencode/dist/deveco-linux-x64"
+          cp install.sh update.sh uninstall.sh "$DIST/"
+          echo "$TAG" > "$DIST/VERSION"
+          tar -czf "$ASSET" -C "$DIST" .
           sha256sum "$ASSET" > "$ASSET.sha256"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "asset=$ASSET" >> "$GITHUB_OUTPUT"

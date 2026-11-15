@@ -42,18 +42,18 @@ Verify the CLT:
 "$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
-### 2. Build and launch
+### 2. Install and launch
+
+Download the latest Linux x64 archive from [Releases](https://github.com/WenYin-Community/deveco-code-linux/releases), extract it, and run the installer:
 
 ```bash
-git clone https://github.com/WenYin-Community/deveco-code-linux.git
-cd deveco-code-linux
-bun install
-cd packages/opencode
-bun run script/build.ts --target=linux-x64 --skip-install
-./dist/deveco-linux-x64/bin/deveco
+tar -xzf deveco-linux-x64-<date>.tar.gz -C deveco-linux-x64
+cd deveco-linux-x64
+./install.sh
+deveco
 ```
 
-Building requires [Bun](https://bun.sh) **1.4.2 or newer**.
+The installer never downloads anything; it uses the extracted `bin/` and `vendor/` in the current directory.
 
 ### 3. Start a conversation
 
@@ -127,23 +127,77 @@ node -v
 "$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
-## Install & Uninstall
+## Install & Update
 
-After building from source, the binary is at `packages/opencode/dist/deveco-linux-x64/bin/deveco`. Link it into your PATH:
+### Install
 
-```bash
-sudo ln -sf "$PWD/packages/opencode/dist/deveco-linux-x64/bin/deveco" /usr/local/bin/deveco
-deveco --version
-```
-
-Update: pull the latest code and rebuild.
-
-Uninstall: remove the symlink and the build output.
+1. Download `deveco-linux-x64-<date>.tar.gz` and `.sha256` from [Releases](https://github.com/WenYin-Community/deveco-code-linux/releases). If GitHub is slow to reach, download manually and copy the files to the target machine.
+2. Verify and extract:
 
 ```bash
-sudo rm -f /usr/local/bin/deveco
-rm -rf packages/opencode/dist
+sha256sum -c deveco-linux-x64-<date>.tar.gz.sha256
+tar -xzf deveco-linux-x64-<date>.tar.gz -C deveco-linux-x64
+cd deveco-linux-x64
 ```
+
+3. Install:
+
+```bash
+./install.sh
+```
+
+The installation lives in `~/.local/share/deveco`, with the command linked to `~/.local/bin/deveco`. If `~/.local/bin` is not on `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`install.sh` never downloads anything. It looks for the extracted `bin/` and `vendor/` in the script directory, the current directory, or `packages/opencode/dist/deveco-linux-x64`. You can also pass a directory or `.tar.gz` explicitly:
+
+```bash
+./install.sh /path/to/deveco-linux-x64
+./install.sh /path/to/deveco-linux-x64-2026-11-15.tar.gz
+```
+
+Installing the same version is skipped; use `--force` to reinstall.
+
+### Update
+
+Download and extract the new version, then run from the new directory:
+
+```bash
+./update.sh
+```
+
+The update keeps only the current version; configuration and login state are preserved. The same version is skipped.
+
+### Uninstall
+
+```bash
+./uninstall.sh
+```
+
+A copy of the uninstaller is kept at `~/.local/share/deveco/uninstall.sh`.
+
+`--purge` also removes `~/.config/deveco` and `~/.local/state/deveco` (configuration and login credentials):
+
+```bash
+./uninstall.sh --purge
+```
+
+### Build from source (optional)
+
+```bash
+git clone https://github.com/WenYin-Community/deveco-code-linux.git
+cd deveco-code-linux
+bun install
+cd packages/opencode
+bun run script/build.ts --target=linux-x64 --skip-install
+cd ../..
+./install.sh
+```
+
+Building requires [Bun](https://bun.sh) **1.4.2 or newer**.
 
 ## Login & Logout
 

@@ -42,18 +42,18 @@ export DEVECO_CLI_CLT_PATH=/path/to/command-line-tools
 "$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
-### 2. 构建并启动
+### 2. 安装并启动
+
+从 [Releases](https://github.com/WenYin-Community/deveco-code-linux/releases) 下载最新 Linux x64 压缩包，解压后运行安装脚本：
 
 ```bash
-git clone https://github.com/WenYin-Community/deveco-code-linux.git
-cd deveco-code-linux
-bun install
-cd packages/opencode
-bun run script/build.ts --target=linux-x64 --skip-install
-./dist/deveco-linux-x64/bin/deveco
+tar -xzf deveco-linux-x64-<日期>.tar.gz -C deveco-linux-x64
+cd deveco-linux-x64
+./install.sh
+deveco
 ```
 
-构建需要 [Bun](https://bun.sh) **1.4.2 及以上**。
+安装脚本不会联网，只使用当前目录中已解压的 `bin/` 与 `vendor/`。
 
 ### 3. 开始对话
 
@@ -127,23 +127,77 @@ node -v
 "$DEVECO_CLI_CLT_PATH/sdk/default/openharmony/toolchains/hdc" -v
 ```
 
-## 安装与卸载
+## 安装与更新
 
-从源码构建后，产物位于 `packages/opencode/dist/deveco-linux-x64/bin/deveco`。可创建软链接方便调用：
+### 安装
 
-```bash
-sudo ln -sf "$PWD/packages/opencode/dist/deveco-linux-x64/bin/deveco" /usr/local/bin/deveco
-deveco --version
-```
-
-更新：拉取最新代码后重新构建。
-
-卸载：删除软链接与构建产物即可。
+1. 从 [Releases](https://github.com/WenYin-Community/deveco-code-linux/releases) 下载 `deveco-linux-x64-<日期>.tar.gz` 与 `.sha256`。GitHub 访问不便时，可先手动下载再拷贝到本机。
+2. 校验并解压：
 
 ```bash
-sudo rm -f /usr/local/bin/deveco
-rm -rf packages/opencode/dist
+sha256sum -c deveco-linux-x64-<日期>.tar.gz.sha256
+tar -xzf deveco-linux-x64-<日期>.tar.gz -C deveco-linux-x64
+cd deveco-linux-x64
 ```
+
+3. 安装：
+
+```bash
+./install.sh
+```
+
+安装位置为 `~/.local/share/deveco`，命令链接到 `~/.local/bin/deveco`。若 `~/.local/bin` 不在 `PATH` 中：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+`install.sh` 不会联网，它会从脚本目录、当前目录或 `packages/opencode/dist/deveco-linux-x64` 查找已解压的 `bin/` 与 `vendor/`。也支持直接传入目录或 `.tar.gz`：
+
+```bash
+./install.sh /path/to/deveco-linux-x64
+./install.sh /path/to/deveco-linux-x64-2026-11-15.tar.gz
+```
+
+版本相同时安装会被跳过，`--force` 可强制重装。
+
+### 更新
+
+下载并解压新版本后，在新目录执行：
+
+```bash
+./update.sh
+```
+
+更新只保留当前版本，配置与登录状态不受影响。版本相同时会跳过。
+
+### 卸载
+
+```bash
+./uninstall.sh
+```
+
+安装目录内保留了一份卸载脚本：`~/.local/share/deveco/uninstall.sh`。
+
+`--purge` 会同时删除 `~/.config/deveco` 与 `~/.local/state/deveco`（含登录凭据）：
+
+```bash
+./uninstall.sh --purge
+```
+
+### 从源码构建（可选）
+
+```bash
+git clone https://github.com/WenYin-Community/deveco-code-linux.git
+cd deveco-code-linux
+bun install
+cd packages/opencode
+bun run script/build.ts --target=linux-x64 --skip-install
+cd ../..
+./install.sh
+```
+
+构建需要 [Bun](https://bun.sh) **1.4.2 及以上**。
 
 ## 登录与登出
 
