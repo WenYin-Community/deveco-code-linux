@@ -147,13 +147,32 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   finalBuildElapsed: number | null
 }
 
-export interface AiCodeAttributionEvent {
+// Line totals one attribution window aggregated: the project they belong to plus the four
+// disjoint buckets. The tracker reports exactly this shape, and it is also the legacy shape older
+// builds uploaded on its own, so queued events carrying it must stay readable.
+export interface CodeAttributionTotals {
   projectId: string
   aiGeneratedLines: number
   humanGeneratedLines: number
   unknownGeneratedLines: number
   totalGeneratedLines: number
 }
+
+// Current wire shape of DevEcoCodeAttribution: the line totals plus the same environment, timing
+// and session fields DevEcoCodeSlash carries, so attribution rows can be sliced by client/os/session
+// without joining another event.
+export interface DevEcoCodeAttributionEvent extends AnalyticsEnvironmentFields, CodeAttributionTotals {
+  // Milliseconds since the epoch, captured when the aggregate is submitted. The wire-level
+  // timestamp of the upload is the upload time, which is a different value: keep both.
+  timestamp: number
+  sessionid: string
+}
+
+// What the queue hands around: the current full event, or the 5-key totals that an older build
+// queued before the environment fields landed. The emitter always writes the full shape (see
+// createAttribution in analytics-plugin.ts); only the storage validator and the tracker's submit
+// contract tolerate the legacy totals, because a rejected shape is dropped from the queue.
+export type AiCodeAttributionEvent = DevEcoCodeAttributionEvent | CodeAttributionTotals
 
 // Historical build detail payload retained for persisted DevEcoCodeBuild events.
 export interface BuildProjectInfo {

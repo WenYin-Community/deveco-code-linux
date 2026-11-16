@@ -12,7 +12,7 @@ import { globalUploader } from "./uploader"
 import { getVersion } from "./storage"
 import { createEnvironmentFields } from "./events"
 import { ANALYTICS_ACTION, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
-import type { AiSessionEvent, AnalyticsSubmission, DevEcoCodeSlashEvent } from "./types"
+import type { AiSessionEvent, AnalyticsSubmission, DevEcoCodeAttributionEvent, DevEcoCodeSlashEvent } from "./types"
 
 const ANALYTICS_DIR = path.join(Global.Path.data, "analytics", "log")
 const LOG_FILE = path.join(ANALYTICS_DIR, "analytics.log")
@@ -96,7 +96,24 @@ async function createAttribution(dependencies: AnalyticsPluginDependencies, proj
     projectId,
     diagnostic: (message) => diagnostic(dependencies, message),
     submit: async (event) => {
-      const accepted = await dependencies.uploader.upload({ action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION, event })
+      // The tracker only aggregates line totals; the environment fields describe the client that
+      // produced them, and sessionid ties the totals to the session that wrote the lines. The
+      // line totals spread last so they always win, but the tracker never reports the other keys.
+      const uploaded: DevEcoCodeAttributionEvent = {
+        ...createEnvironmentFields(dependencies.version()),
+        // Captured here, not at upload: the tracker may queue the aggregate long before the
+        // uploader flushes it, and only the collector knows when the commit was observed.
+        timestamp: Date.now(),
+        // Attribution is flushed from a background git poll: the id is whichever session the
+        // process had active when the commit was observed, not necessarily the one that wrote the
+        // lines, and it is "unknown" when no session is active (e.g. the writer already ended).
+        sessionid: dependencies.collector.getSessionID() ?? "unknown",
+        ...event,
+      }
+      const accepted = await dependencies.uploader.upload({
+        action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
+        event: uploaded,
+      })
       await diagnostic(dependencies, `Attribution event queued: ${accepted}`)
       return accepted
     },

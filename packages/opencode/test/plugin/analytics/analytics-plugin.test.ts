@@ -13,8 +13,14 @@ import { testEffect } from "../../lib/effect"
 import { createAnalyticsPlugin } from "@/plugin/analytics/analytics-plugin"
 import type { CodeAttributionTracker, CodeAttributionTrackerOptions } from "@/plugin/analytics/code-attribution"
 import { SessionCollector, type SessionStart } from "@/plugin/analytics/collector"
+import { createEnvironmentFields } from "@/plugin/analytics/events"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
-import type { AiCodeAttributionEvent, AiSessionEvent, AnalyticsSubmission } from "@/plugin/analytics/types"
+import type {
+  AiSessionEvent,
+  AnalyticsSubmission,
+  CodeAttributionTotals,
+  DevEcoCodeAttributionEvent,
+} from "@/plugin/analytics/types"
 
 const builtEvent: AiSessionEvent = {
   sourceType: "DevEco-Code-Cli",
@@ -49,6 +55,31 @@ const builtEvent: AiSessionEvent = {
   finalBuildElapsed: null,
 }
 
+// What the tracker aggregates: the four buckets for one project. The plugin merges it with the
+// environment fields and the session id of the client that is emitting.
+const attributionTotals: CodeAttributionTotals = {
+  projectId: "550e8400-e29b-41d4-a716-446655440000",
+  aiGeneratedLines: 1,
+  humanGeneratedLines: 2,
+  unknownGeneratedLines: 3,
+  totalGeneratedLines: 6,
+}
+
+// Build the complete wire event from the production environment helper with the harness version so
+// the assertion pins both the merge order and every key the validator requires.
+function attributionEvent(
+  totals: CodeAttributionTotals,
+  sessionid: string,
+  timestamp: number = expect.any(Number) as unknown as number,
+): DevEcoCodeAttributionEvent {
+  return {
+    ...createEnvironmentFields("1.2.3"),
+    timestamp,
+    sessionid,
+    ...totals,
+  }
+}
+
 function createHarnessState() {
   return {
     loggedIn: true,
@@ -56,6 +87,9 @@ function createHarnessState() {
     shouldCollect: true,
     diagnosticThrows: false,
     active: false,
+    // Overrides the session id the collector reports while it is set; null keeps the
+    // "only a started session has an id" behaviour.
+    sessionID: null as string | null,
     diagnostics: [] as string[],
   }
 }
@@ -112,7 +146,7 @@ function createCollector(state: ReturnType<typeof createHarnessState>, calls: Re
     recordBuildExecution: calls.recordBuildExecution,
     markWorkflow: calls.markWorkflow,
     recordDevecoCliCommand: calls.recordDevecoCliCommand,
-    getSessionID: () => (state.active ? "session-1" : null),
+    getSessionID: () => state.sessionID ?? (state.active ? "session-1" : null),
     buildEvent: calls.buildEvent,
     clear: () => {
       state.active = false
@@ -168,6 +202,7 @@ function createHarness() {
     setJwtExpired: (value: boolean | null) => (state.jwtExpired = value),
     setDiagnosticThrows: (value: boolean) => (state.diagnosticThrows = value),
     setShouldCollect: (value: boolean) => (state.shouldCollect = value),
+    setSessionID: (value: string | null) => (state.sessionID = value),
   }
 }
 
@@ -282,7 +317,7 @@ test("logout before session idle clears active analytics without finalizing", as
   expect(harness.isActive()).toBe(false)
 })
 
-test("initializes code attribution with the existing project id and minimal uploader event", async () => {
+test("initializes code attribution with the existing project id and the full uploaded event", async () => {
   const harness = createHarness()
   await harness.plugin({ directory: "/tmp/project" } as never)
 
@@ -292,19 +327,44 @@ test("initializes code attribution with the existing project id and minimal uplo
   expect(options?.projectId).toBe("550e8400-e29b-41d4-a716-446655440000")
   expect(harness.setAttributionEnabled).toHaveBeenCalledWith(true)
 
-  const event: AiCodeAttributionEvent = {
-    projectId: "550e8400-e29b-41d4-a716-446655440000",
-    aiGeneratedLines: 1,
-    humanGeneratedLines: 2,
-    unknownGeneratedLines: 3,
-    totalGeneratedLines: 6,
-  }
-  await options?.submit(event)
+  await options?.submit(attributionTotals)
+  // No session was started, so getSessionID() is null and the session falls back to "unknown".
   expect(harness.upload).toHaveBeenCalledWith({
     action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
-    event,
+    event: attributionEvent(attributionTotals, "unknown"),
   })
   expect(harness.diagnostics).toContain("Attribution event queued: true")
+})
+
+test("propagates the live session id into the attribution event", async () => {
+  const harness = createHarness()
+  harness.setSessionID("ses_x")
+  await startSession(harness, "openai")
+
+  const options = harness.codeAttribution.mock.calls[0]?.[0]
+  await options?.submit(attributionTotals)
+
+  expect(harness.upload).toHaveBeenCalledTimes(1)
+  expect(harness.upload).toHaveBeenCalledWith({
+    action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
+    event: attributionEvent(attributionTotals, "ses_x"),
+  })
+})
+
+test("falls back to unknown when the session that wrote the lines already ended", async () => {
+  const harness = createHarness()
+  const hooks = await startSession(harness, "openai")
+  await finishSession(hooks)
+  expect(harness.isActive()).toBe(false)
+
+  const options = harness.codeAttribution.mock.calls[0]?.[0]
+  await options?.submit(attributionTotals)
+
+  // The attribution flush runs on a background git poll, after the session may be gone.
+  expect(harness.upload).toHaveBeenLastCalledWith({
+    action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
+    event: attributionEvent(attributionTotals, "unknown"),
+  })
 })
 
 test("brackets only mutating AI tools with attribution checkpoints", async () => {

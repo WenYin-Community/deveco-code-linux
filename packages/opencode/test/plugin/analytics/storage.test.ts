@@ -5,10 +5,11 @@ import { Global } from "@opencode-ai/core/global"
 import { LocalCrypto } from "@/security/local-crypto"
 import { ANALYTICS_ACTION } from "@/plugin/analytics/types"
 import type {
-  AiCodeAttributionEvent,
   AiSessionEvent,
   AnalyticsAction,
   BuildProjectAnalyticsEvent,
+  CodeAttributionTotals,
+  DevEcoCodeAttributionEvent,
   DevEcoCodeSlashEvent,
 } from "@/plugin/analytics/types"
 import {
@@ -68,7 +69,44 @@ function event(): AiSessionEvent {
   }
 }
 
-function attributionEvent(): AiCodeAttributionEvent {
+function attributionEvent(): DevEcoCodeAttributionEvent {
+  return {
+    sourceType: "DevEco-Code-Cli",
+    sourceVersion: "1.2.3",
+    os_arch: "arm64",
+    os_name: process.platform,
+    os_version: "os-version",
+    timestamp: 1_730_000_000_000,
+    sessionid: "session-attribution",
+    projectId: "550e8400-e29b-41d4-a716-446655440000",
+    aiGeneratedLines: 3,
+    humanGeneratedLines: 2,
+    unknownGeneratedLines: 1,
+    totalGeneratedLines: 6,
+  }
+}
+
+// A full shape that lost one of the environment keys: it must be rejected, not accepted through the
+// legacy 5-key branch just because the totals are still valid.
+function withoutSessionid(): Omit<DevEcoCodeAttributionEvent, "sessionid"> {
+  return {
+    sourceType: "DevEco-Code-Cli",
+    sourceVersion: "1.2.3",
+    os_arch: "arm64",
+    os_name: process.platform,
+    os_version: "os-version",
+    timestamp: 1_730_000_000_000,
+    projectId: "550e8400-e29b-41d4-a716-446655440000",
+    aiGeneratedLines: 3,
+    humanGeneratedLines: 2,
+    unknownGeneratedLines: 1,
+    totalGeneratedLines: 6,
+  }
+}
+
+// What builds before the environment fields landed queued: the validator still has to read it,
+// because a rejected entry is silently dropped from the pending queue.
+function legacyAttributionEvent(): CodeAttributionTotals {
   return {
     projectId: "550e8400-e29b-41d4-a716-446655440000",
     aiGeneratedLines: 3,
@@ -77,6 +115,25 @@ function attributionEvent(): AiCodeAttributionEvent {
     totalGeneratedLines: 6,
   }
 }
+
+const LEGACY_ATTRIBUTION_KEYS = [
+  "aiGeneratedLines",
+  "humanGeneratedLines",
+  "projectId",
+  "totalGeneratedLines",
+  "unknownGeneratedLines",
+]
+
+const FULL_ATTRIBUTION_KEYS = [
+  ...LEGACY_ATTRIBUTION_KEYS,
+  "os_arch",
+  "os_name",
+  "os_version",
+  "sessionid",
+  "sourceType",
+  "sourceVersion",
+  "timestamp",
+].sort()
 
 test("schema upgrades discard old pending events without migration", async () => {
   await using tmp = await tmpdir()
@@ -480,7 +537,7 @@ test("current-schema queue rejects ai_session details with forbidden fields", as
   expect((await loadStorage()).pendingEvents).toEqual([])
 })
 
-test("ai code attribution queue accepts only the five-field aggregate", async () => {
+test("ai code attribution queue round-trips the full eleven-field event", async () => {
   await using tmp = await tmpdir()
   Global.Path.data = tmp.path
 
@@ -492,16 +549,16 @@ test("ai code attribution queue accepts only the five-field aggregate", async ()
   const pending = await getPendingEvents()
   expect(pending).toHaveLength(1)
   expect(pending[0]?.event).toEqual(attributionEvent())
-  expect(Object.keys(pending[0]?.event ?? {}).sort()).toEqual([
-    "aiGeneratedLines",
-    "humanGeneratedLines",
-    "projectId",
-    "totalGeneratedLines",
-    "unknownGeneratedLines",
-  ])
+  expect(Object.keys(pending[0]?.event ?? {}).sort()).toEqual(FULL_ATTRIBUTION_KEYS)
+
+  // The uploader reads through preparePendingBatch, which drops whatever isPendingAnalyticsEvent
+  // rejects: a shape the validator disagrees with would be silently lost at upload time.
+  const batch = await preparePendingBatch(1)
+  expect(batch).toHaveLength(1)
+  expect(batch[0]?.event).toEqual(attributionEvent())
 })
 
-test("ai code attribution queue rejects invalid totals and extra local fields", async () => {
+test("ai code attribution queue still reads the legacy five-field aggregate", async () => {
   await using tmp = await tmpdir()
   Global.Path.data = tmp.path
   const file = path.join(tmp.path, "analytics", "analytics.json")
@@ -512,11 +569,7 @@ test("ai code attribution queue rejects invalid totals and extra local fields", 
       pendingEvents: [
         {
           action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
-          event: {
-            ...attributionEvent(),
-            totalGeneratedLines: 7,
-            commitSha: "private",
-          },
+          event: legacyAttributionEvent(),
           uid: "uid-1",
           queueId: "queue-1",
           sealed: false,
@@ -527,7 +580,48 @@ test("ai code attribution queue rejects invalid totals and extra local fields", 
   )
   await fs.writeFile(file, JSON.stringify(encrypted))
 
-  expect((await loadStorage()).pendingEvents).toEqual([])
+  const pending = await preparePendingBatch(1)
+  expect(pending).toHaveLength(1)
+  expect(pending[0]?.event).toEqual(legacyAttributionEvent())
+  expect(Object.keys(pending[0]?.event ?? {}).sort()).toEqual(LEGACY_ATTRIBUTION_KEYS)
+})
+
+test("ai code attribution queue rejects invalid totals and unknown extra keys for both shapes", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const file = path.join(tmp.path, "analytics", "analytics.json")
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const pending = (event: object, queueId: string) => ({
+    action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
+    event,
+    uid: "uid-1",
+    queueId,
+    sealed: false,
+  })
+  const encrypted = LocalCrypto.encryptForLocalStorage(
+    JSON.stringify({
+      schemaVersion: ANALYTICS_SCHEMA_VERSION,
+      pendingEvents: [
+        // the full shape must still satisfy total = ai + human + unknown
+        pending({ ...attributionEvent(), totalGeneratedLines: 7 }, "queue-full-total"),
+        // ...and must not smuggle extra fields in
+        pending({ ...attributionEvent(), commitSha: "private" }, "queue-full-extra"),
+        pending({ ...legacyAttributionEvent(), totalGeneratedLines: 7 }, "queue-legacy-total"),
+        pending({ ...legacyAttributionEvent(), commitSha: "private" }, "queue-legacy-extra"),
+        // a half-migrated full shape must not fall back to the legacy branch
+        pending(withoutSessionid(), "queue-full-missing-session"),
+        pending({ ...attributionEvent(), sourceType: "Other" }, "queue-full-source"),
+        pending({ ...attributionEvent(), sessionid: 42 }, "queue-full-session-number"),
+        pending({ ...attributionEvent(), timestamp: "now" }, "queue-full-timestamp-string"),
+        pending({ ...attributionEvent(), timestamp: -1 }, "queue-full-timestamp-negative"),
+      ],
+      lastFlush: 1,
+    }),
+  )
+  await fs.writeFile(file, JSON.stringify(encrypted))
+
+  // Both shapes must be dropped entry by entry, not accepted as "close enough".
+  expect(await preparePendingBatch(10)).toEqual([])
 })
 
 function buildProjectEvent(): BuildProjectAnalyticsEvent {

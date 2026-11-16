@@ -269,28 +269,49 @@ function isLineCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
+// The five totals every attribution event carries, whether it is the current full shape or the
+// legacy aggregate.
+const ATTRIBUTION_TOTAL_KEYS = [
+  "projectId",
+  "aiGeneratedLines",
+  "humanGeneratedLines",
+  "unknownGeneratedLines",
+  "totalGeneratedLines",
+] as const
+
+// Environment and session keys of the current full shape (sourceType is checked by its own guard).
+const ATTRIBUTION_ENV_STRING_FIELDS = ["sourceVersion", "os_arch", "os_name", "os_version", "sessionid"] as const
+
+function hasValidAttributionTotals(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.projectId === "string" &&
+    isLineCount(value.aiGeneratedLines) &&
+    isLineCount(value.humanGeneratedLines) &&
+    isLineCount(value.unknownGeneratedLines) &&
+    isLineCount(value.totalGeneratedLines) &&
+    value.totalGeneratedLines > 0 &&
+    value.totalGeneratedLines ===
+      value.aiGeneratedLines + value.humanGeneratedLines + value.unknownGeneratedLines
+  )
+}
+
+// Two shapes stay readable from the queue: the current full event (five environment fields +
+// sessionid + the five totals) and the legacy 5-key totals an older build queued before the
+// environment fields landed. The emitter always writes the full shape; tolerance here only keeps
+// events from older builds uploading. Do NOT bump ANALYTICS_SCHEMA_VERSION: a bump discards the
+// whole pending queue.
 function isAiCodeAttributionEvent(value: unknown): value is AiCodeAttributionEvent {
-  if (
-    !isRecord(value) ||
-    !hasExactKeys(value, [
-      "projectId",
-      "aiGeneratedLines",
-      "humanGeneratedLines",
-      "unknownGeneratedLines",
-      "totalGeneratedLines",
-    ]) ||
-    typeof value.projectId !== "string" ||
-    !isLineCount(value.aiGeneratedLines) ||
-    !isLineCount(value.humanGeneratedLines) ||
-    !isLineCount(value.unknownGeneratedLines) ||
-    !isLineCount(value.totalGeneratedLines)
-  ) {
+  if (!isRecord(value) || !hasValidAttributionTotals(value)) {
     return false
   }
-
+  if (hasExactKeys(value, ATTRIBUTION_TOTAL_KEYS)) {
+    return true
+  }
   return (
-    value.totalGeneratedLines > 0 &&
-    value.totalGeneratedLines === value.aiGeneratedLines + value.humanGeneratedLines + value.unknownGeneratedLines
+    hasExactKeys(value, ["sourceType", "timestamp", ...ATTRIBUTION_ENV_STRING_FIELDS, ...ATTRIBUTION_TOTAL_KEYS]) &&
+    isSlashCommandTimestamp(value.timestamp) &&
+    isAnalyticsSourceType(value.sourceType) &&
+    hasStrings(value, ATTRIBUTION_ENV_STRING_FIELDS)
   )
 }
 

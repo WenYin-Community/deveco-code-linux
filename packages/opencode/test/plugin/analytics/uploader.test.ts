@@ -58,11 +58,18 @@ test("Huawei trace omits the local queue uid from the request payload", () => {
   expect(Object.keys(payload).sort()).toEqual(["action", "detail", "timestamp"])
 })
 
-test("code attribution sends exactly the project id and four final line totals", () => {
+test("code attribution sends the environment and session fields with the four final line totals", () => {
   const queued: QueuedAnalyticsSubmission = {
     action: ANALYTICS_ACTION.AI_CODE_ATTRIBUTION,
     uid: "record-uid",
     event: {
+      sourceType: "DevEco-Code-Cli",
+      sourceVersion: "1.2.3",
+      os_arch: "arm64",
+      os_name: process.platform,
+      os_version: "os-version",
+      timestamp: 1_730_000_000_000,
+      sessionid: "session-attribution",
       projectId: "550e8400-e29b-41d4-a716-446655440000",
       aiGeneratedLines: 3,
       humanGeneratedLines: 2,
@@ -77,7 +84,14 @@ test("code attribution sends exactly the project id and four final line totals",
   expect(Object.keys(JSON.parse(payload.detail)).sort()).toEqual([
     "aiGeneratedLines",
     "humanGeneratedLines",
+    "os_arch",
+    "os_name",
+    "os_version",
     "projectId",
+    "sessionid",
+    "sourceType",
+    "sourceVersion",
+    "timestamp",
     "totalGeneratedLines",
     "unknownGeneratedLines",
   ])
