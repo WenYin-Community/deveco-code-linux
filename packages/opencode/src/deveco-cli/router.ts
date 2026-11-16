@@ -66,6 +66,15 @@ export async function executeDevecoCliProxy(
   runner: CliRunner = runBundledDevecoCli,
   dependencies: ProxyDependencies = {},
 ): Promise<CliResult & { fullOutput?: string }> {
+  if (args[0] === "verify") {
+    return {
+      stdout: "",
+      stderr:
+        "The `devecocli verify` command group is disabled in DevEco Code. Use the `verify_ui`, `get_ui_verification_log`, and `save_ui_screenshot` tools instead.\n",
+      exitCode: 1,
+    }
+  }
+
   // The native CLI rewrites trailing `help` to `--help` before parsing commands.
   if (args.length >= 2 && args.at(-1) === "help") args = [...args.slice(0, -1), "--help"]
 

@@ -41,6 +41,37 @@ const EMULATORS = JSON.stringify([
 const UPDATE_NOTICE = "New version 1.3.0 available, run `devecocli update` to upgrade"
 
 describe("devecocli proxy router", () => {
+  test.each([
+    { args: ["verify"] },
+    { args: ["verify", "init"] },
+    { args: ["verify", "log"] },
+    { args: ["verify", "screenshot"] },
+    { args: ["verify", "future-subcommand"] },
+    { args: ["verify", "--help"] },
+    { args: ["verify", "init", "help"] },
+    { args: ["verify", "--device", "127.0.0.1:5555", "init"] },
+  ])("blocks the verify command group before invoking the CLI: %j", async (input) => {
+    const cli = runner({})
+    const result = await executeDevecoCliProxy([...input.args], "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([])
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("disabled in DevEco Code")
+    expect(result.stderr).toContain("verify_ui")
+    expect(result.stderr).toContain("get_ui_verification_log")
+    expect(result.stderr).toContain("save_ui_screenshot")
+  })
+
+  test("preserves verify as an argument to another command", async () => {
+    const args = ["docs", "search", "verify"]
+    const cli = runner({ "docs search verify": { stdout: "search results" } })
+    const result = await executeDevecoCliProxy(args, "C:\\project", cli.run)
+
+    expect(cli.calls).toEqual([args])
+    expect(result).toEqual({ stdout: "search results", stderr: "", exitCode: 0 })
+  })
+
   test("passes unrelated commands through unchanged", async () => {
     const cli = runner({ "device list": { stdout: "raw" } })
     const result = await executeDevecoCliProxy(["device", "list"], "C:\\project", cli.run)
