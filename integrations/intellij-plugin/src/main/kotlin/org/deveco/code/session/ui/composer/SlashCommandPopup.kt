@@ -37,6 +37,11 @@ private val CLIENT_COMMANDS = mapOf(
     "new" to "slash.command.new.desc",
 )
 
+// Commands the backend registers but the product does not expose yet: hidden
+// from autocomplete only. Typed "/goal ..." still goes through the send path
+// unchanged (controller.commands keeps the entry), so echo/replay stay correct.
+private val HIDDEN_COMMANDS = setOf("goal")
+
 // Server-side commands come from the server list (the single source of truth for
 // what can actually execute); KNOWN_COMMANDS only localizes the description of
 // names we ship bundle keys for, so a stale entry here can never offer a dead command.
@@ -98,7 +103,9 @@ private fun buildFilterItems(filter: String, commands: List<CommandChoice>): Lis
         }
     val serverCommands = commands
         .filter { cmd ->
-            cmd.name.lowercase().startsWith(filter) && cmd.name.lowercase() !in CLIENT_COMMANDS
+            cmd.name.lowercase().let {
+                it.startsWith(filter) && it !in CLIENT_COMMANDS && it !in HIDDEN_COMMANDS
+            }
         }
         .sortedBy { it.kind.ordinal }
         .map { cmd ->
