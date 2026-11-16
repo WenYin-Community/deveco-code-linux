@@ -354,7 +354,7 @@ private fun SessionContent(
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
                                 .fillMaxHeight()
-                                .padding(end = 2.dp)
+                                .padding(end = 2.dp, bottom = 20.dp)
                                 .hoverable { scrollbarHovered.value = it }
                                 .graphicsLayer { alpha = scrollbarAlpha },
                             style = ScrollbarStyle(
@@ -362,8 +362,8 @@ private fun SessionContent(
                                 thickness = 6.dp,
                                 shape = RoundedCornerShape(3.dp),
                                 hoverDurationMillis = 300,
-                                unhoverColor = JBColor(0x33000000, 0x33FFFFFF).toComposeColor(),
-                                hoverColor = JBColor(0x66000000, 0x66FFFFFF).toComposeColor(),
+                                unhoverColor = DevEcoTheme.scrollbarThumb,
+                                hoverColor = DevEcoTheme.scrollbarThumbHover,
                             ),
                         )
                         if (!welcomeMode) {
@@ -637,7 +637,10 @@ private fun MessageList(
 
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        // Reserve a 20dp empty band above the composer: the viewport clips
+        // 20dp short so no message body ever renders into it; the list
+        // scrollbar and the scroll-to-latest button inset by the same amount.
+        modifier = Modifier.fillMaxSize().padding(bottom = 20.dp),
         contentPadding = PaddingValues(bottom = 30.dp),
     ) {
         itemsIndexed(groups, key = { _, group -> group.parent.id }) { groupIndex, group ->
@@ -1042,7 +1045,7 @@ private fun ScrollToBottomButton(
     scope: CoroutineScope,
 ) {
     Box(
-        modifier.padding(bottom = 8.dp).size(28.dp)
+        modifier.padding(bottom = 20.dp).size(28.dp)
             .clip(CircleShape).background(card)
             .border(1.dp, muted.copy(alpha = 0.35f), CircleShape)
             .clickable {

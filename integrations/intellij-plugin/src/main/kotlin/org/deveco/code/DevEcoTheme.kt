@@ -63,13 +63,11 @@ object DevEcoTheme {
     val hoveredSessionBg: Color get() = JBColor(0xEBECF0, 0x393B40).toComposeColor()
     val previewedFileBg: Color get() = JBColor(0xD4E2FF, 0x2B4A7E).toComposeColor()
     val previewedFileFg: Color get() = JBColor(0x1E1F22, 0xFFFFFF).toComposeColor()
-    // Swing-side tooltip colors, cached: JBColor resolves against the active LAF
-    // at paint time, so one instance stays correct across theme switches (the
-    // Compose Color getters must remain getters — toComposeColor() snapshots).
-    val tooltipBackground: JBColor = JBColor(0x27282E, 0x393B40)
-    val tooltipForeground: JBColor = JBColor(0xFFFFFF, 0xFFFFFF)
-    val actionTooltipBackground: Color get() = JBColor(0xF5F5F5, 0x2B2B2B).toComposeColor()
-    val actionTooltipForeground: Color get() = JBColor(0x1E1F22, 0xDFE1E5).toComposeColor()
+    // Copy-button hover fill: same surface formula as the message attachment chips.
+    val copyActionHoverBackground: Color get() = muted.copy(alpha = 0.12f)
+    // Shared scrollbar thumb colors: message list and composer stay identical.
+    val scrollbarThumb: Color get() = JBColor(0xD9D9D9, 0x48494B).toComposeColor()
+    val scrollbarThumbHover: Color get() = JBColor(0x7B7C7D, 0x595A5C).toComposeColor()
 
     // Message-specific tokens
     val messageBackground: Color get() = JBColor.namedColor("Editor.background", 0xFFFFFF).toComposeColor()

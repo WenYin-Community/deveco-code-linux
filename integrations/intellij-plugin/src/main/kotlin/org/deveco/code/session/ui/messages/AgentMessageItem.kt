@@ -1,5 +1,6 @@
 package org.deveco.code.session.ui.messages
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,15 +21,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
-import androidx.compose.ui.window.PopupPositionProvider
 import kotlinx.coroutines.delay
 import org.deveco.code.DevEcoIcons
 import org.deveco.code.DevEcoTheme
@@ -40,6 +34,7 @@ import org.jetbrains.jewel.markdown.Markdown
 import org.jetbrains.jewel.markdown.extensions.LocalMarkdownBlockRenderer
 import org.jetbrains.jewel.ui.component.Icon
 import org.jetbrains.jewel.ui.component.Text
+import org.jetbrains.jewel.ui.component.Tooltip
 import org.jetbrains.jewel.ui.icon.PathIconKey
 
 private val CheckmarkIconKey = PathIconKey("/icons/checkmark.svg", DevEcoTheme::class.java)
@@ -226,6 +221,7 @@ private fun CopyActionButtons(
         },
         tint = muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
         hoverTint = DevEcoTheme.linkAccent,
+        hoverBackground = DevEcoTheme.copyActionHoverBackground,
         tooltipText = MyMessageBundle.message("message.tooltip.copy"),
     ) { _ ->
         if (copied) {
@@ -314,6 +310,7 @@ private fun FeedbackActionButtons(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ActionButton(
     onClick: () -> Unit,
@@ -321,21 +318,18 @@ internal fun ActionButton(
     hoverTint: Color,
     enabled: Boolean = true,
     tooltipText: String? = null,
+    hoverBackground: Color? = null,
     content: @Composable (Color) -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
-    val bgColor = if (enabled && hovered) hoverTint.copy(alpha = 0.12f) else Color.Transparent
+    val bgColor = if (enabled && hovered) (hoverBackground ?: hoverTint.copy(alpha = 0.12f)) else Color.Transparent
     val contentColor = when {
         !enabled -> tint.copy(alpha = 0.4f)
         hovered -> hoverTint
         else -> tint
     }
-    val showTooltip = enabled && hovered && tooltipText != null
-
-    // Anchor layout for the tooltip popup: wrapping keeps the popup anchored to the
-    // button itself instead of the caller's row, so the tooltip centers on the button.
-    Box {
+    val button = @Composable {
         Box(
             Modifier
                 .size(DevEcoTheme.actionButtonSize.dp)
@@ -353,56 +347,14 @@ internal fun ActionButton(
         ) {
             content(contentColor)
         }
-
-        if (showTooltip) {
-            TooltipPopup(tooltipText!!)
-        }
     }
-}
-
-@Composable
-private fun TooltipPopup(text: String) {
-    Popup(
-        popupPositionProvider = TooltipPositionProvider,
-        properties = PopupProperties(focusable = false),
-    ) {
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(DevEcoTheme.actionTooltipBackground)
-                .border(1.dp, DevEcoTheme.popupBorder, RoundedCornerShape(4.dp))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = text,
-                color = DevEcoTheme.actionTooltipForeground,
-                fontSize = 11.sp,
-                fontFamily = FontFamily.SansSerif,
-            )
-        }
-    }
-}
-
-private object TooltipPositionProvider : PopupPositionProvider {
-    override fun calculatePosition(
-        anchorBounds: IntRect,
-        windowSize: IntSize,
-        layoutDirection: LayoutDirection,
-        popupContentSize: IntSize,
-    ): IntOffset {
-        // Show below the button, horizontally centered on it; flip above when the
-        // window bottom leaves no room, instead of clamping onto the button itself.
-        val x = anchorBounds.left + anchorBounds.width / 2 - popupContentSize.width / 2
-        val yBelow = anchorBounds.bottom + 6
-        val y = if (yBelow + popupContentSize.height <= windowSize.height) {
-            yBelow
-        } else {
-            (anchorBounds.top - popupContentSize.height - 6).coerceAtLeast(0)
-        }
-        return IntOffset(
-            x.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
-            y,
-        )
+    // Platform-native tooltip: Jewel's IntUi bridge feeds it the IDE's own show
+    // delays, ToolTip.* colors and corner radius, so timing, placement and look
+    // match the Swing tooltips elsewhere in the IDE.
+    if (enabled && tooltipText != null) {
+        Tooltip(tooltip = { Text(tooltipText, fontSize = 12.sp) }) { button() }
+    } else {
+        button()
     }
 }
 

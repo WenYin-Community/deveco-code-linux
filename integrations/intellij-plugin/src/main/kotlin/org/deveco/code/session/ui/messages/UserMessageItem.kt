@@ -147,16 +147,6 @@ internal fun UserMessage(
                 LaunchedEffect(overlayVisible) { onOverlayLift?.invoke(overlayVisible) }
                 DisposableEffect(Unit) { onDispose { onOverlayLift?.invoke(false) } }
 
-                var showCopyTooltip by remember { mutableStateOf(false) }
-                LaunchedEffect(copyHovered) {
-                    if (copyHovered) {
-                        delay(500L)
-                        showCopyTooltip = true
-                    } else {
-                        showCopyTooltip = false
-                    }
-                }
-
                 // Keyed on tick so the relative time re-formats every minute; reading
                 // tick here (not as a bare statement) registers the snapshot read.
                 val now = remember(tick) { System.currentTimeMillis() }
@@ -221,7 +211,8 @@ internal fun UserMessage(
                             },
                             tint = DevEcoTheme.muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
                             hoverTint = DevEcoTheme.linkAccent,
-                            tooltipText = if (overlayVisible && showCopyTooltip) MyMessageBundle.message("message.tooltip.copy") else null,
+                            hoverBackground = DevEcoTheme.copyActionHoverBackground,
+                            tooltipText = if (overlayVisible) MyMessageBundle.message("message.tooltip.copy") else null,
                         ) { _ ->
                             if (copied) {
                                 Icon(

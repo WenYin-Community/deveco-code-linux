@@ -97,7 +97,9 @@ internal fun MarkdownWithCodeBlocks(
                                 .padding(vertical = 8.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .border(3.dp, DevEcoTheme.codeBlockBorder, RoundedCornerShape(8.dp))
-                                .background(DevEcoTheme.codeBlockBg),
+                                .background(DevEcoTheme.codeBlockBg)
+                                // Keep content off the 3dp stroke, which draws beneath it.
+                                .padding(3.dp),
                         ) {
                             Markdown(
                                 markdownCode,

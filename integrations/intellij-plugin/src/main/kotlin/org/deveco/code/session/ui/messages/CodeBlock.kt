@@ -104,6 +104,10 @@ internal fun CodeBlockWrapper(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .border(3.dp, DevEcoTheme.codeBlockBorder, RoundedCornerShape(8.dp))
+                    // Inset the scroll viewport inside the 3dp stroke: the border
+                    // draws beneath the content, so without this inset scrolled code
+                    // overlaps the semi-transparent stroke at the edges.
+                    .padding(3.dp)
                     .verticalScroll(scrollState),
             ) {
                 // Measure natural content height inside verticalScroll so it's not
