@@ -13,6 +13,7 @@ import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
@@ -148,12 +149,17 @@ export function devecoAffinityHeaders(
   input: { sessionID: string; parentSessionID?: string; messageID: string },
   projectID: string | undefined,
 ): Record<string, string> {
+  const source = Runtime.current.analyticsSource
+  const pluginVersion = process.env.DEVECO_PLUGIN_VERSION?.trim() ?? "unknown"
   return {
     ...(projectID ? { "x-deveco-project": projectID } : {}),
     "x-deveco-session": input.sessionID,
     ...(input.parentSessionID ? { "x-deveco-parent-session": input.parentSessionID } : {}),
     "x-deveco-task": input.messageID,
-    "x-deveco-client": `deveco-code@${InstallationVersion}`,
+    "x-deveco-client":
+      source.sourceType === "DevEco-Code-Plugin"
+        ? `deveco-code-plugin@${pluginVersion}`
+        : `deveco-code@${InstallationVersion}`,
     "User-Agent": USER_AGENT,
   }
 }

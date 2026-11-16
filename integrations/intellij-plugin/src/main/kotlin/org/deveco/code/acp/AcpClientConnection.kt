@@ -11,11 +11,13 @@ import com.agentclientprotocol.common.SessionCreationParameters
 import com.agentclientprotocol.model.*
 import com.agentclientprotocol.protocol.*
 import com.agentclientprotocol.transport.StdioTransport
+import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.extensions.PluginId
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.produceIn
@@ -168,6 +170,9 @@ internal class AcpClientConnection(
         env["DEVECO_STORAGE_ROOT"] = devecoStorageRoot.toString()
         env["DEVECO_SOURCE_TYPE"] = "DevEco-Code-Plugin"
         env["DEVECO_SOURCE_VERSION"] = ApplicationInfo.getInstance().fullVersion
+        env["DEVECO_PLUGIN_VERSION"] = PluginManagerCore.getPlugin(
+            PluginId.getId("org.deveco.code.deveco-code-jetbrains-plugin"),
+        )?.version ?: "unknown"
         // DevEco Studio signs the agreements itself; a revision the CLI observed
         // before that could never be cleared in-process.
         //
