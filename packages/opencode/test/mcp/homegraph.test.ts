@@ -191,6 +191,72 @@ describe("homegraph wiring", () => {
     expect(hgPart).not.toContain("homegraph_node")
     expect(hgPart).not.toContain("violation")
   })
+
+  // Mirrors the postinstall integration test in test/tool/lib/deveco-cli.test.ts:
+  // the runtime resolves the install root from the PLATFORM package executable,
+  // so the marker must be written to BOTH the meta root and the platform root.
+  test("published postinstall writes the homegraph marker to main AND platform roots", async () => {
+    const platform = process.platform === "win32" ? "windows" : process.platform
+    const platformPackage = `deveco-code-${platform}-${process.arch}`
+    const modules = path.join(tmpRoot, "postinstall-layout", "node_modules", "@deveco")
+    const mainRoot = path.join(modules, "deveco-code")
+    const cliRoot = path.join(modules, "deveco-cli")
+    const hgRoot = path.join(mainRoot, "node_modules", "homegraph")
+    const platformRoot = path.join(modules, platformPackage)
+    const sourceBinary = path.join(platformRoot, "bin", process.platform === "win32" ? "deveco.exe" : "deveco")
+    const cliEntry = path.join(cliRoot, "dist", "cli.js")
+    const hgEntry = path.join(hgRoot, "dist", "bin", "homegraph.js")
+
+    await fs.promises.mkdir(path.dirname(sourceBinary), { recursive: true })
+    await fs.promises.mkdir(path.dirname(cliEntry), { recursive: true })
+    await fs.promises.mkdir(path.dirname(hgEntry), { recursive: true })
+    await fs.promises.copyFile(process.execPath, sourceBinary)
+    if (process.platform !== "win32") await fs.promises.chmod(sourceBinary, 0o755)
+    await fs.promises.writeFile(cliEntry, "console.log('local')\n", "utf8")
+    await fs.promises.writeFile(path.join(cliRoot, "package.json"), JSON.stringify({ name: "@deveco/deveco-cli" }), "utf8")
+    await fs.promises.writeFile(hgEntry, "#!/usr/bin/env node\nconsole.log('local')\n", "utf8")
+    await fs.promises.writeFile(path.join(hgRoot, "package.json"), JSON.stringify({ name: "homegraph" }), "utf8")
+    await fs.promises.copyFile(
+      path.join(import.meta.dir, "../../script/postinstall.mjs"),
+      path.join(mainRoot, "postinstall.mjs"),
+    )
+    await fs.promises.writeFile(
+      path.join(mainRoot, "package.json"),
+      JSON.stringify({
+        name: "@deveco/deveco-code",
+        dependencies: {
+          homegraph: "1.6.4",
+          "@deveco/deveco-cli": "1.3.4",
+        },
+        optionalDependencies: {
+          [`@deveco/${platformPackage}`]: "1.0.0",
+        },
+      }),
+      "utf8",
+    )
+    await fs.promises.writeFile(
+      path.join(platformRoot, "package.json"),
+      JSON.stringify({ name: `@deveco/${platformPackage}`, version: "1.0.0" }),
+      "utf8",
+    )
+
+    const proc = Bun.spawn({
+      cmd: [process.execPath, path.join(mainRoot, "postinstall.mjs")],
+      cwd: mainRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [exitCode, stderr] = await Promise.all([proc.exited, Bun.readableStreamToText(proc.stderr)])
+    expect(exitCode, stderr).toBe(0)
+
+    const marker = await fs.promises.readFile(path.join(mainRoot, "vendor", ".homegraph-entry"), "utf8")
+    expect(marker.trim()).toBe(hgEntry)
+    const platformMarker = await fs.promises.readFile(
+      path.join(platformRoot, "vendor", ".homegraph-entry"),
+      "utf8",
+    )
+    expect(platformMarker.trim()).toBe(hgEntry)
+  })
 })
 
 describe("homegraph ready", () => {

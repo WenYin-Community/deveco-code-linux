@@ -275,6 +275,7 @@ function main() {
       copyBinary(resolveBinary(name), targetBinary)
       copyVendor(packageDir)
       writeDevecoCliEntryMarker(packageDir)
+      writeHomegraphEntryMarker(packageDir)
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return
