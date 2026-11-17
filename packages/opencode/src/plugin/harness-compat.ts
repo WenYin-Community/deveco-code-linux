@@ -39,12 +39,5 @@ export function adaptHarnessHooks(hooks: Hooks): Hooks {
           agent.prompt += VERIFICATION_POLICY
       }
     },
-    "experimental.chat.system.transform": async (input, output) => {
-      await hooks["experimental.chat.system.transform"]?.(input, output)
-      // Correct an older Harness route-table field without duplicating ArkTS rules.
-      output.system = output.system.map((part) =>
-        part.replaceAll("`name` + `buildFunction` + `pageSourceFile`", "`name` + `buildMethod` + `pageSourceFile`"),
-      )
-    },
   }
 }

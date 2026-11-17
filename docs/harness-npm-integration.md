@@ -105,4 +105,4 @@ CLI Shim 写入用户缓存下的 `harness/cli/<安装路径哈希>/`，支持�
 
 ## 当前分支兼容
 
-`src/plugin/harness-compat.ts` 保留当前分支的 UI 验证策略增量：普通 UI 验证最多两次、无额外最终复验，简化验证由 Skill 管理，并限制无法通过 UI 观察的用例。只在 Harness 命令或 Agent 仍包含旧的三次重试、Phase 2 文本时追加，不恢复原生 SDD 资源。它同时纠正旧规则中的路由表字段 `buildFunction` 为 `buildMethod`。Harness 更新移除旧策略后，重试兼容自动停止应用。DFX 附件白名单由 `src/tool/dfx-files.txt` 提供后备。
+`src/plugin/harness-compat.ts` 保留当前分支的 UI 验证策略增量：普通 UI 验证最多两次、无额外最终复验，简化验证由 Skill 管理，并限制无法通过 UI 观察的用例。只在 Harness 命令或 Agent 仍包含旧的三次重试、Phase 2 文本时追加，不恢复原生 SDD 资源。路由字段与 ArkTS 规则直接沿用 Harness，不做宿主重写。Harness 更新移除旧策略后，重试兼容自动停止应用。DFX 附件白名单由 `src/tool/dfx-files.txt` 提供后备。

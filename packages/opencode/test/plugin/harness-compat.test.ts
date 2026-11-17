@@ -26,12 +26,12 @@ test("preserves replacement workflows and updated Harness policy", async () => {
   expect(config.command?.["spec-verify"].template).toBe("Use the current verification workflow")
 })
 
-test("corrects route-table guidance after Harness transforms the system prompt", async () => {
+test("preserves current route-table guidance after Harness transforms the system prompt", async () => {
   const output = { system: ["Host prompt"] }
   await adaptHarnessHooks({
     "experimental.chat.system.transform": async (_, output) => {
       output.system.push("routerMap: `name` + `buildFunction` + `pageSourceFile`")
     },
   })["experimental.chat.system.transform"]!({ sessionID: "session", model: {} as never }, output)
-  expect(output.system).toEqual(["Host prompt", "routerMap: `name` + `buildMethod` + `pageSourceFile`"])
+  expect(output.system).toEqual(["Host prompt", "routerMap: `name` + `buildFunction` + `pageSourceFile`"])
 })

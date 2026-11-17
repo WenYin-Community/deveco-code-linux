@@ -670,18 +670,18 @@ it.instance(
       expect(names.slice(1)).toEqual([
         "build",
         "debug",
-        "goal",
-        "spec-implementation",
-        "spec-verify",
         "general",
         "explore",
-        "dfx",
         "compaction",
         "title",
         "summary",
         "ask",
         "zebra",
         "alpha",
+        "dfx",
+        "goal",
+        "spec-implementation",
+        "spec-verify",
       ])
     }),
   {
