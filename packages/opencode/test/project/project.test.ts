@@ -969,8 +969,6 @@ describe("Project.fromDirectory directory adoption (upstream semantics)", () => 
       const { project } = yield* projects.fromDirectory(tmp)
       expect(project.id).not.toBe(ProjectV2.ID.global)
 
-      // Create a sibling that satisfies the SQL range /tmp/app ≤ x ≤ /tmp/app\uffff
-      // but is NOT inside the worktree (same prefix, different directory).
       const sibling = path.join(path.dirname(tmp), path.basename(tmp) + "-foreign")
       yield* Effect.addFinalizer(() =>
         Effect.promise(() => $`rm -rf ${sibling}`.quiet().nothrow()).pipe(Effect.ignore),
@@ -1000,8 +998,6 @@ describe("Project.fromDirectory directory adoption (upstream semantics)", () => 
         (yield* db.select().from(SessionTable).where(eq(SessionTable.id, local)).get().pipe(Effect.orDie))
           ?.project_id,
       ).toBe(project.id)
-      // The sibling session must remain under global: its directory shares the
-      // SQL prefix but is not inside the worktree.
       expect(
         (yield* db.select().from(SessionTable).where(eq(SessionTable.id, foreign)).get().pipe(Effect.orDie))
           ?.project_id,
@@ -1016,9 +1012,6 @@ describe("Project.fromDirectory directory adoption (upstream semantics)", () => 
       const tmp = yield* tmpdirScoped({ git: true })
       const { project } = yield* projects.fromDirectory(tmp)
 
-      // Create a subdirectory literally named "..foo" inside the worktree.
-      // path.relative(root, root/..foo) = "..foo" which starts with ".." but
-      // is NOT a parent reference — the boundary check must use the separator.
       const dotfoo = path.join(tmp, "..foo")
       yield* Effect.addFinalizer(() =>
         Effect.promise(() => $`rm -rf ${dotfoo}`.quiet().nothrow()).pipe(Effect.ignore),

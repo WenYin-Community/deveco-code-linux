@@ -426,13 +426,8 @@ export const layer = Layer.effect(
         )
     })
 
-    // Port of opencode's markerless adoption (upstream dev): when a directory
-    // gains a VCS identity, the directory-keyed ("markerless", vcs-null)
-    // projects whose worktree now resolves into it are adopted, and their
-    // sessions follow the resolved identity. The global transit — an empty
-    // repo with no remote and no commits — is a legitimate destination: the
-    // sessions follow it there, and move on once a remote or root commit
-    // gives the repo a stable identity.
+    // Sessions follow the resolved identity when their directory gains a VCS
+    // identity, including the global transit for empty repos.
     const adoptInto = Effect.fn("Project.adoptInto")(function* (
       projectID: ProjectV2.ID,
       directory: string,
@@ -465,11 +460,6 @@ export const layer = Layer.effect(
         ...new Set([previous ?? ProjectV2.ID.global, ProjectV2.ID.global, ...adopted.map((row) => row.id)]),
       ].filter((id) => id !== projectID)
       if (sources.length === 0) return
-      // Coarse SQL range pre-filter, then per-row containment verification:
-      // the range /tmp/app ≤ x ≤ /tmp/app\uffff also matches sibling paths like
-      // /tmp/app-foreign, so re-resolve each row and only migrate sessions that
-      // truly sit inside the resolved worktree (mirrors upstream's projector,
-      // including the per-row path recomputation).
       const adoptedIDs = new Set(adopted.map((row) => row.id))
       const rows = yield* db
         .select({
@@ -496,15 +486,11 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         rows,
         (row) => {
-          // For adopted projects, check the project's worktree (adoption already
-          // verified it resolves into this directory); otherwise check the
-          // session's own directory.
           const checkDir = adoptedIDs.has(row.projectID) ? row.worktree : row.directory
           const target = path.resolve(checkDir)
           const rel = path.relative(resolved, target)
-          // "..foo" is a valid subdirectory: exclude only when the relative
-          // path IS ".." or starts with the parent separator — not merely the
-          // ".." prefix (upstream FSUtil.contains does the same boundary check).
+          // "..foo" is a valid subdirectory: exclude only on the exact ".."
+          // or the ".." + separator prefix, not the bare ".." prefix.
           if (rel !== "" && (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel))) {
             return Effect.void
           }
@@ -601,11 +587,6 @@ export const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
 
-      // Supersedes the exact-directory global-to-project move: sessions from
-      // the previous identity, the global transit, or an adopted markerless
-      // project follow the resolved identity when their directory is inside
-      // the resolved worktree (or unconditionally once their project was
-      // adopted, mirroring upstream's session projector).
       yield* adoptInto(projectID, data.directory, data.previous ? ProjectV2.ID.make(data.previous) : undefined)
 
       yield* saveProjectDirectory({
