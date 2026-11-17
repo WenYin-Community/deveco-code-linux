@@ -329,6 +329,7 @@
       "on": "开",
       "off": "关",
       "disabled_not_in_whitelist": "不在 allowed_profiles 白名单内",
+      "disabled_windows_unsupported": "Windows 不支持：{{reason}}",
       "custom": "Custom",
       "custom_desc": "自定义 profile（从配置文件查看）",
       "custom_edit_hint": "自定义 profile 只能在配置文件中编辑",

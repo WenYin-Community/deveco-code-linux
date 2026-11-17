@@ -328,6 +328,7 @@
       "on": "on",
       "off": "off",
       "disabled_not_in_whitelist": "Not in allowed_profiles whitelist",
+      "disabled_windows_unsupported": "Unsupported on Windows: {{reason}}",
       "custom": "Custom",
       "custom_desc": "Custom profile from config (view only)",
       "custom_edit_hint": "Custom profiles can only be edited in config files",

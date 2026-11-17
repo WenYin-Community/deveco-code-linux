@@ -1,5 +1,6 @@
 import { RGBA, TextAttributes } from "@opentui/core"
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
+import { Effect } from "effect"
 import { modify, applyEdits, parse, type ParseError } from "jsonc-parser"
 import { readFile, writeFile, mkdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
@@ -54,6 +55,26 @@ export function profileDisplayName(profileId: string): string {
     "full-access": "Full-access",
   }
   return builtin[profileId] ?? profileId
+}
+
+export function windowsProfileValidationError(
+  config: CoreSandboxConfig,
+  profileId: string,
+  runtime?: CoreSandboxConfig,
+) {
+  const layers: SandboxResolver.LayeredSandboxConfig = {
+    global: config,
+    runtime: { ...runtime, profile: profileId },
+  }
+  return Effect.runSync(
+    SandboxResolver.resolveSandbox(layers).pipe(
+      Effect.flatMap((resolved) => SandboxResolver.validateWindowsProfile(layers, resolved)),
+      Effect.match({
+        onFailure: (error) => error,
+        onSuccess: () => undefined,
+      }),
+    ),
+  )
 }
 
 // Sandbox config shape (mirrors ConfigSandbox.SandboxConfig)
@@ -200,7 +221,7 @@ export function DialogSandbox() {
   // Runtime override (session-level, S-SESS-1). Read from the shared file
   // so the TUI process sees what the server process wrote.
   // Sources: session override file > DEVECO_CONFIG_CONTENT > DEVECO_CONFIG
-  const [runtimeOverride, setRuntimeOverride] = createSignal<SandboxConfig | undefined>(undefined)
+  const [runtimeOverride, setRuntimeOverride] = createSignal<CoreSandboxConfig | undefined>(undefined)
   // Config-source detection: which layer provided the active profile?
   const [configSource, setConfigSource] = createSignal<"runtime" | "project" | "global" | "default">("default")
 
@@ -296,6 +317,11 @@ export function DialogSandbox() {
     if (whitelist && !whitelist.includes(profileId)) {
       return t("dialog.sandbox.disabled_not_in_whitelist")
     }
+    if (process.platform !== "win32") return undefined
+    const validated = validateSandboxConfigShape(sandboxConfig())
+    if (!validated || SandboxResolver.validateAll(validated).length > 0) return undefined
+    const error = windowsProfileValidationError(validated, profileId, runtimeOverride())
+    if (error) return t("dialog.sandbox.disabled_windows_unsupported", { reason: error.message })
     return undefined
   }
 
@@ -360,7 +386,10 @@ export function DialogSandbox() {
     if (!validated) {
       return [{ rule: "shape", message: "Sandbox config has an invalid shape and could not be validated", path: "sandbox" }]
     }
-    return SandboxResolver.validateAll(validated)
+    const errors = SandboxResolver.validateAll(validated)
+    if (errors.length > 0 || process.platform !== "win32") return errors
+    const error = windowsProfileValidationError(validated, effectiveProfile().id, runtimeOverride())
+    return error ? [error] : []
   })
 
   const customOptions = createMemo<DialogSelectOption<string>[]>(() =>
@@ -369,7 +398,7 @@ export function DialogSandbox() {
       return {
         title: p.id,
         value: p.id,
-        description: p.extends ? `extends: ${p.extends}` : p.description,
+        description: disableReason ?? (p.extends ? `extends: ${p.extends}` : p.description),
         disabled: !!disableReason,
       }
     }),
