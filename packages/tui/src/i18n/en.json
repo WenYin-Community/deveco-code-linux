@@ -1175,6 +1175,9 @@
     },
     "hmos-design-to-arkts": {
       "desc": "Handle tasks that convert Pixso or Figma design files into HarmonyOS ArkTS code. This skill must be used whenever the user invokes `$hmos-design-to-arkts`, provides a Pixso or Figma link, selects a node in the Pixso client, supplies design DSL, screenshots, or local assets, or asks to convert a UI design into ArkTS"
+    },
+    "ui-verification-with-deeplink": {
+      "desc": "In DevEco Code, temporarily add controlled custom-scheme URI routes to HarmonyOS applications to simplify UI intent verification. Use `devecocli build` to compile, `devecocli run --skip-build` to deploy, and verify_ui to run a reduced test plan, then restore source files and the installed application even when the project has no Git. Trigger this skill for requests such as simplify verification of a feature, simplify UI intent verification, reduce verification steps, optimize a verify_ui flow, or skip repeated test preparation, even when the user does not mention URI or DeepLink. Also use it for UI tests containing login, data preparation, multi-level navigation, list lookup, or parameter entry when those prerequisites can be replaced without changing the business behavior under test."
     }
   }
 }

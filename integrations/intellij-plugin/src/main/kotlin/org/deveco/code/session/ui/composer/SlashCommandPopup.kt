@@ -55,6 +55,7 @@ private val KNOWN_COMMANDS = CLIENT_COMMANDS + mapOf(
     "hmos-dfx-analyzer" to "slash.command.hmos-dfx-analyzer.desc",
     "hmos-arkui-develop-skill" to "slash.command.hmos-arkui-develop-skill.desc",
     "hmos-design-to-arkts" to "slash.command.hmos-design-to-arkts.desc",
+    "ui-verification-with-deeplink" to "slash.command.ui-verification-with-deeplink.desc",
 )
 
 internal enum class SlashItemKind { COMMAND, MODEL, SERVER_COMMAND }
