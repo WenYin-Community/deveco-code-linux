@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm"
 import { sanitizePath } from "@opencode-ai/core/sanitize-path"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@opencode-ai/core/project/sql"
@@ -426,6 +426,62 @@ export const layer = Layer.effect(
         )
     })
 
+    // Port of opencode's markerless adoption (upstream dev): when a directory
+    // gains a VCS identity, the directory-keyed ("markerless", vcs-null)
+    // projects whose worktree now resolves into it are adopted, and their
+    // sessions follow the resolved identity. The global transit — an empty
+    // repo with no remote and no commits — is a legitimate destination: the
+    // sessions follow it there, and move on once a remote or root commit
+    // gives the repo a stable identity.
+    const adoptInto = Effect.fn("Project.adoptInto")(function* (
+      projectID: ProjectV2.ID,
+      directory: string,
+      previous: ProjectV2.ID | undefined,
+    ) {
+      const range = { lo: AbsolutePath.make(directory), hi: AbsolutePath.make(directory + "\uffff") }
+      const markerless = yield* db
+        .select({ id: ProjectTable.id, worktree: ProjectTable.worktree })
+        .from(ProjectTable)
+        .where(
+          and(
+            isNull(ProjectTable.vcs),
+            ne(ProjectTable.id, projectID),
+            gte(ProjectTable.worktree, range.lo),
+            lte(ProjectTable.worktree, range.hi),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const adopted = yield* Effect.filter(markerless, (candidate) =>
+        Effect.gen(function* () {
+          const found = yield* fs
+            .up({ targets: [".git"], start: candidate.worktree, stop: directory })
+            .pipe(Effect.orElseSucceed(() => [] as string[]))
+          if (!found[0]) return false
+          return path.resolve(path.dirname(found[0])) === path.resolve(directory)
+        }),
+      )
+      const sources = [
+        ...new Set([previous ?? ProjectV2.ID.global, ProjectV2.ID.global, ...adopted.map((row) => row.id)]),
+      ].filter((id) => id !== projectID)
+      if (sources.length === 0) return
+      yield* db
+        .update(SessionTable)
+        .set({ project_id: projectID, time_updated: sql`${SessionTable.time_updated}` })
+        .where(
+          and(
+            inArray(SessionTable.project_id, sources),
+            isNull(SessionTable.workspace_id),
+            or(
+              adopted.length ? inArray(SessionTable.project_id, adopted.map((row) => row.id)) : undefined,
+              and(gte(SessionTable.directory, range.lo), lte(SessionTable.directory, range.hi)),
+            ),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+    })
+
     const fromDirectory = Effect.fn("Project.fromDirectory")(function* (directory: string) {
       yield* Effect.logInfo("fromDirectory", { directory: sanitizePath(directory) })
 
@@ -504,14 +560,12 @@ export const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
 
-      if (projectID !== ProjectV2.ID.global) {
-        yield* db
-          .update(SessionTable)
-          .set({ project_id: projectID })
-          .where(and(eq(SessionTable.project_id, ProjectV2.ID.global), eq(SessionTable.directory, data.directory)))
-          .run()
-          .pipe(Effect.orDie)
-      }
+      // Supersedes the exact-directory global-to-project move: sessions from
+      // the previous identity, the global transit, or an adopted markerless
+      // project follow the resolved identity when their directory is inside
+      // the resolved worktree (or unconditionally once their project was
+      // adopted, mirroring upstream's session projector).
+      yield* adoptInto(projectID, data.directory, data.previous ? ProjectV2.ID.make(data.previous) : undefined)
 
       yield* saveProjectDirectory({
         projectID,
