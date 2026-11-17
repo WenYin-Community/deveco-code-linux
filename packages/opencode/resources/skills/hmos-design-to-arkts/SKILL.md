@@ -17,11 +17,13 @@ description: 处理 Pixso、Figma、MasterGo、蓝湖或 HTML 设计稿转 Harmo
 
 蓝湖开始使用：识别到 lanhuapp.com 链接后，先读 `references/lanhu/mcp-setup.md` 并运行 `scripts/lanhu-setup.mjs --action status`。按状态完成安装、浏览器登录和独立连接验证；这是来源预检，不要求先确定工程或启动 Controller。无需用户自行下载 GitHub 源码、安装 Python、编辑 MCP 配置或复制 Cookie。依赖与连接验证通过后继续需求预检和原设计链接选定的 Full/Fast 流程；等待登录时保留链接和用户已提供的信息。
 
+MasterGo 开始使用：识别到 MasterGo 链接或客户端选区后，先读 `references/mastergo/mcp-setup.md` 并运行 `scripts/mastergo-preflight.mjs` 探测桌面客户端本地服务（Vibe 截图通道）。客户端本地服务可达时按默认 Magic+Vibe 混合取数继续需求预检；不可达时停止并一次性给出两条路——**路径 A** 恢复客户端后继续自动化取数；**路径 B** 不用客户端继续：Magic 通道按 `references/mastergo/mcp-setup.md` 的判定顺序以本机已配置连接优先、`MG_MCP_TOKEN` 只作无连接时的依据，可用则纯 Magic + 手工导出图片，并在同一条消息一次给全导出清单（1× 必须、2× 可选、资源原图条件）、放置目录 `<runDir>/source/mastergo/export/`、导入配置 `recognition.scale=1` 与 `reference.scale` 为 1 或 2、单文件 ≤10 MiB / 总量 ≤100 MiB / 像素 ≤4000 万，同时立即索要图片路径或文件——未提供前不把阶段 1 当作已完成取数，capture 脚本强制校验截图，缺图时按其报错向用户索图或按 `missing_asset` 阻塞；Magic 也不可用则按社区插件通道是否可行判定，都不行按 blocked 报告。两条路可与其余澄清问题同批提出，用户选定后才继续；选定结果由阶段 1 记录进 `requirement-clarification.json` 的 `mastergo.channel`，入口与阶段文档沿用该记录。这是来源预检，不要求先确定工程、安装 runtime 或启动 Controller；用户已声明社区插件模式时该探测不作为门禁。
+
 预检完成后必须生成需求澄清文档，由阶段 1 写入运行目录的 `requirement-clarification.json`。
 
 ## 选择工作流
 
-先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`；用户给出 HTML 设计源路径（`.html` 文件或含 `index.html` 的导出目录）→ `others-html`；用户给出整页截图图片（`.png`/`.jpg`）→ `others-visual`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按 mcp-setup 的降级路径执行，已有用户明确选择且可用的连接直接复用。Vibe 可用性按桌面客户端本地服务探针判定（见 mcp-setup）；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
+先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`；用户给出 HTML 设计源路径（`.html` 文件或含 `index.html` 的导出目录）→ `others-html`；用户给出整页截图图片（`.png`/`.jpg`）→ `others-visual`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；初次接入默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），取数路径按来源预检的结论与用户选择执行，已有用户明确选择且可用的连接直接复用。客户端可用性按来源预检的本地服务探针判定（见 mcp-setup）；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
 
 用户选择社区插件 MCP 时，使用独立的 `community` 模式和 `nodes` 输入格式，仍保留 MasterGo 来源；安装、连接与能力边界见 `references/mastergo/mcp-setup.md`。不得将社区节点响应冒充官方 Magic DSL 或 Vibe 前端代码。
 
@@ -35,7 +37,7 @@ description: 处理 Pixso、Figma、MasterGo、蓝湖或 HTML 设计稿转 Harmo
 
 选择后由 `workflow-state.json.designSource` 和 `.variant` 共同锁定，恢复时不得重新识别来源或切换 catalog。
 
-variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」已通过；蓝湖按 `references/lanhu/mcp-setup.md` 验证独立脚本连接（见下节）；不满足时不得 `init`，按检查结果给出安装建议或引导并停止。
+variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」已通过；蓝湖按 `references/lanhu/mcp-setup.md` 验证独立脚本连接（见下节）；MasterGo 来源预检已给出结论且用户已选定取数通道（阶段 1 记录进 `requirement-clarification.json` 的 `mastergo.channel`）；不满足时不得 `init`（用户已声明社区插件模式时，以通道选择为准），按检查结果给出安装建议或引导并停止。
 
 ## MCP 依赖检查
 
@@ -48,7 +50,7 @@ variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」
 
 Pixso/Figma 依赖不满足时：停止并给出安装建议/修复引导（见 `references/mcp-dependency.md`；只给指引不代装），不得进入 `init`、不得获取 DSL/JSX。Pixso 路径下开发者直接提供 DSL/截图/本地资源（全程不调用 MCP）时，依赖检查记录为不适用并继续。
 
-MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按该指引的降级路径执行，保留用户已明确选择且可用的方案。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
+MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：`init` 前先完成来源预检——运行 `scripts/mastergo-preflight.mjs` 探测桌面客户端本地服务，`available` 时用默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图）；`unavailable` 时按该指引的判定顺序交给用户选定（Magic 可用按本机已配置连接优先判定→纯 Magic + 手工导出截图，导出清单、放置目录、导入 scale 与体积上限一次给全；Magic 不可用→社区通道可行则引导，否则 blocked），选择由阶段 1 记录进 `mastergo.channel` 并沿用；已有用户明确选择且可用的方案直接复用。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
 
 ## 运行目录
 

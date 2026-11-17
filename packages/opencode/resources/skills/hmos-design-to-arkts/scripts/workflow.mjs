@@ -5697,7 +5697,7 @@ function computeWorkflowDigest(skillRoot, catalog, catalogRelPath) {
     ...catalog.stages.map((s) => s.instructionPath)
   ];
   if (catalog.designSource === 'mastergo') {
-    paths.push('scripts/mastergo-community-start.mjs', 'scripts/mastergo-community-verify.mjs', 'references/mastergo/community/manifest.json', 'references/mastergo/community/README.md', 'scripts/mastergo-source.mjs', 'scripts/mastergo-capture.mjs', 'scripts/mastergo-connection.mjs', 'scripts/mastergo-evidence.mjs', 'references/runtime-contract.md', 'references/mastergo/input-contract.md', 'references/mastergo/acquire.md', 'references/mastergo/convert.md', 'references/mastergo/mcp-setup.md', 'references/capabilities/hmos-d2a-mastergo-to-arkui/INSTRUCTIONS.md');
+    paths.push('scripts/mastergo-community-start.mjs', 'scripts/mastergo-community-verify.mjs', 'references/mastergo/community/manifest.json', 'references/mastergo/community/README.md', 'scripts/mastergo-source.mjs', 'scripts/mastergo-capture.mjs', 'scripts/mastergo-connection.mjs', 'scripts/mastergo-evidence.mjs', 'scripts/mastergo-preflight.mjs', 'references/runtime-contract.md', 'references/mastergo/input-contract.md', 'references/mastergo/acquire.md', 'references/mastergo/convert.md', 'references/mastergo/mcp-setup.md', 'references/capabilities/hmos-d2a-mastergo-to-arkui/INSTRUCTIONS.md');
     paths.push(...catalog.stages.filter((stage) => stage.id >= 3).map((stage) => stage.reusesInstructionPath).filter(Boolean));
   }
   const normalized = paths.map((p) => p.replace(/\\/g, '/')).sort();

@@ -1,5 +1,5 @@
-import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
-import { join, relative, resolve, sep } from "node:path"
+import { closeSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync } from "node:fs"
+import { basename, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { capture } from "./mastergo-evidence.mjs"
 import { withMasterGoClient } from "./mastergo-connection.mjs"
@@ -35,6 +35,10 @@ const COMMUNITY_READS = new Set([
   "node.export",
   "node.exportAsync",
 ])
+const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024
+const MAX_SCREENSHOT_PIXELS = 40_000_000
+const MIN_SCREENSHOT_EDGE = 32
 
 // Platform policy and execution stay in the skill; no Code builtin is required.
 export function prepareMasterGoCapture(input, directory = process.cwd()) {
@@ -46,6 +50,7 @@ export function prepareMasterGoCapture(input, directory = process.cwd()) {
   if (!READ_TOOLS.has(name))
     throw new Error("Select a MasterGo design-reading tool; canvas editing is not supported here")
   const args = readArguments(name, input.arguments)
+  requireUserScreenshot(runDir)
   const outputDir = prepareExportDirectory(runDir)
   configureExportArguments(name, args, project, outputDir)
   return { operation: "call", server: input.server, tool: name, arguments: args, outputDir }
@@ -76,7 +81,7 @@ function resolveRunDir(project, value) {
   const destination = resolve(project, value.replaceAll("\\", "/"))
   const rel = relative(project, destination)
   if (!/^\.deveco[\\/]design-to-arkts(?:-fast)?[\\/]runs[\\/][^\\/]+$/.test(rel)) {
-    throw new Error("Use a single run under .deveco/design-to-arkts[-fast]/runs")
+    throw new Error("Use a single run under .deveco/design-to-arkts[-fast]/runs; run it from the project root")
   }
   checkDirectories(project, rel.split(sep), "run")
   const state = JSON.parse(readFileSync(join(destination, "workflow-state.json"), "utf8").replace(/^\uFEFF/, ""))
@@ -115,6 +120,65 @@ function prepareExportDirectory(runDir) {
   mkdirSync(outputDir, { recursive: true })
   if (realpathSync(outputDir) !== outputDir) throw new Error("MasterGo export directory must not contain symlinks")
   return outputDir
+}
+
+// Pure Magic runs have no screenshot tool, so the page export must already be on
+// disk before any design reading starts.
+function requireUserScreenshot(runDir) {
+  if (recordedChannel(runDir) !== "magic-manual") return
+  const exportDir = join(runDir, "source", "mastergo", "export")
+  const problem = screenshotProblem(exportDir)
+  if (!problem) return
+  throw new Error(
+    `Pure Magic runs need the user to export the board screenshot first: put the 1x PNG (2x optional) into ${exportDir} and retry; if the user cannot provide it, complete stage 1 as blocked with --reason-code missing_asset (${problem})`,
+  )
+}
+
+function recordedChannel(runDir) {
+  const file = join(runDir, "requirement-clarification.json")
+  if (!lstatSync(file, { throwIfNoEntry: false })?.isFile()) return undefined
+  try {
+    return JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""))?.mastergo?.channel
+  } catch (error) {
+    throw new Error(`requirement-clarification.json is not valid JSON: ${error.message} (${file})`)
+  }
+}
+
+function screenshotProblem(exportDir) {
+  if (!lstatSync(exportDir, { throwIfNoEntry: false })?.isDirectory()) return "missing export directory"
+  const problems = readdirSync(exportDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.png$/i.test(entry.name))
+    .map((entry) => pngProblem(join(exportDir, entry.name)))
+  if (!problems.length) return "no PNG in the export directory"
+  if (problems.includes(undefined)) return undefined
+  return problems[0]
+}
+
+function pngProblem(file) {
+  const name = basename(file)
+  const info = lstatSync(file, { throwIfNoEntry: false })
+  if (!info?.isFile() || info.size === 0) return `empty file: ${name}`
+  if (info.size > MAX_SCREENSHOT_BYTES) return `over 10 MiB: ${name}`
+  const header = readHeader(file)
+  if (!header.subarray(0, 8).equals(PNG_SIGNATURE) || header.toString("ascii", 12, 16) !== "IHDR")
+    return `unreadable PNG: ${name}`
+  const width = header.readUInt32BE(16)
+  const height = header.readUInt32BE(20)
+  if (width * height > MAX_SCREENSHOT_PIXELS) return `over 40M pixels: ${name} is ${width}x${height}`
+  if (width < MIN_SCREENSHOT_EDGE || height < MIN_SCREENSHOT_EDGE)
+    return `smaller than ${MIN_SCREENSHOT_EDGE}px: ${name} is ${width}x${height}`
+  return undefined
+}
+
+function readHeader(file) {
+  const header = Buffer.alloc(24)
+  const fd = openSync(file, "r")
+  try {
+    readSync(fd, header, 0, header.length, 0)
+  } finally {
+    closeSync(fd)
+  }
+  return header
 }
 
 function configureExportArguments(name, args, project, outputDir) {
