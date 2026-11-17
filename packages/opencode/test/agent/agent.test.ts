@@ -627,12 +627,29 @@ it.instance(
 )
 
 it.instance(
-  "Agent.list keeps the default agent first and sorts the rest by name",
+  "Agent.list keeps the default agent first and the rest in declaration order",
   () =>
     Effect.gen(function* () {
       const names = (yield* load((svc) => svc.list())).map((a) => a.name)
       expect(names[0]).toBe("plan")
-      expect(names.slice(1)).toEqual(names.slice(1).toSorted((a, b) => a.localeCompare(b)))
+      // The rest keeps declaration order: native agents first, then config
+      // agents in their config key order — no alphabetical re-sort.
+      expect(names.slice(1)).toEqual([
+        "build",
+        "debug",
+        "goal",
+        "spec-implementation",
+        "spec-verify",
+        "general",
+        "explore",
+        "dfx",
+        "compaction",
+        "title",
+        "summary",
+        "ask",
+        "zebra",
+        "alpha",
+      ])
     }),
   {
     config: {

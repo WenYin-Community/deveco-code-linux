@@ -440,7 +440,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
-            color: "success",
+            color: "#A89FF9",
             // ArkTS codegen rules arrive via the RULES_AGENTS injection of
             // rules/common.txt — single source of truth shared with build/goal.
             prompt: PROMPT_ASK,
@@ -531,7 +531,6 @@ export const layer = Layer.effect(
                   cfg.default_agent ? x.name === cfg.default_agent : x.name === AgentPromptProfile.current.defaultAgent,
                 "desc",
               ],
-              [(x) => x.name, "asc"],
             ),
           )
         })
