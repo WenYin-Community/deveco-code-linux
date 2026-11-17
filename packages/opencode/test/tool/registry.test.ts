@@ -22,6 +22,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { InstanceRef } from "@/effect/instance-ref"
+import { EventV2Bridge } from "@/event-v2-bridge"
 
 const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".deveco")])),
@@ -51,7 +52,7 @@ const brokenPluginLayer = Layer.succeed(
   }),
 )
 
-const root = LayerNode.group([ToolRegistry.node, Agent.node])
+const root = LayerNode.group([ToolRegistry.node, Agent.node, EventV2Bridge.node])
 const replacements = (flags: Partial<RuntimeFlags.Info> = {}) => [
   LayerNode.replace(Config.node, configLayer),
   LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalBackgroundSubagents: false, ...flags })),
@@ -62,7 +63,9 @@ const background = testEffect(
   LayerNode.buildLayer(root, { replacements: replacements({ experimentalBackgroundSubagents: true }) }),
 )
 const acpClient = testEffect(LayerNode.buildLayer(root, { replacements: replacements({ client: "acp" }) }))
-const headlessClient = testEffect(LayerNode.buildLayer(root, { replacements: replacements({ client: "sdk" }) }))
+const withoutPlugins = testEffect(
+  LayerNode.buildLayer(root, { replacements: replacements({ client: "sdk", disableDefaultPlugins: true }) }),
+)
 const withBrokenPlugin = testEffect(
   LayerNode.buildLayer(root, {
     replacements: [...replacements(), LayerNode.replace(Plugin.node, brokenPluginLayer)],
@@ -91,6 +94,56 @@ afterEach(async () => {
 })
 
 describe("tool.registry", () => {
+  it.instance("bridges plugin file writes to host events and diagnostics", () =>
+    Effect.gen(function* () {
+      const instance = yield* TestInstance
+      const file = path.join(instance.directory, "plugin-written.md")
+      const toolFile = path.join(instance.directory, ".deveco", "tools", "file_writer.ts")
+      yield* Effect.promise(() =>
+        Bun.write(
+          toolFile,
+          [
+            'import fs from "node:fs/promises"',
+            'export default { description: "file writer", args: {},',
+            "execute: async (_args, context) => {",
+            `const file = ${JSON.stringify(file)}`,
+            'await fs.writeFile(file, "written")',
+            'const result = await context.notifyFileChange({file, event: "add"})',
+            'return {output: "Wrote file." + result.output, metadata: {diagnostics: result.diagnostics}}',
+            "}}",
+          ].join("\n"),
+        ),
+      )
+      const events = yield* EventV2Bridge.Service
+      const changes: string[] = []
+      const unsubscribe = yield* events.listen((event) =>
+        Effect.sync(() => {
+          if ((event.data as { file?: string }).file === file) changes.push(event.type)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const registry = yield* ToolRegistry.Service
+      const tool = (yield* registry.all()).find((item) => item.id === "file_writer")
+      if (!tool) throw new Error("file writer was not loaded")
+      const result = yield* tool.execute(
+        {},
+        {
+          sessionID: SessionID.make("ses_plugin_file_write"),
+          messageID: MessageID.make("msg_plugin_file_write"),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          ask: () => Effect.void,
+          metadata: () => Effect.void,
+        },
+      )
+      expect(result.output).toContain("Wrote file.")
+      expect(result.metadata.diagnostics).toEqual({})
+      expect(changes.filter((type) => type === "file.edited")).toHaveLength(1)
+      expect(changes.filter((type) => type === "file.watcher.updated")).toHaveLength(1)
+    }),
+  )
+
   it.instance("does not expose task_status", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
@@ -100,20 +153,28 @@ describe("tool.registry", () => {
     }),
   )
 
-  // The IDE plugin talks to `deveco acp`, which sets DEVECO_CLIENT=acp. Without
-  // the plan tools the plan agent has no way to hand the session to build.
-  acpClient.instance("exposes the plan tools to acp clients", () =>
+  acpClient.instance("loads each migrated Harness tool once for acp clients", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
-      const ids = yield* registry.ids()
-
-      expect(ids).toContain("plan_enter")
-      expect(ids).toContain("plan_write")
-      expect(ids).toContain("plan_exit")
+      const tools = yield* registry.all()
+      for (const id of [
+        "plan_enter",
+        "plan_write",
+        "plan_exit",
+        "switch_cwd",
+        "spec_write",
+        "verify_ui",
+        "get_ui_verification_log",
+        "save_ui_screenshot",
+      ]) {
+        const matches = tools.filter((tool) => tool.id === id)
+        expect(matches).toHaveLength(1)
+        expect(matches[0].source).toBe("custom")
+      }
     }),
   )
 
-  headlessClient.instance("keeps the plan tools away from non-interactive clients", () =>
+  withoutPlugins.instance("does not retain native copies when Harness is disabled", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const ids = yield* registry.ids()
@@ -121,6 +182,11 @@ describe("tool.registry", () => {
       expect(ids).not.toContain("plan_enter")
       expect(ids).not.toContain("plan_write")
       expect(ids).not.toContain("plan_exit")
+      expect(ids).not.toContain("switch_cwd")
+      expect(ids).not.toContain("spec_write")
+      expect(ids).not.toContain("verify_ui")
+      expect(ids).not.toContain("get_ui_verification_log")
+      expect(ids).not.toContain("save_ui_screenshot")
     }),
   )
 
@@ -128,18 +194,18 @@ describe("tool.registry", () => {
     "hides task background parameter unless experimental background subagents are enabled",
     withRegistryInstance(
       Effect.gen(function* () {
-      const registry = yield* ToolRegistry.Service
-      const agent = yield* Agent.Service
-      const build = yield* agent.get("build")
-      if (!build) throw new Error("build agent not found")
-      const task = (yield* registry.tools({
-        providerID: ProviderV2.ID.opencode,
-        modelID: ModelV2.ID.make("test"),
-        agent: build,
-      })).find((tool) => tool.id === "task")
+        const registry = yield* ToolRegistry.Service
+        const agent = yield* Agent.Service
+        const build = yield* agent.get("build")
+        if (!build) throw new Error("build agent not found")
+        const task = (yield* registry.tools({
+          providerID: ProviderV2.ID.opencode,
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).find((tool) => tool.id === "task")
 
-      expect(task?.jsonSchema).toBeDefined()
-      expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+        expect(task?.jsonSchema).toBeDefined()
+        expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
       }),
     ),
   )

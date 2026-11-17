@@ -66,6 +66,72 @@ function load(dir: string, flags?: Parameters<typeof RuntimeFlags.layer>[0]) {
 }
 
 describe("plugin.loader.shared", () => {
+  it.live("initializes Harness once when configured through multiple paths", () =>
+    withTmp(
+      async (dir) => {
+        const mark = path.join(dir, "harness-count.txt")
+        const files = [path.join(dir, "builtin.js"), path.join(dir, "configured.js")]
+        for (const file of files) {
+          await Bun.write(
+            file,
+            [
+              'export default { id: "deveco-harness", server: async () => {',
+              `  const mark = ${JSON.stringify(mark)}`,
+              '  await Bun.write(mark, (await Bun.file(mark).text().catch(() => "")) + "x")',
+              "  return {}",
+              "} }",
+            ].join("\n"),
+          )
+        }
+        await Bun.write(
+          path.join(dir, "deveco.json"),
+          JSON.stringify({ plugin: files.map((file) => pathToFileURL(file).href) }),
+        )
+        return { mark }
+      },
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* load(tmp.path)
+          expect(yield* Effect.promise(() => fs.readFile(tmp.extra.mark, "utf8"))).toBe("x")
+        }),
+    ),
+  )
+
+  it.live("loads the next Harness when its first initialization fails", () =>
+    withTmp(
+      async (dir) => {
+        const first = path.join(dir, "builtin.js")
+        const second = path.join(dir, "configured.js")
+        const mark = path.join(dir, "harness-recovered.txt")
+        await Bun.write(
+          first,
+          'export default { id: "deveco-harness", server: async () => { throw new Error("init failed") } }',
+        )
+        await Bun.write(
+          second,
+          [
+            'export default { id: "deveco-harness", server: async () => {',
+            `  await Bun.write(${JSON.stringify(mark)}, "recovered")`,
+            "  return {}",
+            "} }",
+          ].join("\n"),
+        )
+        await Bun.write(
+          path.join(dir, "deveco.json"),
+          JSON.stringify({
+            plugin: [pathToFileURL(first).href, pathToFileURL(second).href],
+          }),
+        )
+        return { mark }
+      },
+      (tmp) =>
+        Effect.gen(function* () {
+          yield* load(tmp.path)
+          expect(yield* Effect.promise(() => fs.readFile(tmp.extra.mark, "utf8"))).toBe("recovered")
+        }),
+    ),
+  )
+
   it.live("loads a file:// plugin function export", () =>
     withTmp(
       async (dir) => {
@@ -82,10 +148,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -117,10 +180,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -155,10 +215,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -188,10 +245,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -230,10 +284,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -791,10 +842,7 @@ describe("plugin.loader.shared", () => {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },
@@ -916,10 +964,7 @@ export default {
           ].join("\n"),
         )
 
-        await Bun.write(
-          path.join(dir, "deveco.json"),
-          JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2),
-        )
+        await Bun.write(path.join(dir, "deveco.json"), JSON.stringify({ plugin: [pathToFileURL(file).href] }, null, 2))
 
         return { mark }
       },

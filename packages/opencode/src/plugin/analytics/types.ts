@@ -86,9 +86,7 @@ export interface AnalyticsEnvironmentFields {
   os_version: string
 }
 
-// Build result tracking for devecocli build executions.
-// Only counts calls where the tool execution itself succeeded (isSuccess=true),
-// so environment failures (DevEco not found, hvigor misconfigured) are excluded.
+// Build result tracking from Harness CLI events.
 export interface BuildResults {
   // null until the first devecocli build execution; then fixed to that result
   isFirstBuildSuccess: boolean | null
@@ -96,11 +94,9 @@ export interface BuildResults {
   isFinalBuildSuccess: boolean | null
   // number of devecocli build executions
   buildCount: number
-  // null until the first successful build_project tool execution; then fixed to that call's elapsed time.
-  // Elapsed measures prompt submission (startSession) to that build call's completion — not the build's own
-  // duration, which toolExecutions already tracks — and pairs with isFirstBuildSuccess (build may have failed).
+  // Elapsed from prompt submission to the first recorded build completion.
   firstBuildElapsed: number | null
-  // null until the first successful build_project tool execution; then always overwritten by the latest call's elapsed time
+  // Elapsed from prompt submission to the latest recorded build completion.
   finalBuildElapsed: number | null
 }
 
@@ -159,11 +155,8 @@ export interface AiCodeAttributionEvent {
   totalGeneratedLines: number
 }
 
-// One build_project execution, collected per turn for the DevEcoCodeBuild sidecar event.
-// Carries the heavy per-build payloads (log preview, error code) that AiSessionEvent's
-// toolExecutions deliberately excludes.
+// Historical build detail payload retained for persisted DevEcoCodeBuild events.
 export interface BuildProjectInfo {
-  // always "build_project"; kept explicit so future build-flavored tools stay self-describing
   toolName: string
   duration: number
   // Build outcome (same predicate as the session event's isFirstBuildSuccess/isFinalBuildSuccess):
@@ -191,33 +184,6 @@ export interface BuildProjectAnalyticsEvent extends AnalyticsEnvironmentFields {
   buildProjectInfo: BuildProjectInfo[]
 }
 
-export type UiVerificationSubAction = "run" | "log" | "screenshot"
-
-export interface UiVerificationOperationDetail {
-  subAction: UiVerificationSubAction
-  modelName?: string
-  freshStart?: boolean
-  deviceCategory?: string
-  deviceType?: string
-  deeplinkUsed?: boolean
-  bundleName?: string
-  planLen?: number
-  verificationSuccess?: boolean
-  stepExecuted?: number
-  stepTotalDurationMs?: number
-  stepReused?: number | null
-  toolUsageDist?: Record<string, number>
-  screenshotCount?: number
-  tokenUsage?: number
-  failType?: string | null
-}
-
-export interface UiVerificationAnalyticsEvent extends AnalyticsEnvironmentFields {
-  sessionid: string
-  messageId: string
-  event_detail: UiVerificationOperationDetail
-}
-
 // Upper bound for commandName, shared by the emitter (truncates) and the queue validator
 // (rejects). Config commands, MCP prompts and skills are named outside this repo, so the name can
 // be arbitrary long text.
@@ -240,7 +206,6 @@ export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
   BUILD_PROJECT: "DevEcoCodeBuild",
-  UI_VERIFICATION: "DevEcoCodeVerify",
   SLASH_COMMAND: "DevEcoCodeSlash",
 } as const
 
@@ -258,10 +223,6 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.BUILD_PROJECT
       event: BuildProjectAnalyticsEvent
-    }
-  | {
-      action: typeof ANALYTICS_ACTION.UI_VERIFICATION
-      event: UiVerificationAnalyticsEvent
     }
   | {
       action: typeof ANALYTICS_ACTION.SLASH_COMMAND
@@ -299,7 +260,6 @@ export interface SessionContext {
   toolCounts: Map<string, { name: string; category: ToolBucket; count: number }>
   // devecocli invocation counts keyed by the resolved two-level name ("docs.search").
   devecoCliCommandCounts: Map<string, number>
-  buildProjectInfo: BuildProjectInfo[]
   // Last observed workflow signal; kept for the workflow field's existing last-write-wins semantics.
   workflow: string
   // Every distinct workflow signal observed in this window, used to derive taskType once at
@@ -357,7 +317,6 @@ export const BUILTIN_TOOLS = new Set([
   "spec_write",
   "hdc_log",
   "switch_cwd",
-  "build_project",
   "start_app",
   "verify_ui",
   "get_ui_verification_log",

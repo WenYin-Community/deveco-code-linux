@@ -171,6 +171,33 @@ description: Skill with a companion whitelist.
     15_000,
   )
 
+  it.instance(
+    "execute retains curated DFX companions when Harness supplies no FILES.md",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+        const tool = (yield* registry.tools({
+          providerID: ProviderV2.ID.opencode,
+          modelID: ModelV2.ID.make("gpt-5"),
+          agent,
+        })).find((tool) => tool.id === SkillTool.id)
+        if (!tool) throw new Error("Skill tool not found")
+        const before = ripgrepCalls
+        const result = yield* tool.execute({ name: "hmos-dfx-analyzer" }, { ...baseCtx, ask: () => Effect.void })
+        const directory = String(result.metadata.dir)
+        expect(ripgrepCalls).toBe(before)
+        for (const route of ["appfreeze", "cppcrash", "jscrash", "white-screen"]) {
+          expect(result.output).toContain(`<file>${path.join(directory, "references", route, "analyzer.md")}</file>`)
+        }
+        expect(result.output).toContain(
+          `<file>${path.join(directory, "scripts", "collect", "collect-hilog.mjs")}</file>`,
+        )
+        expect(result.output).not.toMatch(/<file>[^<]*test-cases/)
+      }),
+    45_000,
+  )
+
   it.instance("execute preserves not found message", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

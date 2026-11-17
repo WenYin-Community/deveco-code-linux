@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
@@ -196,9 +196,15 @@ describe("DEVECO_HOME recognition", () => {
       await using tmp = await tmpdir()
       await useStateDir(tmp.path)
 
-      await withDevecoHome(path.join(tmp.path, "missing"), async () => {
-        expect(await findDevEcoHome()).toBeUndefined()
-      })
+      // Keep directory discovery independent of locally installed Studio copies.
+      const stat = spyOn(fs, "stat").mockRejectedValue(new Error("Directory unavailable in this fixture"))
+      try {
+        await withDevecoHome(path.join(tmp.path, "missing"), async () => {
+          expect(await findDevEcoHome()).toBeUndefined()
+        })
+      } finally {
+        stat.mockRestore()
+      }
     })
   })
 

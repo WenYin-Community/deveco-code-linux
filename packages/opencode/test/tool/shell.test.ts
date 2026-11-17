@@ -7,13 +7,13 @@ import path from "path"
 import fs from "fs/promises"
 import { Config } from "@/config/config"
 import { Shell } from "@opencode-ai/core/shell"
+import { resolveSandboxWorkspaceRoots, ShellTool } from "../../src/tool/shell"
 import {
+  ASK_DOCS_PREVIEW_CHARS,
+  DOCS_PREVIEW_CHARS_ENV,
   DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS,
-  resolveSandboxWorkspaceRoots,
   resolveShellTimeout,
-  ShellTool,
-} from "../../src/tool/shell"
-import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV } from "../../src/deveco-cli/router"
+} from "../../src/agent/shell-policy"
 import { Filesystem } from "@/util/filesystem"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
@@ -227,10 +227,7 @@ describe("tool.shell", () => {
 describe("tool.shell timeout policy", () => {
   test("extends deveco emulator image downloads to two hours", () => {
     expect(
-      resolveShellTimeout(
-        'devecocli emulator image download --device-type phone --os-version "OS 6.0.2(22)"',
-        600_000,
-      ),
+      resolveShellTimeout('devecocli emulator image download --device-type phone --os-version "OS 6.0.2(22)"', 600_000),
     ).toBe(DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS)
     expect(resolveShellTimeout('"devecocli.cmd" emulator image download', 600_000)).toBe(
       DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS,
@@ -294,16 +291,13 @@ describe("tool.shell docs preview env", () => {
 })
 
 describe("tool.shell Windows sandbox roots", () => {
-  test.skipIf(process.platform !== "win32")(
-    "keeps the current workspace and de-duplicates configured roots",
-    () => {
-      const cwd = path.resolve("C:\\workspace")
-      expect(resolveSandboxWorkspaceRoots(cwd, [cwd.toUpperCase(), "..\\shared", "..\\shared"])).toEqual([
-        cwd,
-        path.resolve(cwd, "..\\shared"),
-      ])
-    },
-  )
+  test.skipIf(process.platform !== "win32")("keeps the current workspace and de-duplicates configured roots", () => {
+    const cwd = path.resolve("C:\\workspace")
+    expect(resolveSandboxWorkspaceRoots(cwd, [cwd.toUpperCase(), "..\\shared", "..\\shared"])).toEqual([
+      cwd,
+      path.resolve(cwd, "..\\shared"),
+    ])
+  })
 
   test("expands home-relative roots", () => {
     expect(resolveSandboxWorkspaceRoots(path.resolve("C:\\workspace"), ["~\\sandbox-root"])).toContain(
@@ -908,33 +902,12 @@ describe("tool.shell permissions", () => {
         yield* runIn(
           tmp,
           Effect.gen(function* () {
-            const command = `${bin} -e ${evalarg("console.log(process.cwd())")}`
+            const prefix = PS.has(sh()) ? "& " : ""
+            const command = `${prefix}${bin} -e ${evalarg("console.log(process.cwd())")}`
             expect((yield* run({ command, description: "Print session cwd" }, next)).output).toContain(sessionDir)
-            expect((yield* run({ command, workdir: explicitDir, description: "Print explicit cwd" }, next)).output).toContain(explicitDir)
-          }),
-        )
-      } finally {
-        clearSessionCwd(next.sessionID)
-      }
-    }),
-  )
-
-  it.live("switches session cwd only for a successful devecocli create event", () =>
-    Effect.gen(function* () {
-      const tmp = yield* tmpdirScoped()
-      const projectRoot = path.join(tmp, "created project")
-      yield* Effect.promise(() => fs.mkdir(projectRoot))
-      const next = { ...ctx, sessionID: SessionID.make("ses_shell_create") }
-
-      try {
-        yield* runIn(
-          tmp,
-          Effect.gen(function* () {
-            const event = JSON.stringify({ command: "create", exitCode: 0, durationMs: 1, projectRoot })
-            const code = `await Bun.write(process.env.DEVECO_CODE_CLI_EVENT_FILE, ${JSON.stringify(`${event}\n`)}); console.log(${JSON.stringify(`Project root: ${projectRoot}`)})`
-            const result = yield* run({ command: `${bin} -e ${evalarg(code)}`, description: "Simulate CLI create" }, next)
-            expect(result.output).toContain("Session directory auto-switched")
-            expect(getSessionCwd(next.sessionID)).toBe(projectRoot)
+            expect(
+              (yield* run({ command, workdir: explicitDir, description: "Print explicit cwd" }, next)).output,
+            ).toContain(explicitDir)
           }),
         )
       } finally {
@@ -947,17 +920,71 @@ describe("tool.shell permissions", () => {
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       const next = { ...ctx, sessionID: SessionID.make("ses_shell_fake_root") }
-      yield* runIn(
+      const output = `Project root: ${path.join(tmp, "fake")}`
+      const script = path.join(tmp, "print-project-root.mjs")
+      yield* Effect.promise(() => Bun.write(script, `console.log(${JSON.stringify(output)})`))
+      const prefix = PS.has(sh()) ? "& " : ""
+      const result = yield* runIn(
         tmp,
         run(
           {
-            command: `${bin} -e ${evalarg(`console.log(${JSON.stringify(`Project root: ${path.join(tmp, "fake")}`)})`)}`,
+            command: `${prefix}${bin} ${quote(script)}`,
             description: "Print unrelated project root",
           },
           next,
         ),
       )
+      expect(result.metadata.exit, result.output).toBe(0)
+      expect(result.output).toContain(output)
       expect(getSessionCwd(next.sessionID)).toBeUndefined()
+    }),
+  )
+
+  it.live("lets Harness own CLI event readback and synchronizes successful create directories", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const projectRoot = "created project"
+      const target = path.join(tmp, projectRoot)
+      yield* Effect.promise(() => fs.mkdir(target))
+      const next = { ...ctx, sessionID: SessionID.make("ses_harness_create"), callID: "harness-create" }
+      try {
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const plugin = yield* Plugin.Service
+            const payload = [
+              JSON.stringify({ command: "create", exitCode: 0, durationMs: 1, projectRoot }),
+              JSON.stringify({ command: "build", exitCode: 1, durationMs: 2 }),
+              "not json",
+              JSON.stringify({ command: "/private/project", exitCode: 0, durationMs: 3 }),
+            ].join("\n")
+            const code = `await Bun.write(process.env.DEVECO_CODE_CLI_EVENT_FILE, ${JSON.stringify(payload)})`
+            const script = path.join(tmp, "emit-cli-events.mjs")
+            yield* Effect.promise(() => Bun.write(script, code))
+            const prefix = PS.has(sh()) ? "& " : ""
+            const args = { command: `${prefix}${bin} ${quote(script)}`, description: "CLI event producer" }
+            const input = { tool: "bash", sessionID: next.sessionID, callID: next.callID }
+            yield* plugin.trigger("tool.execute.before", input, { args })
+            const result = yield* run(args, next)
+            expect(result.metadata.exit, result.output).toBe(0)
+            expect(result.metadata).not.toHaveProperty("devecoCliEvents")
+            yield* plugin.trigger("tool.execute.after", { ...input, args, source: "builtin" }, result)
+            expect(result.metadata).toMatchObject({
+              sessionCwd: target,
+              devecoCliEvents: [
+                { command: "create", exitCode: 0, durationMs: 1, projectRoot },
+                { command: "build", exitCode: 1, durationMs: 2 },
+              ],
+            })
+            expect(result.output).toContain(`[Session directory auto-switched to ${target}]`)
+            expect(getSessionCwd(next.sessionID)).toBe(target)
+            const command = `${prefix}${bin} -e ${evalarg("console.log(process.cwd())")}`
+            expect((yield* run({ command, description: "Read next cwd" }, next)).output).toContain(target)
+          }),
+        )
+      } finally {
+        clearSessionCwd(next.sessionID)
+      }
     }),
   )
 
@@ -1208,7 +1235,7 @@ describe("tool.shell abort", () => {
           const collected: string[] = []
           const res = yield* run(
             {
-              command: `echo before && sleep 30`,
+              command: PS.has(sh()) ? "Write-Output before; Start-Sleep -Seconds 30" : "echo before && sleep 30",
               description: "Long running command",
             },
             {
@@ -1217,7 +1244,7 @@ describe("tool.shell abort", () => {
               metadata: (input) =>
                 Effect.sync(() => {
                   const output = (input.metadata as { output?: string })?.output
-                  if (output && output.includes("before") && !controller.signal.aborted) {
+                  if (output?.split(/\r?\n/).includes("before") && !controller.signal.aborted) {
                     collected.push(output)
                     controller.abort()
                   }
@@ -1229,7 +1256,8 @@ describe("tool.shell abort", () => {
           expect(collected.length).toBeGreaterThan(0)
         }),
       ),
-    15_000,
+    // Native sandbox and shell cold-start time is included in this deadline.
+    30_000,
   )
 
   it.live(
@@ -1313,7 +1341,7 @@ describe("tool.shell abort", () => {
         const isPowerShell = sh === "pwsh" || sh === "powershell"
         const command = isPowerShell
           ? 'Write-Output "first"; Start-Sleep -Milliseconds 300; Write-Output "second"'
-          : 'echo first && sleep 0.3 && echo second'
+          : "echo first && sleep 0.3 && echo second"
         const result = yield* run(
           {
             command,

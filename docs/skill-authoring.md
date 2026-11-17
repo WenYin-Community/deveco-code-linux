@@ -6,12 +6,12 @@ How skills are stored, and how to add a built-in one.
 
 Decide by intent, not by convenience:
 
-| Kind | Source you edit | Runtime location | Use for |
-| --- | --- | --- | --- |
+| Kind                | Source you edit                                                            | Runtime location                                                             | Use for                                                                         |
+| ------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | **Built-in (repo)** | `packages/opencode/resources/skills/<name>/SKILL.md` — the project owns it | `~/.local/share/deveco/skills/<name>/`, extracted from the binary at startup | Skills that must evolve with releases, be reviewed in a PR, or reach every user |
-| **Built-in (CLI)** | `@deveco/deveco-cli-common/skills/<name>/` — the CLI team owns it | Same directory | Skills the CLI ships and updates with its own release |
-| **User (global)** | `~/.config/deveco/skills/<name>/SKILL.md` — you own it | The same directory | Personal skills for one machine |
-| **User (project)** | `<repo>/.deveco/skills/<name>/SKILL.md` — you own it | The same directory | Skills that travel with a repository |
+| **Harness**         | The Harness repository, or its pinned CLI package                          | Global configuration `skills/`, installed by the plugin config hook          | CLI, ArkUI, DFX and DeepLink verification Skills                                |
+| **User (global)**   | `~/.config/deveco/skills/<name>/SKILL.md` — you own it                     | The same directory                                                           | Personal skills for one machine                                                 |
+| **User (project)**  | `<repo>/.deveco/skills/<name>/SKILL.md` — you own it                       | The same directory                                                           | Skills that travel with a repository                                            |
 
 If the project is expected to maintain the skill, it is built-in. A user directory
 is a per-machine scratch space — the project cannot version, review, or ship what
@@ -32,14 +32,14 @@ Under the IDE plugin the same directory lives under the DevEco Studio cache path
 The two-mode split above is the decision you make. At runtime the loader scans
 more than the directories named in the table:
 
-| Location | Scope | Default |
-| --- | --- | --- |
-| The built-in data directory (see above) | builtin | on |
-| `<repo>/.deveco/{skill,skills}/`, walking up to the worktree | project | on |
-| `~/.config/deveco/skills/`, `~/.deveco/skills/` | global | on |
-| `<repo>/.agents/skills/` and `~/.agents/skills/`, walking up | project / global | on |
+| Location                                                     | Scope            | Default                                                          |
+| ------------------------------------------------------------ | ---------------- | ---------------------------------------------------------------- |
+| The built-in data directory (see above)                      | builtin          | on                                                               |
+| `<repo>/.deveco/{skill,skills}/`, walking up to the worktree | project          | on                                                               |
+| `~/.config/deveco/skills/`, `~/.deveco/skills/`              | global           | on                                                               |
+| `<repo>/.agents/skills/` and `~/.agents/skills/`, walking up | project / global | on                                                               |
 | `<repo>/.claude/skills/` and `~/.claude/skills/`, walking up | project / global | **off** — `DEVECO_DISABLE_CLAUDE_CODE_SKILLS` defaults to `true` |
-| `skills.paths` / `skills.urls` from config | per entry | on when configured |
+| `skills.paths` / `skills.urls` from config                   | per entry        | on when configured                                               |
 
 `.agents/` and `.claude/` are interoperability paths for other tools, not this
 project's convention. A skill the project maintains belongs in
@@ -49,45 +49,20 @@ never loads.
 
 ## How built-in skills are delivered
 
-Two sources are merged at build time; a CLI copy wins over a repository copy of
-the same name:
-
-1. `packages/opencode/resources/skills/` — this repository.
-2. `<deveco-cli>-common/skills/` — the installed CLI package, restricted to the
-   names in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`).
-   A whitelisted skill missing from the package fails the build.
-
-The package is resolved from the `@deveco/deveco-cli` shell dependency pinned in
-`packages/opencode/package.json`; `<shell>-common` ships as its
-`optionalDependency`. The lookup order and pre-release scope handling live in
-`packages/opencode/script/skill-sources.ts`.
-
-### Overlays: repository-owned companion files
-
-A CLI copy replaces the **whole** skill, so a file this repository owns but the
-CLI does not publish cannot survive the merge. Such a file belongs in an
-**overlay**: a directory under `packages/opencode/resources/skills/<name>/`
-containing no `SKILL.md`. Overlay files are applied on top of the merged skill
-(the same path wins), fail the build when they match no built-in skill, and are
-part of the embedded hash.
-
-`hmos-dfx-analyzer/FILES.md` is the only overlay today. It is a **deveco-code
-convention**: `src/tool/skill.ts` reads it to list exactly those companion paths
-in `<skill_files>` when the skill loads. The CLI package does not ship it (CLI
-1.0.0 folded the same list into its `SKILL.md`), and without the overlay the tool
-falls back to a sampled `rg --files` list — the skill still loads, but the
-curated paths (the four `analyzer.md` routes, the collect scripts) are replaced
-by whatever sorts first, including `test-cases/` and `.version`.
+Host-owned Skills are embedded from `packages/opencode/resources/skills/`.
+Harness independently builds and installs `deveco-cli`, `hmos-arkui-develop-skill`,
+`hmos-dfx-analyzer` and `ui-verification-with-deeplink`. Do not duplicate these
+resources or add a CLI dependency to the host build.
 
 - Build-time embedding: `packages/opencode/script/skill-sources.ts` (used by
   `build.ts`) → `DEVECO_DEFAULT_SKILLS` + `DEVECO_DEFAULT_SKILLS_HASH`
 - Runtime extraction: `packages/opencode/src/skill/defaults.ts`
 
-The hash covers the merged content, so the runtime marker is
+The hash covers the host-owned content, so the runtime marker is
 `${version}+${hash}`: a same-version rebuild whose skill content changed still
 re-extracts. Under `bun dev` there is no injected hash, the marker stays `local`,
-and only `resources/skills/` is read — CLI-sourced skills are absent by design.
-Link them into `.deveco/skills/` when you need them while developing.
+and native extraction reads only `resources/skills/`. The installed Harness
+dependency supplies its four Skills through the normal plugin configuration flow.
 
 ## Adding a built-in skill
 
@@ -97,10 +72,7 @@ all of them:
 
 1. **`packages/opencode/resources/skills/<name>/SKILL.md`** — the skill itself
    (see format below). For a CLI-sourced skill, add its name to
-   `CLI_BUNDLED_SKILLS` in `packages/opencode/script/skill-sources.ts` instead
-   and bump `@deveco/deveco-cli` to a release that ships it. Repository-owned
-   companion files for a CLI-sourced skill go in the same directory **without**
-   a `SKILL.md` (see "Overlays" above).
+   the Harness CLI Skill whitelist instead and update its pinned CLI version.
 2. **`packages/opencode/src/tool/skill.ts`** — `DevEcoRequiredSkills`. Add the
    skill **only if** it needs the HarmonyOS SDK; membership makes the skill fail
    to load when `DEVECO_HOME` is unset.
@@ -135,7 +107,7 @@ Frontmatter:
 - `name` — **required**. Lowercase, hyphen-separated, at most 64 characters. By
   convention it matches the directory name. The CLI never checks this, but the
   IDE does rely on it: for **user** skills the IDE keys its slash-command list
-  by the *directory* name and joins it against the backend's *frontmatter* names,
+  by the _directory_ name and joins it against the backend's _frontmatter_ names,
   so a mismatch makes the skill disappear from the IDE's `/` popup and its
   enable/disable toggle stop working. Keep the two identical.
 - `description` — **required in practice**. A skill without one is silently
@@ -161,3 +133,5 @@ Frontmatter:
 
 - [ARCHITECTURE.md](../ARCHITECTURE.md) → "Skill Storage Invariant"
 - [AGENTS.md](../AGENTS.md) → "Skills"
+
+The host keeps the DFX companion listing fallback in `packages/opencode/src/tool/dfx-files.txt`. `src/tool/skill.ts` uses it only when the Harness-installed skill has no `FILES.md`; skill resources remain Harness-owned.

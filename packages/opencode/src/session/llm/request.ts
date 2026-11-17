@@ -5,7 +5,6 @@ import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
-import { AgentRules } from "@/agent/rules"
 import { AgentPromptParts, agentNeedsHomegraphPrompt } from "@/agent/prompt-parts"
 import { probeHomegraphReady } from "@/mcp/homegraph-ready"
 import type { MessageV2 } from "../message-v2"
@@ -59,10 +58,7 @@ const mergeOptions = (
   source: Record<string, unknown> | undefined,
 ): Record<string, unknown> => mergeDeep(target, source ?? {}) as Record<string, unknown>
 
-function buildSystemParts(
-  input: PrepareInput,
-  homegraph: { ready: boolean; source?: "product" | "user" },
-): string[] {
+function buildSystemParts(input: PrepareInput, homegraph: { ready: boolean; source?: "product" | "user" }): string[] {
   return [
     [
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
@@ -70,7 +66,6 @@ function buildSystemParts(
         homegraphReady: homegraph.ready,
         homegraphSource: homegraph.source,
       }),
-      ...AgentRules.forAgent(input.model, input.agent),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]
@@ -239,8 +234,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const tools = resolveTools(input)
   ensureCopilotNoopTool(input, tools)
 
-  const needsProject =
-    input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
+  const needsProject = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
   const projectID = needsProject ? (yield* InstanceState.context).project.id : undefined
 
   return {

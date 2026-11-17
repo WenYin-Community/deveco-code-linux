@@ -41,20 +41,12 @@ Built-in and user skills live in **separate, non-overlapping directories**, and
 the location is part of the contract: a skill placed in the wrong directory
 silently stops working at the next upgrade.
 
-Built-in skills have two sources, merged at build time into one embedded map:
+Host-owned skills come from `packages/opencode/resources/skills/` and are
+embedded at build time. Harness supplies `deveco-cli`, `hmos-arkui-develop-skill`,
+`hmos-dfx-analyzer`, and `ui-verification-with-deeplink` through its config hook.
+The host does not extract resources from CLI packages.
 
-- `packages/opencode/resources/skills/` — skills this repository owns.
-- `<deveco-cli>-common/skills/` — skills the CLI package ships. Only the names
-  in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`) are read.
-
-Because a CLI copy replaces the whole skill, a repository-owned companion file
-that the CLI does not publish would disappear at build time. Such files live in
-an **overlay**: a directory under `resources/skills/` with no `SKILL.md`, merged
-on top of the CLI copy and counted in the fingerprint. `hmos-dfx-analyzer/FILES.md`
-is the only overlay today — it is the companion-path whitelist that
-`src/tool/skill.ts` reads when the skill loads.
-
-The merged content is fingerprinted into `DEVECO_DEFAULT_SKILLS_HASH`, so the
+The embedded content is fingerprinted into `DEVECO_DEFAULT_SKILLS_HASH`, so the
 runtime `.version` marker is `${version}+${hash}` and a same-version rebuild with
 changed skill content still re-extracts.
 
@@ -65,3 +57,5 @@ and the authoring convention.
 
 - [packages/opencode/AGENTS.md](packages/opencode/AGENTS.md)
 - [packages/app/AGENTS.md](packages/app/AGENTS.md)
+
+The host keeps the DFX companion listing fallback in `packages/opencode/src/tool/dfx-files.txt`. `src/tool/skill.ts` uses it only when the Harness-installed skill has no `FILES.md`; skill resources remain Harness-owned.

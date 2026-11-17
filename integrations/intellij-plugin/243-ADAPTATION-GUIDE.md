@@ -82,7 +82,7 @@
 | Compose 1.7.1 / Jewel 0.27.0 / Skiko 0.8.18 | Maven | 目标 Studio2 缺少所需模块，243 包随附；261 构建使用对应 IDE 的内置模块 |
 | DevEco Code 后端 | 仓库 `packages/opencode` 源码构建 | `bundleLocalCli` 任务，需先 `bun install` + `postinstall` |
 | Node 22.22.0 | nodejs.org，SHA-256 固定 | 当前 243 构建额外携带 Node 22；261 不额外打包，依赖实际运行环境中可找到且版本满足要求的 Node，不能假定所有 261 IDE 都内置 Node |
-| @deveco/deveco-cli 1.2.2 + npm 依赖 | npm 发布物 | 外部供应链依赖，不等同仓库内源码 |
+| Harness（包含 CLI）及其 npm 依赖 | npm 发布物 | 由后端产物的固定版本依赖清单交付，见 [Harness 集成说明](../../docs/harness-npm-integration.md) |
 | ACP 0.25.0 | Maven → ASM 改写为 `acp-jvm-0.25.0-deveco243.jar` | SHA-256 固定 |
 | SQLite JDBC 3.51.1.0 | Maven | 自带多平台原生资源 |
 | ripgrep / ui-verification-mcp | 后端打包流程携带 | ripgrep 默认经 ghproxy.net 下载 |

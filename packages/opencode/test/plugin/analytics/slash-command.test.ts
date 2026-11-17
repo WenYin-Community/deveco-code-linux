@@ -47,7 +47,6 @@ function createHarness() {
     uploader,
     isLoggedIn: async () => state.loggedIn,
     isJwtExpired: async () => state.jwtExpired,
-    toolImprovementEnabled: async () => true,
     diagnostic: async () => undefined,
     projectId: async () => PROJECT_ID,
     codeAttribution: createAttributionStub(),

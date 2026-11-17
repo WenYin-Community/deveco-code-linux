@@ -498,6 +498,29 @@ function Test-InstallationComplete {
     return (Test-Path -LiteralPath (Join-Path $InstallRoot "bin\$AppName.exe") -PathType Leaf)
 }
 
+function Install-PackageDependencies {
+    param([string]$InstallRoot)
+    $manifest = Join-Path $InstallRoot "package.json"
+    if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return }
+    $package = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+    if (-not $package.dependencies) { return }
+    $script:TelemetryStage = "dependencies"
+    $script:TelemetryErrorCode = "npm_install_failed"
+    if ($nodeWarning) { throw "Node.js 22 or newer is required to install Harness" }
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { throw "npm is required to install Harness" }
+    # Platform constraints describe DevEco, not the Node process running npm.
+    $package.PSObject.Properties.Remove("os")
+    $package.PSObject.Properties.Remove("cpu")
+    [System.IO.File]::WriteAllText($manifest, ($package | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Installing built-in plugin dependencies" -ForegroundColor DarkGray
+    # PS 5.1 represents npm warnings on stderr as non-terminating errors.
+    $ErrorActionPreference = "Continue"
+    & $npm.Source install --prefix $InstallRoot --omit=dev --ignore-scripts --no-audit --no-fund 2>&1 |
+        ForEach-Object { Write-Host $_.ToString() }
+    if ($LASTEXITCODE -ne 0) { throw "Failed to install built-in plugin dependencies (npm exit $LASTEXITCODE)" }
+}
+
 function Move-DirectoryWithRetry {
     param([string]$Source, [string]$Destination, [int]$Attempts = 8)
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
@@ -828,6 +851,10 @@ try {
             if (Test-Path -LiteralPath $sourceChangelog) {
                 Copy-Item -LiteralPath $sourceChangelog -Destination (Join-Path $stageDir "CHANGELOG.md") -Force -ErrorAction Stop
             }
+            $sourcePackage = Join-Path $sourceRoot "package.json"
+            if (Test-Path -LiteralPath $sourcePackage -PathType Leaf) {
+                Copy-Item -LiteralPath $sourcePackage -Destination (Join-Path $stageDir "package.json") -Force -ErrorAction Stop
+            }
         }
 
         if (-not (Test-InstallationComplete $stageDir)) {
@@ -840,6 +867,7 @@ try {
         if ($installedVersion -ne $tag) { $script:TelemetryErrorCode = "version_mismatch" }
         if ($probe.ExitCode -ne 0) { throw "Installation verification failed — deveco could not run" }
         if ($installedVersion -ne $tag) { throw "Local binary version does not match. Expected $tag, got $installedVersion" }
+        Install-PackageDependencies -InstallRoot $stageDir
         $script:TelemetryStage = "activate"
         $script:TelemetryErrorCode = "activation_failed"
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
@@ -965,6 +993,12 @@ try {
         }
 
         # Move binary into staging/bin/ (normalize name to deveco.exe)
+        $sourceRoot = Split-Path $binarySrc -Parent
+        if ((Split-Path $sourceRoot -Leaf) -ieq "bin") { $sourceRoot = Split-Path $sourceRoot -Parent }
+        $sourcePackage = Join-Path $sourceRoot "package.json"
+        if ((Test-Path -LiteralPath $sourcePackage -PathType Leaf) -and $sourcePackage -ne (Join-Path $stageDir "package.json")) {
+            Copy-Item -LiteralPath $sourcePackage -Destination (Join-Path $stageDir "package.json") -Force -ErrorAction Stop
+        }
         $stageBin = Join-Path $stageBinDir "$AppName.exe"
         if ($binarySrc -ne $stageBin) {
             Move-Item -LiteralPath $binarySrc -Destination $stageBin -Force -ErrorAction Stop
@@ -1011,6 +1045,7 @@ try {
             throw "Downloaded binary version $installedVersion does not match release v$tag. Try: npm install -g @deveco/deveco-code"
         }
 
+        Install-PackageDependencies -InstallRoot $stageDir
         $script:TelemetryStage = "activate"
         $script:TelemetryErrorCode = "activation_failed"
         $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"
@@ -1023,6 +1058,7 @@ try {
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
     } else {
         $versionDir = Join-Path $VersionsDir $tag
+        Install-PackageDependencies -InstallRoot $versionDir
         $versionBin = Join-Path $versionDir "bin\$AppName.exe"
         if ($installationState -eq "repair") {
             $launcherStage = Join-Path $BinDir ".$AppName.exe.$installID.new"

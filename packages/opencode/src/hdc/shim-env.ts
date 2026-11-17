@@ -3,7 +3,8 @@ export * as HdcShimEnv from "./shim-env"
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Global } from "@opencode-ai/core/global"
-import { isolatedShellPath, resolveDevecoCodeProxyLauncher } from "@/tool/lib/deveco-cli"
+import { isolatedShellPath } from "@/util/shim"
+import { resolveHdcShimLauncher } from "./launcher"
 import { HdcIpcServer } from "./ipc-server"
 import { handleGuardRequest, registerSession } from "./service"
 
@@ -36,7 +37,7 @@ function windowsShimContents(launcher: readonly string[]) {
 }
 
 async function ensureHdcShim(binDir = Global.Path.bin): Promise<void> {
-  const launcher = resolveDevecoCodeProxyLauncher()
+  const launcher = resolveHdcShimLauncher()
   await mkdir(binDir, { recursive: true })
 
   const shimPath = path.join(binDir, process.platform === "win32" ? "hdc.cmd" : "hdc")
@@ -85,9 +86,7 @@ export interface HdcGuardShellEnvInput {
 // `directory` is the session's instance directory — the key the
 // TUI's permission reply resolves the pending ask by, so it must
 // be captured at arm time (the shell cwd may drift from it).
-export async function ensureHdcGuardShellEnv(
-  input: HdcGuardShellEnvInput,
-): Promise<HdcGuardShellEnv | undefined> {
+export async function ensureHdcGuardShellEnv(input: HdcGuardShellEnvInput): Promise<HdcGuardShellEnv | undefined> {
   // Without a session there is nothing to bind permission asks
   // to; refuse to arm rather than run unattributed (fail closed).
   if (!input.sessionID || !input.directory) return undefined
@@ -96,7 +95,8 @@ export async function ensureHdcGuardShellEnv(
   registerSession(input.sessionID, input.directory)
 
   return {
-    PATH: isolatedShellPath(input.currentPath ?? process.env.PATH, Global.Path.bin),
+    // Explicit Worker environments use case-sensitive keys, including Windows Path.
+    PATH: isolatedShellPath(input.currentPath ?? process.env.PATH ?? process.env.Path, Global.Path.bin),
     DEVECO_CODE_HDC_ENDPOINT: server.endpoint,
     DEVECO_CODE_HDC_TOKEN: server.token,
     DEVECO_CODE_HDC_SESSION: input.sessionID,

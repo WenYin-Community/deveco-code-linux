@@ -238,9 +238,9 @@ test("records first/final build elapsed from prompt submission, not build durati
   })
   // Prompt submitted at 00:00:00; first build finishes 60s later and fails, final build finishes 180s later.
   setSystemTime(new Date("2026-01-01T00:01:00Z"))
-  collector.recordToolExecution("build_project", 5000, true, false)
+  collector.recordBuildExecution(false)
   setSystemTime(new Date("2026-01-01T00:03:00Z"))
-  collector.recordToolExecution("build_project", 3000, true, true)
+  collector.recordBuildExecution(true)
   setSystemTime(new Date())
 
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
@@ -284,60 +284,6 @@ test("collection still requires login and the analytics switch", async () => {
   expect(await collector.shouldCollect()).toBe(false)
 })
 
-test("emits a build project event listing every build of the turn", async () => {
-  const collector = new SessionCollector({ analyticsEnabled: async () => true })
-  collector.setLoggedIn(true)
-  collector.startSession({
-    sessionID: "session-build-detail",
-    messageId: "message-1",
-    sourceVersion: "1.2.3",
-    providerId: "deveco",
-    modelId: "glm-5",
-    agentName: "build",
-  })
-  collector.recordBuildProjectInfo({
-    toolName: "build_project",
-    duration: 5000,
-    isSuccess: false,
-    timestamp: 1,
-    exitCode: 10505001,
-    output: "10505001 ArkTS Compiler Error: ...",
-    truncated: false,
-  })
-  collector.recordBuildProjectInfo({
-    toolName: "build_project",
-    duration: 3000,
-    isSuccess: true,
-    timestamp: 2,
-    exitCode: 0,
-    output: "Build completed successfully (exitCode=0)",
-    truncated: false,
-  })
-
-  const event = collector.buildProjectEvent()
-  expect(event?.sessionid).toBe("session-build-detail")
-  expect(event?.messageId).toBe("message-1")
-  expect(event?.sourceType).toBe("DevEco-Code-Cli")
-  expect(event?.buildProjectInfo).toHaveLength(2)
-  expect(event?.buildProjectInfo[0]?.exitCode).toBe(10505001)
-  expect(event?.buildProjectInfo[1]?.exitCode).toBe(0)
-})
-
-test("returns null build project event when the turn had no build", async () => {
-  const collector = new SessionCollector({ analyticsEnabled: async () => true })
-  collector.setLoggedIn(true)
-  collector.startSession({
-    sessionID: "session-no-build",
-    messageId: "message-1",
-    sourceVersion: "1.2.3",
-    providerId: "deveco",
-    modelId: "glm-5",
-    agentName: "build",
-  })
-
-  expect(collector.buildProjectEvent()).toBe(null)
-})
-
 test("classifies tools by origin and keeps custom, MCP, and skill counts separate", async () => {
   const collector = new SessionCollector({ analyticsEnabled: async () => true })
   collector.setLoggedIn(true)
@@ -370,7 +316,6 @@ test("classifies tools by origin and keeps custom, MCP, and skill counts separat
     "plan_exit",
     "hdc_log",
     "switch_cwd",
-    "build_project",
     "start_app",
     "verify_ui",
     "get_ui_verification_log",
@@ -383,11 +328,11 @@ test("classifies tools by origin and keeps custom, MCP, and skill counts separat
     collector.recordToolExecution(name, 20, false)
   }
 
-  collector.recordToolExecution("deveco_build_project", 10, true, false, "mcp")
-  collector.recordToolExecution("read", 10, true, false, "custom")
-  collector.recordToolExecution("skill", 10, true, false, "custom")
-  collector.recordToolExecution("read", 10, true, false, "mcp")
-  collector.recordToolExecution("future_builtin", 10, true, false, "builtin")
+  collector.recordToolExecution("deveco_build_project", 10, true, "mcp")
+  collector.recordToolExecution("read", 10, true, "custom")
+  collector.recordToolExecution("skill", 10, true, "custom")
+  collector.recordToolExecution("read", 10, true, "mcp")
+  collector.recordToolExecution("future_builtin", 10, true, "builtin")
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.operations).toEqual({
     builtinTools: [...builtin.map((name) => ({ name, count: 2 })), { name: "future_builtin", count: 1 }],
@@ -422,15 +367,15 @@ test("keeps builtin tool ids unchanged", async () => {
     agentName: "build",
   })
   collector.recordToolExecution("bash", 10, true)
-  collector.recordToolExecution("read", 20, true, false, "builtin")
-  collector.recordToolExecution("build_project", 30, true, true)
+  collector.recordToolExecution("read", 20, true, "builtin")
+  collector.recordToolExecution("write", 30, true)
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   // Ordinary tools keep their own id in the execution log and in the per-category counters.
-  expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual(["bash", "read", "build_project"])
+  expect(event?.toolExecutions.map((tool) => tool.toolName)).toEqual(["bash", "read", "write"])
   expect(event?.operations.builtinTools).toEqual([
     { name: "bash", count: 1 },
     { name: "read", count: 1 },
-    { name: "build_project", count: 1 },
+    { name: "write", count: 1 },
   ])
   expect(event?.operations.skillTools).toEqual([])
 })
@@ -448,7 +393,7 @@ test("records the skill tool id while keeping per-skill counts", async () => {
   })
   // The execution log keeps the tool id "skill"; the skill name only refines the per-skill
   // counter under operations.skillTools.
-  collector.recordToolExecution("skill", 10, true, false, "builtin", "hmos-arkui-develop-skill")
+  collector.recordToolExecution("skill", 10, true, "builtin", "hmos-arkui-develop-skill")
   const single = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(single?.toolExecutions).toEqual([
     { toolName: "skill", duration: 10, isSuccess: true, timestamp: expect.any(Number) },
@@ -458,7 +403,7 @@ test("records the skill tool id while keeping per-skill counts", async () => {
   expect(single?.operations.skillTools).toEqual([{ name: "hmos-arkui-develop-skill", count: 1 }])
 
   // A second, different skill adds its own counter; both executions still read as "skill".
-  collector.recordToolExecution("skill", 20, false, false, "builtin", "arkts-error-fixes")
+  collector.recordToolExecution("skill", 20, false, "builtin", "arkts-error-fixes")
   const pair = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(pair?.operations.skillTools).toEqual([
     { name: "hmos-arkui-develop-skill", count: 1 },
@@ -478,18 +423,18 @@ test("falls back to the tool id when the skill name is blank", async () => {
     modelId: "model-1",
     agentName: "build",
   })
-  for (const name of ["arkts-error-fixes", "arkts-error-fixes", "read", "build_project", "", "   ", undefined]) {
-    collector.recordToolExecution("skill", 10, true, false, "builtin", name)
+  for (const name of ["arkts-error-fixes", "arkts-error-fixes", "read", "write", "", "   ", undefined]) {
+    collector.recordToolExecution("skill", 10, true, "builtin", name)
   }
-  collector.recordToolExecution("skill", 10, true, false, "custom", "custom-skill")
-  collector.recordToolExecution("skill", 10, true, false, "mcp", "mcp-skill")
+  collector.recordToolExecution("skill", 10, true, "custom", "custom-skill")
+  collector.recordToolExecution("skill", 10, true, "mcp", "mcp-skill")
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.operations).toEqual({
     builtinTools: [],
     skillTools: [
       { name: "arkts-error-fixes", count: 2 },
       { name: "read", count: 1 },
-      { name: "build_project", count: 1 },
+      { name: "write", count: 1 },
       { name: "skill", count: 3 },
     ],
     customTools: [{ name: "skill", count: 1 }],

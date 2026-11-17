@@ -15,6 +15,7 @@ import { Provider } from "../../src/provider/provider"
 import { Skill } from "../../src/skill"
 import { Truncate } from "../../src/tool/truncate"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 
 const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Agent.layer.pipe(
@@ -28,6 +29,12 @@ const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const it = testEffect(agentLayer())
+const withoutPlugins = testEffect(
+  LayerNode.buildLayer(Agent.node, {
+    replacements: [LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ disableDefaultPlugins: true }))],
+  }),
+)
+const harnessDfx = testEffect(LayerNode.buildLayer(LayerNode.group([Agent.node, Config.node])))
 
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionV1.Action | undefined {
@@ -93,6 +100,8 @@ it.instance("build asks and spec-verify allows UI verification tools by default"
     )
 
     const [build, specVerify, specImplementation, goal, plan, general, explore, compaction, title, summary] = agents
+    expect(specVerify?.prompt).toContain("at most 2 verification attempts")
+    expect(goal?.prompt).toContain("Do not run a separate final pass")
 
     for (const tool of uiTools) {
       expect(evalPerm(build, tool)).toBe("ask")
@@ -107,12 +116,12 @@ it.instance("build asks and spec-verify allows UI verification tools by default"
   }),
 )
 
-it.instance("spec-implementation agent is a native subagent with correct permissions", () =>
+it.instance("Harness supplies spec-implementation with the configured subagent permissions", () =>
   Effect.gen(function* () {
     const impl = yield* load((svc) => svc.get("spec-implementation"))
     expect(impl).toBeDefined()
     expect(impl?.mode).toBe("subagent")
-    expect(impl?.native).toBe(true)
+    expect(impl?.native).toBe(false)
     expect(impl?.hidden).toBe(true)
     expect(evalPerm(impl, "edit")).toBe("allow")
     expect(evalPerm(impl, "write")).toBe("allow")
@@ -138,7 +147,11 @@ it.instance("plan agent denies edits except data/plans/*", () =>
     // path like C:\Users\...\AppData\Local\deveco\plans. Check the allow rule
     // exists in the permission list (exact path varies by platform).
     const plansAllow = plan!.permission.some(
-      (r) => r.permission === "external_directory" && r.action === "allow" && typeof r.pattern === "string" && r.pattern.includes("plans"),
+      (r) =>
+        r.permission === "external_directory" &&
+        r.action === "allow" &&
+        typeof r.pattern === "string" &&
+        r.pattern.includes("plans"),
     )
     expect(plansAllow).toBe(true)
   }),
@@ -196,12 +209,32 @@ it.instance("explore agent asks for external directories and allows whitelisted 
   }),
 )
 
-it.instance("dfx agent allows analysis scripts but denies code modification", () =>
+withoutPlugins.instance("does not retain a native DFX agent when Harness is disabled", () =>
+  Effect.gen(function* () {
+    const agents = yield* load((svc) => svc.list())
+    expect(agents.some((agent) => agent.name === "dfx")).toBe(false)
+    expect(agents.some((agent) => agent.name === "build")).toBe(true)
+  }),
+)
+
+harnessDfx.instance("Harness /analyze routes to its plugin-owned DFX agent", () =>
+  Effect.gen(function* () {
+    const agent = yield* (yield* Agent.Service).get("dfx")
+    const config = yield* (yield* Config.Service).get()
+    const command = config.command?.analyze
+    expect(agent?.native).toBe(false)
+    expect(agent?.hidden).toBe(true)
+    expect(command?.agent).toBe("dfx")
+    expect(command?.subtask).toBe(true)
+  }),
+)
+
+it.instance("Harness supplies the DFX agent with analysis-only permissions", () =>
   Effect.gen(function* () {
     const dfx = yield* load((svc) => svc.get("dfx"))
     expect(dfx).toBeDefined()
     expect(dfx?.mode).toBe("subagent")
-    expect(dfx?.native).toBe(true)
+    expect(dfx?.native).toBe(false)
     // SR1 v1.6: hidden from pickers and @-mention autocomplete; natural
     // language analysis is delegated by the main agent via the task tool,
     // which surfaces the description regardless of hidden.
@@ -934,15 +967,13 @@ it.instance(
 )
 
 it.instance(
-  "defaultAgent returns goal when build is disabled and default_agent not set",
+  "defaultAgent returns plan when build is disabled and default_agent not set",
   () =>
     Effect.gen(function* () {
       const agent = yield* load((svc) => svc.defaultAgent())
-      // build is disabled, so it returns the first primary non-hidden agent
-      // by insertion order: build, debug, goal, spec-impl, spec-verify, plan,
-      // general, explore, compaction, summary. goal is the first primary
-      // non-hidden after build.
-      expect(agent).toBe("goal")
+      // Plugin agents are merged after native defaults. Plan is the first
+      // remaining visible primary agent when build is disabled.
+      expect(agent).toBe("plan")
     }),
   {
     config: {

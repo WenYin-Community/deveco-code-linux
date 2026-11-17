@@ -5,15 +5,7 @@ import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import { createEnvironmentFields } from "./events"
-import type {
-  AiSessionEvent,
-  BuildProjectAnalyticsEvent,
-  BuildProjectInfo,
-  BuildResults,
-  Operations,
-  SessionContext,
-  ToolBucket,
-} from "./types"
+import type { AiSessionEvent, BuildResults, Operations, SessionContext, ToolBucket } from "./types"
 import { isBuiltinTool, isSkillTool, resolveTaskType, UI_RECONSTRUCTION_SCORE_UNAVAILABLE } from "./types"
 
 export type SessionStart = {
@@ -124,7 +116,6 @@ export class SessionCollector {
       toolExecutions: [],
       toolCounts: new Map(),
       devecoCliCommandCounts: new Map(),
-      buildProjectInfo: [],
       workflow: "",
       workflows: new Set(),
       buildResults: {
@@ -162,20 +153,10 @@ export class SessionCollector {
     this.context.uiVerificationModel = model
   }
 
-  // Per-build sidecar ledger for the DevEcoCodeBuild event; entries carry the log preview
-  // and parsed error code that AiSessionEvent.toolExecutions intentionally omits.
-  recordBuildProjectInfo(entry: BuildProjectInfo): void {
-    if (!this.context) return
-    this.context.buildProjectInfo.push(entry)
-  }
-
-  // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
-  // isBuildSuccess: only meaningful for build_project — true when output contains "build successful".
   recordToolExecution(
     toolName: string,
     duration: number,
     isSuccess: boolean,
-    isBuildSuccess = false,
     source?: "builtin" | "custom" | "mcp",
     skillName?: string,
   ): void {
@@ -208,9 +189,6 @@ export class SessionCollector {
       category,
       count: (this.context.toolCounts.get(key)?.count ?? 0) + 1,
     })
-    // Skip build result tracking when the tool execution itself failed — no build actually ran.
-    if (toolName === "build_project" && isSuccess)
-      this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
   }
 
   recordBuildExecution(isBuildSuccess: boolean): void {
@@ -310,18 +288,6 @@ export class SessionCollector {
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
       finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
       workflow: this.context.workflow,
-    }
-  }
-
-  // DevEcoCodeBuild sidecar: only turns with at least one build_project execution
-  // produce an event; an empty list would be pure noise.
-  buildProjectEvent(): BuildProjectAnalyticsEvent | null {
-    if (!this.context || this.context.buildProjectInfo.length === 0) return null
-    return {
-      ...createEnvironmentFields(this.context.sourceVersion),
-      sessionid: this.context.sessionID,
-      messageId: this.context.messageId,
-      buildProjectInfo: this.context.buildProjectInfo,
     }
   }
 

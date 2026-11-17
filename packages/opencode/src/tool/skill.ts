@@ -6,6 +6,8 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Skill } from "../skill"
 import * as Tool from "./tool"
 import DESCRIPTION from "./skill.txt"
+import DFX_FILES from "./dfx-files.txt"
+import { loadSavedDevEcoHome } from "./lib/env"
 
 const FILES_WHITELIST = "FILES.md"
 
@@ -13,9 +15,7 @@ export const Parameters = Schema.Struct({
   name: Schema.String.annotate({ description: "The name of the skill from available_skills" }),
 })
 
-const DevEcoRequiredSkills = new Set([
-  "hmos-arkui-develop-skill",
-])
+const DevEcoRequiredSkills = new Set(["hmos-arkui-develop-skill"])
 
 export const SkillTool = Tool.define(
   "skill",
@@ -34,9 +34,13 @@ export const SkillTool = Tool.define(
             .pipe(Effect.catchTag("Skill.NotFoundError", (error) => Effect.die(new Error(error.message))))
 
           if (DevEcoRequiredSkills.has(info.name) && !process.env.DEVECO_HOME?.trim()) {
-            throw new Error(
-              "DEVECO_HOME environment variable is not configured. PLEASE set your DEVECO_HOME path manually and restart.",
-            )
+            const home = yield* Effect.promise(loadSavedDevEcoHome)
+            if (!home) {
+              throw new Error(
+                "DEVECO_HOME environment variable is not configured. PLEASE set your DEVECO_HOME path manually and restart.",
+              )
+            }
+            process.env.DEVECO_HOME = home
           }
 
           yield* ctx.ask({
@@ -49,26 +53,32 @@ export const SkillTool = Tool.define(
           const dir = path.dirname(info.location)
           const base = pathToFileURL(dir).href
 
-          if (yield* fsys.existsSafe(path.join(dir, FILES_WHITELIST))) {
-            const content = yield* fsys.readFileString(path.join(dir, FILES_WHITELIST)).pipe(Effect.orDie);
+          // Harness supplies DFX resources; retain the host curated companion list
+          // until the installed skill supplies its own FILES.md.
+          const content = (yield* fsys.existsSafe(path.join(dir, FILES_WHITELIST)))
+            ? yield* fsys.readFileString(path.join(dir, FILES_WHITELIST)).pipe(Effect.orDie)
+            : info.name === "hmos-dfx-analyzer"
+              ? DFX_FILES
+              : undefined
+          if (content !== undefined) {
             const { notes, files } = content.split("\n").reduce(
               (acc, line) => {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith("#")) return acc;
+                const trimmed = line.trim()
+                if (!trimmed || trimmed.startsWith("#")) return acc
                 if (trimmed.startsWith("@note ")) {
-                  acc.notes.push(trimmed.slice(6));
+                  acc.notes.push(trimmed.slice(6))
                 } else {
-                  acc.files.push(path.resolve(dir, trimmed));
+                  acc.files.push(path.resolve(dir, trimmed))
                 }
-                return acc;
+                return acc
               },
               { notes: [] as string[], files: [] as string[] },
-            );
+            )
             const existing = yield* Effect.all(
               files.map((f) => fsys.existsSafe(f).pipe(Effect.map((ok) => (ok ? f : null)))),
               { concurrency: "unbounded" },
-            );
-            const entries = [...notes, ...existing.filter((f): f is string => f !== null)];
+            )
+            const entries = [...notes, ...existing.filter((f): f is string => f !== null)]
             return {
               title: `Loaded skill: ${info.name}`,
               output: render(info.name, info.content, base, entries),
@@ -76,7 +86,7 @@ export const SkillTool = Tool.define(
                 name: info.name,
                 dir,
               },
-            };
+            }
           }
 
           const files = yield* ripgrep.find({
@@ -86,8 +96,8 @@ export const SkillTool = Tool.define(
             follow: false,
             signal: ctx.abort,
             limit: 10,
-          });
-          const entries = files.map((file) => path.resolve(dir, file.path));
+          })
+          const entries = files.map((file) => path.resolve(dir, file.path))
 
           return {
             title: `Loaded skill: ${info.name}`,

@@ -10,7 +10,6 @@ import type {
   AnalyticsAction,
   BuildProjectAnalyticsEvent,
   DevEcoCodeSlashEvent,
-  UiVerificationAnalyticsEvent,
 } from "@/plugin/analytics/types"
 import {
   ANALYTICS_SCHEMA_VERSION,
@@ -254,7 +253,9 @@ async function stageEncryptedMagpieStorage(root: string, events: unknown[]) {
 async function readStagedMagpieQueue(root: string): Promise<Record<string, unknown>[]> {
   const file = path.join(root, "analytics", "analytics-magpie.json")
   const persisted = JSON.parse(await fs.readFile(file, "utf8"))
-  const plain = LocalCrypto.isEncryptedBlob(persisted) ? JSON.parse(LocalCrypto.decryptForLocalStorage(persisted)) : persisted
+  const plain = LocalCrypto.isEncryptedBlob(persisted)
+    ? JSON.parse(LocalCrypto.decryptForLocalStorage(persisted))
+    : persisted
   return plain.pendingEvents
 }
 
@@ -391,7 +392,12 @@ test("Magpie read retains pending events whose payload this build cannot validat
   delete legacy.outputTokens
   legacy.inputTokenCount = 7
   legacy.outputTokenCount = 3
-  await stageEncryptedMagpieStorage(tmp.path, [unknownPayload, invalidPayload, legacy, { ...magpieEvent(), cacheTokens: 5 }])
+  await stageEncryptedMagpieStorage(tmp.path, [
+    unknownPayload,
+    invalidPayload,
+    legacy,
+    { ...magpieEvent(), cacheTokens: 5 },
+  ])
 
   const pending = await getMagpiePendingEvents()
   expect(pending.map((item) => item.queueId)).toEqual(["queue-0", "queue-1", "queue-2", "queue-3"])
@@ -526,58 +532,28 @@ test("ai code attribution queue rejects invalid totals and extra local fields", 
 
 function buildProjectEvent(): BuildProjectAnalyticsEvent {
   return {
-    sourceType: 'DevEco-Code-Cli',
-    sourceVersion: '1.2.3',
-    os_arch: 'arm64',
+    sourceType: "DevEco-Code-Cli",
+    sourceVersion: "1.2.3",
+    os_arch: "arm64",
     os_name: process.platform,
-    os_version: 'os-version',
-    sessionid: 'session-build',
-    messageId: 'message-build',
+    os_version: "os-version",
+    sessionid: "session-build",
+    messageId: "message-build",
     buildProjectInfo: [
       {
-        toolName: 'build_project',
+        toolName: "build_project",
         duration: 5000,
         isSuccess: false,
         timestamp: 1,
         exitCode: 10505001,
-        output: '10505001 ArkTS Compiler Error: ...',
+        output: "10505001 ArkTS Compiler Error: ...",
         truncated: false,
       },
     ],
   }
 }
 
-function uiVerificationEvent(): UiVerificationAnalyticsEvent {
-  return {
-    sourceType: 'DevEco-Code-Cli',
-    sourceVersion: '1.2.3',
-    os_arch: 'arm64',
-    os_name: process.platform,
-    os_version: 'os-version',
-    sessionid: 'session-verify',
-    messageId: 'message-verify',
-    event_detail: {
-      subAction: 'run',
-      modelName: 'vision-model',
-      freshStart: true,
-      deviceCategory: 'emulator',
-      deviceType: 'phone',
-      bundleName: 'com.example.app',
-      planLen: 32,
-      verificationSuccess: false,
-      deeplinkUsed: false,
-      stepExecuted: 4,
-      stepTotalDurationMs: 1000,
-      stepReused: 2,
-      toolUsageDist: { getlayout: 2, other: 1 },
-      screenshotCount: 3,
-      tokenUsage: 180,
-      failType: 'assertion_failed',
-    },
-  }
-}
-
-test('build project events round-trip through the encrypted pending queue', async () => {
+test("build project events round-trip through the encrypted pending queue", async () => {
   await using tmp = await tmpdir()
   Global.Path.data = tmp.path
 
@@ -591,12 +567,12 @@ test('build project events round-trip through the encrypted pending queue', asyn
   }
 })
 
-test('build project queue rejects events with unknown fields', async () => {
+test("build project queue rejects events with unknown fields", async () => {
   await using tmp = await tmpdir()
   Global.Path.data = tmp.path
-  const file = path.join(tmp.path, 'analytics', 'analytics.json')
+  const file = path.join(tmp.path, "analytics", "analytics.json")
   await fs.mkdir(path.dirname(file), { recursive: true })
-  const invalid = { ...buildProjectEvent(), outputPath: '/local/full/log.txt' }
+  const invalid = { ...buildProjectEvent(), outputPath: "/local/full/log.txt" }
   const encrypted = LocalCrypto.encryptForLocalStorage(
     JSON.stringify({
       schemaVersion: ANALYTICS_SCHEMA_VERSION,
@@ -604,8 +580,8 @@ test('build project queue rejects events with unknown fields', async () => {
         {
           action: ANALYTICS_ACTION.BUILD_PROJECT,
           event: invalid,
-          uid: 'uid-1',
-          queueId: 'queue-1',
+          uid: "uid-1",
+          queueId: "queue-1",
           sealed: false,
         },
       ],
@@ -630,17 +606,24 @@ test("queue accepts legacy and custom tool summaries but rejects malformed categ
     { ...legacy, customTools: [{ name: "my_check", count: "2" }] },
     { ...legacy, customTools: [], unexpected: [] },
   ]
-  await fs.writeFile(file, JSON.stringify(LocalCrypto.encryptForLocalStorage(JSON.stringify({
-    schemaVersion: ANALYTICS_SCHEMA_VERSION,
-    pendingEvents: operations.map((operations, index) => ({
-      action: ANALYTICS_ACTION.AI_SESSION,
-      event: { ...event(), operations },
-      uid: `uid-${index}`,
-      queueId: `queue-${index}`,
-      sealed: false,
-    })),
-    lastFlush: 1,
-  }))))
+  await fs.writeFile(
+    file,
+    JSON.stringify(
+      LocalCrypto.encryptForLocalStorage(
+        JSON.stringify({
+          schemaVersion: ANALYTICS_SCHEMA_VERSION,
+          pendingEvents: operations.map((operations, index) => ({
+            action: ANALYTICS_ACTION.AI_SESSION,
+            event: { ...event(), operations },
+            uid: `uid-${index}`,
+            queueId: `queue-${index}`,
+            sealed: false,
+          })),
+          lastFlush: 1,
+        }),
+      ),
+    ),
+  )
   const pending = await preparePendingBatch(10)
   expect(pending.map((item) => item.queueId)).toEqual(["queue-0", "queue-1"])
   expect(pending[1]?.event).toMatchObject({ operations: { customTools: [{ name: "my_check", count: 2 }] } })
@@ -752,104 +735,6 @@ test("current-schema queue rejects ai_session events with a non-string workflow"
   )
   await fs.writeFile(file, JSON.stringify(encrypted))
   expect((await loadStorage()).pendingEvents).toEqual([])
-})
-
-test("ui verification events round-trip through the encrypted pending queue", async () => {
-  await using tmp = await tmpdir()
-  Global.Path.data = tmp.path
-
-  await enqueuePendingEvent({ action: ANALYTICS_ACTION.UI_VERIFICATION, event: uiVerificationEvent() })
-  const pending = await getPendingEvents()
-
-  expect(pending).toHaveLength(1)
-  expect(pending[0]?.action).toBe(ANALYTICS_ACTION.UI_VERIFICATION)
-  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
-    expect(pending[0].event.event_detail).toEqual(uiVerificationEvent().event_detail)
-  }
-})
-
-test("ui verification queue preserves the deeplinkUsed flag", async () => {
-  await using tmp = await tmpdir()
-  Global.Path.data = tmp.path
-  const event = uiVerificationEvent()
-
-  await enqueuePendingEvent({
-    action: ANALYTICS_ACTION.UI_VERIFICATION,
-    event: { ...event, event_detail: { ...event.event_detail, deeplinkUsed: true } },
-  })
-  const pending = await getPendingEvents()
-
-  expect(pending).toHaveLength(1)
-  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
-    expect(pending[0].event.event_detail.deeplinkUsed).toBe(true)
-  }
-})
-
-test("ui verification queue rejects raw content and unknown fields", async () => {
-  await using tmp = await tmpdir()
-  Global.Path.data = tmp.path
-  const file = path.join(tmp.path, "analytics", "analytics.json")
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  const encrypted = LocalCrypto.encryptForLocalStorage(
-    JSON.stringify({
-      schemaVersion: ANALYTICS_SCHEMA_VERSION,
-      pendingEvents: [
-        {
-          action: ANALYTICS_ACTION.UI_VERIFICATION,
-          event: {
-            ...uiVerificationEvent(),
-            event_detail: {
-              ...uiVerificationEvent().event_detail,
-              testPlan: "private test plan",
-            },
-          },
-          uid: "uid-1",
-          queueId: "queue-1",
-          sealed: false,
-        },
-      ],
-      lastFlush: 1,
-    }),
-  )
-  await fs.writeFile(file, JSON.stringify(encrypted))
-
-  expect((await loadStorage()).pendingEvents).toEqual([])
-})
-
-test("ui verification queue accepts only the documented detail types", async () => {
-  await using tmp = await tmpdir()
-  Global.Path.data = tmp.path
-  const file = path.join(tmp.path, "analytics", "analytics.json")
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  const valid = uiVerificationEvent()
-  const invalidStep = {
-    ...valid,
-    event_detail: { ...valid.event_detail, stepExecuted: "4" },
-  }
-  const invalidDistribution = {
-    ...valid,
-    event_detail: { ...valid.event_detail, toolUsageDist: { getlayout: "2" } },
-  }
-  const encrypted = LocalCrypto.encryptForLocalStorage(
-    JSON.stringify({
-      schemaVersion: ANALYTICS_SCHEMA_VERSION,
-      pendingEvents: [invalidStep, invalidDistribution, valid].map((event, index) => ({
-        action: ANALYTICS_ACTION.UI_VERIFICATION,
-        event,
-        uid: `uid-${index}`,
-        queueId: `queue-${index}`,
-        sealed: false,
-      })),
-      lastFlush: 1,
-    }),
-  )
-  await fs.writeFile(file, JSON.stringify(encrypted))
-
-  const pending = await preparePendingBatch(10)
-  expect(pending.map((item) => item.queueId)).toEqual(["queue-2"])
-  if (pending[0]?.action === ANALYTICS_ACTION.UI_VERIFICATION) {
-    expect(pending[0].event.event_detail.stepReused).toBe(2)
-  }
 })
 
 // The server command hook and the TUI reporting path (POST /analytics/command) write the same

@@ -71,8 +71,7 @@ function sessionErrorText(error: SessionErrorPayload): string {
 function sessionErrorMeta(error: SessionErrorPayload) {
   const data = typeof error.data === "object" && error.data !== null ? error.data : undefined
   const type = data ? gatewayErrorType(data) : undefined
-  const statusCode =
-    data && "statusCode" in data && typeof data.statusCode === "number" ? data.statusCode : undefined
+  const statusCode = data && "statusCode" in data && typeof data.statusCode === "number" ? data.statusCode : undefined
   return {
     name: error.name,
     ...(type ? { type } : {}),
@@ -164,7 +163,8 @@ function subagentToolTarget(part: ToolPart): string {
   if (typeof command === "string" && command.trim()) {
     return truncateProgress(command.replace(/\s+/g, " ").trim(), 60)
   }
-  const raw = input?.filePath ?? input?.file_path ?? input?.path ?? input?.pathInProject ?? input?.pattern ?? input?.query
+  const raw =
+    input?.filePath ?? input?.file_path ?? input?.path ?? input?.pathInProject ?? input?.pattern ?? input?.query
   if (typeof raw !== "string" || !raw.trim()) return ""
   const normalized = raw.replace(/\\/g, "/")
   return truncateProgress(normalized.split("/").pop() ?? normalized, 60)
@@ -325,11 +325,7 @@ export class Subscription {
     // empty turn. Using the assistant message's own id as messageId keeps each
     // failed turn in its own message bubble — ACP clients aggregate chunks by
     // messageId, so a session-scoped id would merge unrelated failures.
-    if (
-      message.info.role === "assistant" &&
-      message.info.error &&
-      message.info.error.name !== "MessageAbortedError"
-    ) {
+    if (message.info.role === "assistant" && message.info.error && message.info.error.name !== "MessageAbortedError") {
       await this.input.connection.sessionUpdate({
         sessionId: message.info.sessionID,
         update: sessionErrorChunk(message.info.id, message.info.error),
@@ -451,7 +447,7 @@ export class Subscription {
   }
 
   // plan_exit/plan_enter hand the session to another agent by writing a synthetic
-  // user message (tool/plan.ts); the runner picks the agent up from that message
+  // user message through Harness; the runner picks the agent up from that message
   // but no ACP notification follows, so the client keeps prompting with its stale
   // mode (service.ts pins `agent: modeId`). Mirror the switch into the session
   // state and push current_mode_update. Live events only — replay derives the

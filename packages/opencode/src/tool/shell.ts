@@ -1,9 +1,8 @@
 import { Effect, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
-import { rm, readFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
-import { randomUUID } from "node:crypto"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -19,7 +18,12 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Shell, PS_ENCODING_PREAMBLE } from "@opencode-ai/core/shell"
 import { ShellID } from "./shell/id"
-import { Sandbox, toNativePrepareRequest, fromNativePreparedCommand, resolveSandboxAndMapError } from "@opencode-ai/core/sandbox"
+import {
+  Sandbox,
+  toNativePrepareRequest,
+  fromNativePreparedCommand,
+  resolveSandboxAndMapError,
+} from "@opencode-ai/core/sandbox"
 import { SandboxResolver } from "@opencode-ai/core/config/sandbox-resolver"
 import { ConfigSandbox, type ResolvedProfile } from "@opencode-ai/core/config/sandbox"
 import { getRuntimeSandbox } from "@opencode-ai/core/config/runtime-sandbox"
@@ -32,30 +36,16 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
-import { getSessionCwd, setSessionCwd } from "./lib/session-cwd"
-import { resolveCliInvocation } from "@/deveco-cli/commands"
-import { DEVECO_CLI_EVENT_FILE, type DevecoCliEvent } from "@/deveco-cli/event"
-import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV } from "@/deveco-cli/router"
+import { getSessionCwd } from "./lib/session-cwd"
+import { loadSavedDevEcoHome } from "./lib/env"
 import { HdcHostEnforcement } from "@/hdc/host-enforcement"
+import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV, resolveShellTimeout } from "@/agent/shell-policy"
 import { Global } from "@opencode-ai/core/global"
 import { Agent } from "@/agent/agent"
 
 export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
-export const DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS = 2 * 60 * 60 * 1000
-const DEVECO_IMAGE_DOWNLOAD_COMMAND = new RegExp(
-  "\\bdevecocli(?:\\.(?:cmd|exe))?\\s+emulator\\s+image\\s+download\\b",
-  "i",
-)
-const SHELL_COMMAND_QUOTES = new RegExp("[\"']", "g")
-const SHELL_COMMAND_WHITESPACE = new RegExp("\\s+", "g")
-
-export function resolveShellTimeout(command: string, timeout: number): number {
-  const normalized = command.replace(SHELL_COMMAND_QUOTES, " ").replace(SHELL_COMMAND_WHITESPACE, " ")
-  return DEVECO_IMAGE_DOWNLOAD_COMMAND.test(normalized) ? Math.max(timeout, DEVECO_IMAGE_DOWNLOAD_TIMEOUT_MS) : timeout
-}
-
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const FILES = new Set([
   ...CWD,
@@ -119,7 +109,6 @@ type ShellRunInput = {
   env: NodeJS.ProcessEnv
   timeout: number
   description: string
-  devecoCliEventFile: string
 }
 
 type ShellRunLimits = {
@@ -319,53 +308,6 @@ function tail(text: string, maxLines: number, maxBytes: number) {
   }
 }
 
-async function readDevecoCliEvents(file: string): Promise<DevecoCliEvent[]> {
-  const text = await Bun.file(file)
-    .text()
-    .catch(() => "")
-  await rm(file, { force: true }).catch(() => undefined)
-  return text.split(/\r?\n/).filter(Boolean).flatMap(parseDevecoCliEvent)
-}
-
-function parseDevecoCliEvent(line: string): DevecoCliEvent[] {
-  try {
-    const event: unknown = JSON.parse(line)
-    if (!event || typeof event !== "object") return []
-    const value = event as Record<string, unknown>
-    if (typeof value.command !== "string" || !value.command) return []
-    if (value.subcommand !== undefined && typeof value.subcommand !== "string") return []
-    if (typeof value.exitCode !== "number" || typeof value.durationMs !== "number") return []
-    // The event file is writable by every command the shell tool runs, so the payload is not
-    // trusted: re-apply the counting policy (unknown commands are dropped, a subcommand the
-    // command does not own is normalised away) instead of accepting whatever shape is on disk.
-    // resolveCliInvocation is the single source of truth for that policy (deveco-cli/commands.ts).
-    const subcommand = typeof value.subcommand === "string" && value.subcommand ? value.subcommand : undefined
-    const invocation = resolveCliInvocation([value.command, ...(subcommand ? [subcommand] : [])])
-    if (!invocation) return []
-    return [
-      {
-        command: invocation.command,
-        ...(invocation.subcommand ? { subcommand: invocation.subcommand } : {}),
-        exitCode: value.exitCode,
-        durationMs: value.durationMs,
-        ...(typeof value.projectRoot === "string" ? { projectRoot: value.projectRoot } : {}),
-      },
-    ]
-  } catch {
-    return []
-  }
-}
-
-function updateSessionCwdFromDevecoCliEvents(events: DevecoCliEvent[], cwd: string, sessionID: string) {
-  const projectDir = events.findLast(
-    (event) => event.command === "create" && event.exitCode === 0 && event.projectRoot,
-  )?.projectRoot
-  if (!projectDir) return ""
-  const projectRoot = path.resolve(cwd, projectDir)
-  setSessionCwd(sessionID, projectRoot)
-  return `\n\n[Session directory auto-switched to ${projectRoot}]`
-}
-
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
   const tree = yield* Effect.promise(() => parser().then((p) => (ps ? p.ps : p.bash).parse(command)))
   if (!tree) throw new Error("Failed to parse command")
@@ -561,6 +503,10 @@ export const ShellTool = Tool.define(
     })
 
     const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string, directory: string) {
+      if (!process.env.DEVECO_HOME?.trim()) {
+        const home = yield* Effect.promise(loadSavedDevEcoHome)
+        if (home) process.env.DEVECO_HOME = home
+      }
       const extra = yield* plugin.trigger(
         "shell.env",
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID, directory },
@@ -666,7 +612,10 @@ export const ShellTool = Tool.define(
         text = await readFile(filepath, "utf-8")
       } catch (err) {
         if (err instanceof Error && "code" in err && err.code === "ENOENT") return undefined
-        console.warn(`[sandbox] Failed to read config file ${filepath}:`, err instanceof Error ? err.message : String(err))
+        console.warn(
+          `[sandbox] Failed to read config file ${filepath}:`,
+          err instanceof Error ? err.message : String(err),
+        )
         return undefined
       }
       if (!text) return undefined
@@ -716,22 +665,23 @@ export const ShellTool = Tool.define(
 
     // FR-CFG-009: resolve runtime layer from env vars when no session override exists.
     // Checks DEVECO_CONFIG_CONTENT (inline JSON) then DEVECO_CONFIG (file path).
-    const resolveRuntimeEnvLayer = Effect.fn("ShellTool.resolveRuntimeEnvLayer")(
-      function* () {
-        const envContent = process.env.DEVECO_CONFIG_CONTENT
-        if (envContent) {
-          const parsed = extractSandbox(envContent)
-          if (parsed) return parsed
-        }
-        const envConfigPath = process.env.DEVECO_CONFIG
-        if (envConfigPath) {
-          return yield* Effect.promise(() => readSandboxConfig(envConfigPath))
-        }
-        return undefined
-      },
-    )
+    const resolveRuntimeEnvLayer = Effect.fn("ShellTool.resolveRuntimeEnvLayer")(function* () {
+      const envContent = process.env.DEVECO_CONFIG_CONTENT
+      if (envContent) {
+        const parsed = extractSandbox(envContent)
+        if (parsed) return parsed
+      }
+      const envConfigPath = process.env.DEVECO_CONFIG
+      if (envConfigPath) {
+        return yield* Effect.promise(() => readSandboxConfig(envConfigPath))
+      }
+      return undefined
+    })
 
-    const resolveSandboxProfile = Effect.fn("ShellTool.resolveSandboxProfile")(function* (cwd: string, agentSandbox?: ConfigSandbox.SandboxConfig) {
+    const resolveSandboxProfile = Effect.fn("ShellTool.resolveSandboxProfile")(function* (
+      cwd: string,
+      agentSandbox?: ConfigSandbox.SandboxConfig,
+    ) {
       const layers: SandboxResolver.LayeredSandboxConfig = {}
 
       const globalPath = findGlobalConfig()
@@ -751,9 +701,7 @@ export const ShellTool = Tool.define(
       // overrides the project-level top-level selection but is still subject to
       // the runtime layer (session switch, S-SESS-1) and higher-priority overrides.
       if (agentSandbox) {
-        layers.project = layers.project
-          ? mergeSandboxConfig(layers.project, agentSandbox)
-          : agentSandbox
+        layers.project = layers.project ? mergeSandboxConfig(layers.project, agentSandbox) : agentSandbox
       }
 
       // FR-CFG-009 (S-SESS-1): runtime injection layer — highest priority.
@@ -850,7 +798,11 @@ export const ShellTool = Tool.define(
           Effect.catch(() => Effect.succeed([] as string[])),
         )
         if (protectedBins.length > 0) {
-          const injectedProfile = HdcHostEnforcement.injectHostEnforcement(profile, protectedBins, input.env.DEVECO_CODE_HDC_ENDPOINT)
+          const injectedProfile = HdcHostEnforcement.injectHostEnforcement(
+            profile,
+            protectedBins,
+            input.env.DEVECO_CODE_HDC_ENDPOINT,
+          )
           profile = injectedProfile
           const canaries = yield* Effect.tryPromise({
             try: () =>
@@ -913,9 +865,10 @@ export const ShellTool = Tool.define(
           executable: input.shell,
           args: isWindows ? Shell.args(input.shell, input.command, input.cwd) : ["-c", input.command],
           cwd: input.cwd,
-          env: Object.fromEntries(
-            Object.entries(input.env).filter(([, v]) => v !== undefined),
-          ) as Record<string, string>,
+          env: Object.fromEntries(Object.entries(input.env).filter(([, v]) => v !== undefined)) as Record<
+            string,
+            string
+          >,
         })
 
         const prepareStartTime = Date.now()
@@ -1004,9 +957,7 @@ export const ShellTool = Tool.define(
       if (prepareDurationMs !== undefined) finishedParts.push(`prepare_duration_ms=${prepareDurationMs}`)
       if (failureStage) finishedParts.push(`failure_stage=${failureStage}`)
       if (errorType) finishedParts.push(`error_type=${errorType}`)
-      yield* Effect.logInfo(
-        `sandbox_request_finished ${finishedParts.join(" ")}`,
-      )
+      yield* Effect.logInfo(`sandbox_request_finished ${finishedParts.join(" ")}`)
 
       if (exit.kind === "exit") {
         if (isMac && handle.pid) {
@@ -1033,12 +984,20 @@ export const ShellTool = Tool.define(
     //
     // Not 100% precise: "permission denied" can also come from the regular
     // filesystem. We only claim "likely" in the hint text.
-    function detectSandboxDenial(stderr: string, profileId?: string, networkEnabled?: boolean): "file" | "network" | null {
+    function detectSandboxDenial(
+      stderr: string,
+      profileId?: string,
+      networkEnabled?: boolean,
+    ): "file" | "network" | null {
       if (!profileId || profileId === "full-access") return null
       // Seatbelt write/exit denials appear as "operation not permitted".
       if (/operation not permitted/i.test(stderr)) return "file"
       // Network blocked by sandbox profile.
-      if (!networkEnabled && /connection refused|network unreachable|could not resolve host|network is down/i.test(stderr)) return "network"
+      if (
+        !networkEnabled &&
+        /connection refused|network unreachable|could not resolve host|network is down/i.test(stderr)
+      )
+        return "network"
       // read-only profile rejects every write, so permission denied on writes
       // is almost certainly the sandbox.
       if (profileId === "read-only" && /permission denied/i.test(stderr)) return "file"
@@ -1060,12 +1019,12 @@ export const ShellTool = Tool.define(
       limits: ShellRunLimits,
       code: number | null,
     ) {
-      const events = yield* Effect.promise(() => readDevecoCliEvents(input.devecoCliEventFile))
       const raw = state.list.map((item) => item.text).join("")
       // Compute sandbox denial hint once; reused in both meta (LLM) and UI output.
-      const denial = (code !== null && code !== 0 && state.sandboxProfileId)
-        ? detectSandboxDenial(raw, state.sandboxProfileId, state.sandboxNetworkEnabled)
-        : null
+      const denial =
+        code !== null && code !== 0 && state.sandboxProfileId
+          ? detectSandboxDenial(raw, state.sandboxProfileId, state.sandboxNetworkEnabled)
+          : null
       const sandboxHint = denial
         ? sandboxHintMessage(denial, state.sandboxProfileId!, state.sandboxNetworkEnabled ?? false)
         : ""
@@ -1077,7 +1036,9 @@ export const ShellTool = Tool.define(
           : []),
         ...(state.sandboxError
           ? [`Sandbox blocked the command: ${state.sandboxError}`]
-          : state.aborted ? ["User aborted the command"] : []),
+          : state.aborted
+            ? ["User aborted the command"]
+            : []),
         // Sandbox denial hint: when the command exited non-zero and stderr
         // matches sandbox denial patterns under an applied profile, append an
         // explanation so users/agents can understand the cause.
@@ -1089,16 +1050,14 @@ export const ShellTool = Tool.define(
       const truncated =
         state.cut && state.file ? `...output truncated...\n\nFull output saved to: ${state.file}\n\n` : ""
       const metadata = meta.length > 0 ? `\n\n<shell_metadata>\n${meta.join("\n")}\n</shell_metadata>` : ""
-      const output =
-        truncated +
-        (end.text || "(no output)") +
-        metadata +
-        updateSessionCwdFromDevecoCliEvents(events, input.cwd, ctx.sessionID)
+      const output = truncated + (end.text || "(no output)") + metadata
       // UI display: replace <shell_metadata> block with single-line [SANDBOX] hint
       // so users see a concise, structured prefix per industry logging conventions.
-      const metadataOutput = preview(output.includes("<shell_metadata>") && sandboxHint
-        ? output.replace(/<shell_metadata>[\s\S]*?<\/shell_metadata>/, sandboxHint)
-        : output)
+      const metadataOutput = preview(
+        output.includes("<shell_metadata>") && sandboxHint
+          ? output.replace(/<shell_metadata>[\s\S]*?<\/shell_metadata>/, sandboxHint)
+          : output,
+      )
       return {
         title: input.description,
         metadata: {
@@ -1106,7 +1065,6 @@ export const ShellTool = Tool.define(
           exit: code,
           description: input.description,
           truncated: state.cut,
-          devecoCliEvents: events,
           ...(state.cut && state.file ? { outputPath: state.file } : {}),
         },
         output,
@@ -1132,7 +1090,9 @@ export const ShellTool = Tool.define(
             Effect.gen(function* () {
               state.aborted = true
               state.sandboxError = `[${err.code}] ${err.message}`
-              yield* ctx.metadata({ metadata: { output: `[sandbox error] [${err.code}] ${err.message}`, description: input.description } })
+              yield* ctx.metadata({
+                metadata: { output: `[sandbox error] [${err.code}] ${err.message}`, description: input.description },
+              })
               return null
             }),
         }),
@@ -1145,7 +1105,12 @@ export const ShellTool = Tool.define(
                 `sandbox_request_finished request_id=${state.requestId} enforcement_result=failed host_enforcement=${state.hostEnforcement ?? "not_applicable"} execution_result=failed duration_ms=${Date.now() - state.sandboxStartTime} error_type=internal_error error_message=${err instanceof Error ? err.message : String(err)}`,
               )
             }
-            yield* ctx.metadata({ metadata: { output: `[shell error] ${err instanceof Error ? err.message : String(err)}`, description: input.description } })
+            yield* ctx.metadata({
+              metadata: {
+                output: `[shell error] ${err instanceof Error ? err.message : String(err)}`,
+                description: input.description,
+              },
+            })
             return null
           }),
         ),
@@ -1187,15 +1152,7 @@ export const ShellTool = Tool.define(
                 }),
               )
 
-              const devecoCliEventFile = path.join(
-                Global.Path.tmp,
-                "devecocli-events",
-                `${process.pid}-${randomUUID()}.jsonl`,
-              )
-              const env: NodeJS.ProcessEnv = {
-                ...(yield* shellEnv(ctx, cwd, instanceCtx.directory)),
-                [DEVECO_CLI_EVENT_FILE]: devecoCliEventFile,
-              }
+              const env: NodeJS.ProcessEnv = { ...(yield* shellEnv(ctx, cwd, instanceCtx.directory)) }
               // ask gets a larger single-pass docs preview; every other agent has the variable
               // removed so an ambient override never widens its preview.
               if (ctx.agent === "ask") env[DOCS_PREVIEW_CHARS_ENV] = String(ASK_DOCS_PREVIEW_CHARS)
@@ -1208,7 +1165,6 @@ export const ShellTool = Tool.define(
                   env,
                   timeout,
                   description: params.description,
-                  devecoCliEventFile,
                 },
                 ctx,
               )

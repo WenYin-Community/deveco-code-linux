@@ -85,8 +85,6 @@ export const rpc = {
     invalidateImprovementConsentCache()
   },
   async shutdown() {
-    const { stopUiVerificationMcp } = await import("@/tool/ui-verification")
-    await stopUiVerificationMcp().catch(() => {})
     await shutdownAnalyticsMagpieCollection().catch(() => {})
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)

@@ -238,6 +238,17 @@ abstract class BuildLocalCliTask : DefaultTask() {
         source.copyRecursively(dst, overwrite = true)
         File(dst, "bin/$binaryName").setExecutable(true)
 
+        execOperations.exec {
+            workingDir = repo
+            commandLine(
+                bun,
+                "run",
+                File(pluginDir.get().asFile, "script/bundle-builtin-plugins.ts").absolutePath,
+                dst.absolutePath,
+                target,
+            )
+        }
+
         if (includeNodeRuntime.get()) {
             execOperations.exec {
                 workingDir = repo

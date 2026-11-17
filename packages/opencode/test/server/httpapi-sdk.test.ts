@@ -298,10 +298,7 @@ function httpapiInstance<A, E>(
   )
 }
 
-function serverPathParity<A, E>(
-  name: string,
-  scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>,
-) {
+function serverPathParity<A, E>(name: string, scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>) {
   it.live(name, scenario("raw"))
 }
 
@@ -819,7 +816,7 @@ describe("HttpApi SDK", () => {
   )
 
   serverPathParity("matches generated SDK prompt no-reply routes", (serverPath) =>
-    withStandardProject(serverPath, ({ sdk }) =>
+    withFakeLlm(serverPath, ({ sdk, llm }) =>
       Effect.gen(function* () {
         const session = yield* capture(() => sdk.session.create({ title: "prompt" }))
         const sessionID = String(record(session.data).id)
@@ -840,6 +837,13 @@ describe("HttpApi SDK", () => {
           }),
         )
         const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+
+        expect(prompt.status).toBe(200)
+        expect(asyncPrompt.status).toBe(204)
+        expect(
+          array(messages.data).flatMap((item) => array(record(item).parts).map((part) => record(part).text)),
+        ).toContain("async hello")
+        expect(yield* llm.calls).toBe(0)
 
         return {
           statuses: statuses({ session, prompt, asyncPrompt, messages }),

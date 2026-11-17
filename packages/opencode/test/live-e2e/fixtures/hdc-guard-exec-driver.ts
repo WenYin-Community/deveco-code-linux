@@ -48,7 +48,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { HdcShimEnv } from "@/hdc/shim-env"
-import { resolveDevecoCodeProxyLauncher } from "@/tool/lib/deveco-cli"
+import { resolveHdcShimLauncher } from "@/hdc/launcher"
 
 export interface HdcGuardExecDriverResult {
   mode: string
@@ -96,7 +96,7 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
-const launcher = resolveDevecoCodeProxyLauncher()
+const launcher = resolveHdcShimLauncher()
 
 function shimArgs(hdcArgs: string[]) {
   return [...launcher, "__hdc-shim", "--", ...hdcArgs]
@@ -130,7 +130,9 @@ async function spawnCapture(cmd: string[], env: DriverEnv) {
 
 async function bootGuardedSession() {
   const { store, ctx } = await AppRuntime.runPromise(
-    InstanceStore.Service.use((store) => store.load({ directory: workspace }).pipe(Effect.map((ctx) => ({ store, ctx })))),
+    InstanceStore.Service.use((store) =>
+      store.load({ directory: workspace }).pipe(Effect.map((ctx) => ({ store, ctx }))),
+    ),
   )
 
   // Approver fiber: replies to every pending `hdc` permission ask.
@@ -190,7 +192,8 @@ async function main() {
 }
 
 async function dispatchMode(guardEnv: HdcShimEnv.HdcGuardShellEnv, rest: string[]): Promise<void> {
-  if (mode === "probe" || mode === "badtoken" || mode === "nosession" || mode === "noguard") return runDenyMode(rest, guardEnv)
+  if (mode === "probe" || mode === "badtoken" || mode === "nosession" || mode === "noguard")
+    return runDenyMode(rest, guardEnv)
   if (mode === "subprocess") return runSubprocessMode(rest, guardEnv)
   if (mode === "cancel") return runCancelMode(rest, guardEnv)
   if (mode === "concurrent") return runConcurrentMode(rest, guardEnv)
@@ -251,7 +254,10 @@ async function runNpmWrapper(probes: string[][], env: DriverEnv): Promise<void> 
     result.runs.push({ exitCode: -2, stdout: "", stderr: "npm not available; leg skipped", durationMs: 0 })
     return
   }
-  await Bun.write(`${workspace}/package.json`, JSON.stringify({ name: "sr1-hdc-subprocess", private: true, scripts: { hdc: "hdc" } }))
+  await Bun.write(
+    `${workspace}/package.json`,
+    JSON.stringify({ name: "sr1-hdc-subprocess", private: true, scripts: { hdc: "hdc" } }),
+  )
   for (const hdcArgs of probes) {
     result.runs.push(await spawnCapture([npmPath, "run", "hdc", "--", ...hdcArgs], env))
   }

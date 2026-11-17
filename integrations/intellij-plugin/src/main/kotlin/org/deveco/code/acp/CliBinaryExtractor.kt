@@ -54,12 +54,6 @@ internal object CliBinaryExtractor {
 
         marker.writeText(pluginVersion)
 
-        val cliJs = targetDir.resolve("node_modules/@deveco/deveco-cli/dist/cli.js").toFile()
-        if (cliJs.isFile) {
-            val entry = targetDir.resolve("vendor/.deveco-cli-entry").toFile()
-            entry.writeText("${cliJs.absolutePath}\n")
-        }
-
         log.debug("Extracted bundled CLI: ${binary.name} (version=$pluginVersion)")
         return binary.absolutePath
     }

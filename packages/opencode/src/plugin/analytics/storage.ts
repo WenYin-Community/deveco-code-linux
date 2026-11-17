@@ -14,8 +14,6 @@ import type {
   BuildProjectInfo,
   DevEcoCodeSlashEvent,
   QueuedAnalyticsSubmission,
-  UiVerificationAnalyticsEvent,
-  UiVerificationOperationDetail,
   ToolExecution,
   ToolSummary,
 } from "./types"
@@ -316,9 +314,6 @@ function isPendingAnalyticsEvent(value: unknown): value is PendingAnalyticsEvent
   if (value.action === ANALYTICS_ACTION.BUILD_PROJECT) {
     return isBuildProjectEvent(value.event)
   }
-  if (value.action === ANALYTICS_ACTION.UI_VERIFICATION) {
-    return isUiVerificationAnalyticsEvent(value.event)
-  }
   if (value.action === ANALYTICS_ACTION.SLASH_COMMAND) {
     return isDevEcoCodeSlashEvent(value.event)
   }
@@ -365,77 +360,6 @@ function isBuildProjectEvent(value: unknown): value is BuildProjectAnalyticsEven
   )
 }
 
-const UI_VERIFICATION_STRING_FIELDS = ['modelName', 'deviceCategory', 'deviceType', 'bundleName'] as const;
-const UI_VERIFICATION_BOOLEAN_FIELDS = ['freshStart', 'verificationSuccess', 'deeplinkUsed'] as const;
-const UI_VERIFICATION_NUMBER_FIELDS = [
-  'planLen',
-  'stepExecuted',
-  'stepTotalDurationMs',
-  'screenshotCount',
-  'tokenUsage',
-] as const;
-
-function hasOptionalBooleans(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => value[key] === undefined || typeof value[key] === 'boolean');
-}
-
-function hasOptionalNumbers(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => value[key] === undefined || typeof value[key] === 'number');
-}
-
-function hasOptionalStrings(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => value[key] === undefined || typeof value[key] === 'string');
-}
-
-function isToolUsageDist(value: unknown): value is Record<string, number> {
-  return value === undefined || (isRecord(value) && Object.values(value).every((count) => typeof count === 'number'));
-}
-
-function isUiVerificationOperationDetail(value: unknown): value is UiVerificationOperationDetail {
-  if (!isRecord(value)) return false;
-  if (
-    !hasExactKeys(value, [
-      'subAction',
-      ...UI_VERIFICATION_STRING_FIELDS.filter((key) => Object.hasOwn(value, key)),
-      ...UI_VERIFICATION_BOOLEAN_FIELDS.filter((key) => Object.hasOwn(value, key)),
-      ...UI_VERIFICATION_NUMBER_FIELDS.filter((key) => Object.hasOwn(value, key)),
-      ...(Object.hasOwn(value, 'stepReused') ? ['stepReused'] : []),
-      ...(Object.hasOwn(value, 'toolUsageDist') ? ['toolUsageDist'] : []),
-      ...(Object.hasOwn(value, 'failType') ? ['failType'] : []),
-    ])
-  ) {
-    return false;
-  }
-  return (
-    (value.subAction === 'run' || value.subAction === 'log' || value.subAction === 'screenshot') &&
-    hasOptionalStrings(value, UI_VERIFICATION_STRING_FIELDS) &&
-    hasOptionalBooleans(value, UI_VERIFICATION_BOOLEAN_FIELDS) &&
-    hasOptionalNumbers(value, UI_VERIFICATION_NUMBER_FIELDS) &&
-    (value.stepReused === undefined || value.stepReused === null || typeof value.stepReused === 'number') &&
-    isToolUsageDist(value.toolUsageDist) &&
-    (value.failType === undefined || value.failType === null || typeof value.failType === 'string')
-  );
-}
-
-function isUiVerificationAnalyticsEvent(value: unknown): value is UiVerificationAnalyticsEvent {
-  return (
-    isRecord(value) &&
-    hasExactKeys(value, [
-      'sourceType',
-      'sourceVersion',
-      'os_arch',
-      'os_name',
-      'os_version',
-      'sessionid',
-      'messageId',
-      'event_detail',
-    ]) &&
-    isAnalyticsSourceType(value.sourceType) &&
-    hasStrings(value, ['sourceVersion', 'os_arch', 'os_name', 'os_version', 'sessionid', 'messageId']) &&
-    isUiVerificationOperationDetail(value.event_detail)
-  );
-}
-
 const SLASH_COMMAND_STRING_FIELDS = [
   "sourceVersion",
   "os_arch",
@@ -446,9 +370,7 @@ const SLASH_COMMAND_STRING_FIELDS = [
 ] as const
 
 function isSlashCommandName(value: unknown): value is string {
-  return (
-    typeof value === "string" && value.length > 0 && value.length <= SLASH_COMMAND_NAME_MAX_LENGTH
-  )
+  return typeof value === "string" && value.length > 0 && value.length <= SLASH_COMMAND_NAME_MAX_LENGTH
 }
 
 // Milliseconds since the epoch, captured when the command was dispatched (not upload time).

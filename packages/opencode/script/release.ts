@@ -37,16 +37,17 @@ console.log()
 console.log(">>> [2/2] Publishing CLI packages ...")
 process.chdir(cliDir)
 
-const pkg = (await Bun.file("./package.json").json()) as { name: string; license: string; dependencies: Record<string, string> }
-const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
-if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
+const pkg = (await Bun.file("./package.json").json()) as {
+  name: string
+  license: string
+  dependencies: Record<string, string>
+  builtinPlugins: Record<string, string>
+}
 // Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
 const homegraphVersion = pkg.dependencies.homegraph
 if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
 if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
-  throw new Error(
-    `Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`,
-  )
+  throw new Error(`Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`)
 }
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
@@ -97,20 +98,13 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       license: pkg.license,
       os: ["darwin", "linux", "win32", "openharmony"],
       cpu: ["arm64", "x64"],
-      files: [
-        "bin/**/*",
-        "postinstall.mjs",
-        "LICENSE",
-        "README.md",
-        "CHANGELOG.md",
-      ],
+      files: ["bin/**/*", "postinstall.mjs", "LICENSE", "README.md", "CHANGELOG.md"],
       optionalDependencies: {
         ...Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
         [hmosPackageName]: version,
       },
       dependencies: {
-        "@deveco/deveco-cli": devecoCliVersion,
-        // npm vs curl/irm split — same as @deveco/deveco-cli (see publish.ts).
+        ...pkg.builtinPlugins,
         homegraph: homegraphVersion,
       },
     },
@@ -147,4 +141,8 @@ if (hasCnpm) {
 console.log()
 console.log("=== Release complete ===")
 console.log(`  @${scope}/deveco-code@${Script.version}`)
-console.log(`  ${Object.keys(binaries).map((n) => `${n}@${Script.version}`).join("\n  ")}`)
+console.log(
+  `  ${Object.keys(binaries)
+    .map((n) => `${n}@${Script.version}`)
+    .join("\n  ")}`,
+)

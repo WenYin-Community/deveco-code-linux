@@ -3,7 +3,6 @@ import path from "path"
 import type { Hooks, Plugin } from "@opencode-ai/plugin"
 import { Global } from "@opencode-ai/core/global"
 import { devecoAuth } from "../deveco"
-import { isImprovementConsentGranted } from "../deveco/improvement-consent"
 import { globalCollector } from "./collector"
 import type { SessionStart } from "./collector"
 import { createCodeAttributionTracker } from "./code-attribution"
@@ -13,13 +12,7 @@ import { globalUploader } from "./uploader"
 import { getVersion } from "./storage"
 import { createEnvironmentFields } from "./events"
 import { ANALYTICS_ACTION, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
-import type {
-  AiSessionEvent,
-  AnalyticsSubmission,
-  BuildProjectAnalyticsEvent,
-  BuildProjectInfo,
-  DevEcoCodeSlashEvent,
-} from "./types"
+import type { AiSessionEvent, AnalyticsSubmission, DevEcoCodeSlashEvent } from "./types"
 
 const ANALYTICS_DIR = path.join(Global.Path.data, "analytics", "log")
 const LOG_FILE = path.join(ANALYTICS_DIR, "analytics.log")
@@ -33,14 +26,12 @@ interface AnalyticsCollectorDependency {
   recordResponseDelta(): void
   recordTokenUsage(inputTokens: number, outputTokens: number, cacheTokens?: number): void
   recordUIVerificationModel(model: string | null): void
-  recordBuildProjectInfo(entry: BuildProjectInfo): void
   recordFileEdit(filePath: string): void
   recordFileDiff(filePath: string, additions: number, deletions: number): void
   recordToolExecution(
     toolName: string,
     duration: number,
     isSuccess: boolean,
-    isBuildSuccess?: boolean,
     source?: "builtin" | "custom" | "mcp",
     skillName?: string,
   ): void
@@ -49,7 +40,6 @@ interface AnalyticsCollectorDependency {
   recordDevecoCliCommand(command: string, subcommand?: string): void
   getSessionID(): string | null
   buildEvent(projectId: string, projectPath: string): Promise<AiSessionEvent | null>
-  buildProjectEvent(): BuildProjectAnalyticsEvent | null
   clear(): void
 }
 
@@ -68,9 +58,6 @@ interface AnalyticsPluginDependencies {
   uploader: AnalyticsUploaderDependency
   isLoggedIn(): Promise<boolean>
   isJwtExpired(): Promise<boolean | null>
-  // Privacy switch "Improvement" (kv deveco_tool_improvement_enabled); gates the
-  // DevEcoCodeBuild event the same way the magpie flow gates its own collection.
-  toolImprovementEnabled(): Promise<boolean>
   diagnostic(message: string): void | Promise<void>
   projectId(directory: string): Promise<string>
   codeAttribution(options: CodeAttributionTrackerOptions): Promise<CodeAttributionTracker>
@@ -87,21 +74,6 @@ async function writeLog(message: string): Promise<void> {
   } catch {
     // Analytics logging must never affect the TUI.
   }
-}
-
-// Extracts the build error code from a build_project log preview: the first 6-8 digit
-// standalone number, matching the three real hvigor output shapes: "10505001 ArkTS
-// Compiler Error:", "10605008:", and ohpm's "ERROR: 00608002:". Purely a failure-path
-// parser — the caller decides success via metadata.exitCode before invoking this.
-// Returns the fallback (the tool process exit code) when nothing parses.
-export function extractBuildExitCode(output: string, fallback: number): number {
-  for (const line of output.split("\n")) {
-    const leading = line.match(/^\s*(\d{6,8})\b/)
-    if (leading?.[1]) return Number(leading[1])
-    const afterError = line.match(/ERROR:\s*(\d{6,8})/)
-    if (afterError?.[1]) return Number(afterError[1])
-  }
-  return fallback
 }
 
 type ChatMessageHook = NonNullable<Hooks["chat.message"]>
@@ -134,7 +106,6 @@ async function createAttribution(dependencies: AnalyticsPluginDependencies, proj
 class AnalyticsRuntime {
   private readonly toolStartTimes = new Map<string, number>()
   private readonly attributionCalls = new Set<string>()
-  private sessionProviderId = "unknown"
   private attributionEligibility: boolean | undefined
   private uploaderReady = false
   private lastAnalyticsEnabled: boolean | undefined
@@ -299,23 +270,7 @@ class AnalyticsRuntime {
     if (!event) return
     await this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.AI_SESSION, event })
     await this.dependencies.uploader.flush()
-    const buildEvent = this.dependencies.collector.buildProjectEvent()
-    if (buildEvent) await this.reportBuildEvent(buildEvent)
     this.dependencies.collector.clear()
-  }
-
-  private async reportBuildEvent(event: BuildProjectAnalyticsEvent) {
-    if (this.sessionProviderId !== "deveco") {
-      await this.log(`Build project event skipped: provider=${this.sessionProviderId}`)
-      return
-    }
-    if (!(await this.dependencies.toolImprovementEnabled())) {
-      await this.log("Build project event skipped: Improvement disabled")
-      return
-    }
-    await this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.BUILD_PROJECT, event })
-    await this.dependencies.uploader.flush()
-    await this.log(`Build project event queued: ${event.buildProjectInfo.length} build(s)`)
   }
 
   private async chatMessage(input: Parameters<ChatMessageHook>[0], output: Parameters<ChatMessageHook>[1]) {
@@ -323,7 +278,6 @@ class AnalyticsRuntime {
     const providerId = input.model?.providerID || "unknown"
     const modelId = input.model?.modelID || "unknown"
     const agentName = input.agent || "unknown"
-    this.sessionProviderId = providerId
     this.dependencies.collector.startSession({
       sessionID: input.sessionID,
       messageId: output.message.id,
@@ -377,20 +331,12 @@ class AnalyticsRuntime {
     if (startTime === undefined) return
     this.toolStartTimes.delete(input.callID)
     const metadata = output.metadata as Record<string, unknown> | undefined
-    const hasError =
-      metadata?.error ||
-      (input.tool !== "build_project" && (output.output?.includes("Error") || output.output?.includes("Failed")))
+    const hasError = metadata?.error || output.output?.includes("Error") || output.output?.includes("Failed")
     const duration = Date.now() - startTime
-    const isSuccess = !hasError
-    const buildSucceeded =
-      typeof metadata?.exitCode === "number"
-        ? metadata.exitCode === 0
-        : (output.output ?? "").toLowerCase().includes("build successful")
     this.dependencies.collector.recordToolExecution(
       input.tool,
       duration,
-      isSuccess,
-      input.tool === "build_project" && isSuccess && buildSucceeded,
+      !hasError,
       input.source,
       input.tool === "skill" && typeof input.args?.name === "string" ? input.args.name : undefined,
     )
@@ -401,7 +347,6 @@ class AnalyticsRuntime {
       }
     }
     this.recordUIVerificationModel(input, metadata)
-    this.recordBuildProject(input, output, metadata, duration, buildSucceeded)
     this.recordDevecoBuilds(metadata)
     this.recordDevecoCliCommands(input, metadata)
     this.recordFileDiff(input, metadata)
@@ -422,31 +367,6 @@ class AnalyticsRuntime {
     this.dependencies.collector.recordUIVerificationModel(model)
   }
 
-  private recordBuildProject(
-    input: Parameters<ToolAfterHook>[0],
-    output: Parameters<ToolAfterHook>[1],
-    metadata: Record<string, unknown> | undefined,
-    duration: number,
-    buildSucceeded: boolean,
-  ) {
-    // 工具执行记录统一由 toolAfter 只记一次；这里只补充 build_project 的专属信息。
-    if (input.tool !== "build_project" || typeof output.output !== "string") return
-    this.dependencies.collector.recordBuildProjectInfo({
-      toolName: input.tool,
-      duration,
-      isSuccess: buildSucceeded,
-      timestamp: Date.now(),
-      exitCode: buildSucceeded
-        ? 0
-        : extractBuildExitCode(output.output, typeof metadata?.exitCode === "number" ? metadata.exitCode : 1),
-      output: output.output
-        .split("\n")
-        .filter((line) => !line.startsWith("Full output saved to:"))
-        .join("\n"),
-      truncated: metadata?.truncated === true,
-    })
-  }
-
   private recordDevecoBuilds(metadata: Record<string, unknown> | undefined) {
     const events = Array.isArray(metadata?.devecoCliEvents) ? metadata.devecoCliEvents : []
     for (const event of events) {
@@ -460,10 +380,7 @@ class AnalyticsRuntime {
   // Feeds every recorded devecocli invocation into the session's command tally. Unlike
   // recordDevecoBuilds this is not filtered by command name or exit code: the counting
   // contract is "executed => counted", failures included.
-  private recordDevecoCliCommands(
-    input: Parameters<ToolAfterHook>[0],
-    metadata: Record<string, unknown> | undefined,
-  ) {
+  private recordDevecoCliCommands(input: Parameters<ToolAfterHook>[0], metadata: Record<string, unknown> | undefined) {
     // Same ownership guard as recordUIVerificationModel: another session's CLI calls must not
     // land in the tracked session's tally.
     if (this.dependencies.collector.getSessionID() !== input.sessionID) return
@@ -525,12 +442,6 @@ const AnalyticsPlugin = createAnalyticsPlugin({
   uploader: globalUploader,
   isLoggedIn: () => devecoAuth.isLoggedIn(),
   isJwtExpired: () => devecoAuth.isJwtExpired(),
-  // T2.5 (review catch B3): the DevEcoCodeBuild gate must be account-scoped
-  // too — after the /privacy row stops writing the device-level kv key,
-  // readPrivacyBoolean(KEY, true) would default to true forever and build
-  // events would keep uploading even after the user declined. The provider
-  // pre-check in reportBuildEvent stays (AND relation, design §4.4 ④).
-  toolImprovementEnabled: () => isImprovementConsentGranted(),
   diagnostic: writeLog,
   projectId: getOrCreateProjectId,
   codeAttribution: createCodeAttributionTracker,

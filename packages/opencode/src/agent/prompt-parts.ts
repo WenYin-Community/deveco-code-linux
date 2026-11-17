@@ -1,5 +1,6 @@
 import type { Agent } from "@/agent/agent"
 import type { HomegraphInjectSource } from "@/mcp/homegraph"
+import { Runtime } from "@opencode-ai/core/runtime"
 
 import PART_CODEBASE from "./prompt-parts/codebase-understanding.txt"
 import PART_CODEBASE_HOMEGRAPH from "./prompt-parts/codebase-understanding-homegraph.txt"
@@ -33,13 +34,20 @@ function homegraphPromptPart(source?: HomegraphInjectSource): string {
     .join("\n")
 }
 
-export function forAgent(agent: Agent.Info, opts: PromptPartsOptions = {}) {
-  if (!agentNeedsHomegraphPrompt(agent.name)) {
+export function forAgent(agent: Pick<Agent.Info, "name">, opts: PromptPartsOptions = {}) {
+  if (!CODEBASE_AGENTS.has(agent.name)) {
     return []
   }
   // Only teach homegraph_* when tools are actually usable — avoid prompting
-  // for a server that failed to connect or was opted out (enabled:false).
-  return [opts.homegraphReady ? homegraphPromptPart(opts.homegraphSource) : PART_CODEBASE]
+  // for a server that failed to connect.
+  const routing = opts.homegraphReady ? homegraphPromptPart(opts.homegraphSource) : PART_CODEBASE
+  if (agent.name !== "build" || Runtime.current.mode !== "default") return [routing]
+
+  const lookups = opts.homegraphReady ? "`glob`/`grep`/`read` and `homegraph_*`" : "`glob`/`grep`/`read`"
+  return [
+    routing,
+    `Follow this section to locate edit sites and call chains before editing. When marking a step \`in_progress\`, \`todowrite\` may run in parallel with ${lookups} where the routing above permits parallel calls.`,
+  ]
 }
 
 export * as AgentPromptParts from "./prompt-parts"

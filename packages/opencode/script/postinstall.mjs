@@ -28,28 +28,6 @@ const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.n
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", "deveco.exe")
-const devecoCliPackageName = "@deveco/deveco-cli"
-const devecoCliBinName = "devecocli"
-
-function resolveLocalDevecoCliEntry() {
-  const packageJsonPath = require.resolve(`${devecoCliPackageName}/package.json`)
-  const packageRoot = path.dirname(packageJsonPath)
-  const bin = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).bin
-  // The platform-split shell package declares `bin.devecocli` at its root; bundled builds ship `dist/cli.js`.
-  const declared = typeof bin === "string" ? bin : bin?.[devecoCliBinName]
-  const entry = [declared && path.join(packageRoot, declared), path.join(packageRoot, "dist", "cli.js")]
-    .filter(Boolean)
-    .find((candidate) => fs.existsSync(candidate))
-  if (entry) return entry
-  throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry under ${packageRoot}.`)
-}
-
-function writeDevecoCliEntryMarker(installRoot) {
-  const marker = path.join(installRoot, "vendor", ".deveco-cli-entry")
-  fs.mkdirSync(path.dirname(marker), { recursive: true })
-  fs.writeFileSync(marker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
-}
-
 function writeHomegraphEntryMarker(installRoot) {
   try {
     const hgRoot = path.dirname(require.resolve("homegraph/package.json"))
@@ -237,7 +215,6 @@ function installPackage(name) {
     copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
     copyVendor(packageDir)
     // Do not write marker into packageDir: it lives under mkdtemp and is deleted in finally.
-    // Marker for the install root is written in main() via writeDevecoCliEntryMarker(__dirname).
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
@@ -266,7 +243,6 @@ function verifyBinary() {
 }
 
 function main() {
-  writeDevecoCliEntryMarker(__dirname)
   writeHomegraphEntryMarker(__dirname)
 
   for (const name of packageNames()) {
@@ -274,7 +250,6 @@ function main() {
       const packageDir = resolvePackageDir(name)
       copyBinary(resolveBinary(name), targetBinary)
       copyVendor(packageDir)
-      writeDevecoCliEntryMarker(packageDir)
       writeHomegraphEntryMarker(packageDir)
       if (verifyBinary()) return
     } catch {

@@ -328,6 +328,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      if (ctx.payload.noReply) {
+        // Tool handoffs must be visible to the running session before their
+        // caller resumes. This branch only persists input; it runs no model.
+        yield* promptSvc
+          .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID })
+          .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        return HttpApiSchema.NoContent.make()
+      }
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -512,12 +520,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       // Fork the aside as a background fiber; return immediately
-      yield* asideSvc.btw({
-        sessionID: ctx.params.sessionID,
-        asideID: ctx.payload.asideID,
-        text: ctx.payload.text,
-        model: ctx.payload.model,
-      }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+      yield* asideSvc
+        .btw({
+          sessionID: ctx.params.sessionID,
+          asideID: ctx.payload.asideID,
+          text: ctx.payload.text,
+          model: ctx.payload.model,
+        })
+        .pipe(Effect.forkIn(scope, { startImmediately: true }))
       return { asideID: ctx.payload.asideID }
     })
 

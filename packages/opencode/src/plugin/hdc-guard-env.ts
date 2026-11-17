@@ -10,7 +10,7 @@ export async function HdcGuardEnvPlugin(_input: PluginInput): Promise<Hooks> {
       const extra = await ensureHdcGuardShellEnv({
         sessionID: input.sessionID,
         callID: input.callID,
-        currentPath: output.env.PATH,
+        currentPath: output.env.PATH ?? output.env.Path,
         directory: input.directory,
       }).catch(() => undefined)
       if (!extra) return

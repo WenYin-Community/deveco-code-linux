@@ -633,6 +633,26 @@ download_with_progress() {
 }
 
 # ─── Versioned install helpers ────────────────────────────────────────────────
+install_dependencies() {
+    local install_root="$1"
+    [ -f "$install_root/package.json" ] || return 0
+    grep -Eq '"dependencies"[[:space:]]*:' "$install_root/package.json" || return 0
+    if [ "$node_warning" = true ]; then
+        die "Node.js 22 or newer is required to install Harness" "Install Node.js and retry" "dependencies" "node_version_unsupported"
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        die "npm is required to install Harness" "Install npm and retry" "dependencies" "missing_dependency"
+    fi
+    TELEMETRY_STAGE="dependencies"
+    TELEMETRY_ERROR_CODE="npm_install_failed"
+    # This directory is a runtime project, not an npm platform package. Node
+    # may run under Rosetta even when DevEco uses the native arm64 binary.
+    node -e 'const fs = require("fs"), file = process.argv[1], pkg = JSON.parse(fs.readFileSync(file, "utf8")); delete pkg.os; delete pkg.cpu; fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");' "$install_root/package.json"
+    echo -e "${MUTED}Installing built-in plugin dependencies${NC}"
+    npm install --prefix "$install_root" --omit=dev --ignore-scripts --no-audit --no-fund ||
+        die "Failed to install built-in plugin dependencies" "Check npm connectivity and retry" "dependencies" "npm_install_failed"
+}
+
 update_symlink() {
     TELEMETRY_STAGE="activate"
     TELEMETRY_ERROR_CODE="activation_failed"
@@ -680,6 +700,7 @@ download_and_install() {
         local existing_ver
         existing_ver=$("$version_dir/bin/$APP" --version 2>/dev/null || echo "")
         if [ "$existing_ver" = "$specific_version" ]; then
+            install_dependencies "$version_dir"
             echo -e "${MUTED}Version ${NC}$specific_version${MUTED} already installed, skipping download"
             update_symlink "$version_dir"
             cleanup_old_versions
@@ -754,6 +775,12 @@ download_and_install() {
     mv "$binary_src" "$stage_dir/bin/$APP"
     chmod 755 "$stage_dir/bin/$APP"
 
+    local package_src
+    package_src=$(find "$tmp_dir" -maxdepth 2 -name package.json -not -path "*/vendor/*" -print -quit)
+    if [ -n "$package_src" ]; then
+        cp "$package_src" "$stage_dir/package.json"
+    fi
+
     # Copy vendor directory into staging (ripgrep, ui-verification-mcp, etc.)
     local vendor_src
     vendor_src="$tmp_dir/vendor"
@@ -783,6 +810,8 @@ download_and_install() {
         rm -rf "$stage_dir" "$tmp_dir"
         die "Downloaded binary version does not match release" "Expected $specific_version, got ${installed_version:-no version output}. Try: npm install -g @deveco/deveco-code" "package_validation" "version_mismatch"
     fi
+
+    install_dependencies "$stage_dir"
 
     # Atomic switch: staging → version directory
     if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
@@ -815,6 +844,9 @@ install_from_binary() {
     if [ -n "$source_root" ] && [ -f "$source_root/CHANGELOG.md" ]; then
         cp "$source_root/CHANGELOG.md" "$stage_dir/CHANGELOG.md"
     fi
+    if [ -n "$source_root" ] && [ -f "$source_root/package.json" ]; then
+        cp "$source_root/package.json" "$stage_dir/package.json"
+    fi
     if ! installation_complete "$stage_dir"; then
         die "Local build output is incomplete" "The deveco executable is missing" "package_validation" "binary_missing"
     fi
@@ -823,6 +855,7 @@ install_from_binary() {
     if [ "$installed_version" != "$specific_version" ]; then
         die "Local binary version does not match" "Expected $specific_version, got ${installed_version:-no version output}" "package_validation" "version_mismatch"
     fi
+    install_dependencies "$stage_dir"
     if [ -d "$version_dir" ]; then rm -rf "$version_dir"; fi
     mv "$stage_dir" "$version_dir"
     update_symlink "$version_dir"
@@ -833,6 +866,7 @@ if [ -n "$binary_path" ]; then
     install_from_binary
 else
     if check_version; then
+        install_dependencies "$VERSIONS_DIR/$specific_version"
         cleanup_old_versions
     else
         download_and_install
