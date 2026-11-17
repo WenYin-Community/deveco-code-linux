@@ -1008,4 +1008,72 @@ describe("Project.fromDirectory directory adoption (upstream semantics)", () => 
       ).toBe(ProjectV2.ID.global)
     }),
   )
+
+  it.live("adopts sessions from a subdirectory named ..foo without treating it as a parent", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const { project } = yield* projects.fromDirectory(tmp)
+
+      // Create a subdirectory literally named "..foo" inside the worktree.
+      // path.relative(root, root/..foo) = "..foo" which starts with ".." but
+      // is NOT a parent reference — the boundary check must use the separator.
+      const dotfoo = path.join(tmp, "..foo")
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`rm -rf ${dotfoo}`.quiet().nothrow()).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => $`mkdir ${dotfoo}`.quiet())
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const id = crypto.randomUUID() as SessionID
+      yield* insertSession({ id, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(dotfoo), title: "dotfoo" })
+
+      yield* projects.fromDirectory(tmp)
+
+      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+      expect(row).toBeDefined()
+      expect(row!.project_id).toBe(project.id)
+      expect(row!.path).toBe("..foo")
+    }),
+  )
+
+  it.live("recomputes session path relative to the adopted worktree", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const subdir = path.join(tmp, "src")
+      yield* Effect.promise(() => $`mkdir ${subdir}`.quiet())
+      const { project } = yield* projects.fromDirectory(tmp)
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const root = crypto.randomUUID() as SessionID
+      const nested = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: root, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(tmp), title: "root" })
+      yield* insertSession({ id: nested, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(subdir), title: "nested" })
+
+      yield* projects.fromDirectory(tmp)
+
+      const rootRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, root)).get().pipe(Effect.orDie)
+      expect(rootRow!.project_id).toBe(project.id)
+      expect(rootRow!.path).toBeNull()
+
+      const nestedRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, nested)).get().pipe(Effect.orDie)
+      expect(nestedRow!.project_id).toBe(project.id)
+      expect(nestedRow!.path).toBe("src")
+    }),
+  )
 })

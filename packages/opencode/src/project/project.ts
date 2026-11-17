@@ -468,7 +468,8 @@ export const layer = Layer.effect(
       // Coarse SQL range pre-filter, then per-row containment verification:
       // the range /tmp/app ≤ x ≤ /tmp/app\uffff also matches sibling paths like
       // /tmp/app-foreign, so re-resolve each row and only migrate sessions that
-      // truly sit inside the resolved worktree (mirrors upstream's projector).
+      // truly sit inside the resolved worktree (mirrors upstream's projector,
+      // including the per-row path recomputation).
       const adoptedIDs = new Set(adopted.map((row) => row.id))
       const rows = yield* db
         .select({
@@ -492,21 +493,34 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const resolved = path.resolve(directory)
-      const eligible = rows.filter((row) => {
-        // For adopted projects, check the project's worktree (adoption already
-        // verified it resolves into this directory); otherwise check the
-        // session's own directory.
-        const checkDir = adoptedIDs.has(row.projectID) ? row.worktree : row.directory
-        const rel = path.relative(resolved, path.resolve(checkDir))
-        return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
-      })
-      if (eligible.length === 0) return
-      yield* db
-        .update(SessionTable)
-        .set({ project_id: projectID, time_updated: sql`${SessionTable.time_updated}` })
-        .where(inArray(SessionTable.id, eligible.map((row) => row.id)))
-        .run()
-        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        rows,
+        (row) => {
+          // For adopted projects, check the project's worktree (adoption already
+          // verified it resolves into this directory); otherwise check the
+          // session's own directory.
+          const checkDir = adoptedIDs.has(row.projectID) ? row.worktree : row.directory
+          const target = path.resolve(checkDir)
+          const rel = path.relative(resolved, target)
+          // "..foo" is a valid subdirectory: exclude only when the relative
+          // path IS ".." or starts with the parent separator — not merely the
+          // ".." prefix (upstream FSUtil.contains does the same boundary check).
+          if (rel !== "" && (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel))) {
+            return Effect.void
+          }
+          return db
+            .update(SessionTable)
+            .set({
+              project_id: projectID,
+              path: rel ? rel.replaceAll("\\", "/") : null,
+              time_updated: sql`${SessionTable.time_updated}`,
+            })
+            .where(eq(SessionTable.id, row.id))
+            .run()
+            .pipe(Effect.asVoid, Effect.orDie)
+        },
+        { discard: true },
+      )
     })
 
     const fromDirectory = Effect.fn("Project.fromDirectory")(function* (directory: string) {
