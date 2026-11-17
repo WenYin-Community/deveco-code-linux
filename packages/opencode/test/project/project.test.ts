@@ -960,4 +960,52 @@ describe("Project.fromDirectory directory adoption (upstream semantics)", () => 
       ).toBe(before.project.id)
     }),
   )
+
+  it.live("does not steal sessions from sibling directories sharing a prefix", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const { project } = yield* projects.fromDirectory(tmp)
+      expect(project.id).not.toBe(ProjectV2.ID.global)
+
+      // Create a sibling that satisfies the SQL range /tmp/app ≤ x ≤ /tmp/app\uffff
+      // but is NOT inside the worktree (same prefix, different directory).
+      const sibling = path.join(path.dirname(tmp), path.basename(tmp) + "-foreign")
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`rm -rf ${sibling}`.quiet().nothrow()).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => $`mkdir ${sibling}`.quiet())
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const local = crypto.randomUUID() as SessionID
+      const foreign = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: local, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(tmp), title: "local" })
+      yield* insertSession({
+        id: foreign,
+        projectID: ProjectV2.ID.global,
+        directory: AbsolutePath.make(sibling),
+        title: "sibling",
+      })
+
+      yield* projects.fromDirectory(tmp)
+
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, local)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(project.id)
+      // The sibling session must remain under global: its directory shares the
+      // SQL prefix but is not inside the worktree.
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, foreign)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(ProjectV2.ID.global)
+    }),
+  )
 })

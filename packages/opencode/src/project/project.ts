@@ -465,9 +465,20 @@ export const layer = Layer.effect(
         ...new Set([previous ?? ProjectV2.ID.global, ProjectV2.ID.global, ...adopted.map((row) => row.id)]),
       ].filter((id) => id !== projectID)
       if (sources.length === 0) return
-      yield* db
-        .update(SessionTable)
-        .set({ project_id: projectID, time_updated: sql`${SessionTable.time_updated}` })
+      // Coarse SQL range pre-filter, then per-row containment verification:
+      // the range /tmp/app ≤ x ≤ /tmp/app\uffff also matches sibling paths like
+      // /tmp/app-foreign, so re-resolve each row and only migrate sessions that
+      // truly sit inside the resolved worktree (mirrors upstream's projector).
+      const adoptedIDs = new Set(adopted.map((row) => row.id))
+      const rows = yield* db
+        .select({
+          id: SessionTable.id,
+          directory: SessionTable.directory,
+          projectID: SessionTable.project_id,
+          worktree: ProjectTable.worktree,
+        })
+        .from(SessionTable)
+        .innerJoin(ProjectTable, eq(SessionTable.project_id, ProjectTable.id))
         .where(
           and(
             inArray(SessionTable.project_id, sources),
@@ -478,6 +489,22 @@ export const layer = Layer.effect(
             ),
           ),
         )
+        .all()
+        .pipe(Effect.orDie)
+      const resolved = path.resolve(directory)
+      const eligible = rows.filter((row) => {
+        // For adopted projects, check the project's worktree (adoption already
+        // verified it resolves into this directory); otherwise check the
+        // session's own directory.
+        const checkDir = adoptedIDs.has(row.projectID) ? row.worktree : row.directory
+        const rel = path.relative(resolved, path.resolve(checkDir))
+        return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+      })
+      if (eligible.length === 0) return
+      yield* db
+        .update(SessionTable)
+        .set({ project_id: projectID, time_updated: sql`${SessionTable.time_updated}` })
+        .where(inArray(SessionTable.id, eligible.map((row) => row.id)))
         .run()
         .pipe(Effect.orDie)
     })
