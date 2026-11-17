@@ -175,10 +175,9 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     }
   })
 
-  // 验证: 用户显式批准 (allow_once) 后, ask-ceiling 操作 (app_lifecycle) 可执行 —
-  // ceiling 压缩的是未经审批的自动 allow, 不应把用户已批准的请求压回 deny
-  // (aa start 已修正为 install_start/allow-ceiling, ask-ceiling 覆盖改用 force-stop)
-  it("allow_once approval executes an ask-ceiling operation (aa force-stop)", async () => {
+  // 验证: 用户显式批准 (allow_once) 后, app_lifecycle 操作可执行 —
+  // ceiling=allow 不压缩用户已批准的请求
+  it("allow_once approval executes an app_lifecycle operation (aa force-stop)", async () => {
     const approveLayer = Layer.succeed(HdcPermissionPort, {
       evaluate: () =>
         Effect.succeed({
@@ -203,11 +202,9 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     }
   })
 
-  // 验证: saved permission 只加速同一动作, 不得突破产品上限 (§1.10, TC-15) —
-  // aa start 的 Always allow 保存后, 同一 bundle 的 aa force-stop 仍须弹窗。
-  // evaluate 返回 saved_permission allow (当次无弹窗), ceiling=ask 必须
-  // 走 awaitApproval 拿到当次审批后才允许执行。
-  it("saved permission cannot bypass ask ceiling (aa force-stop) — prompts again", async () => {
+  // 验证: app_lifecycle (ceiling=allow) 的 saved permission 直接放行, 无需再次弹窗
+  // (ceiling=allow 后, saved_permission allow 不再被压缩为 ask)
+  it("saved permission directly allows app_lifecycle operation (aa force-stop)", async () => {
     let approvalCalls = 0
     const savedLayer = Layer.succeed(HdcPermissionPort, {
       evaluate: () =>
@@ -230,17 +227,16 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
         }),
     })
     const decision = await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, savedLayer)
-    expect(approvalCalls).toBe(1)
+    expect(approvalCalls).toBe(0)
     expect(decision.kind).toBe("allow")
     if (decision.kind === "allow") {
-      expect(decision.approvalResult).toBe("allow_once")
-      expect(decision.approvalPrompted).toBe(true)
+      expect(decision.approvalResult).toBe("always_allow")
     }
   })
 
-  // 验证: saved permission 放行 + 无法取得当次审批 (端口仍返回无弹窗 allow)
-  // → fail-closed deny(approval_denied), 不得执行 ask-ceiling 操作。
-  it("saved permission without a prompt fails closed on ask-ceiling operation", async () => {
+  // 验证: app_lifecycle (ceiling=allow) 的 saved permission 即使端口返回无弹窗 allow,
+  // 也直接放行 (ceiling=allow 不再压缩 saved_permission allow)
+  it("saved permission without a prompt allows app_lifecycle operation", async () => {
     const savedLayer = Layer.succeed(HdcPermissionPort, {
       evaluate: () =>
         Effect.succeed({
@@ -258,9 +254,9 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
         }),
     })
     const decision = await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, savedLayer)
-    expect(decision.kind).toBe("deny")
-    if (decision.kind === "deny") {
-      expect(decision.reasonCode).toBe("approval_denied")
+    expect(decision.kind).toBe("allow")
+    if (decision.kind === "allow") {
+      expect(decision.approvalResult).toBe("always_allow")
     }
   })
 
@@ -292,9 +288,8 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
   })
 
   // 验证: permRequest.canAlwaysAllow — aa start (install_start, ceiling=allow)
-  // 为 true (TC-15: 审批弹窗须提供 Always allow); aa force-stop 保持 false。
-  // 此前 aa start 误归 app_lifecycle 导致只有 Allow once。
-  it("aa start passes canAlwaysAllow=true, force-stop false", async () => {
+  // 为 true; aa force-stop (app_lifecycle, ceiling=allow) 也为 true。
+  it("aa start and force-stop both pass canAlwaysAllow=true", async () => {
     const seen: boolean[] = []
     const captureLayer = Layer.succeed(HdcPermissionPort, {
       evaluate: (req: { canAlwaysAllow: boolean }) =>
@@ -317,7 +312,7 @@ describe("SEC2-008: Fixed processing order (§1)", () => {
     })
     await runGuard(makeRequest(["shell", "aa", "start", "-b", "com.example.app", "-a", "EntryAbility"]), trustedCtx, captureLayer)
     await runGuard(makeRequest(["shell", "aa", "force-stop", "com.example.app"]), trustedCtx, captureLayer)
-    expect(seen).toEqual([true, false])
+    expect(seen).toEqual([true, true])
   })
 })
 

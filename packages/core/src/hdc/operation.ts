@@ -183,7 +183,7 @@ export function categoryOf(op: HdcOperation): OperationCategory {
       // aa start pairs with install in the install_start category
       // (SR2 §2.3: install/aa start widen to allow, Always-allow
       // eligible — FR-APPROVAL-101). force-stop/stop stay
-      // app_lifecycle (ceiling ask, one-shot approval only).
+      // app_lifecycle (ceiling allow, Always-allow eligible).
       return categoryOfAppControl(op.action)
     case "fileSend":
     case "fileRecv":

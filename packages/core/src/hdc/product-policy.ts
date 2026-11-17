@@ -8,9 +8,11 @@ import type { PermissionEffect } from "./decision"
 
 // Product policy version (for audit/telemetry, consumed by SEC1 via HdcGuardTrustedContext)
 // Increment when strategy matrix (hard deny / ceiling / canAlwaysAllow) changes.
+// 1.2.0: install_start and app_lifecycle changed to allow/allow (install, aa start,
+// force-stop, stop, uninstall, bm uninstall no longer prompt for approval).
 // 1.1.0: aa start reclassified install_start (ceiling allow, Always-allow
 // eligible per SR2 §2.3 / FR-APPROVAL-101); force-stop/stop remain ask-ceiling.
-export const PRODUCT_POLICY_VERSION = "1.1.0"
+export const PRODUCT_POLICY_VERSION = "1.2.0"
 
 // ─── Hard deny commands ────────────────────────────────────
 // These are matched first and produce an irreversible hard deny.
@@ -99,14 +101,14 @@ const POLICY_TABLE: Record<OperationCategory, ProductPolicyEntry> = {
   // Device readonly: allow by default
   device_readonly: { productDefault: "allow", productCeiling: "allow" },
 
-  // Install/start: ask by default, can be widened to allow
-  install_start: { productDefault: "ask", productCeiling: "allow" },
+  // Install/start: allow by default (install, aa start)
+  install_start: { productDefault: "allow", productCeiling: "allow" },
 
   // File transfer: ask by default, can be widened to allow
   file_transfer: { productDefault: "ask", productCeiling: "allow" },
 
-  // App lifecycle: ask by default, max ask
-  app_lifecycle: { productDefault: "ask", productCeiling: "ask" },
+  // App lifecycle: allow by default (force-stop, stop, uninstall, bm uninstall)
+  app_lifecycle: { productDefault: "allow", productCeiling: "allow" },
 
   // Device file change: ask in allowlist, deny otherwise; max ask
   device_file_change: { productDefault: "ask", productCeiling: "ask" },

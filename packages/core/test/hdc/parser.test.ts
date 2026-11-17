@@ -475,7 +475,7 @@ describe("SEC2-001/004: categoryOf mapping", () => {
     expect(categoryOf(op)).toBe("install_start")
   })
 
-  // 验证: aa force-stop / aa stop 仍为 app_lifecycle (上限 ask, 不提供 Always allow)
+  // 验证: aa force-stop / aa stop 仍为 app_lifecycle (上限 allow)
   it("aa force-stop → app_lifecycle", () => {
     const op: HdcOperation = { kind: "appControl", action: "aa force-stop", bundleName: "com.example" }
     const { categoryOf } = require("../../src/hdc/operation")
