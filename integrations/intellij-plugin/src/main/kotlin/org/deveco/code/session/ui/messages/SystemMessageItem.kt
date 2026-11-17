@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,9 +58,10 @@ internal fun SystemItem(
         permissionDenied -> PermissionCardState.DENIED
         choices != null -> {
             // Check if this is a sensitive permission request (contains warning keywords)
-            if (item.text.contains("上传", ignoreCase = true) ||
-                item.text.contains("服务器", ignoreCase = true) ||
-                item.text.contains("网络", ignoreCase = true)
+            val haystack = item.title + "\n" + item.text
+            if (haystack.contains("上传", ignoreCase = true) ||
+                haystack.contains("服务器", ignoreCase = true) ||
+                haystack.contains("网络", ignoreCase = true)
             ) {
                 PermissionCardState.WARNING
             } else {
@@ -141,14 +143,20 @@ internal fun SystemItem(
             )
         }
 
-        // Show error message text for SYSTEM state
-        if (state == PermissionCardState.SYSTEM && item.text.isNotBlank()) {
+        // Detail lines: permission ask targets (path/command/url) and always-allow
+        // scope; monospace for asks, prose font for the success scope sentence.
+        if (item.text.isNotBlank()) {
             Spacer(Modifier.height(6.dp))
             Text(
                 item.text,
-                color = DevEcoTheme.foreground,
+                color = if (state == PermissionCardState.SYSTEM) DevEcoTheme.foreground else muted,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Normal,
+                fontFamily = if (state == PermissionCardState.REQUEST || state == PermissionCardState.WARNING || state == PermissionCardState.DENIED) {
+                    FontFamily.Monospace
+                } else {
+                    FontFamily.Default
+                },
             )
         }
 

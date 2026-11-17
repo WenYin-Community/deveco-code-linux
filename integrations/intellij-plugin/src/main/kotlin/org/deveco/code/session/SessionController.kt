@@ -364,6 +364,21 @@ internal class SessionController(
     val permissionResults = mutableStateMapOf<String, String>()
     private val deniedPermissions = mutableStateMapOf<String, Boolean>()
     val permissionDeniedIds: Set<String> get() = deniedPermissions.keys
+    // Permission ids with a localized action noun (session.permission.label.<id>);
+    // anything else keeps the generic title carrying the raw id.
+    private val permissionLabelIds = setOf(
+        "external_directory",
+        "bash",
+        "shell",
+        "edit",
+        "write",
+        "apply_patch",
+        "read",
+        "webfetch",
+        "grep",
+        "glob",
+        "doom_loop",
+    )
     val pendingElicitation = mutableStateOf<ElicitationItem?>(null)
     val attachments = mutableStateListOf<AttachmentItem>()
 
@@ -3825,10 +3840,15 @@ internal class SessionController(
             request.toolCall.title?.contains("云端", ignoreCase = true) == true ||
             request.toolCall.title?.contains("上传", ignoreCase = true) == true
 
-        val requestTitle = if (isSensitive) {
-            MyMessageBundle.message("session.permission.request.warning.title", toolTitle)
-        } else {
-            MyMessageBundle.message("session.permission.request.title", toolTitle)
+        // The backend ships the ask target (path/command/url) in toolCall.rawInput and
+        // locations; surface it so the user authorizes a concrete action, not a rule id.
+        val label = permissionLabel(toolTitle)
+        val detail = permissionDetail(request)
+        val requestTitle = when {
+            isSensitive && label != null -> MyMessageBundle.message("session.permission.request.action.warning.title", label)
+            isSensitive -> MyMessageBundle.message("session.permission.request.warning.title", toolTitle)
+            label != null -> MyMessageBundle.message("session.permission.request.action.title", label)
+            else -> MyMessageBundle.message("session.permission.request.title", toolTitle)
         }
 
         updateUi {
@@ -3836,10 +3856,17 @@ internal class SessionController(
                 messageId,
                 ChatRole.SYSTEM,
                 requestTitle,
-                request.toolCall.title ?: "Permission requested",
+                detail,
             )
             messages += message
-            permissionChoices[messageId] = buildPermissionChoices(request, toolTitle, result, messageId)
+            permissionChoices[messageId] = buildPermissionChoices(
+                request,
+                toolTitle,
+                label,
+                permissionAlwaysScope(toolTitle, request.toolCall),
+                result,
+                messageId,
+            )
         }
         return try {
             result.awaitCancellable()
@@ -3860,6 +3887,8 @@ internal class SessionController(
     private fun buildPermissionChoices(
         request: RequestPermissionRequest,
         toolTitle: String,
+        actionLabel: String?,
+        alwaysScope: String?,
         result: CompletableFuture<RequestPermissionResponse>,
         messageId: String,
     ): List<PermissionChoice> {
@@ -3872,7 +3901,11 @@ internal class SessionController(
                     // Mark as denied for UI display
                     deniedPermissions[messageId] = true
                     // Update the message title to show denied
-                    val deniedTitle = MyMessageBundle.message("session.permission.denied.title", toolTitle)
+                    val deniedTitle = if (actionLabel != null) {
+                        MyMessageBundle.message("session.permission.denied.action.title", actionLabel)
+                    } else {
+                        MyMessageBundle.message("session.permission.denied.title", toolTitle)
+                    }
                     updateUi {
                         val index = messages.indexOfFirst { it.id == messageId }
                         if (index >= 0) {
@@ -3886,11 +3919,21 @@ internal class SessionController(
                     // Store the permission result for success card display
                     permissionResults[messageId] = displayName
                     // Update the message title to show success
-                    val successTitle = MyMessageBundle.message("session.permission.success.title", toolTitle, displayName)
+                    val successTitle = if (actionLabel != null) {
+                        MyMessageBundle.message("session.permission.success.action.title", actionLabel, displayName)
+                    } else {
+                        MyMessageBundle.message("session.permission.success.title", toolTitle, displayName)
+                    }
+                    // "Always allow" persists a per-target rule; say what it covers so a
+                    // later ask for another target does not read as the same ask repeating.
+                    val scope = alwaysScope.takeIf { option.name == "Always allow" }
                     updateUi {
                         val index = messages.indexOfFirst { it.id == messageId }
                         if (index >= 0) {
-                            val updatedMessage = messages[index].copy(title = successTitle)
+                            val updatedMessage = messages[index].copy(
+                                title = successTitle,
+                                text = scope ?: messages[index].text,
+                            )
                             messages[index] = updatedMessage
                         }
                     }
@@ -3903,6 +3946,71 @@ internal class SessionController(
                 }
             }
         }
+    }
+
+    /**
+     * Localized action noun for known permission ids so card titles read as actions
+     * ("该操作需要访问外部目录") instead of embedding the raw rule id. Unknown ids fall
+     * back to the generic title carrying the id verbatim.
+     */
+    private fun permissionLabel(permissionId: String): String? {
+        if (permissionId !in permissionLabelIds) return null
+        return MyMessageBundle.message("session.permission.label.$permissionId")
+    }
+
+    /**
+     * Ask target lines (path/command/url) for the permission card, extracted from the
+     * toolCall the backend already sends: rawInput metadata (flattening a nested
+     * "input" object the way the TUI does) plus locations. Mirrors the TUI mapping in
+     * packages/opencode/src/cli/cmd/run/permission.shared.ts.
+     */
+    private fun permissionDetail(request: RequestPermissionRequest): String {
+        val permissionId = request.toolCall.title ?: return ""
+        val meta = permissionMetadata(request.toolCall.rawInput)
+        fun field(key: String): String? =
+            (meta?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val keys = when (permissionId.lowercase()) {
+            "external_directory" -> listOf("parentDir", "filepath")
+            "bash", "shell" -> listOf("command")
+            "edit", "write", "apply_patch", "read" -> listOf("filepath", "filePath")
+            "webfetch" -> listOf("url")
+            "grep", "glob" -> listOf("path", "pattern")
+            else -> listOf("command", "filepath", "filePath", "path", "url", "parentDir")
+        }
+        val targets = keys.mapNotNull { field(it) }.distinct()
+        val locations = request.toolCall.locations?.mapNotNull { it.path.takeIf(String::isNotBlank) } ?: emptyList()
+        val lines = (targets + locations.filterNot { loc -> targets.any { it.contains(loc) || loc.contains(it) } })
+            .distinct()
+            .take(3)
+        if (lines.isEmpty()) return ""
+        val scoped = permissionId == "external_directory" &&
+            request.options.any { it.name == "Always allow" }
+        if (!scoped) return lines.joinToString("\n")
+        return (lines + MyMessageBundle.message("session.permission.always.hint.external_directory")).joinToString("\n")
+    }
+
+    /**
+     * What an "Always allow" reply persists for external_directory (the backend stores
+     * the parent-directory glob it asked with); null for permissions whose stored
+     * pattern the ACP request does not let us derive.
+     */
+    private fun permissionAlwaysScope(permissionId: String, toolCall: SessionUpdate.ToolCallUpdate): String? {
+        if (permissionId != "external_directory") return null
+        val meta = permissionMetadata(toolCall.rawInput)
+        fun field(key: String): String? =
+            (meta?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val dir = field("parentDir") ?: field("filepath") ?: return null
+        val separator = if (dir.contains('\\')) "\\" else "/"
+        return MyMessageBundle.message(
+            "session.permission.always.scope.external_directory",
+            dir.trimEnd('\\', '/') + separator + "*",
+        )
+    }
+
+    private fun permissionMetadata(rawInput: Any?): JsonObject? {
+        val raw = rawInput as? JsonObject ?: return null
+        val nested = raw["input"] as? JsonObject ?: return raw
+        return JsonObject(raw + nested)
     }
 
     /**
