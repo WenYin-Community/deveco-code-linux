@@ -270,16 +270,19 @@ export const layer = Layer.effect(
           conditions.push(
             sql`${SessionTable.title} LIKE ${`%${input.search.replaceAll("!", "!!").replaceAll("%", "!%").replaceAll("_", "!_")}%`} ESCAPE '!'`,
           )
+        // Session IDs are descending-encoded (newer = lexicographically smaller), so within one
+        // time_created millisecond creation order is id DESC; the id tie-break and the anchor
+        // comparisons must run opposite to the time direction to stay consistent with it.
         if (input.anchor) {
           conditions.push(
             order === "asc"
               ? or(
                   gt(sortColumn, input.anchor.time),
-                  and(eq(sortColumn, input.anchor.time), gt(SessionTable.id, input.anchor.id)),
+                  and(eq(sortColumn, input.anchor.time), lt(SessionTable.id, input.anchor.id)),
                 )!
               : or(
                   lt(sortColumn, input.anchor.time),
-                  and(eq(sortColumn, input.anchor.time), lt(SessionTable.id, input.anchor.id)),
+                  and(eq(sortColumn, input.anchor.time), gt(SessionTable.id, input.anchor.id)),
                 )!,
           )
         }
@@ -289,7 +292,7 @@ export const layer = Layer.effect(
           .where(conditions.length > 0 ? and(...conditions) : undefined)
           .orderBy(
             order === "asc" ? asc(sortColumn) : desc(sortColumn),
-            order === "asc" ? asc(SessionTable.id) : desc(SessionTable.id),
+            order === "asc" ? desc(SessionTable.id) : asc(SessionTable.id),
           )
         const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(
           Effect.orDie,

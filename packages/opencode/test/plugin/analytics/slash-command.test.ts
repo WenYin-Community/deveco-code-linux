@@ -138,13 +138,15 @@ function uploadedSlashCommandNames(harness: ReturnType<typeof createHarness>): s
 
 test("slash command emits exactly one DevEcoCodeSlash upload", async () => {
   const harness = createHarness()
+  // sample the lower bound before the event exists; sampling after runCommand
+  // can straddle a millisecond boundary and make the >= assertion flaky
+  const before = Date.now()
   await runCommand(harness, { command: "my-flow" })
 
   expect(harness.upload).toHaveBeenCalledTimes(1)
   expect(harness.flush).toHaveBeenCalledTimes(1)
   const submission = harness.upload.mock.calls[0]?.[0]
   expect(submission?.action).toBe(ANALYTICS_ACTION.SLASH_COMMAND)
-  const before = Date.now()
   expect(uploadedSlashEvent(harness)).toEqual({
     sourceType: "DevEco-Code-Cli",
     sourceVersion: "1.2.3",

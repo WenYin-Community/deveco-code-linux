@@ -21,7 +21,7 @@ stages:
     jobs:
       typecheck:
         name: typecheck
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_swr]
         steps:
           - name: 检出代码
             uses: checkout

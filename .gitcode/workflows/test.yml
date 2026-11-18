@@ -21,7 +21,7 @@ stages:
     jobs:
       test:
         name: unit-test
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_swr]
         steps:
           - name: 检出代码
             uses: checkout
@@ -34,6 +34,11 @@ stages:
               node-version: 22
           - name: 安装 Bun
             run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install -g bun@1.4.2
+          - name: 安装单测专用 Bun 1.4.4
+            # bun 1.4.2 跑 deveco 包单测时稳定 segfault（JSCTaskScheduler 空指针，bun.report 建议升级 1.4.4），
+            # 但 1.4.3+ 有 solid-js JSX 回归（jsxDEV not found），ui 等包只能用 1.4.2 跑测试，
+            # 因此把 1.4.4 装到独立前缀，仅 deveco 包的测试使用
+            run: NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ npm install --prefix /opt/bun-test bun@1.4.4
           - name: 配置 apt 镜像
             run: |
               SUDO=(); if [ "$(id -u)" -ne 0 ]; then SUDO=(sudo); fi
@@ -84,7 +89,23 @@ stages:
             run: find . -path '*/node_modules/.bin/*' -type l -exec chmod +x {} +
           - name: 运行单元测试
             # 限制包级并发，避免多个测试包同时运行造成内存和进程压力
-            run: bun turbo test --concurrency=4 --output-logs=errors-only --log-order=grouped --log-prefix=task
+            # 分两阶段：deveco 之外的包用全局 bun 1.4.2（1.4.3+ 的 solid-js JSX 回归会打挂 ui），
+            # deveco 包用 /opt/bun-test 下的 1.4.4（1.4.2 跑它会 segfault）；
+            # deveco 阶段降到 citest 用户执行，否则 root 绕过 chmod 检查导致 EACCES/EPERM 断言失败
+            # （HOME 一并切走，避免 turbo/bun 写 /root）
+            run: |
+              TEST_ARGS=(turbo test --concurrency=4 --output-logs=errors-only --log-order=grouped --log-prefix=task)
+              BUN144=/opt/bun-test/node_modules/.bin
+              bun "${TEST_ARGS[@]}" --filter='!deveco'
+              if [ "$(id -u)" -ne 0 ]; then
+                PATH="$BUN144:$PATH" bun "${TEST_ARGS[@]}" --filter=deveco
+                exit $?
+              fi
+              # 阶段一以 root 建出的 /tmp/deveco（Global.Path.tmp）会让 citest 在阶段二 EACCES，先清掉
+              rm -rf /tmp/deveco
+              id -u citest >/dev/null 2>&1 || useradd -m -s /bin/bash citest
+              chown -R citest:citest .
+              runuser -u citest --preserve-environment -- env HOME=/home/citest PATH="$BUN144:$PATH" bun "${TEST_ARGS[@]}" --filter=deveco
             env:
               OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
               DEVECO_DISABLE_MODELS_FETCH: "true"

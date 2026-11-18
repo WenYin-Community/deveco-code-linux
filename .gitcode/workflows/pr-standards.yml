@@ -26,7 +26,7 @@ stages:
     jobs:
       check-standards:
         name: 标题格式与关联 Issue
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_swr]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
@@ -152,7 +152,7 @@ stages:
     jobs:
       check-compliance:
         name: PR 模板合规检查
-        runs-on: ubuntu-latest
+        runs-on: [self-hosted, deveco_swr]
         env:
           GITCODE_API: https://atomgit.com/api/v5
           GITCODE_REPO: ${{ atomgit.repository }}
