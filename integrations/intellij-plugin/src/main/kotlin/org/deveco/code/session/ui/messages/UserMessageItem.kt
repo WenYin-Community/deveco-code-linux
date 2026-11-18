@@ -106,8 +106,15 @@ internal fun UserMessage(
                         modifier = Modifier.then(if (hasTextAfter) Modifier.padding(bottom = 6.dp) else Modifier),
                     )
                 }
+                // User bubble is deliberately plain text: no markdown rendering, so typed
+                // line breaks and log/path content show exactly as entered.
                 if (item.text.isNotBlank()) {
-                    MarkdownWithCodeBlocks(text = item.text, modifier = Modifier.wrapContentWidth())
+                    Text(
+                        text = item.text,
+                        color = DevEcoTheme.foreground,
+                        fontSize = 14.sp,
+                        modifier = Modifier.wrapContentWidth(),
+                    )
                 }
             }
 
