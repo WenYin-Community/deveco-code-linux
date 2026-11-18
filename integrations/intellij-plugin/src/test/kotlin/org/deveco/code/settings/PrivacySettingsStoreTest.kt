@@ -2,6 +2,8 @@ package org.deveco.code.settings
 
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
 
@@ -19,6 +21,13 @@ class PrivacySettingsStoreTest {
                 java.nio.file.Files.createTempDirectory("privacy-store-test").toAbsolutePath().toString(),
             )
         }
+    }
+
+    @Before
+    fun resetArbitration() {
+        // The store is a process-wide object, so the "applied in this session" flag would
+        // otherwise leak from one test into the next.
+        PrivacySettingsStore.resetToolImprovementArbitrationForTest()
     }
 
     @Test
@@ -60,27 +69,64 @@ class PrivacySettingsStoreTest {
     }
 
     @Test
-    fun `conditional write adopts the legacy value on a store without a value`() {
+    fun `forced write adopts the legacy value on a store without a value`() {
         // Fresh store, as on the first launch after an upgrade: no persisted value yet.
         java.nio.file.Files.deleteIfExists(kvJsonPath())
-        assertTrue(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(true))
+        assertTrue(PrivacySettingsStore.writeToolImprovementEnabledForced(true))
         assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
     }
 
     @Test
-    fun `conditional write ordered after a user write never overwrites it`() {
+    fun `forced write overwrites a value nobody applied through the settings page`() {
+        // The CLI writes the same key with its own default, so a value in kv.json is not proof of
+        // a newer decision; the legacy consent must still win and the other key must survive.
+        seedKvJson("""{"analytics_enabled":true,"deveco_tool_improvement_enabled":true}""")
+        assertTrue(PrivacySettingsStore.writeToolImprovementEnabledForced(false))
+        assertFalse(PrivacySettingsStore.readToolImprovementEnabled())
+        assertTrue(PrivacySettingsStore.readAnalyticsEnabled())
+    }
+
+    @Test
+    fun `forced write ordered after a settings page apply never overwrites it`() {
         // Deterministic reproduction of the reviewed interleaving: the user applies a
-        // choice (plain write) after the legacy property was written, then the one-time
-        // migration runs its conditional write — sequencing the calls forces exactly
-        // that order, and the newer value must win.
+        // choice after the legacy property was written, then the one-time migration runs
+        // its forced write — sequencing the calls forces exactly that order, and the
+        // applied value must win.
         PrivacySettingsStore.writeToolImprovementEnabled(false)
-        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(true))
+        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledForced(true))
         assertFalse(PrivacySettingsStore.readToolImprovementEnabled())
 
         // Symmetric direction: a user-enabled choice must not be turned off either.
         PrivacySettingsStore.writeToolImprovementEnabled(true)
-        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(false))
+        assertFalse(PrivacySettingsStore.writeToolImprovementEnabledForced(false))
         assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
+    }
+
+    @Test
+    fun `a failed settings page apply still lets the migration write`() {
+        // Swapping state/ for a regular file makes createDirectories throw, so the apply fails
+        // without persisting anything; the migration must not read that as a deliberate choice,
+        // or it would decline and the migrator would retire the legacy key anyway.
+        val state = kvJsonPath().parent
+        java.nio.file.Files.createDirectories(state)
+        java.nio.file.Files.deleteIfExists(kvJsonPath())
+        java.nio.file.Files.deleteIfExists(state)
+        java.nio.file.Files.writeString(state, "not a directory")
+        try {
+            PrivacySettingsStore.writeToolImprovementEnabled(true)
+            fail("expected the apply to throw")
+        } catch (expected: java.io.IOException) {
+        } finally {
+            java.nio.file.Files.deleteIfExists(state)
+        }
+        assertTrue(PrivacySettingsStore.writeToolImprovementEnabledForced(true))
+        assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
+    }
+
+    private fun seedKvJson(content: String) {
+        val file = kvJsonPath()
+        java.nio.file.Files.createDirectories(file.parent)
+        java.nio.file.Files.writeString(file, content)
     }
 
     private fun kvJsonPath(): java.nio.file.Path =

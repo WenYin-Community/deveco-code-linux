@@ -25,12 +25,12 @@ object ToolImprovementConsentMigrator {
         val props = PropertiesComponent.getInstance()
         val value = props.getValue(CONSENT_KEY) ?: return
         val enabled = value == "true"
-        // Fill kv.json only when it does not carry a value yet (same lock as the settings
-        // page apply): a user who saved a choice after the legacy property was written
-        // must not have it overwritten by the legacy value. A failed write keeps the
-        // legacy key so the next launch retries; only a decided outcome retires it.
+        // Overwrite kv.json (same lock as the settings page apply) unless the user already applied
+        // a choice in this process: a value the CLI or an earlier run left behind is not a newer
+        // decision, and the legacy property is the only record of the original consent. A failed
+        // write keeps the legacy key so the next launch retries; only a decided outcome retires it.
         val adopted = try {
-            PrivacySettingsStore.writeToolImprovementEnabledIfAbsent(enabled)
+            PrivacySettingsStore.writeToolImprovementEnabledForced(enabled)
         } catch (e: Exception) {
             log.warn("Failed to migrate tool improvement consent", e)
             return
@@ -39,7 +39,7 @@ object ToolImprovementConsentMigrator {
         if (adopted) {
             log.info("Migrated tool improvement consent from IDE properties to kv.json (enabled=$enabled)")
         } else {
-            log.info("Kept the newer tool improvement consent value in kv.json; cleared the legacy IDE property")
+            log.info("Kept the consent applied in this session; cleared the legacy IDE property")
         }
     }
 }
