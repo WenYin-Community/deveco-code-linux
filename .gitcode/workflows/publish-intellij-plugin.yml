@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEVECO_CHANNEL: ${{ inputs.channel }}
+      NODEJS_ORG_MIRROR: https://npmmirror.com/mirrors/node
       PLATFORM: ${{ inputs.platform }}
     steps:
       - name: 检出代码
@@ -78,10 +79,57 @@ jobs:
           echo "| 分支 | \`$ATOMGIT_REF_NAME\` |" >> "$ATOMGIT_STEP_SUMMARY"
 
       - name: 准备构建环境
-        run: NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node NPM_CONFIG_REGISTRY=https://registry.npmmirror.com bun install
+        run: |
+          NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node \
+            NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+            bun install --frozen-lockfile
+          NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+            bun run --cwd packages/opencode postinstall
 
-      - name: 使用镜像下载 Gradle 发行版
-        run: sed -i 's|services.gradle.org/distributions/|mirrors.huaweicloud.com/gradle/|' integrations/intellij-plugin/gradle/wrapper/gradle-wrapper.properties
+      - name: 准备 Gradle Wrapper
+        run: |
+          set -euo pipefail
+
+          WRAPPER_DIR="integrations/intellij-plugin/gradle/wrapper"
+          WRAPPER_JAR="$WRAPPER_DIR/gradle-wrapper.jar"
+          WRAPPER_PROPERTIES="$WRAPPER_DIR/gradle-wrapper.properties"
+
+          sed -i 's|services.gradle.org/distributions/|mirrors.huaweicloud.com/gradle/|' "$WRAPPER_PROPERTIES"
+          GRADLE_VERSION=$(sed -n 's/.*gradle-\([0-9.]*\)-bin\.zip.*/\1/p' "$WRAPPER_PROPERTIES")
+          if [ -z "$GRADLE_VERSION" ]; then
+            echo "ERROR: Unable to determine Gradle version from $WRAPPER_PROPERTIES"
+            exit 1
+          fi
+
+          wrapper_is_valid() {
+            [ -s "$WRAPPER_JAR" ] &&
+              unzip -tq "$WRAPPER_JAR" >/dev/null &&
+              unzip -Z1 "$WRAPPER_JAR" | grep -qx 'org/gradle/wrapper/GradleWrapperMain.class'
+          }
+
+          if ! wrapper_is_valid; then
+            TMP_DIR=$(mktemp -d)
+            trap 'rm -rf "$TMP_DIR"' EXIT
+            GRADLE_ARCHIVE="$TMP_DIR/gradle-$GRADLE_VERSION-bin.zip"
+            GRADLE_HOME="$TMP_DIR/gradle-$GRADLE_VERSION"
+            WRAPPER_MAIN="$GRADLE_HOME/lib/plugins/gradle-wrapper-main-$GRADLE_VERSION.jar"
+
+            echo "Restoring missing Gradle Wrapper bootstrap jar for Gradle $GRADLE_VERSION"
+            curl -fsSL --retry 3 --retry-delay 2 \
+              "https://mirrors.huaweicloud.com/gradle/gradle-$GRADLE_VERSION-bin.zip" \
+              -o "$GRADLE_ARCHIVE"
+            unzip -q "$GRADLE_ARCHIVE" \
+              "gradle-$GRADLE_VERSION/lib/plugins/gradle-wrapper-main-$GRADLE_VERSION.jar" \
+              -d "$TMP_DIR"
+            unzip -p "$WRAPPER_MAIN" gradle-wrapper.jar > "$WRAPPER_JAR"
+          fi
+
+          wrapper_is_valid || {
+            echo "ERROR: Gradle Wrapper bootstrap jar is missing or invalid"
+            exit 1
+          }
+          chmod +x integrations/intellij-plugin/gradlew
+          integrations/intellij-plugin/gradlew --version
 
       - name: 构建 IntelliJ 插件三个安装包
         id: build
@@ -89,6 +137,8 @@ jobs:
           NPM_REGISTRY: https://registry.npmmirror.com
           NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
         run: |
+          set -euo pipefail
+
           cd integrations/intellij-plugin
           ./gradlew --no-daemon --no-configuration-cache buildCompatibilityPackages \
             -Pversion="$PLUGIN_VERSION" \
@@ -101,6 +151,63 @@ jobs:
             find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.zip' -print || true
             exit 1
           fi
+
+          CHECK_DIR=$(mktemp -d)
+          trap 'rm -rf "$CHECK_DIR"' EXIT
+          for zipfile in "$PLUGIN_DIR"/*.zip; do
+            entries=$(unzip -Z1 "$zipfile")
+            plugin_jar=$(grep -E '(^|/)lib/deveco-code-jetbrains-plugin-[^/]+\.jar$' <<< "$entries" | head -1)
+            if [ -z "$plugin_jar" ]; then
+              echo "ERROR: Plugin implementation jar is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+            unzip -p "$zipfile" "$plugin_jar" > "$CHECK_DIR/plugin.jar"
+            plugin_entries=$(unzip -Z1 "$CHECK_DIR/plugin.jar")
+            if ! grep -qx 'META-INF/plugin.xml' <<< "$plugin_entries"; then
+              echo "ERROR: plugin.xml is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+            if ! grep -Eq '^cli/bin/deveco(\.exe)?$' <<< "$plugin_entries"; then
+              echo "ERROR: Bundled DevEco Code runtime is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+            if ! grep -qx 'cli/manifest.txt' <<< "$plugin_entries"; then
+              echo "ERROR: Bundled runtime manifest is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+            if [ "$PLATFORM" = "243" ]; then
+              node_binary='cli/bin/node'
+              if [[ "$(basename "$zipfile")" == *-windows-x64.zip ]]; then
+                node_binary='cli/bin/node.exe'
+              fi
+              if ! grep -qx "$node_binary" <<< "$plugin_entries"; then
+                echo "ERROR: Bundled Node runtime is missing from $(basename "$zipfile")"
+                exit 1
+              fi
+            fi
+            if ! grep -Eq '(^|/)lib/acp-model-jvm-[^/]+\.jar$' <<< "$entries"; then
+              echo "ERROR: ACP model jar is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+            if ! grep -Eq '(^|/)lib/sqlite-jdbc-[^/]+\.jar$' <<< "$entries"; then
+              echo "ERROR: SQLite JDBC jar is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+
+            if [ "$PLATFORM" = "243" ]; then
+              if ! grep -Eq '(^|/)lib/acp-jvm-0\.25\.0-deveco243\.jar$' <<< "$entries"; then
+                echo "ERROR: Adapted ACP jar is missing from $(basename "$zipfile")"
+                exit 1
+              fi
+              if grep -Eq '(^|/)lib/acp-jvm-0\.25\.0\.jar$' <<< "$entries"; then
+                echo "ERROR: Original ACP jar must not be packaged for 243: $(basename "$zipfile")"
+                exit 1
+              fi
+            elif ! grep -Eq '(^|/)lib/acp-jvm-0\.25\.0\.jar$' <<< "$entries"; then
+              echo "ERROR: ACP jar is missing from $(basename "$zipfile")"
+              exit 1
+            fi
+          done
 
       - name: 上传插件安装包为流水线制品
         id: upload

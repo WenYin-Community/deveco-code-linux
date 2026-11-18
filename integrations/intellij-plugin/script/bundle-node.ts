@@ -7,6 +7,7 @@ import path from "node:path"
 const version = "22.22.0"
 const destination = process.argv[2]
 const target = process.argv[3]
+const mirror = (process.env.NODEJS_ORG_MIRROR || "https://nodejs.org/dist").replace(/\/$/, "")
 const platforms = {
   "darwin-arm64": { archive: `node-v${version}-darwin-arm64.tar.gz`, hash: "5ed4db0fcf1eaf84d91ad12462631d73bf4576c1377e192d222e48026a902640", root: `node-v${version}-darwin-arm64`, binary: "bin/node" },
   "darwin-x64": { archive: `node-v${version}-darwin-x64.tar.gz`, hash: "5ea50c9d6dea3dfa3abb66b2656f7a4e1c8cef23432b558d45fb538c7b5dedce", root: `node-v${version}-darwin-x64`, binary: "bin/node" },
@@ -25,7 +26,7 @@ const tarball = path.join(cache, archive)
 const valid = async () => (await Bun.file(tarball).exists()) &&
   createHash("sha256").update(new Uint8Array(await Bun.file(tarball).arrayBuffer())).digest("hex") === expected
 if (!(await valid())) {
-  const response = await fetch(`https://nodejs.org/dist/v${version}/${archive}`)
+  const response = await fetch(`${mirror}/v${version}/${archive}`)
   if (!response.ok) throw new Error(`Node download failed: ${response.status}`)
   const bytes = new Uint8Array(await response.arrayBuffer())
   if (createHash("sha256").update(bytes).digest("hex") !== expected) {
