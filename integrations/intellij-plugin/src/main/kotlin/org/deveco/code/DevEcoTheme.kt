@@ -71,12 +71,11 @@ object DevEcoTheme {
 
     // Message-specific tokens
     val messageBackground: Color get() = JBColor.namedColor("Editor.background", 0xFFFFFF).toComposeColor()
-    val userBubbleBg: Color get() = JBColor(0xF0F4FF, 0x27282C).toComposeColor()
-    val userBubbleBorder: Color get() = JBColor(0xC8D0DC, 0x37383C).toComposeColor()
-    val userBubbleRadius: Int get() = 10
+    val userBubbleBg: Color get() = messageBackground
+    val userBubbleRadius: Int get() = 8
     val userBubblePaddingH: Int get() = 14
     val userBubblePaddingV: Int get() = 10
-    val userBubbleMaxWidth: Int get() = 480
+    val userBubbleMaxWidth: Int get() = 544
 
     val agentMessageRadius: Int get() = 8
     val agentMessagePaddingV: Int get() = 4

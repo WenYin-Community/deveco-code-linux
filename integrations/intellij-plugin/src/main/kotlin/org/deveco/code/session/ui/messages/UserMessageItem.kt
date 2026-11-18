@@ -82,7 +82,6 @@ internal fun UserMessage(
                     .align(Alignment.TopEnd)
                     .clip(RoundedCornerShape(DevEcoTheme.userBubbleRadius.dp))
                     .background(DevEcoTheme.userBubbleBg)
-                    .border(1.dp, DevEcoTheme.userBubbleBorder, RoundedCornerShape(DevEcoTheme.userBubbleRadius.dp))
                     .padding(
                         horizontal = DevEcoTheme.userBubblePaddingH.dp,
                         vertical = DevEcoTheme.userBubblePaddingV.dp,
