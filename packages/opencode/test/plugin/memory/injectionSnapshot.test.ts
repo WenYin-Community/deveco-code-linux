@@ -75,6 +75,16 @@ describe("SessionInjectionSnapshotCache", () => {
     cache.clear()
     expect(cache.size).toBe(0)
   })
+
+  it("prune keeps only entries the predicate accepts", () => {
+    const cache = new SessionInjectionSnapshotCache()
+    cache.set("fork", ["1"])
+    cache.set("main", ["2"])
+    cache.prune((sid) => sid === "fork")
+    expect(cache.get("fork")).toEqual(["1"])
+    expect(cache.get("main")).toBeUndefined()
+    expect(cache.size).toBe(1)
+  })
 })
 
 describe("computeInjectionBlocks", () => {

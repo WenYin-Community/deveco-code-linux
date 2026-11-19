@@ -1,6 +1,7 @@
-import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext } from "@opencode-ai/plugin"
+import type { Plugin, PluginInput, PluginOptions, Hooks, ToolContext, ToolDefinition } from "@opencode-ai/plugin"
 import type { OpencodeClient } from "@opencode-ai/sdk"
 import path from 'path'
+import fs from 'fs/promises'
 import { Global } from '@opencode-ai/core/global'
 import { initLogger, logger, setLogDir, type LogLevel } from './util/logger';
 import { MemoryStorage } from './memory/storage';
@@ -10,13 +11,21 @@ import { SessionInjectionSnapshotCache, computeInjectionBlocks } from './memory/
 import { EnhancedMemoryRetrieval } from './memory/enhanced-retrieval';
 import { DEFAULT_MEMORY_CONFIG, z, DEFAULT_AUTO_DREAM_CONFIG, DEFAULT_EXTRACTION_CONFIG, DEFAULT_TRUNCATION_CONFIG, DEFAULT_SKILL_CONFIG, DEFAULT_MEMORY_RECALL_CONFIG, DEFAULT_SEMANTIC_SELECTION_CONFIG, DEFAULT_MEMORY_EXPIRY_CONFIG, type MemoryConfig, type AutoDreamConfig, type ExtractionConfig, type SkillConfig, type MemoryRecallConfig, type SemanticSelectionConfig, type MemoryType, type Memory } from './memory/types';
 // Auto Dream imports
-import { initAutoDream, executeAutoDream, handleChatMessageTrigger, checkAllGates, isConsolidationInProgress, markDreamDone } from './autoDream/autoDream';
-import { isForkedSession, unregisterForkSession, getForkSessionAgent } from './util/forkManager';
+import {
+    initAutoDream,
+    executeAutoDream,
+    handleChatMessageTrigger,
+    checkAllGates,
+    isConsolidationInProgress,
+    markDreamDone,
+    updateAutoDreamConfig,
+} from './autoDream/autoDream';
+import { isForkedSession, unregisterForkSession, getForkSessionAgent, getForkConfig, type ForkMemoryConfig } from './util/forkManager';
 import { isSubagentSession, detectAndRegisterSubagent } from './util/subagentManager';
 
 
 // Auto Memory Extraction imports
-import { initAutoMemoryExtraction, getExtractionRunner, } from './memory/extractionRunner';
+import { initAutoMemoryExtraction, getExtractionRunner, updateExtractionConfig, } from './memory/extractionRunner';
 import { releaseExtractionLock } from './memory/extractionLock';
 import { processToolCallForSkill, incrementTurnCounter, markExtractionCompleted, resetExtractionSkillCounter, getThresholdState, updateThresholdState } from './memory/extractionThreshold';
 // Skills imports
@@ -74,6 +83,12 @@ interface PluginState {
     memoryToolUsedThisTurn: Set<string>
     /** Sessions whose last memory tool output carried a pending-expiry notice. */
     pendingExpiryNotice: Set<string>
+    /** Raw plugin options merged under the user config file on every reload. */
+    pluginOptions: PluginConfig
+    configPath: string
+    /** mtime the current state was built from; a different mtime triggers a reload. */
+    configMtimeMs: number
+    refreshing: Promise<void> | undefined
 }
 
 const stateMap = new Map<string, PluginState>();
@@ -84,7 +99,7 @@ const initPromises = new Map<string, Promise<PluginState>>();
 const sweptProjects = new Set<string>();
 
 async function getPendingExpiryNotice(state: PluginState, sessionID?: string): Promise<string | null> {
-    if (!state.expiryConfig?.enabled) return null;
+    if (!expiryConfigFor(state, sessionID).enabled) return null;
     const pending = await state.storage.readPendingExpiry();
     if (!pending || pending.pendingDeletions.length === 0) return null;
     const count = pending.pendingDeletions.length;
@@ -354,10 +369,20 @@ function createPluginState(
         pendingExpiryToastShown: false,
         memoryToolUsedThisTurn: new Set(),
         pendingExpiryNotice: new Set(),
+        pluginOptions: {},
+        configPath: "",
+        configMtimeMs: 0,
+        refreshing: undefined,
     };
 }
 
-async function getState(projectID: string, directory: string, pluginConfig: PluginConfig = {}, client?: OpencodeClient): Promise<PluginState> {
+async function getState(
+    projectID: string,
+    directory: string,
+    pluginConfig: PluginConfig = {},
+    client?: OpencodeClient,
+    pluginOptions: PluginConfig = {},
+): Promise<PluginState> {
     const existing = stateMap.get(projectID);
     if (existing) return existing;
     const inflight = initPromises.get(projectID);
@@ -380,10 +405,14 @@ async function getState(projectID: string, directory: string, pluginConfig: Plug
             }
         }
         const state = createPluginState(fullConfig, memoryRecallConfig, semanticSelectionConfig, client, projectID, directory, configs, slashCommandsEnabled);
+        state.pluginOptions = pluginOptions;
+        state.configPath = path.join(Global.Path.config, MEMORY_CONFIG_FILENAME);
+        state.configMtimeMs = await configMtime(state.configPath);
         if (client) {
             initAutoDream(client, storage, configs.autoDream);
         }
-        if (client && fullConfig.enabled) {
+        // Initialize even when disabled so enabling the Auto memory switch later works without a restart.
+        if (client) {
             initAutoMemoryExtraction(client, storage, configs.extraction, undefined, skillStorage, configs.skills);
         }
         stateMap.set(projectID, state);
@@ -411,6 +440,203 @@ async function loadMemoryConfigFile(configPath: string): Promise<PluginConfig> {
         logger.warn('[PluginInit]', 'Failed to load memory config:', configPath, e instanceof Error ? e.message : String(e))
         return {}
     }
+}
+
+async function configMtime(configPath: string): Promise<number> {
+    try {
+        return (await fs.stat(configPath)).mtimeMs
+    } catch {
+        return 0
+    }
+}
+
+/** Drop live-config state entries but keep fork sessions on their frozen snapshot. */
+function pruneNonForkEntries<T>(map: Map<string, T>): void {
+    for (const key of map.keys()) {
+        if (!isForkedSession(key)) map.delete(key)
+    }
+}
+
+function pruneNonForkSet(set: Set<string>): void {
+    for (const key of set) {
+        if (!isForkedSession(key)) set.delete(key)
+    }
+}
+
+/** Rebuild every derived instance so the next hook observes the new config. */
+function applyPluginConfig(state: PluginState, pluginConfig: PluginConfig): void {
+    const { configs, slashCommandsEnabled } = resolvePluginConfigs(pluginConfig);
+    state.config = configs.autoMemory;
+    state.autoDreamConfig = configs.autoDream;
+    state.extractionConfig = configs.extraction;
+    state.skillConfig = configs.skills;
+    state.slashCommandsEnabled = slashCommandsEnabled;
+    state.memoryRecallConfig = configs.memoryRecall;
+    state.semanticSelectionConfig = configs.semanticSelection;
+    state.subagentHooksConfig = configs.subagentHooks;
+    state.expiryConfig = configs.expiry;
+    state.retrieval = new EnhancedMemoryRetrieval(state.storage, configs.autoMemory, configs.memoryRecall, configs.semanticSelection, state.client);
+    state.injection = new MemoryInjection(state.storage, configs.autoMemory);
+    state.skillInjection = new SkillInjection(state.skillStorage, configs.skills);
+    // Frozen inject blocks and pending notices describe the old config; drop them so the
+    // next request renders the current one. Fork sessions keep theirs — they still render
+    // and notify from the snapshot captured at fork time.
+    state.injectionSnapshots.prune((sid) => isForkedSession(sid));
+    pruneNonForkEntries(state.pendingRecallMap);
+    pruneNonForkEntries(state.pendingWriteMap);
+    pruneNonForkSet(state.pendingExpiryNotice);
+    updateExtractionConfig(configs.extraction, configs.skills);
+    updateAutoDreamConfig(configs.autoDream);
+}
+
+/**
+ * Hot-reload memory-config.json. Hooks call this before reading any config so a toggle in
+ * the /memory dialog takes effect on the next request without restarting the process.
+ */
+async function refreshConfig(state: PluginState): Promise<void> {
+    if (!state.configPath) return;
+    const mtime = await configMtime(state.configPath);
+    if (mtime === state.configMtimeMs) return;
+    if (state.refreshing) {
+        await state.refreshing;
+        return;
+    }
+    state.refreshing = (async () => {
+        const fileConfig = await loadMemoryConfigFile(state.configPath);
+        applyPluginConfig(state, { ...fileConfig, ...state.pluginOptions } as PluginConfig);
+        state.configMtimeMs = await configMtime(state.configPath);
+    })();
+    try {
+        await state.refreshing;
+    } finally {
+        state.refreshing = undefined;
+    }
+}
+
+// ============================================================================
+// Per-Fork Config Snapshot
+// ============================================================================
+
+/**
+ * Freeze the memory config in effect for the spawning session into a snapshot
+ * for the dream/extraction fork about to be created. A non-fork parent reads
+ * live state; applyPluginConfig replaces the live objects wholesale, so holding
+ * these references is safe; nothing may mutate the snapshot afterwards.
+ */
+function forkMemorySnapshot(state: PluginState, sid?: string): ForkMemoryConfig {
+    return {
+        memory: memoryConfigFor(state, sid),
+        autoDream: autoDreamConfigFor(state, sid),
+        extraction: extractionConfigFor(state, sid),
+        skills: skillsConfigFor(state, sid),
+        recall: recallConfigFor(state, sid),
+        semantic: semanticConfigFor(state, sid),
+        expiry: expiryConfigFor(state, sid),
+    };
+}
+
+// Fork sessions read the config frozen at fork time; everything else (main
+// sessions, new tasks) keeps following the hot-reloaded live state.
+
+function memoryConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.memory : undefined) ?? state.config;
+}
+
+function autoDreamConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.autoDream : undefined) ?? state.autoDreamConfig;
+}
+
+function extractionConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.extraction : undefined) ?? state.extractionConfig;
+}
+
+function skillsConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.skills : undefined) ?? state.skillConfig;
+}
+
+function recallConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.recall : undefined) ?? state.memoryRecallConfig;
+}
+
+function semanticConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.semantic : undefined) ?? state.semanticSelectionConfig;
+}
+
+function expiryConfigFor(state: PluginState, sid?: string) {
+    return (sid ? getForkConfig(sid)?.expiry : undefined) ?? state.expiryConfig;
+}
+
+interface ForkDerivedInstances {
+    retrieval: EnhancedMemoryRetrieval
+    injection: MemoryInjection
+    skillInjection: SkillInjection
+}
+
+// Built once per fork from its snapshot, so repeated tool/hook calls in a long
+// dream/extraction run reuse the same derived instances.
+const forkDerivedCache = new Map<string, ForkDerivedInstances>()
+
+function forkDerivedFor(state: PluginState, sid: string): ForkDerivedInstances {
+    const cached = forkDerivedCache.get(sid)
+    if (cached) return cached
+    const derived = {
+        retrieval: new EnhancedMemoryRetrieval(
+            state.storage, memoryConfigFor(state, sid), recallConfigFor(state, sid), semanticConfigFor(state, sid), state.client,
+        ),
+        injection: new MemoryInjection(state.storage, memoryConfigFor(state, sid)),
+        skillInjection: new SkillInjection(state.skillStorage, skillsConfigFor(state, sid)),
+    }
+    forkDerivedCache.set(sid, derived)
+    return derived
+}
+
+function retrievalFor(state: PluginState, sid?: string): EnhancedMemoryRetrieval {
+    if (!sid || !getForkConfig(sid)) return state.retrieval
+    return forkDerivedFor(state, sid).retrieval
+}
+
+function injectionFor(state: PluginState, sid?: string): MemoryInjection {
+    if (!sid || !getForkConfig(sid)) return state.injection
+    return forkDerivedFor(state, sid).injection
+}
+
+function skillInjectionFor(state: PluginState, sid?: string): SkillInjection {
+    if (!sid || !getForkConfig(sid)) return state.skillInjection
+    return forkDerivedFor(state, sid).skillInjection
+}
+
+/** Drop everything derived for a finished fork: cached instances and pending notices. */
+function forgetForkSessionState(state: PluginState, sid: string): void {
+    forkDerivedCache.delete(sid)
+    state.injectionSnapshots.delete(sid)
+    state.pendingRecallMap.delete(sid)
+    state.pendingWriteMap.delete(sid)
+    state.pendingExpiryNotice.delete(sid)
+}
+
+/** Tools that belong to the declarative memory chains; skills keep their own switch. */
+const MEMORY_TOOLS = new Set([
+    'memory-read',
+    'memory-write',
+    'memory-search',
+    'memory-delete',
+    'dream-trigger',
+    'dream-approve',
+    'dream-reject',
+]);
+
+/** Tools are always registered; the Auto memory switch decides whether they may run. */
+function gatedTool(tool: ToolDefinition, state: PluginState): ToolDefinition {
+    return {
+        ...tool,
+        async execute(args, ctx) {
+            await refreshConfig(state);
+            if (!memoryConfigFor(state, ctx.sessionID).enabled) {
+                return 'Memory is disabled. Enable it via config: autoMemory.enabled = true';
+            }
+            return tool.execute(args, ctx);
+        },
+    };
 }
 
 // ============================================================================
@@ -474,6 +700,7 @@ async function handleForkedSessionIdle(sid: string, state: PluginState, client: 
     } else {
         logger.warn('[SessionIdle]', 'Forked session with unknown/missing agent type:', agentType || '(none)', sid);
     }
+    forgetForkSessionState(state, sid);
     unregisterForkSession(sid);
 }
 
@@ -492,6 +719,7 @@ async function handleExtractionIdle(sid: string, state: PluginState, projectID: 
             void extractionRunner({
                 sessionID: sid, projectID, memoryRoot: state.storage.getMemoryPath(),
                 projectDirectory: directory, storage: state.storage,
+                forkConfig: forkMemorySnapshot(state, sid),
             });
             logger.info('[SessionIdle]', 'Async extraction triggered via session.idle for:', sid);
         }
@@ -505,12 +733,13 @@ async function handleSessionEvent(
     projectID: string,
     directory: string,
 ): Promise<void> {
+    await refreshConfig(state);
     if (event.type === 'session.deleted') {
         // Evict the frozen injection snapshot so the session's blocks are not
         // pinned in memory after deletion (the cache also FIFO-bounds itself).
         const props = event.properties as { info?: { id?: string } } | undefined;
         const deletedSid = props?.info?.id || '';
-        if (deletedSid) { state.injectionSnapshots.delete(deletedSid) }
+        if (deletedSid) { forgetForkSessionState(state, deletedSid) }
         return;
     }
     if (event.type !== 'session.idle') { return }
@@ -555,11 +784,11 @@ async function performSystemInjections(sid: string, state: PluginState, isSubNow
         return;
     }
     const { blocks, hadError } = await computeInjectionBlocks({
-        injection: state.injection,
-        skillInjection: state.skillInjection,
+        injection: injectionFor(state, sid),
+        skillInjection: skillInjectionFor(state, sid),
         opts: {
-            truncationEnabled: state.config.truncation?.enabled !== false,
-            skillsEnabled: state.skillConfig.enabled,
+            truncationEnabled: memoryConfigFor(state, sid).truncation?.enabled !== false,
+            skillsEnabled: skillsConfigFor(state, sid).enabled,
             slashCommandsEnabled: state.slashCommandsEnabled,
             subMemoryRecall: state.subagentHooksConfig.memoryRecall,
             subSkillReviewTrigger: state.subagentHooksConfig.skillReviewTrigger,
@@ -573,7 +802,8 @@ async function performSystemInjections(sid: string, state: PluginState, isSubNow
 }
 
 async function handleSystemTransform(sid: string, state: PluginState, client: OpencodeClient, output: { system: string[] }, projectID: string): Promise<void> {
-    if (!state.config.enabled) { return }
+    await refreshConfig(state);
+    if (!memoryConfigFor(state, sid).enabled) { return }
     if (isForkedSession(sid)) { return }
     if (!sweptProjects.has(projectID)) {
         sweptProjects.add(projectID);
@@ -649,17 +879,21 @@ function setPendingRecallNotification(
     sid: string,
     memories: Array<{ name: string; type: string }>,
 ): void {
-    if (!state.memoryRecallConfig.visibleRecall) { return }
+    if (!recallConfigFor(state, sid).visibleRecall) { return }
     if (isSubagentSession(sid) && !state.subagentHooksConfig.visibleRecall) { return }
     const summary = memories.map((m) => `${m.name}(${m.type})`).join(', ');
     state.pendingRecallMap.set(sid || 'default', `Recalled ${memories.length} memories: ${summary}`);
 }
 
 async function handleMessagesTransform(_input: unknown, output: MessagesTransformOutput, state: PluginState, client: OpencodeClient): Promise<void> {
-    if (!state.memoryRecallConfig.enabled) { return }
+    await refreshConfig(state);
+    const preSid = (output.messages?.[0]?.info?.sessionID || output.messages?.findLast((m) => m.info?.role === 'user')?.info?.sessionID) || 'default'
+    if (!memoryConfigFor(state, preSid).enabled) { return }
+    if (!recallConfigFor(state, preSid).enabled) { return }
     try {
         const sid = await resolveRecallSessionId(output.messages, state, client);
         if (!sid) { return }
+        const recallCfg = recallConfigFor(state, sid);
         const lastUserMsg = output.messages!.findLast((m) => m.info?.role === 'user');
         if (!lastUserMsg) { return }
         const userMsgId = lastUserMsg.info?.id;
@@ -669,13 +903,14 @@ async function handleMessagesTransform(_input: unknown, output: MessagesTransfor
         logger.info('[Recall]', 'query:', userText.slice(0, 100));
         const alreadyInjected = parseAlreadyInjected(lastUserMsg.parts || []);
         if (alreadyInjected.size > 0) { return }
-        const relevant = await state.retrieval.findRelevant(userText, { limit: state.memoryRecallConfig.maxRecall, sessionID: sid });
-        const threshold = state.memoryRecallConfig.minRelevanceScore;
+        const retrieval = retrievalFor(state, sid);
+        const relevant = await retrieval.findRelevant(userText, { limit: recallCfg.maxRecall, sessionID: sid });
+        const threshold = recallCfg.minRelevanceScore;
         const filtered = relevant.filter((r) => !alreadyInjected.has(r.name) && (r.relevance ?? 0) >= threshold);
         if (filtered.length === 0) { return }
         logger.info('[Recall]', 'injecting', filtered.length, 'memories');
-        const memories = await state.retrieval.loadMemories(filtered);
-        const recallContent = buildRecallContent(memories, filtered, state.memoryRecallConfig.maxInjectChars);
+        const memories = await retrieval.loadMemories(filtered);
+        const recallContent = buildRecallContent(memories, filtered, recallCfg.maxInjectChars);
         lastUserMsg.parts.push({
             type: 'text',
             text: `<system-reminder>\nRelevant memories recalled for your question:\n\n${recallContent}\n</system-reminder>`,
@@ -747,6 +982,7 @@ async function handleToolExecuteAfter(
     projectID: string,
     directory: string,
 ): Promise<void> {
+    await refreshConfig(state);
     if (isForkedSession(input.sessionID)) { return }
     // Meta-tool that spawns the review agent itself: must not feed the skill
     // trigger counter (double-spawn risk) or count as user work.
@@ -804,6 +1040,7 @@ function dispatchSlashCommand(
 }
 
 function triggerAutoDream(state: PluginState, sessionID: string, projectID: string, directory: string): void {
+    if (!state.config.enabled) { return }
     if (!state.autoDreamConfig.enabled) { return }
     if (isConsolidationInProgress(state.storage.getMemoryPath())) { return }
     try {
@@ -811,6 +1048,7 @@ function triggerAutoDream(state: PluginState, sessionID: string, projectID: stri
             sessionID, projectID, memoryRoot: state.storage.getMemoryPath(),
             directory, storage: state.storage, expiryConfig: state.expiryConfig,
             skillEnabled: state.skillConfig.enabled,
+            forkConfig: forkMemorySnapshot(state),
         });
     } catch (error) {
         logger.error('[AutoDream]', 'chat.message hook error:', error);
@@ -851,6 +1089,7 @@ async function handleChatMessageHook(
     projectID: string,
     directory: string,
 ): Promise<void> {
+    await refreshConfig(state);
     const sid = input.sessionID || '';
     let isBg = isForkedSession(sid);
     if (!isBg && !isSubagentSession(sid)) { await detectAndRegisterSubagent(sid, client) }
@@ -872,7 +1111,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
     const mergedOptions = { ...fileConfig, ...options } as PluginConfig
     logger.info('[PluginInit]', 'rawDirectory:', rawDirectory, 'projectID:', projectID, 'normalized:', projectID !== rawDirectory);
     const slashCommandsEnabled = (mergedOptions.slashCommands as Record<string, unknown> | undefined)?.enabled ?? true;
-    const state = await getState(projectID, directory, mergedOptions, client);
+    const state = await getState(projectID, directory, mergedOptions, client, options as PluginConfig);
 
     const hooks: Hooks = {
         dispose: async () => {
@@ -881,8 +1120,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
         'event': async ({ event }) => handleSessionEvent(event as unknown as { type: string; properties?: Record<string, string> }, state, client, projectID, directory),
         'experimental.chat.system.transform': async (_input, output) => handleSystemTransform(_input.sessionID || '', state, client, output as unknown as { system: string[] }, projectID),
         'experimental.session.compacting': async (_input, output) => {
-            if (!state.config.enabled) return;
+            await refreshConfig(state);
             const sid = _input.sessionID || '';
+            if (!memoryConfigFor(state, sid).enabled) return;
             if (isForkedSession(sid)) return;
             const isSub = isSubagentSession(sid);
             if (isSub) {
@@ -892,14 +1132,16 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                 if (isSubagentSession(sid) && !state.subagentHooksConfig.memoryRecall) return;
             }
             try {
-                const context = await state.injection.getCompactionContext();
+                const context = await injectionFor(state, sid).getCompactionContext();
                 if (context) { output.context.push(context) }
             } catch (e) { logger.error('[Compacting]', 'Failed to get compaction context:', e instanceof Error ? e.message : String(e)); }
         },
         'experimental.chat.messages.transform': async (_input, output) => handleMessagesTransform(_input, output as unknown as MessagesTransformOutput, state, client),
         'tool.execute.before': async (input, output) => {
-            if (input.tool !== 'question' || !state.expiryConfig?.enabled) return;
+            await refreshConfig(state);
             const sid = input.sessionID || 'default';
+            if (!memoryConfigFor(state, sid).enabled) return;
+            if (input.tool !== 'question' || !expiryConfigFor(state, sid).enabled) return;
             // Only the flagged session's next question call is eligible, then clear the flag
             // unconditionally so dismiss / pre-notice /memory clear / non-matching questions
             // cannot leak the flag and re-attach stale details on later calls (see #3).
@@ -918,8 +1160,11 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
         },
         'tool.execute.after': async (input, output) => handleToolExecuteAfter(input, state, client, projectID, directory),
         'experimental.text.complete': async (input, output) => {
+            await refreshConfig(state);
             const sid = input.sessionID || 'default';
+            if (!memoryConfigFor(state, sid).enabled) return;
             if (isForkedSession(sid)) return;
+            const recallCfg = recallConfigFor(state, sid);
             const isSub = isSubagentSession(sid);
             const subHooks = state.subagentHooksConfig;
             if (isSub) {
@@ -939,8 +1184,8 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             }
             const pendingWrite = state.pendingWriteMap.get(sid);
             const pendingRecall = state.pendingRecallMap.get(sid);
-            const canShowWrite = pendingWrite && (!isSubagentSession(sid) || subHooks.visibleWrite);
-            const canShowRecall = pendingRecall && (!isSubagentSession(sid) || subHooks.visibleRecall);
+            const canShowWrite = pendingWrite && recallCfg.visibleWrite && (!isSubagentSession(sid) || subHooks.visibleWrite);
+            const canShowRecall = pendingRecall && recallCfg.visibleRecall && (!isSubagentSession(sid) || subHooks.visibleRecall);
             logger.info('[TextComplete]', 'sid:', sid, 'pendingWrite:', pendingWrite || 'none', 'pendingRecall:', pendingRecall || 'none', 'canShowWrite:', canShowWrite, 'canShowRecall:', canShowRecall);
             let prefix = '';
             if (canShowWrite) {
@@ -975,7 +1220,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     name: z.string().optional().describe('Memory name to read'),
                 },
                 async execute(args: { name?: string }, ctx: ToolContext) {
-                    if (!state.config.enabled) {
+                    if (!memoryConfigFor(state, ctx.sessionID).enabled) {
                         return 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true';
                     }
                     try {
@@ -1026,7 +1271,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     ttl: z.number().optional().describe('Custom TTL in days (overrides type default)'),
                 },
                 async execute(args: { name: string; description: string; type: string; content: string; pin?: boolean; ttl?: number }, ctx: ToolContext) {
-                    if (!state.config.enabled) {
+                    if (!memoryConfigFor(state, ctx.sessionID).enabled) {
                         return {
                             title: 'Auto-Memory disabled',
                             output: 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true',
@@ -1048,7 +1293,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         const sid = ctx.sessionID || 'default';
                         state.memoryToolUsedThisTurn.add(sid);
                         const visibleWriteEnabled =
-                            state.memoryRecallConfig.visibleWrite &&
+                            recallConfigFor(state, sid).visibleWrite &&
                             (!isSubagentSession(sid) || state.subagentHooksConfig.visibleWrite)
                         if (visibleWriteEnabled) {
                             const existing = state.pendingWriteMap.get(sid);
@@ -1079,7 +1324,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     limit: z.number().default(5),
                 },
                 async execute(args: { query: string; limit: number }, ctx: ToolContext) {
-                    if (!state.config.enabled) {
+                    if (!memoryConfigFor(state, ctx.sessionID).enabled) {
                         return {
                             title: 'Auto-Memory disabled',
                             output: 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true',
@@ -1089,8 +1334,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     try {
                         const query = args.query;
                         const limit = args.limit || 5;
-                        const relevant = await state.retrieval.findRelevant(query, { limit, sessionID: ctx?.sessionID });
-                        const memories = await state.retrieval.loadMemories(relevant);
+                        const retrieval = retrievalFor(state, ctx?.sessionID);
+                        const relevant = await retrieval.findRelevant(query, { limit, sessionID: ctx?.sessionID });
+                        const memories = await retrieval.loadMemories(relevant);
                         let output = '## Search: ' + query + '\n\n';
                         for (let i = 0; i < memories.length; i++) {
                             const m = memories[i];
@@ -1108,7 +1354,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                         await showPendingExpiryToast(state);
                         const sid = ctx.sessionID || 'default';
                         const visibleRecallEnabled =
-                            state.memoryRecallConfig.visibleRecall &&
+                            recallConfigFor(state, sid).visibleRecall &&
                             (!isSubagentSession(sid) || state.subagentHooksConfig.visibleRecall);
                         return {
                             title: visibleRecallEnabled ? '💡 Memory search: ' + query : 'Memory search: ' + query,
@@ -1131,7 +1377,7 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     name: z.string().describe('Memory name to delete'),
                 },
                 async execute(args: { name: string }, ctx: ToolContext) {
-                    if (!state.config.enabled) {
+                    if (!memoryConfigFor(state, ctx.sessionID).enabled) {
                         return {
                             title: 'Auto-Memory disabled',
                             output: 'Auto-Memory is disabled. Enable it via config: autoMemory.enabled = true',
@@ -1165,12 +1411,12 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                     force: z.boolean().optional().default(false).describe('Force consolidation even if thresholds not met'),
                 },
                 async execute(args: { force?: boolean }, ctx: ToolContext) {
-                    if (!state.autoDreamConfig.enabled) {
+                    const sessionID = ctx?.sessionID || 'default';
+                    if (!autoDreamConfigFor(state, sessionID).enabled) {
                         return 'Auto Dream is disabled. Enable it via config: autoDream.enabled = true';
                     }
                     try {
                         const force = args.force || false;
-                        const sessionID = ctx?.sessionID || 'default';
                         const memoryRoot = state.storage.getMemoryPath();
                         
                         const result = await executeAutoDream({
@@ -1180,8 +1426,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
                             directory: directory,
                             storage: state.storage,
                             skipGateCheck: force,
-                            expiryConfig: state.expiryConfig,
-                            skillEnabled: state.skillConfig.enabled,
+                            expiryConfig: expiryConfigFor(state, sessionID),
+                            skillEnabled: skillsConfigFor(state, sessionID).enabled,
+                            forkConfig: forkMemorySnapshot(state, sessionID),
                         });
                         
                         if (!result.success) {
@@ -1200,8 +1447,8 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             'dream-approve': {
                 description: 'Approve pending memory expiry deletions. Deletes all memories listed in .pending-expiry.json and clears the file.',
                 args: {},
-                async execute(_args: Record<string, unknown>, _ctx: ToolContext) {
-                    if (!state.expiryConfig?.enabled) {
+                async execute(_args: Record<string, unknown>, ctx: ToolContext) {
+                    if (!expiryConfigFor(state, ctx?.sessionID).enabled) {
                         return 'Memory expiry is disabled.';
                     }
                     try {
@@ -1230,8 +1477,8 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             'dream-reject': {
                 description: 'Reject pending memory expiry deletions. Keeps all memories and clears .pending-expiry.json.',
                 args: {},
-                async execute(_args: Record<string, unknown>, _ctx: ToolContext) {
-                    if (!state.expiryConfig?.enabled) {
+                async execute(_args: Record<string, unknown>, ctx: ToolContext) {
+                    if (!expiryConfigFor(state, ctx?.sessionID).enabled) {
                         return 'Memory expiry is disabled.';
                     }
                     try {
@@ -1285,6 +1532,9 @@ export const MemoryPlugin: Plugin = async (input: PluginInput, options: PluginOp
             'skill-view': skillViewTool,
         },
     };
+    for (const [name, tool] of Object.entries(hooks.tool ?? {})) {
+        if (MEMORY_TOOLS.has(name)) hooks.tool![name] = gatedTool(tool, state);
+    }
     return hooks;
 };
 

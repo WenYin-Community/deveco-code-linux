@@ -576,15 +576,16 @@
     "memory_content_title": "记忆：{{name}}",
     "memory_missing": "记忆文件已不存在",
     "memory_expired": "已过期",
-    "memory_config_note": "插件初始化时读取，重启后生效",
+    "memory_config_note": "修改后立即生效",
+    "memory_advanced_hint": "请先开启自动记忆",
     "memory_setting": {
       "auto_memory": "自动记忆",
-      "auto_dream": "自动梦境整合",
-      "extraction": "自动提取记忆",
-      "recall": "记忆召回",
-      "recall_visible": "对话中显示召回",
-      "write_visible": "对话中显示写入",
-      "skills": "技能沉淀"
+      "auto_dream": "自动整合",
+      "extraction": "自动提取",
+      "recall": "自动召回",
+      "recall_visible": "在对话中显示记忆召回",
+      "write_visible": "在对话中显示记忆写入",
+      "skills": "技能提取"
     },
     "memory_delete_title": "删除记忆：{{name}}",
     "memory_delete_message": "确定删除这条记忆文件？删除后插件无法再召回它。",
@@ -840,7 +841,9 @@
     "plugin_internal": "内部",
     "plugin_external": "外部",
     "memory": "记忆",
-    "memory_settings": "记忆配置",
+    "memory_settings": "记忆设置",
+    "memory_advanced": "高级记忆设置",
+    "memory_skills": "技能设置",
     "memory_items": "记忆列表"
   },
   "prompt": {

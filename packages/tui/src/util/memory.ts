@@ -44,13 +44,21 @@ export type Setting = {
 
 export const SETTINGS: Setting[] = [
   { key: "autoMemory.enabled", id: "auto_memory", fallback: true, alias: "enabled" },
-  { key: "autoDream.enabled", id: "auto_dream", fallback: true },
-  { key: "extraction.enabled", id: "extraction", fallback: true },
   { key: "memoryRecall.enabled", id: "recall", fallback: true },
+  { key: "extraction.enabled", id: "extraction", fallback: true },
+  { key: "autoDream.enabled", id: "auto_dream", fallback: true },
   { key: "memoryRecall.visibleRecall", id: "recall_visible", fallback: true },
   { key: "memoryRecall.visibleWrite", id: "write_visible", fallback: true },
   { key: "skills.enabled", id: "skills", fallback: false },
 ]
+
+/** Switches that only take effect while Auto memory is on. */
+export const AUTO_MEMORY_KEY = "autoMemory.enabled"
+const INDEPENDENT_KEYS = new Set([AUTO_MEMORY_KEY, "skills.enabled"])
+
+export function isDependentSetting(setting: Setting) {
+  return !INDEPENDENT_KEYS.has(setting.key)
+}
 
 export type MemoryItem = {
   name: string

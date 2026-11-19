@@ -9,7 +9,7 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { setSessionPermissions, getDreamPermissionRules, createForkedChildSession, type ForkedSessionInfo } from '../util/forkManager'
+import { setSessionPermissions, getDreamPermissionRules, createForkedChildSession, type ForkedSessionInfo, type ForkMemoryConfig } from '../util/forkManager'
 import type { AutoDreamConfig, MemoryExpiryConfig } from '../memory/types'
 import { DEFAULT_AUTO_DREAM_CONFIG } from '../memory/types'
 import { MemoryStorage } from '../memory/storage'
@@ -36,6 +36,8 @@ export interface AutoDreamContext {
   skipGateCheck?: boolean
   expiryConfig?: MemoryExpiryConfig
   skillEnabled?: boolean
+  /** Config frozen at trigger time; the dream fork reads it for all memory decisions. */
+  forkConfig?: ForkMemoryConfig
 }
 
 export interface AutoDreamResult {
@@ -74,6 +76,11 @@ export function initAutoDream(
     minSessions: config.minSessions,
     lockStaleMs: config.lockStaleMs
   })
+}
+
+/** Swap the config in place on hot reload; gate state and counters stay untouched. */
+export function updateAutoDreamConfig(config: AutoDreamConfig): void {
+  initializedConfig = config
 }
 
 function getAutoDreamRunner(): AutoDreamRunner | null {
@@ -249,7 +256,7 @@ async function launchDreamSession(
   const result: AutoDreamResult = { success: false, error: undefined };
   try {
     const forkInfo = await createForkedChildSession(
-      initializedClient!, context.sessionID, 'dream', context.directory,
+      initializedClient!, context.sessionID, 'dream', context.directory, context.forkConfig,
     );
     if (!forkInfo) {
       await cleanupDreamFailure(lockPath, priorMtime, context.memoryRoot);
@@ -315,6 +322,7 @@ export async function handleChatMessageTrigger(
     storage?: MemoryStorage
     expiryConfig?: MemoryExpiryConfig
     skillEnabled?: boolean
+    forkConfig?: ForkMemoryConfig
   }
 ): Promise<void> {
   if (!runner || !initializedClient) {
@@ -351,6 +359,7 @@ export async function handleChatMessageTrigger(
     storage: input.storage ?? initializedStorage ?? undefined,
     expiryConfig: input.expiryConfig,
     skillEnabled: input.skillEnabled,
+    forkConfig: input.forkConfig,
   }
   
   void runner(context)

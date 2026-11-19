@@ -27,6 +27,7 @@ import type { ExtractionPromptContext } from './extractionPrompt'
 import { runExtractionAgent } from './extractionAgent'
 import type { ExtractionAgentContext } from './extractionAgent'
 import { getLockFilePath, readConsolidationLock, isLockStale } from '../autoDream/consolidationLock'
+import type { ForkMemoryConfig } from '../util/forkManager'
 import { DEFAULT_AUTO_DREAM_CONFIG } from './types'
 import { SkillStorage } from '../skills/storage'
 import type { SkillHeader } from '../skills/types'
@@ -52,6 +53,8 @@ export interface ExtractionRunnerContext {
   storage?: MemoryStorage
   lastMessageUuid?: string
   skipThrottle?: boolean
+  /** Config frozen at trigger time; the extraction fork reads it for all memory decisions. */
+  forkConfig?: ForkMemoryConfig
 }
 
 export interface ExtractionRunnerResult {
@@ -120,6 +123,12 @@ export function initAutoMemoryExtraction(
     skillEnabled: initializedSkillConfig.enabled,
     skillReviewInterval: initializedSkillConfig.skillReviewInterval,
   })
+}
+
+/** Swap configs in place on hot reload without resetting counters or the in-progress flag. */
+export function updateExtractionConfig(config: ExtractionConfig, skillConfig: SkillConfig): void {
+  initializedConfig = config
+  initializedSkillConfig = skillConfig
 }
 
 function getExtractionThresholdState(): ExtractionThresholdState {
@@ -344,6 +353,7 @@ function buildExtractionAgentContext(
     prompt: prompt,
     reviewMode: reviewMode,
     skillConfig: initializedSkillConfig,
+    forkConfig: context.forkConfig,
   }
 }
 

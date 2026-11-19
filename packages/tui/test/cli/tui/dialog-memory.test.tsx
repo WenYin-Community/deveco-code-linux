@@ -247,13 +247,13 @@ test("memory detail survives a file deleted from under it", async () => {
 
     // The bound delete keys route to the same guard: refresh instead of confirming a no-op.
     await app.mockInput.pressKey("d", { ctrl: true })
-    await until(() => frame().includes("Memory settings"), "the refreshed list")
+    await until(() => frame().includes("Memory setting"), "the refreshed list")
     expect(frame()).not.toContain("Delete memory:")
     expect(frame()).not.toContain("Cache dir")
     expect(await files(dir)).toEqual(["build.md"])
 
     await app.mockInput.pressEscape()
-    await until(() => !frame().includes("Memory settings"), "the dialog to close")
+    await until(() => !frame().includes("Memory setting"), "the dialog to close")
   } finally {
     app.renderer.destroy()
   }
@@ -264,13 +264,13 @@ test("memory dialog toggles settings and shows memory content", async () => {
   const { app, frame, config, dir } = await mountMemory(tmp.path)
   try {
     await until(() => frame().includes("Auto memory"), "the memory settings")
-    expect(frame()).toContain("Memory settings")
+    expect(frame()).toContain("Memory setting")
     expect(row(frame(), "Auto memory")).toContain("✓ Enabled")
     expect(row(frame(), "Skill extraction")).toContain("○ Disabled")
     // The footer only offers what the selected row can do, and the labels come from the
     // resolved keybindings rather than hardcoded strings.
     expect(frame()).toContain("toggle space")
-    expect(frame()).toContain("Read at plugin init, restart to apply")
+    expect(frame()).toContain("Changes apply immediately")
     expect(frame()).not.toContain("View details")
 
     // Settings rows come first, so space toggles the row the cursor starts on and writes the
@@ -353,7 +353,39 @@ test("memory dialog toggles settings and shows memory content", async () => {
     await until(() => frame().includes("No memories yet"), "the empty memories placeholder")
 
     await app.mockInput.pressEscape()
-    await until(() => !frame().includes("Memory settings"), "the dialog to close")
+    await until(() => !frame().includes("Memory setting"), "the dialog to close")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("turning off Auto memory disables the dependent switches", async () => {
+  await using tmp = await tmpdir()
+  const { app, frame, config } = await mountMemory(tmp.path)
+  try {
+    await until(() => frame().includes("Auto memory"), "the memory settings")
+    expect(frame()).not.toContain("Enable auto memory first")
+    await app.mockInput.pressKey(" ")
+    await until(async () => (await readConfig(config)).autoMemory?.enabled === false, "the Auto memory toggle")
+
+    await until(() => row(frame(), "Auto recall").includes("○ Disabled"), "auto recall to be disabled")
+    await until(() => row(frame(), "Auto extraction").includes("○ Disabled"), "auto extraction to be disabled")
+    await until(() => row(frame(), "Auto dream").includes("○ Disabled"), "auto dream to be disabled")
+    expect(frame()).toContain("Advanced memory settings")
+    expect(row(frame(), "Advanced memory settings")).toContain("Enable auto memory first")
+    expect(frame()).toContain("Skill setting")
+    expect(frame()).toContain("Show memory recall in chat")
+    expect(frame()).toContain("Show memory write in chat")
+
+    // A disabled row must not write config or leak the key into the filter, which used
+    // to leave an empty "No results found" dialog when space was pressed.
+    const before = await readConfig(config)
+    await app.mockInput.pressKey("ARROW_DOWN")
+    await app.mockInput.pressKey(" ")
+    await Bun.sleep(50)
+    expect(await readConfig(config)).toEqual(before)
+    expect(frame()).toContain("Auto recall")
+    expect(frame()).not.toContain("No results found")
   } finally {
     app.renderer.destroy()
   }

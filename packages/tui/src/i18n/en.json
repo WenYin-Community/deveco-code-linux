@@ -575,14 +575,15 @@
     "memory_content_title": "Memory: {{name}}",
     "memory_missing": "Memory file no longer exists",
     "memory_expired": "Expired",
-    "memory_config_note": "Read at plugin init, restart to apply",
+    "memory_config_note": "Changes apply immediately",
+    "memory_advanced_hint": "Enable auto memory first",
     "memory_setting": {
       "auto_memory": "Auto memory",
-      "auto_dream": "Auto dream (consolidation)",
+      "auto_dream": "Auto dream",
       "extraction": "Auto extraction",
-      "recall": "Memory recall",
-      "recall_visible": "Show recall in chat",
-      "write_visible": "Show memory writes in chat",
+      "recall": "Auto recall",
+      "recall_visible": "Show memory recall in chat",
+      "write_visible": "Show memory write in chat",
       "skills": "Skill extraction"
     },
     "memory_delete_title": "Delete memory: {{name}}",
@@ -839,7 +840,9 @@
     "plugin_internal": "Internal",
     "plugin_external": "External",
     "memory": "Memory",
-    "memory_settings": "Memory settings",
+    "memory_settings": "Memory setting",
+    "memory_advanced": "Advanced memory settings",
+    "memory_skills": "Skill setting",
     "memory_items": "Memories"
   },
   "prompt": {

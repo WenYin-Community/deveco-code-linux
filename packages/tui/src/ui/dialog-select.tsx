@@ -36,6 +36,8 @@ export interface DialogSelectProps<T> {
   onSelect?: (option: DialogSelectOption<T>) => void
   skipFilter?: boolean
   renderFilter?: boolean
+  /** Override the default list viewport cap (rows). */
+  maxHeight?: number
   locked?: boolean
   preserveSelection?: boolean
   // When true, the title bar (title + esc) is not rendered. Callers that
@@ -217,7 +219,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   const dimensions = useTerminalDimensions()
-  const height = createMemo(() => Math.min(rows(), Math.floor(dimensions().height / 2) - 6))
+  const height = createMemo(() =>
+    Math.min(rows(), props.maxHeight ?? Math.floor(dimensions().height / 2) - 6),
+  )
 
   const selected = createMemo(() => flat()[store.selected])
 
