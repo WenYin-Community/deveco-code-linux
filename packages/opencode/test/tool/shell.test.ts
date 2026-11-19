@@ -1,5 +1,6 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import os from "os"
@@ -1433,4 +1434,931 @@ describe("tool.shell truncation", () => {
       }),
     ),
   )
+})
+
+// D2A observations carry the host binding (session, assistant message, callID,
+// bundle name) that analytics uses for run attribution. Assertions about the
+// workflow evidence itself compare the observation without it.
+function stripBinding(observation: Record<string, unknown>): Record<string, unknown> {
+  const { binding: _binding, ...rest } = observation
+  return rest
+}
+
+describe("tool.shell d2a workflow observation", () => {  const controllerScript = quote(
+    path.join(projectRoot, "resources", "skills", "hmos-design-to-arkts", "scripts", "workflow.mjs"),
+  )
+  const d2a = (args: string) => {
+    const text = `${bin} ${controllerScript} ${args}`
+    return PS.has(sh()) ? `& ${text}` : text
+  }
+  // ctx.extra.model mirrors what session/tools.ts provides; the logical id must
+  // be projected, not api.id.
+  const d2aCtx = (model: { providerId: string; modelId: string }) => ({
+    ...ctx,
+    extra: {
+      model: {
+        providerID: model.providerId,
+        id: model.modelId,
+        api: { id: `${model.modelId}-api` },
+      },
+    },
+  })
+  const modelA = { providerId: "deveco", modelId: "glm-logical" }
+  const ctxA = d2aCtx(modelA)
+  const snapshots = (result: { metadata: Record<string, unknown> }) =>
+    (result.metadata.d2aWorkflowSnapshots as Array<Record<string, unknown>>).map(stripBinding)
+  const rawSnapshots = (result: { metadata: Record<string, unknown> }) =>
+    result.metadata.d2aWorkflowSnapshots as Array<Record<string, unknown>>
+
+  each("d2a: init is attributed, status and non-ready stage-start are rereads", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const runDir = path.join(tmp, "runs", "run-1")
+          const init = yield* run(
+            {
+              command: d2a(`--mode init --source pixso --variant full --run-dir ${quote(runDir)}`),
+              description: "D2A workflow init",
+            },
+            ctxA,
+          )
+          expect(init.metadata.exit).toBe(0)
+          expect(snapshots(init)).toEqual([
+            {
+              operation: "init",
+              replayed: false,
+              model: modelA,
+              // A verified fresh init also carries the build tracking marker.
+              buildTrackingStartedAtInit: true,
+              snapshot: expect.objectContaining({
+                revision: 1,
+                designSource: "pixso",
+                variant: "full",
+                status: "running",
+                completedStages: [],
+                stages: [],
+                runId: expect.any(String),
+              }),
+            },
+          ])
+
+          const status = yield* run(
+            {
+              command: d2a(`--mode status --run-dir ${quote(runDir)}`),
+              description: "D2A workflow status",
+            },
+            ctxA,
+          )
+          expect(snapshots(status)).toEqual([
+            {
+              operation: "status",
+              replayed: true,
+              snapshot: expect.objectContaining({ revision: 1, status: "running" }),
+            },
+          ])
+
+          const start = yield* run(
+            {
+              command: d2a(`--mode stage-start --run-dir ${quote(runDir)} --stage 1`),
+              description: "D2A workflow stage start",
+            },
+            ctxA,
+          )
+          expect(snapshots(start)).toEqual([
+            {
+              operation: "stage-start",
+              replayed: false,
+              model: modelA,
+              snapshot: expect.objectContaining({ revision: 2, status: "running" }),
+            },
+          ])
+
+          // ready=false still exits 0; it committed nothing, so it is a reread.
+          const notReady = yield* run(
+            {
+              command: d2a(`--mode stage-start --run-dir ${quote(runDir)} --stage 5`),
+              description: "D2A workflow stage start (not ready)",
+            },
+            ctxA,
+          )
+          expect(notReady.metadata.exit).toBe(0)
+          expect(snapshots(notReady)).toEqual([
+            {
+              operation: "stage-start",
+              replayed: true,
+              snapshot: expect.objectContaining({ revision: 2 }),
+            },
+          ])
+        }),
+      )
+    }),
+  )
+
+  each("d2a: observations carry the host binding used for run attribution", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const runDir = path.join(tmp, "runs", "run-1")
+          // The callID is the tool-call identity analytics joins the measurement by.
+          const init = yield* run(
+            {
+              command: d2a(`--mode init --source pixso --variant full --run-dir ${quote(runDir)}`),
+              description: "D2A workflow init",
+            },
+            { ...ctxA, callID: "call-d2a-init" },
+          )
+          expect(rawSnapshots(init)).toEqual([
+            expect.objectContaining({
+              binding: { sessionID: "ses_test", messageID: "msg_test", callID: "call-d2a-init" },
+            }),
+          ])
+          // No AppScope in the fixture project: the bundle name is omitted, never "".
+          expect((rawSnapshots(init)[0].binding as Record<string, unknown>).bundleName).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  each("d2a: failed controller commands are rereads and never attributed to a model", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const runDir = path.join(tmp, "runs", "run-1")
+          yield* run(
+            {
+              command: d2a(`--mode init --source pixso --variant full --run-dir ${quote(runDir)}`),
+              description: "D2A workflow init",
+            },
+            ctxA,
+          )
+          // Stage 1 does not require confirmation, so this fails before any write.
+          const failed = yield* run(
+            {
+              command: d2a(`--mode confirm --run-dir ${quote(runDir)} --stage 1 --decision accepted`),
+              description: "D2A workflow confirm (invalid)",
+            },
+            ctxA,
+          )
+          expect(failed.metadata.exit).toBe(1)
+          expect(snapshots(failed)).toEqual([
+            {
+              operation: "confirm",
+              replayed: true,
+              snapshot: expect.objectContaining({ revision: 1, status: "running" }),
+            },
+          ])
+        }),
+      )
+    }),
+  )
+
+  each("d2a: two runs keep independent models", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const modelB = { providerId: "deveco", modelId: "glm-other" }
+          const ctxB = d2aCtx(modelB)
+          const first = yield* run(
+            {
+              command: d2a(`--mode init --source figma --variant full --run-dir ${quote(path.join(tmp, "runs", "a"))}`),
+              description: "D2A workflow init A",
+            },
+            ctxA,
+          )
+          const second = yield* run(
+            {
+              command: d2a(`--mode init --source pixso --variant fast --run-dir ${quote(path.join(tmp, "runs", "b"))}`),
+              description: "D2A workflow init B",
+            },
+            ctxB,
+          )
+          const firstSnapshot = snapshots(first)[0]
+          const secondSnapshot = snapshots(second)[0]
+          expect((firstSnapshot.model as { modelId: string }).modelId).toBe(modelA.modelId)
+          expect((secondSnapshot.model as { modelId: string }).modelId).toBe(modelB.modelId)
+          expect((firstSnapshot.snapshot as { runId: string }).runId).not.toBe(
+            (secondSnapshot.snapshot as { runId: string }).runId,
+          )
+        }),
+      )
+    }),
+  )
+
+  each("d2a: run directories outside the instance are not observed", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const outside = path.join(os.tmpdir(), `d2a-outside-run-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+          const result = yield* run(
+            {
+              command: d2a(`--mode status --run-dir ${quote(outside)}`),
+              description: "D2A workflow status (outside)",
+            },
+            ctxA,
+          )
+          expect(result.metadata.exit).toBe(1)
+          expect(result.metadata.d2aWorkflowSnapshots).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  for (const item of shells.filter((shell) => shell.label === "bash" || PS.has(shell.label))) {
+    it.live(`d2a: quoted run directory with spaces and CJK characters [${item.label}]`, () =>
+      withShell(
+        item,
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* runIn(
+            tmp,
+            Effect.gen(function* () {
+              const runDir = path.join(tmp, "runs", "run with 空格")
+              const init = yield* run(
+                {
+                  command: d2a(`--mode init --source figma --variant full --run-dir ${quote(runDir)}`),
+                  description: "D2A workflow init (spaced run dir)",
+                },
+                ctxA,
+              )
+              expect(init.metadata.exit).toBe(0)
+              expect(snapshots(init)).toEqual([
+                {
+                  operation: "init",
+                  replayed: false,
+                  model: modelA,
+                  buildTrackingStartedAtInit: true,
+                  snapshot: expect.objectContaining({ designSource: "figma", revision: 1 }),
+                },
+              ])
+            }),
+          )
+        }),
+      ),
+    )
+
+    it.live(`d2a: compound commands with two controller calls stay rereads [${item.label}]`, () =>
+      withShell(
+        item,
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* runIn(
+            tmp,
+            Effect.gen(function* () {
+              const runDir = path.join(tmp, "runs", "run-1")
+              yield* run(
+                {
+                  command: d2a(`--mode init --source pixso --variant full --run-dir ${quote(runDir)}`),
+                  description: "D2A workflow init",
+                },
+                ctxA,
+              )
+              // Windows PowerShell 5.1 has no `&&`; every shell here accepts `;`
+              // except cmd, which needs `&&`.
+              const chain = sh() === "cmd" ? "&&" : ";"
+              const compound = yield* run(
+                {
+                  command: `${d2a(`--mode status --run-dir ${quote(runDir)}`)} ${chain} ${d2a(`--mode status --run-dir ${quote(runDir)}`)}`,
+                  description: "D2A workflow compound status",
+                },
+                ctxA,
+              )
+              expect(compound.metadata.exit).toBe(0)
+              // Two controller calls on one run: ownership is ambiguous, so the
+              // observation stays a plain reread without operation or model.
+              expect(snapshots(compound)).toEqual([
+                {
+                  replayed: true,
+                  snapshot: expect.objectContaining({ revision: 1, status: "running" }),
+                },
+              ])
+            }),
+          )
+        }),
+      ),
+    )
+  }
+
+  it.live("d2a: a run directory symlink escaping the instance is refused", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const outsideTarget = path.join(os.tmpdir(), `d2a-escape-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+          yield* Effect.promise(() => fs.mkdir(outsideTarget, { recursive: true }))
+          const aliasRun = path.join(tmp, "alias-run")
+          const linked = yield* Effect.promise(() =>
+            fs
+              .symlink(outsideTarget, aliasRun, process.platform === "win32" ? "junction" : "dir")
+              .then(
+                () => true,
+                () => false,
+              ),
+          )
+          if (!linked) return
+          const init = yield* run(
+            {
+              command: d2a(`--mode init --source pixso --variant full --run-dir ${quote(aliasRun)}`),
+              description: "D2A workflow init (symlinked run dir)",
+            },
+            ctxA,
+          )
+          expect(init.metadata.exit).toBe(0)
+          // The command ran and wrote into the junction target, but the host
+          // refuses to observe a run whose real path escapes the instance.
+          expect(init.metadata.d2aWorkflowSnapshots).toBeUndefined()
+          yield* Effect.promise(() => fs.rm(outsideTarget, { recursive: true, force: true }))
+        }),
+      )
+    }),
+  )
+
+  // ─── PowerShell host variables (skill root and run dir bound first) ────────
+  // A real Pixso run assigns both paths to local variables before the call, so
+  // the static pass has to expand them to observe the run at all. The skill root
+  // comes from an environment variable fixture instead of this machine's install
+  // location, and the run directory carries spaces to keep quoting honest.
+  const skillRootEnv = "D2A_SHELL_TEST_SKILL_ROOT"
+  const skillRootDir = path.join(projectRoot, "resources", "skills", "hmos-design-to-arkts")
+  const withSkillRoot = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const previous = process.env[skillRootEnv]
+        process.env[skillRootEnv] = skillRootDir
+        return previous
+      }),
+      () => self,
+      (previous) =>
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env[skillRootEnv]
+          else process.env[skillRootEnv] = previous
+        }),
+    )
+  // The shape under test: `$skillRoot` and `$runDir` bound in the same call as
+  // the controller invocation, exactly like the Pixso Full run that exposed the
+  // missing observation.
+  const varCommand = (runDir: string, args: string) =>
+    [
+      `$skillRoot = "$env:${skillRootEnv}"`,
+      `$runDir = "${runDir}"`,
+      `& ${bin} "$skillRoot\\scripts\\workflow.mjs" ${args}`,
+    ].join("\n")
+  const varRunDir = (tmp: string) => path.join(tmp, "runs", "run with 空格")
+
+  for (const item of ps) {
+    it.live(`d2a: host variables resolve the controller script and run directory [${item.label}]`, () =>
+      withShell(
+        item,
+        withSkillRoot(
+          Effect.gen(function* () {
+            const tmp = yield* tmpdirScoped()
+            yield* runIn(
+              tmp,
+              Effect.gen(function* () {
+                const runDir = varRunDir(tmp)
+                const init = yield* run(
+                  {
+                    command: varCommand(runDir, '--mode init --source pixso --variant full --run-dir "$runDir"'),
+                    description: "D2A variable init",
+                  },
+                  ctxA,
+                )
+                expect(init.metadata.exit).toBe(0)
+                // The fresh run is observed as a real init: the tracking origin
+                // is established on the very call that bound its own paths.
+                expect(snapshots(init)).toEqual([
+                  {
+                    operation: "init",
+                    replayed: false,
+                    model: modelA,
+                    buildTrackingStartedAtInit: true,
+                    snapshot: expect.objectContaining({
+                      revision: 1,
+                      designSource: "pixso",
+                      status: "running",
+                      runId: expect.any(String),
+                    }),
+                  },
+                ])
+                const runId = (snapshots(init)[0].snapshot as { runId: string }).runId
+
+                // A later call in a new shell invocation keeps resolving the same
+                // run through the same variable form.
+                const start = yield* run(
+                  {
+                    command: varCommand(runDir, '--mode stage-start --stage 1 --run-dir "$runDir"'),
+                    description: "D2A variable stage start",
+                  },
+                  ctxA,
+                )
+                expect(start.metadata.exit).toBe(0)
+                expect(snapshots(start)).toEqual([
+                  {
+                    operation: "stage-start",
+                    replayed: false,
+                    model: modelA,
+                    snapshot: expect.objectContaining({ revision: 2, runId }),
+                  },
+                ])
+
+                // PowerShell variable names are case-insensitive, so a differently
+                // cased reference resolves the value bound above.
+                const cased = yield* run(
+                  {
+                    command: [
+                      `$RUNdir = "${runDir}"`,
+                      `& ${bin} ${controllerScript} --mode status --run-dir "$runDir"`,
+                    ].join("\n"),
+                    description: "D2A variable casing",
+                  },
+                  ctxA,
+                )
+                expect(cased.metadata.exit).toBe(0)
+                expect(snapshots(cased)).toEqual([
+                  {
+                    operation: "status",
+                    replayed: true,
+                    snapshot: expect.objectContaining({ revision: 2, runId }),
+                  },
+                ])
+              }),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  for (const item of ps) {
+    it.live(`d2a: unsafe host-variable forms are not observed [${item.label}]`, () =>
+      withShell(
+        item,
+        withSkillRoot(
+          Effect.gen(function* () {
+            const tmp = yield* tmpdirScoped()
+            yield* runIn(
+              tmp,
+              Effect.gen(function* () {
+                const runDir = path.join(tmp, "runs", "run-1")
+                yield* run(
+                  {
+                    command: varCommand(runDir, '--mode init --source pixso --variant full --run-dir "$runDir"'),
+                    description: "D2A variable init",
+                  },
+                  ctxA,
+                )
+                const cases = [
+                  // A subexpression is evaluated by PowerShell, but not by a
+                  // static pass that refuses to run expressions.
+                  {
+                    label: "subexpression",
+                    command: `$runDir = "${runDir}"\n& ${bin} ${controllerScript} --mode status --run-dir "$($runDir)"`,
+                    exit: 0,
+                  },
+                  // A conditional assignment has no provable value at the call.
+                  {
+                    label: "conditional assignment",
+                    command: `if ($true) { $runDir = "${runDir}" }\n& ${bin} ${controllerScript} --mode status --run-dir "$runDir"`,
+                    exit: 0,
+                  },
+                  // Inside single quotes PowerShell keeps `$runDir` literal.
+                  {
+                    label: "single-quoted variable",
+                    command: `$runDir = "${runDir}"\n& ${bin} ${controllerScript} --mode status --run-dir '$runDir'`,
+                    exit: 1,
+                  },
+                  // An unset variable expands to nothing in PowerShell.
+                  {
+                    label: "unset variable",
+                    command: `& ${bin} ${controllerScript} --mode status --run-dir "$notDefinedAnywhere"`,
+                    exit: 1,
+                  },
+                ]
+                for (const form of cases) {
+                  const result = yield* run({ command: form.command, description: `D2A ${form.label} status` }, ctxA)
+                  // The command always runs; only the observation is dropped.
+                  expect(result.metadata.exit).toBe(form.exit)
+                  expect(result.metadata.d2aWorkflowSnapshots).toBeUndefined()
+                }
+              }),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  for (const item of ps) {
+    it.live(`d2a: a host variable pointing outside the instance is not observed [${item.label}]`, () =>
+      withShell(
+        item,
+        withSkillRoot(
+          Effect.gen(function* () {
+            const tmp = yield* tmpdirScoped()
+            yield* runIn(
+              tmp,
+              Effect.gen(function* () {
+                const outside = path.join(
+                  os.tmpdir(),
+                  `d2a-outside-var-${process.pid}-${Math.random().toString(36).slice(2, 8)}`,
+                )
+                yield* Effect.promise(() => fs.mkdir(outside, { recursive: true }))
+                // Path expansion succeeds; the existing instance boundary then
+                // refuses the run directory exactly like a literal one.
+                const command = [
+                  `$runDir = "${outside}"`,
+                  `& ${bin} ${controllerScript} --mode status --run-dir "$runDir"`,
+                ].join("\n")
+                const result = yield* run({ command, description: "D2A variable outside run" }, ctxA)
+                // The command itself still fails on the missing run; only the
+                // observation is what the boundary suppresses.
+                expect(result.metadata.exit).not.toBe(0)
+                expect(result.metadata.d2aWorkflowSnapshots).toBeUndefined()
+                yield* Effect.promise(() => fs.rm(outside, { recursive: true, force: true }))
+              }),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  // others-html fast is the shortest catalog (five stages), so the final
+  // stage-complete can be reached without preparing every Pixso Full gate. The
+  // artifact shapes mirror the controller regression fixture, which registers its
+  // own tests and therefore cannot be imported; only the fast subset is kept.
+  const seedHtmlFast = (() => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    )
+    // Fixed epoch base and a non-boundary clock for the build report: the gates
+    // only need timestamps the controller accepts, never the wall clock.
+    const t0 = 1_700_000_000_000
+    const now = Date.now() - 61_000
+    const honest = new Date(now - (now % 1000) + 123).toISOString()
+    const sha256 = (data: Buffer | string) => createHash("sha256").update(data).digest("hex")
+    const json = async (dir: string, relative: string, value: unknown) => {
+      const file = path.join(dir, ...relative.split("/"))
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`)
+    }
+    return async (dir: string) => {
+      const input = "<html><body><div>hello</div></body></html>"
+      await fs.mkdir(path.join(dir, "source", "html", "reference"), { recursive: true })
+      await fs.writeFile(path.join(dir, "source", "html", "input.html"), input)
+      await fs.writeFile(path.join(dir, "source", "html", "reference", "reference-00.png"), png)
+      await fs.writeFile(path.join(dir, "source", "html", "reference", "reference-full.png"), "stitched reference frames")
+      const inputSha = sha256(input)
+      await json(dir, "requirement-clarification.json", {
+        preCheckCompleted: true,
+        designSource: "others-html",
+        visualCalibration: { enabled: true, scoreThreshold: 80 },
+      })
+      await json(dir, "inputs-manifest.json", {
+        designSource: "others-html",
+        htmlSource: { path: "source/html/input.html", sha256: inputSha },
+        layoutFactsPath: "stage1/layout-facts.json",
+        visualSpecPath: "stage1/visual-spec.json",
+        referenceSet: {
+          dir: "source/html/reference",
+          frames: ["reference-00.png"],
+          contentFull: "reference-full.png",
+          content: { frames: 1 },
+          deviceScaleFactor: 1,
+          logicalCanvas: { width: 1, height: 1 },
+        },
+      })
+      await json(dir, "stage1/layout-facts.json", {
+        schemaVersion: 1,
+        designSource: "others-html",
+        source: { path: "source/html/input.html", sha256: inputSha },
+        render: {
+          deviceScaleFactor: 1,
+          canvas: { logicalWidth: 1, logicalHeight: 1, physicalWidth: 1, physicalHeight: 1 },
+          content: { coverage: 1, extentPx: 1, visibleCoverage: 1, frames: 1 },
+          statusBarVp: 0,
+          gestureBarVp: 0,
+        },
+        nodes: [{ nodeId: "n1", rect: { x: 0, y: 0, w: 1, h: 1 }, text: "hello" }],
+        systemUi: [],
+        uncertainties: [],
+      })
+      await json(dir, "stage1/visual-spec.json", {
+        schemaVersion: 1,
+        designSource: "others-html",
+        canvasIncludesSystemBar: false,
+        roles: [],
+        systemUi: [],
+        notImplemented: [],
+        unknowns: ["none"],
+      })
+      await json(dir, "stage1/source-freeze.json", {
+        producer: "html_source_freeze",
+        input: "source/html/input.html",
+        sha256: inputSha,
+        resources: { total: 1, missing: 0 },
+      })
+      await json(dir, "stage2/generated-ui-manifest.json", {
+        page: { file: "entry/src/main/ets/pages/HtmlPage.ets", component: "HtmlPage", hasEntry: false },
+        registration: {
+          mode: "existing-router",
+          route: "html_page",
+          file: "route/map.json",
+          default: false,
+          component: "HtmlPage",
+        },
+        startup: { entryAbilityPage: "pages/Index", mainPagesContainsIndex: true },
+        reachability: "entry-point-exists",
+      })
+      await json(dir, "stage2/initial-build-report.json", {
+        success: true,
+        command: "hvigorw assembleHap",
+        exitCode: 0,
+        completedAt: honest,
+      })
+      await json(dir, "stage4/quality-audit.json", {
+        criticalIssues: [],
+        majorIssues: [],
+        audits: {
+          structureAndValues: { pass: true },
+          hds: { pass: true },
+          systemUi: { pass: true },
+          safeArea: { pass: true },
+          topCollision: { pass: true },
+          resources: { pass: true },
+          routing: { pass: true },
+          codeQuality: { pass: true },
+        },
+        buildResult: { exitCode: 0, command: "hvigorw assembleHap" },
+      })
+      await json(dir, "hds-decision.json", { hdsRequired: false })
+      await json(dir, "input-security-report.json", { schemaVersion: 1, status: "clean" })
+      await json(dir, "capability-invocation-ledger.json", [
+        { capability: "hmos-d2a-html-to-arkui", status: "completed" },
+        { capability: "hmos-d2a-solution-design", status: "completed" },
+        { capability: "hmos-d2a-arkts-logic-completer", status: "completed" },
+      ])
+      for (const [relative, text] of [
+        ["stage2/component-analysis.md", "component analysis\n"],
+        ["stage3-interaction-report.md", "interaction report\n"],
+        ["stage4/build-report.md", "build report\n"],
+        ["design-doc.md", "# design doc\n"],
+        ["component-tree.md", "- n1 Button\n"],
+        ["completeness-report.md", "summary\n"],
+      ] as const) {
+        await fs.writeFile(path.join(dir, ...relative.split("/")), text)
+      }
+      // Gates for the completed stages, then the state that records them: the
+      // fast catalog has no confirmation stage, so no stage-2 snapshot is owed.
+      for (const stage of [1, 2, 3, 4]) {
+        await json(dir, `stage-gates/stage${String(stage).padStart(2, "0")}-gate.json`, {
+          stage,
+          status: "passed",
+          completedAt: new Date(t0 + stage * 1000).toISOString(),
+        })
+      }
+      const file = path.join(dir, "workflow-state.json")
+      const state = JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown>
+      await fs.writeFile(
+        file,
+        `${JSON.stringify({ ...state, completedStages: [1, 2, 3, 4], currentStage: 5 }, null, 2)}\n`,
+      )
+    }
+  })()
+
+  for (const item of ps) {
+    it.live(`d2a: the final stage completes in the call that bound its own paths [${item.label}]`, () =>
+      withShell(
+        item,
+        withSkillRoot(
+          Effect.gen(function* () {
+            const tmp = yield* tmpdirScoped()
+            yield* runIn(
+              tmp,
+              Effect.gen(function* () {
+                const runDir = varRunDir(tmp)
+                const init = yield* run(
+                  {
+                    command: varCommand(runDir, '--mode init --source others-html --variant fast --run-dir "$runDir"'),
+                    description: "D2A variable init (fast catalog)",
+                  },
+                  ctxA,
+                )
+                expect(init.metadata.exit).toBe(0)
+                const runId = (snapshots(init)[0].snapshot as { runId: string }).runId
+                expect(snapshots(init)[0].buildTrackingStartedAtInit).toBe(true)
+
+                yield* Effect.promise(() => seedHtmlFast(runDir))
+                // No extra `status` call: the completion itself is observed, which
+                // is what makes the delivery event queue on the same call.
+                const final = yield* run(
+                  {
+                    command: varCommand(runDir, '--mode stage-complete --run-dir "$runDir" --stage 5 --result passed'),
+                    description: "D2A variable final stage",
+                  },
+                  ctxA,
+                )
+                expect(final.metadata.exit).toBe(0)
+                expect(snapshots(final)).toEqual([
+                  {
+                    operation: "stage-complete",
+                    replayed: false,
+                    model: modelA,
+                    snapshot: expect.objectContaining({
+                      runId,
+                      status: "completed",
+                      completedStages: [1, 2, 3, 4, 5],
+                    }),
+                  },
+                ])
+              }),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  // ─── marked standalone build observation (first/final build outcome) ──────
+  // ctx.callID is the tool call id the build result is keyed by.
+  const buildCtx = (callId: string) => ({ ...ctxA, callID: callId })
+  const initRun = (dir: string, source = "pixso") =>
+    run(
+      {
+        command: d2a(`--mode init --source ${source} --variant full --run-dir ${quote(dir)}`),
+        description: "D2A workflow init",
+      },
+      ctxA,
+    )
+  const buildCommand = (success: boolean) => {
+    const code = success ? "process.exit(0)" : "process.exit(3)"
+    const text = `${bin} -e ${evalarg(code)}`
+    return PS.has(sh()) ? `& ${text}` : text
+  }
+
+  each("d2a: a marked build records its exit outcome and the init marker", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const runDir = path.join(tmp, "runs", "run-1")
+          const init = yield* initRun(runDir)
+          // The real init observation carries the tracking-start marker.
+          expect(snapshots(init)[0].buildTrackingStartedAtInit).toBe(true)
+
+          const failed = yield* run(
+            {
+              command: buildCommand(false),
+              description: "D2A marked build (failure)",
+              d2aBuildRunDir: runDir,
+            },
+            buildCtx("call-build-fail"),
+          )
+          // Non-zero is the contract: Windows PowerShell 5.1's -Command
+          // wrapper may collapse a native non-zero exit (3 here) to 1, and
+          // the sandbox prepare path keeps the wrapper's code as-is. Both
+          // stay failures, so the recorded boolean is unaffected.
+          expect(failed.metadata.exit).not.toBe(0)
+          const failedSnapshots = snapshots(failed)
+          expect(failedSnapshots).toHaveLength(1)
+          expect(failedSnapshots[0]).toEqual({
+            replayed: true,
+            snapshot: expect.objectContaining({ status: "running" }),
+            buildResult: { callId: "call-build-fail", completedAtMs: expect.any(Number), success: false },
+          })
+
+          const succeeded = yield* run(
+            {
+              command: buildCommand(true),
+              description: "D2A marked build (success)",
+              d2aBuildRunDir: runDir,
+            },
+            buildCtx("call-build-ok"),
+          )
+          expect(succeeded.metadata.exit).toBe(0)
+          expect(snapshots(succeeded)[0].buildResult).toEqual({
+            callId: "call-build-ok",
+            completedAtMs: expect.any(Number),
+            success: true,
+          })
+        }),
+      )
+    }),
+  )
+
+  each("d2a: unmarked, compound and out-of-scope builds are not observed", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          const runDir = path.join(tmp, "runs", "run-1")
+          yield* initRun(runDir)
+
+          // No marker: nothing.
+          const unmarked = yield* run(
+            { command: buildCommand(true), description: "Unmarked build" },
+            buildCtx("call-unmarked"),
+          )
+          expect(unmarked.metadata.d2aWorkflowSnapshots).toBeUndefined()
+
+          // Build combined with a deploy-like follow-up: exit attribution is
+          // ambiguous, so no observation even with the marker.
+          const chain = sh() === "cmd" ? "&&" : ";"
+          const compound = yield* run(
+            {
+              command: `${buildCommand(true)} ${chain} ${buildCommand(true)}`,
+              description: "Compound build plus deploy",
+              d2aBuildRunDir: runDir,
+            },
+            buildCtx("call-compound"),
+          )
+          expect(compound.metadata.exit).toBe(0)
+          expect(compound.metadata.d2aWorkflowSnapshots).toBeUndefined()
+
+          // Marker outside the instance: refused, command still runs.
+          const outside = path.join(os.tmpdir(), `d2a-outside-build-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+          yield* Effect.promise(() => fs.mkdir(path.join(outside, "runs"), { recursive: true }))
+          const escaped = yield* run(
+            {
+              command: buildCommand(true),
+              description: "Marked build (outside instance)",
+              d2aBuildRunDir: outside,
+            },
+            buildCtx("call-outside"),
+          )
+          expect(escaped.metadata.exit).toBe(0)
+          expect(escaped.metadata.d2aWorkflowSnapshots).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  each("d2a: a marked build against a missing or completed run is skipped", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* runIn(
+        tmp,
+        Effect.gen(function* () {
+          // Missing run directory: no observation (init has not run).
+          const missing = yield* run(
+            {
+              command: buildCommand(true),
+              description: "Marked build (missing run)",
+              d2aBuildRunDir: path.join(tmp, "runs", "never-initialized"),
+            },
+            buildCtx("call-missing"),
+          )
+          expect(missing.metadata.exit).toBe(0)
+          expect(missing.metadata.d2aWorkflowSnapshots).toBeUndefined()
+        }),
+      )
+    }),
+  )
+
+  for (const item of ps) {
+    it.live(`d2a: a failing PowerShell command that never sets $LASTEXITCODE is still a failed build [${item.label}]`, () =>
+      withShell(
+        item,
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* runIn(
+            tmp,
+            Effect.gen(function* () {
+              const runDir = path.join(tmp, "runs", "run-1")
+              yield* initRun(runDir)
+              // Write-Error fails without ever touching $LASTEXITCODE: a
+              // trailing `; exit $LASTEXITCODE` fix-up would exit 0 here and
+              // record a false success. The -Command wrapper keeps the exit
+              // non-zero, so the tracked boolean stays correct.
+              const errored = yield* run(
+                {
+                  command: "Write-Error 'd2a marked build boom'",
+                  description: "D2A marked build (PowerShell error)",
+                  d2aBuildRunDir: runDir,
+                },
+                buildCtx("call-ps-error"),
+              )
+              expect(errored.metadata.exit).not.toBe(0)
+              const observed = snapshots(errored)
+              expect(observed).toHaveLength(1)
+              expect(observed[0].buildResult).toMatchObject({ callId: "call-ps-error", success: false })
+            }),
+          )
+        }),
+      ),
+    )
+  }
 })

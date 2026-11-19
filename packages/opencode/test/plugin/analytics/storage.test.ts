@@ -59,6 +59,7 @@ function event(): AiSessionEvent {
     workflow: "",
     isFirstBuildSuccess: null,
     isFinalBuildSuccess: null,
+    buildCount: 0,
     uiVerificationModel: null,
     uiReconstructionScore: -1,
     inputTokens: 0,
@@ -760,6 +761,7 @@ test("legacy pending events without the new fields stay uploadable", async () =>
   delete legacy.taskType
   delete legacy.uiReconstructionScore
   delete legacy.cacheTokens
+  delete legacy.buildCount
   await stageEncryptedStorage(tmp.path, [legacy])
 
   const pending = await preparePendingBatch(10)
@@ -768,6 +770,9 @@ test("legacy pending events without the new fields stay uploadable", async () =>
     expect(pending[0].event).not.toHaveProperty("taskType")
     expect(pending[0].event).not.toHaveProperty("uiReconstructionScore")
     expect(pending[0].event).not.toHaveProperty("cacheTokens")
+    // A queue entry written before the build tally existed keeps uploading without it; only a
+    // current event carries the measured value.
+    expect(pending[0].event).not.toHaveProperty("buildCount")
     expect(Object.hasOwn(pending[0].event.operations, "devecoCliCommands")).toBe(false)
   }
 })
@@ -780,19 +785,25 @@ test("queue rejects malformed new fields while accepting the valid shape", async
     { ...event(), taskType: 42 },
     { ...event(), uiReconstructionScore: "x" },
     { ...event(), cacheTokens: "x" },
+    { ...event(), buildCount: -1 },
+    { ...event(), buildCount: 1.5 },
+    { ...event(), buildCount: "2" },
+    { ...event(), buildCount: null },
     { ...event(), operations: { ...operations(), devecoCliCommands: "invalid" } },
     { ...event(), operations: { ...operations(), devecoCliCommands: [{ name: "docs.search", count: "2" }] } },
     // Control: the same fields with their real types must still be accepted, otherwise the
-    // rejection assertions above would pass for the wrong reason.
-    event(),
+    // rejection assertions above would pass for the wrong reason. The build tally is carried by
+    // the accepted event, not just tolerated.
+    { ...event(), buildCount: 2 },
   ])
 
   const pending = await preparePendingBatch(10)
-  expect(pending.map((item) => item.queueId)).toEqual(["queue-5"])
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-9"])
   expect(pending[0]?.event).toMatchObject({
     taskType: "default",
     uiReconstructionScore: -1,
     cacheTokens: 0,
+    buildCount: 2,
     operations: { devecoCliCommands: [] },
   })
 })

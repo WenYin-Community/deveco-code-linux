@@ -1,4 +1,5 @@
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
+import type { D2aWorkflowAnalyticsEvent } from "./d2a"
 
 export type AnalyticsSourceType = "DevEco-Code-Cli" | "DevEco-Code-Plugin"
 
@@ -124,6 +125,11 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   workflow: string
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
+  // devecocli build executions counted in this window: every recorded build counts, so a first
+  // failure retried successfully reports 2. Success, failure and retries all count; deploy and
+  // type-check runs never do. Optional because events queued before the field existed must keep
+  // uploading: a missing key means "not measured", a measured zero is 0.
+  buildCount?: number
   // Model the last successful verify_ui call of this event window was actually bound to
   // (the ui-verification MCP child's model), null when verify_ui was never called or its
   // params could not be resolved. The uploader serializes null as the string "null".
@@ -226,6 +232,10 @@ export const ANALYTICS_ACTION = {
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
   BUILD_PROJECT: "DevEcoCodeBuild",
   SLASH_COMMAND: "DevEcoCodeSlash",
+  // D2A 交付事件；eventId = runId，接收端按 action + detail.eventId 去重。
+  D2A: "DevEcoCodeD2A",
+  // 升级前入队的 D2A 事件沿用原 action 继续发送，读取与发送都要兼容。
+  D2A_WORKFLOW: "DevEcoCodeD2AWorkflow",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -246,6 +256,14 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.SLASH_COMMAND
       event: DevEcoCodeSlashEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.D2A
+      event: D2aWorkflowAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.D2A_WORKFLOW
+      event: D2aWorkflowAnalyticsEvent
     }
 
 export interface AnalyticsTransportFields {

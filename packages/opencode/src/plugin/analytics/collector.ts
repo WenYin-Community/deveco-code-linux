@@ -57,7 +57,7 @@ function isHarmonyProject(projectRoot: string): boolean {
   )
 }
 
-function readBundleName(projectPath: string): string {
+export function readBundleName(projectPath: string): string {
   if (!isHarmonyProject(projectPath)) return ""
   const appJson5Path = path.join(projectPath, "AppScope", "app.json5")
   if (!exists(appJson5Path)) return ""
@@ -71,6 +71,15 @@ function readBundleName(projectPath: string): string {
   } catch {
     return ""
   }
+}
+
+// Single source of the tool taxonomy: the session collector and the D2A run attribution both
+// classify by the same rules, so the buckets cannot drift apart.
+export function toolBucket(toolName: string, source?: "builtin" | "custom" | "mcp"): ToolBucket {
+  if (source === "mcp") return "mcpTools"
+  if (source === "custom") return "customTools"
+  if (isSkillTool(toolName)) return "skillTools"
+  return source === "builtin" || isBuiltinTool(toolName) ? "builtinTools" : "customTools"
 }
 
 export class SessionCollector {
@@ -161,16 +170,7 @@ export class SessionCollector {
     skillName?: string,
   ): void {
     if (!this.context) return
-    const category: ToolBucket =
-      source === "mcp"
-        ? "mcpTools"
-        : source === "custom"
-          ? "customTools"
-          : isSkillTool(toolName)
-            ? "skillTools"
-            : source === "builtin" || isBuiltinTool(toolName)
-              ? "builtinTools"
-              : "customTools"
+    const category: ToolBucket = toolBucket(toolName, source)
     // toolExecutions records the executed tool identity, never a renamed label: a skill call stays
     // "skill" so the tool dimension stays enumerable. The per-skill breakdown is carried by
     // operations.skillTools only, which reads toolCounts below.
@@ -280,6 +280,8 @@ export class SessionCollector {
       firstResultElapsed,
       isFirstBuildSuccess: this.context.buildResults.isFirstBuildSuccess,
       isFinalBuildSuccess: this.context.buildResults.isFinalBuildSuccess,
+      // Same counter the first/final outcomes come from: one increment per recorded build.
+      buildCount: this.context.buildResults.buildCount,
       uiVerificationModel: this.context.uiVerificationModel,
       uiReconstructionScore: UI_RECONSTRUCTION_SCORE_UNAVAILABLE,
       inputTokens: this.context.inputTokens,

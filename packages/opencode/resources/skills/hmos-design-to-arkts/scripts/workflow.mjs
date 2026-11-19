@@ -83,6 +83,415 @@ function writeJsonAtomic(path, value) {
   renameSync(tmp, path);
 }
 
+// ─── run-level mutex ────────────────────────────────────────────────────────
+// The same run can be driven by concurrent processes (a stuck earlier tool
+// call, an over-eager retry). Atomic renames keep each state file internally
+// consistent but cannot stop two writers from overwriting each other's
+// read-validate-write cycles, so every mode runs under a run-level lock file.
+// A crashed holder leaves the lock behind; it is reclaimed after the stale
+// window instead of failing every later command on the same run.
+
+const RUN_LOCK_FILE = 'workflow-state.lock';
+const RUN_LOCK_STALE_MS = 5 * 60 * 1000;
+const RUN_LOCK_TIMEOUT_MS = 10 * 1000;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireRunLock(runDir) {
+  const lockPath = join(runDir, RUN_LOCK_FILE);
+  const deadline = Date.now() + RUN_LOCK_TIMEOUT_MS;
+  for (;;) {
+    try {
+      writeFileSync(lockPath, `${process.pid}\n${new Date().toISOString()}\n`, { flag: 'wx' });
+      return lockPath;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    const lockStat = statSync(lockPath, { throwIfNoEntry: false });
+    if (!lockStat) continue;
+    if (Date.now() - lockStat.mtimeMs > RUN_LOCK_STALE_MS) {
+      try { rmSync(lockPath, { force: true }); } catch { /* retried on the next pass */ }
+      continue;
+    }
+    if (Date.now() > deadline) {
+      fail(`another workflow command is holding the run lock: ${lockPath}`);
+    }
+    sleepSync(100);
+  }
+}
+
+function holdRunLock(runDir) {
+  let lockPath;
+  try {
+    lockPath = acquireRunLock(runDir);
+  } catch (error) {
+    fail(`cannot lock run directory ${runDir} (${error.message})`);
+  }
+  process.on('exit', () => {
+    try { rmSync(lockPath, { force: true }); } catch { /* best effort */ }
+  });
+}
+
+// ─── analytics observability ─────────────────────────────────────────────────
+// Optional workflow-state.json analytics subobject: per-stage net timing
+// (elapsed minus human confirmation waits), calibration rounds and the frozen
+// final visual score. States written before this subobject existed keep
+// loading under the original rules; they adopt a fresh runId at their first
+// compatible successful change, and stages that started earlier simply have
+// no timing, so their durations stay omitted. Observation failures never
+// change the business result.
+
+const FINAL_VISUAL_SCORE_FILE = 'final-visual-score.json';
+
+function isValidUuid(value) {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
+function isEpochMs(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function visualCalibrationStage(catalog) {
+  return ['figma', 'mastergo', 'lanhu', 'others-html', 'others-visual'].includes(catalog.designSource ?? 'pixso') ? 5 : 9;
+}
+
+// Prepares the analytics object for the next committed state change. New runs
+// carry it from init with revision 1; an old run without the subobject adopts
+// one (revision 1) at its first successful mutation.
+function withAnalyticsBump(state, mutate) {
+  const analytics = state.analytics === undefined
+    ? { version: 1, runId: randomUUID(), revision: 1, stages: {} }
+    : {
+        ...state.analytics,
+        revision: state.analytics.revision + 1,
+        stages: { ...(state.analytics.stages ?? {}) },
+      };
+  mutate(analytics);
+  return { ...state, analytics };
+}
+
+function stageTimingOf(analytics, stage) {
+  return analytics.stages[String(stage)];
+}
+
+// stage-start records only the first entry into a stage; re-entering after a
+// revision request or a duplicate call keeps the original start time.
+function recordStageStart(analytics, stage, startedAtMs) {
+  if (stageTimingOf(analytics, stage)?.startedAtMs !== undefined) return;
+  const existing = analytics.stages[String(stage)] ?? {};
+  analytics.stages[String(stage)] = { ...existing, startedAtMs };
+}
+
+function openConfirmationWait(analytics, stage, startedAtMs) {
+  const existing = analytics.stages[String(stage)] ?? {};
+  const waits = Array.isArray(existing.confirmationWaits) ? existing.confirmationWaits : [];
+  analytics.stages[String(stage)] = {
+    ...existing,
+    confirmationWaits: [...waits, { startedAtMs }],
+  };
+}
+
+// confirm accepted/revision-requested close the latest open wait; a failed
+// confirmation never closes anything. One stage may hold several waits.
+function closeConfirmationWait(analytics, stage, endedAtMs) {
+  const timing = analytics.stages[String(stage)];
+  const waits = Array.isArray(timing?.confirmationWaits) ? timing.confirmationWaits : [];
+  const openIndex = waits.findLastIndex((wait) => wait.endedAtMs === undefined);
+  if (openIndex === -1) return;
+  analytics.stages[String(stage)] = {
+    ...timing,
+    confirmationWaits: waits.map((wait, index) =>
+      index === openIndex ? { ...wait, endedAtMs } : wait
+    ),
+  };
+}
+
+// Net active duration of one stage: elapsed time minus every closed
+// confirmation wait. Missing timestamps, unclosed, overlapping, out-of-order or
+// out-of-stage waits and negative results make the value untrustworthy, so the
+// duration is omitted while the business state stays valid; zero is kept as a
+// legitimate value.
+function computeActiveDurationMs(timing) {
+  if (!isEpochMs(timing?.startedAtMs) || !isEpochMs(timing?.completedAtMs)) return null;
+  const waits = Array.isArray(timing.confirmationWaits) ? timing.confirmationWaits : [];
+  let waited = 0;
+  let previousEnd = timing.startedAtMs;
+  for (const wait of waits) {
+    if (!isEpochMs(wait?.startedAtMs) || !isEpochMs(wait?.endedAtMs)) return null;
+    if (wait.startedAtMs < previousEnd || wait.endedAtMs < wait.startedAtMs || wait.endedAtMs > timing.completedAtMs) {
+      return null;
+    }
+    waited += wait.endedAtMs - wait.startedAtMs;
+    previousEnd = wait.endedAtMs;
+  }
+  const duration = timing.completedAtMs - timing.startedAtMs - waited;
+  return Number.isSafeInteger(duration) && duration >= 0 ? duration : null;
+}
+
+// The single timing function used when a stage passes: the canonical gate
+// completedAt (preserved when replaying an interrupted write) becomes the stage
+// end, and the net duration is derived once, from the stored timestamps.
+function recordStageCompletion(analytics, stage, completedAtMs) {
+  const existing = analytics.stages[String(stage)] ?? {};
+  const timing = { ...existing, completedAtMs };
+  const activeDurationMs = computeActiveDurationMs(timing);
+  analytics.stages[String(stage)] = activeDurationMs === null
+    ? { ...timing, activeDurationMs: undefined }
+    : { ...timing, activeDurationMs };
+}
+
+// Calibration summary taken straight from the existing calibration report.
+// Only enabled, completed calibration produces rounds; a skipped report and
+// Fast runs keep the field absent.
+function recordCalibrationAnalytics(runDir, catalog, analytics) {
+  const stage = visualCalibrationStage(catalog);
+  let report = null;
+  try {
+    report = readJsonFile(join(runDir, `stage${stage}-visual-calibration-report.json`));
+  } catch {
+    return;
+  }
+  if (report?.status !== 'completed' || !Number.isInteger(report.roundsCompleted) || report.roundsCompleted < 1) return;
+  analytics.calibration = {
+    calibrationRounds: report.roundsCompleted,
+    correctionRounds: report.roundsCompleted - 1,
+    completionReason: report.completionReason,
+  };
+}
+
+function resolveInsideRunPath(runDir, value, label) {
+  if (typeof value !== 'string' || value.length === 0 || isAbsolute(value)) return null;
+  const resolved = resolve(runDir, value);
+  const relFromRun = relative(runDir, resolved);
+  if (relFromRun.startsWith('..') || isAbsolute(relFromRun) || relFromRun === '') {
+    return null;
+  }
+  return resolved;
+}
+
+function readInsideRunJson(runDir, value) {
+  const resolved = resolveInsideRunPath(runDir, value);
+  if (!resolved || !existsSync(resolved) || !statSync(resolved).isFile()) return null;
+  try {
+    return readJsonFile(resolved);
+  } catch {
+    return null;
+  }
+}
+
+function isValidScore(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+// Freezes the delivered-page score at workflow completion. calibration_round
+// reuses one scored round of the run's own calibration report; delivery_check
+// reuses the single-round scorer output the summary stage saved for the
+// current page. Fast is not_applicable and an explicitly disabled calibration
+// is skipped.
+//
+// A missing or untrustworthy artifact is reported as an `issue` instead of
+// degrading to unavailable: the final Full submission is refused while the
+// value is still correctable, because finalScore is frozen into
+// workflow-state.json and the completion snapshot is uploaded once.
+function resolveFinalScore(runDir, catalog) {
+  if (catalog.variant !== 'full') return { finalScore: { status: 'not_applicable' } };
+  const stage = visualCalibrationStage(catalog);
+  let report = null;
+  try {
+    report = readJsonFile(join(runDir, `stage${stage}-visual-calibration-report.json`));
+  } catch {
+    return { issue: 'invalid_calibration' };
+  }
+  if (report?.status === 'skipped') return { finalScore: { status: 'skipped' } };
+  if (report?.status !== 'completed' || !Number.isInteger(report.roundsCompleted) || report.roundsCompleted < 1) {
+    return { issue: 'invalid_calibration' };
+  }
+  let artifact = null;
+  try {
+    artifact = readJsonFile(join(runDir, FINAL_VISUAL_SCORE_FILE));
+  } catch (error) {
+    return { issue: error?.code === 'ENOENT' ? 'missing' : 'invalid_artifact' };
+  }
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+    return { issue: 'invalid_artifact' };
+  }
+  if (artifact.status === 'unavailable') {
+    // `reason` is a local note kept beside the artifact so a reviewer can see
+    // why no score was recorded; only its type is enforced, and it never
+    // reaches workflow-state.json or the uploaded event.
+    if (artifact.reason !== undefined && (typeof artifact.reason !== 'string' || artifact.reason.length === 0)) {
+      return { issue: 'invalid_artifact' };
+    }
+    return { finalScore: { status: 'unavailable' } };
+  }
+  if (artifact.status !== 'recorded') return { issue: 'invalid_artifact' };
+  if (artifact.source === 'calibration_round') {
+    const round = artifact.round;
+    const rounds = Array.isArray(report.rounds)
+      ? report.rounds.filter((item) => Number(item?.round) === round)
+      : [];
+    if (
+      !Number.isInteger(round) || round < 1 || round > report.roundsCompleted ||
+      rounds.length !== 1 || !isValidScore(rounds[0]?.score)
+    ) {
+      return { issue: 'invalid_score_evidence' };
+    }
+    return { finalScore: { status: 'recorded', source: 'calibration_round', scoredRound: round, score: rounds[0].score } };
+  }
+  if (artifact.source === 'delivery_check') {
+    const scoreJson = readInsideRunJson(runDir, artifact.scoreJson);
+    if (!scoreJson || !isValidScore(scoreJson?.aggregate?.final_baseline_score)) {
+      return { issue: 'invalid_score_evidence' };
+    }
+    for (const field of ['metricsJson', 'candidate', 'buildLog', 'deploymentLog']) {
+      const resolved = resolveInsideRunPath(runDir, artifact[field]);
+      if (!resolved || !existsSync(resolved) || !statSync(resolved).isFile()) {
+        return { issue: 'invalid_score_evidence' };
+      }
+    }
+    return { finalScore: { status: 'recorded', source: 'delivery_check', score: scoreJson.aggregate.final_baseline_score } };
+  }
+  return { issue: 'invalid_artifact' };
+}
+
+// Final-stage admission: a Full run may only complete once its delivery score
+// is on disk and trustworthy. The refusal happens before the canonical Gate is
+// written, so the stage, its Gate and the analytics keep their previous values
+// and the model can record the artifact and retry the same submission.
+function requireFinalScore(runDir, catalog, stage) {
+  const resolved = resolveFinalScore(runDir, catalog);
+  if (!resolved.issue) return resolved.finalScore;
+  process.stdout.write(`${JSON.stringify({
+    error: 'final_score_evidence_required',
+    stage,
+    artifactPath: join(runDir, FINAL_VISUAL_SCORE_FILE),
+    reason: resolved.issue,
+    retry: {
+      mode: 'stage-complete',
+      stage,
+      result: 'passed'
+    }
+  }, null, 2)}\n`);
+  process.exit(1);
+}
+
+function validateFinalScoreShape(finalScore) {
+  if (!finalScore || typeof finalScore !== 'object' || Array.isArray(finalScore)) {
+    fail('workflow-state.analytics.finalScore must be an object');
+  }
+  if (finalScore.status === 'recorded') {
+    if (finalScore.source !== 'calibration_round' && finalScore.source !== 'delivery_check') {
+      fail(`workflow-state.analytics.finalScore.source is invalid: ${finalScore.source}`);
+    }
+    const keys = Object.keys(finalScore).sort();
+    const expected = finalScore.source === 'calibration_round'
+      ? ['score', 'scoredRound', 'source', 'status']
+      : ['score', 'source', 'status'];
+    if (JSON.stringify(keys) !== JSON.stringify(expected)) {
+      fail('workflow-state.analytics.finalScore has unexpected fields');
+    }
+    if (finalScore.source === 'calibration_round' &&
+      (!Number.isInteger(finalScore.scoredRound) || finalScore.scoredRound < 1)) {
+      fail('workflow-state.analytics.finalScore.scoredRound must be a positive integer');
+    }
+    if (!isValidScore(finalScore.score)) {
+      fail('workflow-state.analytics.finalScore.score must be a finite number between 0 and 100');
+    }
+    return;
+  }
+  if (!['unavailable', 'skipped', 'not_applicable'].includes(finalScore.status)) {
+    fail(`workflow-state.analytics.finalScore.status is invalid: ${finalScore.status}`);
+  }
+  if (Object.keys(finalScore).length !== 1) {
+    fail('workflow-state.analytics.finalScore carries unexpected fields');
+  }
+}
+
+const TASK_COMPLETION_FILE = 'task-completion.json';
+const TASK_COMPLETION_STATUSES = new Set(['passed', 'failed', 'unverified']);
+
+// Reads the model-authored task acceptance report at the run root and reduces
+// it to the summary stored on workflow-state.json. The report itself stays a
+// local artifact; only counts survive. Any missing, unreadable (a symlinked
+// or otherwise escaping file included) or invalid report degrades to
+// unavailable so the final stage never breaks on analytics collection.
+function resolveTaskCompletion(runDir) {
+  const file = join(runDir, TASK_COMPLETION_FILE);
+  try {
+    if (lstatSync(file).isSymbolicLink()) return { status: 'unavailable' };
+  } catch {
+    return { status: 'unavailable' };
+  }
+  let report;
+  try {
+    report = readJsonFile(file);
+  } catch {
+    return { status: 'unavailable' };
+  }
+  if (!report || typeof report !== 'object' || Array.isArray(report) || !Array.isArray(report.tasks) || report.tasks.length === 0) {
+    return { status: 'unavailable' };
+  }
+  const seenIds = new Set();
+  const counts = { passed: 0, failed: 0, unverified: 0 };
+  for (const task of report.tasks) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return { status: 'unavailable' };
+    for (const field of ['id', 'task', 'evidence']) {
+      if (typeof task[field] !== 'string' || task[field].length === 0) return { status: 'unavailable' };
+    }
+    if (seenIds.has(task.id)) return { status: 'unavailable' };
+    seenIds.add(task.id);
+    if (!TASK_COMPLETION_STATUSES.has(task.status)) return { status: 'unavailable' };
+    counts[task.status] += 1;
+  }
+  // Completion is program-computed from the per-item verdicts: an invalid
+  // whole report is unavailable, never a silently shrunk denominator.
+  const total = counts.passed + counts.failed + counts.unverified;
+  return {
+    status: 'recorded',
+    passed: counts.passed,
+    failed: counts.failed,
+    unverified: counts.unverified,
+    rate: counts.passed / total,
+  };
+}
+
+function validateTaskCompletionShape(taskCompletion) {
+  if (!taskCompletion || typeof taskCompletion !== 'object' || Array.isArray(taskCompletion)) {
+    fail('workflow-state.analytics.taskCompletion must be an object');
+  }
+  if (taskCompletion.status === 'recorded') {
+    const keys = Object.keys(taskCompletion).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(['failed', 'passed', 'rate', 'status', 'unverified'])) {
+      fail('workflow-state.analytics.taskCompletion has unexpected fields');
+    }
+    for (const field of ['passed', 'failed', 'unverified']) {
+      if (!Number.isSafeInteger(taskCompletion[field]) || taskCompletion[field] < 0) {
+        fail(`workflow-state.analytics.taskCompletion.${field} must be a non-negative safe integer`);
+      }
+    }
+    const total = taskCompletion.passed + taskCompletion.failed + taskCompletion.unverified;
+    if (!Number.isSafeInteger(total) || total < 1) {
+      fail('workflow-state.analytics.taskCompletion counts must sum to a positive integer');
+    }
+    if (typeof taskCompletion.rate !== 'number' || !Number.isFinite(taskCompletion.rate) || taskCompletion.rate < 0 || taskCompletion.rate > 1) {
+      fail('workflow-state.analytics.taskCompletion.rate must be a finite ratio between 0 and 1');
+    }
+    if (taskCompletion.rate !== taskCompletion.passed / total) {
+      fail('workflow-state.analytics.taskCompletion.rate must equal passed / total');
+    }
+    return;
+  }
+  if (taskCompletion.status !== 'unavailable') {
+    fail(`workflow-state.analytics.taskCompletion.status is invalid: ${taskCompletion.status}`);
+  }
+  if (Object.keys(taskCompletion).length !== 1) {
+    fail('workflow-state.analytics.taskCompletion carries unexpected fields');
+  }
+}
+
 function hashFile(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -5433,7 +5842,7 @@ function collectRepoContextConsumptionIssues(runDir) {
 function collectStageEvidenceIssues(runDir, catalog, stage, ctx = {}) {
   const issues = [];
   const designSource = catalog.designSource ?? 'pixso';
-  const visualStage = ['figma', 'mastergo', 'lanhu', 'others-html', 'others-visual'].includes(designSource) ? 5 : 9;
+  const visualStage = visualCalibrationStage(catalog);
   const referenceNowMs = resolveTimestampReferenceNowMs(runDir);
   if (stage === 1) {
     issues.push(...collectRequirementClarificationEvidenceIssues(runDir, catalog));
@@ -5800,6 +6209,80 @@ function validateState(state, catalog) {
       }
     }
   }
+  if (state.analytics !== undefined) {
+    if (!state.analytics || typeof state.analytics !== 'object' || Array.isArray(state.analytics)) {
+      fail('workflow-state.analytics must be an object');
+    }
+    const analytics = state.analytics;
+    if (analytics.version !== 1) {
+      fail(`workflow-state.analytics.version must be 1, got ${analytics.version}`);
+    }
+    if (!isValidUuid(analytics.runId)) {
+      fail('workflow-state.analytics.runId must be a UUID');
+    }
+    if (!Number.isSafeInteger(analytics.revision) || analytics.revision < 1) {
+      fail('workflow-state.analytics.revision must be a positive safe integer');
+    }
+    if (!analytics.stages || typeof analytics.stages !== 'object' || Array.isArray(analytics.stages)) {
+      fail('workflow-state.analytics.stages must be an object');
+    }
+    for (const [stageKey, timing] of Object.entries(analytics.stages)) {
+      const stageId = Number(stageKey);
+      if (!Number.isInteger(stageId) || stageId < 1 || stageId > catalog.stages.length) {
+        fail(`workflow-state.analytics.stages contains invalid stage id: ${stageKey}`);
+      }
+      if (!timing || typeof timing !== 'object' || Array.isArray(timing)) {
+        fail(`workflow-state.analytics.stages.${stageKey} must be an object`);
+      }
+      for (const key of Object.keys(timing)) {
+        if (!['startedAtMs', 'completedAtMs', 'confirmationWaits', 'activeDurationMs'].includes(key)) {
+          fail(`workflow-state.analytics.stages.${stageKey} contains unsupported key: ${key}`);
+        }
+      }
+      for (const field of ['startedAtMs', 'completedAtMs', 'activeDurationMs']) {
+        if (timing[field] !== undefined && !isEpochMs(timing[field])) {
+          fail(`workflow-state.analytics.stages.${stageKey}.${field} must be a non-negative integer timestamp`);
+        }
+      }
+      if (timing.confirmationWaits !== undefined) {
+        if (!Array.isArray(timing.confirmationWaits)) {
+          fail(`workflow-state.analytics.stages.${stageKey}.confirmationWaits must be an array`);
+        }
+        for (const wait of timing.confirmationWaits) {
+          if (!wait || typeof wait !== 'object' || Array.isArray(wait)) {
+            fail(`workflow-state.analytics.stages.${stageKey}.confirmationWaits entries must be objects`);
+          }
+          for (const key of Object.keys(wait)) {
+            if (key !== 'startedAtMs' && key !== 'endedAtMs') {
+              fail(`workflow-state.analytics.stages.${stageKey}.confirmationWaits contains unsupported key: ${key}`);
+            }
+          }
+          if (!isEpochMs(wait.startedAtMs) || (wait.endedAtMs !== undefined && !isEpochMs(wait.endedAtMs))) {
+            fail(`workflow-state.analytics.stages.${stageKey}.confirmationWaits entry timestamps are invalid`);
+          }
+        }
+      }
+    }
+    if (analytics.calibration !== undefined) {
+      const calibration = analytics.calibration;
+      if (
+        !calibration || typeof calibration !== 'object' || Array.isArray(calibration) ||
+        Object.keys(calibration).length !== 3 ||
+        !Number.isInteger(calibration.calibrationRounds) || calibration.calibrationRounds < 1 ||
+        !Number.isInteger(calibration.correctionRounds) ||
+        calibration.correctionRounds !== calibration.calibrationRounds - 1 ||
+        !['score-threshold-reached', 'max-rounds-reached'].includes(calibration.completionReason)
+      ) {
+        fail('workflow-state.analytics.calibration is invalid');
+      }
+    }
+    if (analytics.finalScore !== undefined) {
+      validateFinalScoreShape(analytics.finalScore);
+    }
+    if (analytics.taskCompletion !== undefined) {
+      validateTaskCompletionShape(analytics.taskCompletion);
+    }
+  }
 }
 
 function checkDigest(state, catalog, skillRoot, catalogRelPath) {
@@ -6046,6 +6529,10 @@ if (mode === 'init') {
   if (!VALID_SOURCES.has(designSource)) {
     fail(`--source must be one of ${[...VALID_SOURCES].join(', ')}`);
   }
+  // init may be handed a run directory that does not exist yet; create it so
+  // the run lock (and the state-exists check below) has a place to live.
+  mkdirSync(runDir, { recursive: true });
+  holdRunLock(runDir);
   const statePath = join(runDir, 'workflow-state.json');
   if (existsSync(statePath)) {
     fail('workflow-state.json already exists; refusing to overwrite. Use status to inspect or delete the run directory to reinitialize.');
@@ -6074,7 +6561,8 @@ if (mode === 'init') {
     awaitingConfirmationFor: null,
     blockedReasonCode: null,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    analytics: { version: 1, runId: randomUUID(), revision: 1, stages: {} },
   };
   writeJsonAtomic(statePath, state);
   writeTodoPayload(runDir, catalog, state);
@@ -6092,6 +6580,7 @@ if (mode === 'init') {
 if (!existsSync(runDir)) {
   fail(`run directory does not exist: ${runDir}`);
 }
+holdRunLock(runDir);
 
 const { state, catalog, catalogRelPath, statePath } = loadCatalogFromState(skillRoot, runDir);
 
@@ -6135,7 +6624,14 @@ if (mode === 'reacquire') {
   const reacquisition = { runDir: newRun, reason, createdAt: now };
   writeJsonAtomic(join(newRun, 'reacquisition-origin.json'), { runDir: realpathSync(runDir), reason, createdAt: now });
   writeJsonAtomic(gatePath(runDir, 2), buildCanonicalGate(2, 'blocked', 'missing_asset', now));
-  writeJsonAtomic(statePath, { ...state, status: 'blocked', awaitingConfirmationFor: null, blockedReasonCode: 'missing_asset', reacquisition, updatedAt: now });
+  writeJsonAtomic(statePath, {
+    ...withAnalyticsBump(state, () => {}),
+    status: 'blocked',
+    awaitingConfirmationFor: null,
+    blockedReasonCode: 'missing_asset',
+    reacquisition,
+    updatedAt: now
+  });
   process.stdout.write(`${JSON.stringify({ status: 'running', currentStage: 1, nextRequiredAction: 'stage_start', ...reacquisition }, null, 2)}\n`);
   process.exit(0);
 }
@@ -6377,7 +6873,23 @@ if (mode === 'stage-start') {
   }
   if (ready) {
     result.instructionPath = catalog.stages[requestedStage - 1].instructionPath;
-    writeTodoPayload(runDir, catalog, state);
+    let todoState = state;
+    if (stageTimingOf(state.analytics ?? {}, requestedStage)?.startedAtMs === undefined) {
+      // First entry into this stage commits its start time alongside the same
+      // state file (one atomic write). Re-entry keeps the original timestamp,
+      // so revision stays untouched for actual no-ops. A recording failure
+      // leaves the business flow and todo sync intact.
+      try {
+        const startedAtMs = Date.now();
+        const startedState = withAnalyticsBump(state, (analytics) =>
+          recordStageStart(analytics, requestedStage, startedAtMs));
+        writeJsonAtomic(statePath, { ...startedState, updatedAt: new Date(startedAtMs).toISOString() });
+        todoState = startedState;
+      } catch {
+        // observation must not fail the business result
+      }
+    }
+    writeTodoPayload(runDir, catalog, todoState);
     result.todoPayloadPath = join(runDir, 'todo-payload.json');
   }
   if (pendingGateResult && !ready) {
@@ -6472,7 +6984,8 @@ if (mode === 'confirm') {
   let newState;
   if (decision === 'request') {
     newState = {
-      ...state,
+      ...withAnalyticsBump(state, (analytics) =>
+        openConfirmationWait(analytics, requestedStage, Date.parse(now))),
       status: 'awaiting_confirmation',
       awaitingConfirmationFor: requestedStage,
       ...(requestedConfirmationSnapshot && {
@@ -6515,7 +7028,8 @@ if (mode === 'confirm') {
       confirmedStages.push(requestedStage);
     }
     newState = {
-      ...state,
+      ...withAnalyticsBump(state, (analytics) =>
+        closeConfirmationWait(analytics, requestedStage, Date.parse(now))),
       status: 'running',
       awaitingConfirmationFor: null,
       confirmedStages,
@@ -6534,7 +7048,8 @@ if (mode === 'confirm') {
       delete confirmationSnapshots[String(requestedStage)];
     }
     newState = {
-      ...state,
+      ...withAnalyticsBump(state, (analytics) =>
+        closeConfirmationWait(analytics, requestedStage, Date.parse(now))),
       status: 'running',
       awaitingConfirmationFor: null,
       confirmedStages,
@@ -6735,6 +7250,15 @@ if (mode === 'stage-complete') {
     }
   }
 
+  // Admission runs before any successful write: a Full final `passed` without a
+  // usable delivery score must not create a Gate or a completion state. The
+  // resolved value is reused for the state so the file cannot change between
+  // the check and the write.
+  const isLastStage = requestedStage === catalog.stages.length;
+  const finalScore = result === 'passed' && isLastStage
+    ? requireFinalScore(runDir, catalog, requestedStage)
+    : null;
+
   writeJsonAtomic(gatePath(runDir, requestedStage), canonicalGate);
 
   if (
@@ -6762,7 +7286,7 @@ if (mode === 'stage-complete') {
 
   if (result === 'blocked') {
     const newState = {
-      ...state,
+      ...withAnalyticsBump(state, () => {}),
       status: 'blocked',
       blockedReasonCode: reasonCode,
       awaitingConfirmationFor: null,
@@ -6781,9 +7305,17 @@ if (mode === 'stage-complete') {
 
   // result === 'passed'
   const completedStages = [...state.completedStages, requestedStage];
-  const isLastStage = requestedStage === catalog.stages.length;
   const newState = {
-    ...state,
+    ...withAnalyticsBump(state, (analytics) => {
+      recordStageCompletion(analytics, requestedStage, Date.parse(canonicalGate.completedAt));
+      if (catalog.variant === 'full' && requestedStage === visualCalibrationStage(catalog)) {
+        recordCalibrationAnalytics(runDir, catalog, analytics);
+      }
+      if (isLastStage) {
+        analytics.finalScore = finalScore;
+        analytics.taskCompletion = resolveTaskCompletion(runDir);
+      }
+    }),
     completedStages,
     currentStage: isLastStage ? requestedStage : requestedStage + 1,
     status: isLastStage ? 'completed' : 'running',

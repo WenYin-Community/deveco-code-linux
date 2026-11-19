@@ -24,6 +24,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
       "description": "The command to execute",
       "type": "string",
     },
+    "d2aBuildRunDir": {
+      "description": "The D2A run directory this standalone build command belongs to (e.g. <project>/.deveco/design-to-arkts/runs/<run>). Only pass it for a single build command of one D2A run; never combine the build with deploy or other commands in the same call.",
+      "type": "string",
+    },
     "description": {
       "description": 
 "Clear, concise description of what this command does in 5-10 words. Examples:

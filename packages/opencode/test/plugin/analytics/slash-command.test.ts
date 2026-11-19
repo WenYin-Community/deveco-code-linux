@@ -51,6 +51,8 @@ function createHarness() {
     projectId: async () => PROJECT_ID,
     codeAttribution: createAttributionStub(),
     version: () => "1.2.3",
+    recordD2aObservations: async () => 0,
+    clearD2aProgress: async () => undefined,
   })
   return { plugin, state, upload, flush }
 }

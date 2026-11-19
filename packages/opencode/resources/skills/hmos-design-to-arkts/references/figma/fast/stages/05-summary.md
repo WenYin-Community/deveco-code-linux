@@ -25,6 +25,8 @@ ledger 缺失、无法解析、invocationId 不一致、必需 completed 记录�
 
 同时核对 Anchor 输入身份、React 源 hash、自动采用的组件方案、交互实现、HDS 决策和最终构建。写入 `<designToArktsFastRunDir>/completeness-report.md`，列出生成/修改文件、路由、功能、构建结果和已知限制；Fast 不声称已完成独立视觉校准。
 
+本阶段已有工作和验证完成后，按主 Skill 的「交付任务完成率验收」读取本 run 的 `design-doc.md`，对照本次交付代码与已有证据逐项判定，把报告写入 `<designToArktsFastRunDir>/task-completion.json`；确认落盘后，再执行本阶段的最终提交。
+
 满足条件后调用：
 
 ```text

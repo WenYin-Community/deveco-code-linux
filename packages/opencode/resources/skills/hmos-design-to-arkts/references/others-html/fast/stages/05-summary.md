@@ -24,7 +24,8 @@
 3. 核对 `run-index.json`：本 run 记录已由 Controller 在阶段 2 写入，字段与 `stage2/generated-ui-manifest.json` 一致。
 4. 核对 ledger：`hmos-d2a-html-to-arkui`、`hmos-d2a-solution-design`、`hmos-d2a-arkts-logic-completer` 均为 completed；`hmos-d2a-arkui2hds` 仅在 `hdsRequired=true` 时出现。
 5. 写 `completeness-report.md`，包含：生成/修改文件清单、路由与可达性、功能实现表（引用 `stage3-interaction-report.md` 的结论）、`visibleCoverage` 与"参考图未覆盖的区域"、**权威产物与实现的一致性核对**（写出实现与 `layout-facts.json` 的差异项数并逐条列出未闭合项）、已知限制。
-6. 完成后先读取 `workflow-state.json` 的 `todoPayloadPath`，调用 `todowrite` 同步最终 TODO 状态，再调用 `stage-complete --stage 5 --result passed`；本阶段通过即整条 run 完成。
+6. 按主 Skill 的「交付任务完成率验收」读取本 run 的 `design-doc.md`，对照本次交付代码与已有证据逐项判定，把报告写入 run 根目录 `task-completion.json`，确认落盘。
+7. 完成后先读取 `workflow-state.json` 的 `todoPayloadPath`，调用 `todowrite` 同步最终 TODO 状态，再调用 `stage-complete --stage 5 --result passed`；本阶段通过即整条 run 完成。
 
 ## 必需产物
 
@@ -40,7 +41,7 @@
 - **不得**把"设计文档未被改动"写成合规优点，也不得用"忽略差异""近似等价"掩盖未闭合项。
 - 报告里不出现与本设计来源无关的其它来源字段。
 
-通过后调用：
+通过后调用（此前 `task-completion.json` 须已落盘）：
 
 ```text
 node <skillRoot>/scripts/workflow.mjs --mode stage-complete --run-dir <designToArktsFastRunDir> --stage 5 --result passed

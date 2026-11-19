@@ -1,8 +1,7 @@
 import { Effect, Stream } from "effect"
 import os from "os"
-import { createWriteStream } from "node:fs"
+import { createWriteStream, existsSync, lstatSync, realpathSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { existsSync } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -42,6 +41,9 @@ import { HdcHostEnforcement } from "@/hdc/host-enforcement"
 import { ASK_DOCS_PREVIEW_CHARS, DOCS_PREVIEW_CHARS_ENV, resolveShellTimeout } from "@/agent/shell-policy"
 import { Global } from "@opencode-ai/core/global"
 import { Agent } from "@/agent/agent"
+import { readD2aWorkflowStateFile, projectD2aWorkflowState } from "@/plugin/analytics/d2a"
+import type { D2aBuildResult, D2aOperation, D2aObservationBinding, D2aShellSnapshot } from "@/plugin/analytics/d2a"
+import { readBundleName } from "@/plugin/analytics/collector"
 
 export { Parameters } from "./shell/prompt"
 
@@ -109,6 +111,25 @@ type ShellRunInput = {
   env: NodeJS.ProcessEnv
   timeout: number
   description: string
+  // D2A controller observation context (empty calls when nothing was detected).
+  d2a: {
+    calls: D2aControllerCall[]
+    before: Map<string, D2aRunProbe>
+    totalCommands: number
+    instance: InstanceContext
+    // A marked standalone build command (first/final build outcome).
+    // Undefined when no valid d2aBuildRunDir was supplied or the command is
+    // not a directly attributable single build invocation.
+    build?: D2aBuildObservation
+  }
+}
+
+type D2aBuildObservation = {
+  // Validated run snapshot read before the build; the observation is
+  // attributed to this run's analytics.runId.
+  snapshot: D2aShellSnapshot["snapshot"]
+  callId: string
+  startedAtMs: number
 }
 
 type ShellRunLimits = {
@@ -308,6 +329,507 @@ function tail(text: string, maxLines: number, maxBytes: number) {
   }
 }
 
+// ─── D2A workflow controller observation ─────────────────────────────────────
+// The shell tool recognizes built-in Node Controller invocations of the
+// hmos-design-to-arkts skill, reads the run's workflow-state.json before and
+// after execution, and attaches a whitelist-projected snapshot to
+// metadata.d2aWorkflowSnapshots. Attribution (operation, model) only follows a
+// verified state transition with exactly one new revision; everything else is
+// a plain reread. Local paths, state原文 and stdout stay local.
+
+const D2A_SCRIPT_REL = path.join("hmos-design-to-arkts", "scripts", "workflow.mjs")
+const D2A_OPERATIONS = new Set(["init", "status", "stage-start", "confirm", "stage-complete"])
+const D2A_TRACKED_FLAGS = new Set(["mode", "run-dir", "stage", "decision", "result"])
+
+type D2aControllerCall = {
+  operation: D2aOperation
+  runDir: string
+  stage?: number
+  decision?: string
+  result?: string
+}
+
+type D2aRunProbe = {
+  exists: boolean
+  refused?: boolean
+  runId?: string
+  revision?: number
+  status?: string
+  completedStages?: number[]
+  startedStages?: Set<number>
+}
+
+function d2aPathKey(value: string): string {
+  return process.platform === "win32" ? value.toLowerCase() : value
+}
+
+// The built-in install location managed by src/skill/defaults.ts plus the dev
+// resources entry; both are recognized so dev and packaged builds observe the
+// same commands.
+const d2aControllerScriptRealpaths = lazy(async (): Promise<Set<string>> => {
+  const candidates = [
+    path.join(Global.Path.data, "skills", D2A_SCRIPT_REL),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "resources", "skills", D2A_SCRIPT_REL),
+  ]
+  const real = new Set<string>()
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue
+    try {
+      real.add(d2aPathKey(realpathSync(candidate)))
+    } catch {
+      // not observable from this build
+    }
+  }
+  return real
+})
+
+function isD2aInterpreterToken(text: string): boolean {
+  const base = path.basename(unquote(text)).toLowerCase()
+  return base === "node" || base === "node.exe" || base === "bun" || base === "bun.exe"
+}
+
+// parts() deliberately skips bare number arguments (a tree-sitter-bash
+// "number" node), but controller flags like `--stage 1` end in one, so the
+// D2A walk collects the same shapes plus number tokens. Kept local: including
+// numbers in parts() would also change permission-path scanning.
+function d2aCommandTokens(node: Node): string[] {
+  const out: string[] = []
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i)
+    if (!child) continue
+    if (child.type === "command_elements") {
+      for (let j = 0; j < child.childCount; j++) {
+        const item = child.child(j)
+        if (!item || item.type === "command_argument_sep" || item.type === "redirection") continue
+        out.push(item.text)
+      }
+      continue
+    }
+    if (
+      child.type !== "command_name" &&
+      child.type !== "command_name_expr" &&
+      child.type !== "word" &&
+      child.type !== "string" &&
+      child.type !== "raw_string" &&
+      child.type !== "concatenation" &&
+      child.type !== "number"
+    ) {
+      continue
+    }
+    out.push(child.text)
+  }
+  return out
+}
+
+// ─── D2A PowerShell host-variable expansion ─────────────────────────────────
+// A real run binds the skill root and run directory to local variables first and
+// then references them in the controller call:
+//
+//   $skillRoot = "$env:USERPROFILE\.local\share\deveco\skills\hmos-design-to-arkts"
+//   $runDir = "D:\Projects\demo\.deveco\design-to-arkts\runs\photo-day-view"
+//   node "$skillRoot\scripts\workflow.mjs" --mode init --run-dir "$runDir"
+//
+// PowerShell expands those before the controller sees them, but the static pass
+// cannot resolve local variables, so such calls were dropped and the run was
+// only observed on a later call that spelled the paths out. Only the two path
+// arguments are expanded, and only from an assignment the parse proves: a
+// simple `$name = <string>` in the same top-level statement list, before the
+// call. Anything the parse cannot settle — a subexpression, condition, escape,
+// unknown or reassigned variable, an unset environment variable — drops that
+// call instead of guessing. The command itself, the generic path scan,
+// permissions and the sandbox keep running unchanged.
+
+type D2aHostVars = ReadonlyMap<string, string>
+
+// Reads an assignment value as a plain string. A double-quoted value may
+// reference `$env:NAME` only, and that variable must exist. A single-quoted
+// value is literal, so a `$` inside it would be substituted into a later
+// double-quoted token with the wrong single-pass semantics and is refused.
+function d2aHostValue(value: Node): string | undefined {
+  const text = value.text.trim()
+  const literal = [
+    ...value.descendantsOfType("string_literal"),
+    ...value.descendantsOfType("raw_string_literal"),
+  ].find((item) => item?.text === text)
+  if (!literal || text.length < 2) return undefined
+  const quote = text[0]
+  if ((quote !== '"' && quote !== "'") || text[text.length - 1] !== quote) return undefined
+  const inner = text.slice(1, -1)
+  if (inner.includes("`") || inner.includes("${") || inner.includes("$(")) return undefined
+  if (quote === "'") return inner.includes("$") ? undefined : inner
+  for (const ref of inner.matchAll(/\$([A-Za-z_][A-Za-z0-9_:]*)/g)) {
+    const name = ref[1].toLowerCase()
+    if (!name.startsWith("env:") || envValue(name.slice(4)) === undefined) return undefined
+  }
+  return inner
+}
+
+// Classifies one top-level statement. `undefined` means "not an assignment",
+// which leaves the known values alone; "unknown" means it assigns in a way this
+// pass cannot prove (a condition, an operator such as `+=`, a computed value),
+// which stops expansion for the call entirely.
+function d2aHostAssignment(statement: Node): { name: string; value: string } | "unknown" | undefined {
+  if (statement.type !== "pipeline") return "unknown"
+  if (statement.namedChildCount !== 1) return "unknown"
+  const expression = statement.namedChild(0)
+  if (!expression || expression.type !== "assignment_expression") return undefined
+  const left = expression.namedChild(0)
+  const operator = expression.namedChild(1)
+  const value = expression.childForFieldName("value")
+  if (left?.type !== "left_assignment_expression" || operator?.type !== "assignement_operator" || !value) {
+    return "unknown"
+  }
+  if (operator.text.trim() !== "=") return "unknown"
+  const name = left.text.trim().match(/^\$([A-Za-z_][A-Za-z0-9_]*)$/)?.[1]
+  if (!name) return "unknown"
+  const resolved = d2aHostValue(value)
+  if (resolved === undefined) return "unknown"
+  // PowerShell variable names are case-insensitive.
+  return { name: name.toLowerCase(), value: resolved }
+}
+
+// Collects the simple assignments that precede the call in the same top-level
+// statement list. A call inside any other construct has no provable ordering or
+// scope, so it keeps the literal-only handling.
+function d2aHostVariables(command: Node): D2aHostVars | undefined {
+  let node: Node = command
+  while (
+    node.parent &&
+    (node.parent.type === "pipeline_chain" ||
+      node.parent.type === "pipeline" ||
+      node.parent.type === "redirected_statement")
+  ) {
+    node = node.parent
+  }
+  const list = node.parent
+  if (!list || list.type !== "statement_list" || list.parent?.type !== "program") return undefined
+  const vars = new Map<string, string>()
+  for (let index = 0; index < list.childCount; index++) {
+    const statement = list.child(index)
+    if (!statement) continue
+    if (statement.id === node.id) return vars
+    if (statement.type === "comment" || statement.type === "empty_statement") continue
+    const assignment = d2aHostAssignment(statement)
+    if (assignment === "unknown") return undefined
+    if (assignment) vars.set(assignment.name, assignment.value)
+  }
+  return vars
+}
+
+// Expands host variables in one path token, keeping its quoting for argPath.
+// A single-quoted token stays literal (`$name` there is not a variable); the
+// call is dropped when the token mixes in anything this pass cannot resolve.
+function d2aExpandHostToken(text: string, vars: D2aHostVars): string | undefined {
+  const quote = text.length >= 2 && text[0] === text[text.length - 1] ? text[0] : ""
+  if (quote === "'") return text
+  const inner = quote === '"' ? text.slice(1, -1) : text
+  if (inner.includes("`") || inner.includes("${") || inner.includes("$(")) return undefined
+  let unknown = false
+  const replaced = inner.replace(/\$([A-Za-z_][A-Za-z0-9_:]*)/g, (match, name: string) => {
+    if (name.toLowerCase().startsWith("env:")) {
+      if (envValue(name.slice(4)) === undefined) unknown = true
+      return match
+    }
+    const value = vars.get(name.toLowerCase())
+    if (value === undefined) {
+      unknown = true
+      return match
+    }
+    return value
+  })
+  if (unknown) return undefined
+  // Anything still opening a `$` is a reference this pass cannot resolve.
+  if (/\$(?!env:[A-Za-z_][A-Za-z0-9_]*)/i.test(replaced)) return undefined
+  return quote ? `${quote}${replaced}${quote}` : replaced
+}
+
+// Extracts the tracked controller flags. Unknown flags are ignored (the
+// controller accepts more options than we observe), but a tracked flag
+// without a value mirrors the controller's own failure and drops the call.
+// `--run-dir` keeps its raw token because PowerShell host variables are
+// expanded before path resolution.
+function parseD2aControllerFlags(
+  tokens: string[],
+  scriptIndex: number,
+): { operation: D2aOperation; runDirToken: string; stage?: number; decision?: string; result?: string } | null {
+  const values: Record<string, string> = {}
+  for (let index = scriptIndex + 1; index < tokens.length; index++) {
+    const flag = unquote(tokens[index])
+    if (!flag.startsWith("--")) continue
+    const key = flag.slice(2)
+    if (!D2A_TRACKED_FLAGS.has(key)) continue
+    const raw = tokens[index + 1]
+    if (raw === undefined || raw.startsWith("--")) return null
+    values[key] = key === "run-dir" ? raw : unquote(raw)
+    index += 1
+  }
+  if (!values.mode || !values["run-dir"] || !D2A_OPERATIONS.has(values.mode)) return null
+  const call: { operation: D2aOperation; runDirToken: string; stage?: number; decision?: string; result?: string } = {
+    operation: values.mode as D2aOperation,
+    runDirToken: values["run-dir"],
+  }
+  if (call.operation !== "init" && call.operation !== "status") {
+    const stage = Number(values.stage)
+    if (!Number.isInteger(stage) || stage <= 0) return null
+    call.stage = stage
+  }
+  if (call.operation === "confirm") {
+    if (!["request", "accepted", "revision-requested"].includes(values.decision ?? "")) return null
+    call.decision = values.decision
+  }
+  if (call.operation === "stage-complete") {
+    if (!["passed", "blocked"].includes(values.result ?? "")) return null
+    call.result = values.result
+  }
+  return call
+}
+
+// The run directory must resolve inside the allowed project scope, and its
+// real path must stay inside too (a symlinked directory escaping the workspace
+// is refused). A directory that does not exist yet is expected before init.
+function probeD2aRunDir(runDir: string, instance: InstanceContext): { state: "refused" } | { state: "missing" } | { state: "ok"; runDir: string } {
+  if (!containsPath(runDir, instance)) return { state: "refused" }
+  if (!existsSync(runDir)) return { state: "missing" }
+  let realRunDir: string
+  try {
+    realRunDir = realpathSync(runDir)
+  } catch {
+    return { state: "refused" }
+  }
+  if (!containsPath(realRunDir, instance)) return { state: "refused" }
+  return { state: "ok", runDir: realRunDir }
+}
+
+// Best-effort summary of the raw state; every field is optional so unreadable
+// or legacy (analytics-less) states degrade to "exists, revision unknown".
+function summarizeD2aState(raw: Record<string, unknown>): {
+  runId?: string
+  revision?: number
+  status?: string
+  completedStages?: number[]
+  startedStages: Set<number>
+} {
+  const analytics = raw.analytics
+  const stages =
+    analytics && typeof analytics === "object" && !Array.isArray(analytics) && typeof (analytics as Record<string, unknown>).stages === "object" &&
+    !Array.isArray((analytics as Record<string, unknown>).stages)
+      ? ((analytics as Record<string, unknown>).stages as Record<string, unknown>)
+      : {}
+  const startedStages = new Set<number>()
+  for (const [stageKey, timing] of Object.entries(stages)) {
+    if (
+      timing &&
+      typeof timing === "object" &&
+      !Array.isArray(timing) &&
+      typeof (timing as Record<string, unknown>).startedAtMs === "number"
+    ) {
+      const stageId = Number(stageKey)
+      if (Number.isInteger(stageId) && stageId > 0) startedStages.add(stageId)
+    }
+  }
+  const analyticsRecord = analytics && typeof analytics === "object" && !Array.isArray(analytics) ? (analytics as Record<string, unknown>) : {}
+  return {
+    ...(typeof analyticsRecord.runId === "string" ? { runId: analyticsRecord.runId } : {}),
+    ...(typeof analyticsRecord.revision === "number" && Number.isSafeInteger(analyticsRecord.revision) && analyticsRecord.revision >= 0
+      ? { revision: analyticsRecord.revision }
+      : {}),
+    ...(typeof raw.status === "string" ? { status: raw.status } : {}),
+    ...(Array.isArray(raw.completedStages)
+      ? { completedStages: raw.completedStages.filter((stage): stage is number => Number.isSafeInteger(stage) && stage > 0) }
+      : {}),
+    startedStages,
+  }
+}
+
+// Reads the run state for probing. A symlinked state file (potential escape
+// outside the run) is refused; read failures record a bare "exists" probe.
+async function readD2aStateSafe(realRunDir: string): Promise<unknown> {
+  const stateFile = path.join(realRunDir, "workflow-state.json")
+  try {
+    if (lstatSync(stateFile).isSymbolicLink()) return null
+  } catch {
+    return null
+  }
+  return await readD2aWorkflowStateFile(stateFile)
+}
+
+async function readD2aRunProbe(realRunDir: string): Promise<D2aRunProbe> {
+  const raw = await readD2aStateSafe(realRunDir)
+  if (raw === null || typeof raw !== "object") return { exists: true }
+  return { exists: true, ...summarizeD2aState(raw as Record<string, unknown>) }
+}
+
+// ─── D2A build outcome observation ───────────────────────────────────────────
+// A marked standalone build (params.d2aBuildRunDir) is collected when the
+// parsed command is exactly one plain command node with no list/condition/
+// pipeline/subshell wrapper around it, so the process exit code attributes to
+// the build alone. The before-build run snapshot anchors the observation;
+// completion time is sampled when the process truly exits.
+
+// True when the node sits in a construct whose overall exit status cannot be
+// attributed to this single command (list, condition, pipeline, subshell,
+// negation, redirection is fine — it does not change the exit code chain).
+// tree-sitter-powershell wraps even a plain direct call in
+// statement_list > pipeline > pipeline_chain; those wrappers are accepted,
+// while a second statement sibling (e.g. `; exit 3`, a flow-control node
+// that overrides the exit status but is not a command node) rejects
+// attribution. A real pipe or a second command surfaces as another command
+// node and is rejected by the count above.
+function d2aBuildAttributableCommand(root: Node): boolean {
+  const commandNodes = commands(root)
+  if (commandNodes.length !== 1) return false
+  let node: Node | undefined = commandNodes[0]
+  while (node && node.id !== root.id) {
+    const parent: Node | undefined = node.parent ?? undefined
+    if (!parent) break
+    if (
+      parent.type !== "program" &&
+      parent.type !== "redirected_statement" &&
+      parent.type !== "command" &&
+      parent.type !== "statement_list" &&
+      parent.type !== "pipeline" &&
+      parent.type !== "pipeline_chain"
+    ) {
+      return false
+    }
+    if (parent.type === "statement_list") {
+      for (let index = 0; index < parent.childCount; index++) {
+        const sibling = parent.child(index)
+        if (!sibling || sibling.id === node.id || sibling.type === "empty_statement") continue
+        return false
+      }
+    }
+    node = parent
+  }
+  return true
+}
+
+async function prepareD2aBuildObservation(input: {
+  runDir: string
+  callId: string
+  instance: InstanceContext
+  root: Node
+}): Promise<D2aBuildObservation | undefined> {
+  if (!d2aBuildAttributableCommand(input.root)) return undefined
+  const dirProbe = probeD2aRunDir(input.runDir, input.instance)
+  if (dirProbe.state !== "ok") return undefined
+  const raw = await readD2aStateSafe(dirProbe.runDir)
+  if (raw === null || typeof raw !== "object") return undefined
+  const snapshot = projectD2aWorkflowState(raw)
+  if (!snapshot) return undefined
+  // A finished run accepts no further build observations.
+  if (snapshot.status === "completed") return undefined
+  return { snapshot, callId: input.callId, startedAtMs: Date.now() }
+}
+
+function d2aModelOf(ctx: Tool.Context) {
+  const model = ctx.extra?.model
+  if (!model || typeof model !== "object") return undefined
+  const providerID = (model as Record<string, unknown>).providerID
+  const id = (model as Record<string, unknown>).id
+  if (typeof providerID !== "string" || !providerID || typeof id !== "string" || !id) return undefined
+  // The logical model id (distinct from api.id) is what events record.
+  return { providerId: providerID, modelId: id }
+}
+
+// Attribution requires the transition this call should have produced; stage
+// success is never inferred from the command string or exit code alone.
+function d2aTransitionMatches(
+  call: D2aControllerCall,
+  before: D2aRunProbe | undefined,
+  after: ReturnType<typeof summarizeD2aState>,
+): boolean {
+  const beforeStatus = before?.exists ? before?.status : undefined
+  const beforeCompleted = before?.exists ? (before?.completedStages ?? []) : []
+  const beforeStarted = before?.exists ? (before?.startedStages ?? new Set<number>()) : new Set<number>()
+  if (call.operation === "init") return !before?.exists
+  if (call.operation === "status") return false
+  if (call.operation === "stage-start") {
+    return after.startedStages.has(call.stage!) && !beforeStarted.has(call.stage!)
+  }
+  if (call.operation === "confirm") {
+    return call.decision === "request"
+      ? beforeStatus !== "awaiting_confirmation" && after.status === "awaiting_confirmation"
+      : beforeStatus === "awaiting_confirmation" && after.status !== "awaiting_confirmation"
+  }
+  if (call.result === "blocked") {
+    return beforeStatus !== "blocked" && after.status === "blocked"
+  }
+  return !beforeCompleted.includes(call.stage!) && (after.completedStages ?? []).includes(call.stage!)
+}
+
+async function buildD2aShellSnapshots(input: {
+  calls: D2aControllerCall[]
+  before: Map<string, D2aRunProbe>
+  instance: InstanceContext
+  model: { providerId: string; modelId: string } | undefined
+  exit: number | null
+  totalCommands: number
+}): Promise<{ snapshots: D2aShellSnapshot[]; diagnostics: string[] }> {
+  const snapshots: D2aShellSnapshot[] = []
+  const diagnostics: string[] = []
+  const callsByRun = new Map<string, D2aControllerCall[]>()
+  for (const call of input.calls) {
+    const group = callsByRun.get(call.runDir)
+    if (group) group.push(call)
+    else callsByRun.set(call.runDir, [call])
+  }
+  for (const [runDir, runCalls] of callsByRun) {
+    const dirProbe = probeD2aRunDir(runDir, input.instance)
+    if (dirProbe.state === "refused") {
+      diagnostics.push("d2a observation skipped: run directory escapes the allowed project scope")
+      continue
+    }
+    if (dirProbe.state === "missing") {
+      // init never created (or failed to create) the run directory; nothing to observe.
+      continue
+    }
+    const raw = await readD2aStateSafe(dirProbe.runDir)
+    if (raw === null || typeof raw !== "object") {
+      diagnostics.push("d2a observation skipped: workflow-state.json is missing or unreadable")
+      continue
+    }
+    const snapshot = projectD2aWorkflowState(raw)
+    if (!snapshot) {
+      diagnostics.push("d2a observation skipped: workflow-state.json failed whitelist projection")
+      continue
+    }
+    const after = summarizeD2aState(raw as Record<string, unknown>)
+    const before = input.before.get(runDir)
+    const beforeRevision = before?.exists && before.refused !== true ? before?.revision : undefined
+    const committed =
+      beforeRevision !== undefined
+        ? after.revision === beforeRevision + 1
+        : after.revision === 1 && (!before || !before.exists || (before.refused !== true && before.revision === undefined))
+    const single = runCalls.length === 1 ? runCalls[0] : undefined
+    const attributable =
+      committed &&
+      single !== undefined &&
+      single.operation !== "status" &&
+      input.model !== undefined &&
+      d2aTransitionMatches(single, before, after) &&
+      (input.totalCommands === 1 ? input.exit === 0 : true)
+    snapshots.push({
+      ...(single ? { operation: single.operation } : {}),
+      replayed: !attributable,
+      ...(attributable && input.model ? { model: input.model } : {}),
+      snapshot,
+    })
+    // 采集起点标记：执行前无状态、执行后是合法的新 run（revision 1）、
+    // 单命令且正常零退出——即一次真实 init。与有无模型信息解耦。
+    if (
+      single?.operation === "init" &&
+      !before?.exists &&
+      snapshot.revision === 1 &&
+      input.totalCommands === 1 &&
+      input.exit === 0
+    ) {
+      snapshots[snapshots.length - 1].buildTrackingStartedAtInit = true
+    }
+  }
+  return { snapshots, diagnostics }
+}
+
 const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boolean) {
   const tree = yield* Effect.promise(() => parser().then((p) => (ps ? p.ps : p.bash).parse(command)))
   if (!tree) throw new Error("Failed to parse command")
@@ -500,6 +1022,81 @@ export const ShellTool = Tool.define(
       }
 
       return scan
+    })
+
+    // Recognizes built-in Node Controller invocations on the same parsed tree:
+    // an interpreter token, the controller script resolved to the built-in
+    // install (or dev resources) location, and the tracked flags.
+    const detectD2aCalls = Effect.fn("ShellTool.detectD2aCalls")(function* (
+      root: Node,
+      cwd: string,
+      ps: boolean,
+      shell: string,
+    ) {
+      const controllerPaths = yield* Effect.promise(() => d2aControllerScriptRealpaths())
+      if (controllerPaths.size === 0) return []
+      const calls: D2aControllerCall[] = []
+      for (const node of commands(root)) {
+        const tokens = d2aCommandTokens(node)
+        if (tokens.length < 2 || !isD2aInterpreterToken(tokens[0])) continue
+        // Only PowerShell needs host-variable expansion; every other shell keeps
+        // the literal tokens that argPath already resolves.
+        const vars = ps ? d2aHostVariables(node) : undefined
+        let scriptIndex = -1
+        for (let index = 1; index < tokens.length; index++) {
+          const text = unquote(tokens[index])
+          if (text.startsWith("-")) continue
+          scriptIndex = index
+          break
+        }
+        if (scriptIndex === -1) continue
+        const scriptArg = vars ? d2aExpandHostToken(tokens[scriptIndex], vars) : tokens[scriptIndex]
+        if (scriptArg === undefined) continue
+        const scriptPath = yield* argPath(scriptArg, cwd, ps, shell)
+        if (!scriptPath) continue
+        const realScript = yield* Effect.promise(async () => {
+          try {
+            return realpathSync(scriptPath)
+          } catch {
+            return undefined
+          }
+        })
+        if (!realScript || !controllerPaths.has(d2aPathKey(realScript))) continue
+        const flags = parseD2aControllerFlags(tokens, scriptIndex)
+        if (!flags) continue
+        const runDirArg = vars ? d2aExpandHostToken(flags.runDirToken, vars) : flags.runDirToken
+        if (runDirArg === undefined) continue
+        const runDir = yield* argPath(runDirArg, cwd, ps, shell)
+        if (!runDir) continue
+        calls.push({
+          operation: flags.operation,
+          runDir,
+          ...(flags.stage !== undefined ? { stage: flags.stage } : {}),
+          ...(flags.decision !== undefined ? { decision: flags.decision } : {}),
+          ...(flags.result !== undefined ? { result: flags.result } : {}),
+        })
+      }
+      return calls
+    })
+
+    const readD2aBeforeProbes = Effect.fn("ShellTool.readD2aBeforeProbes")(function* (
+      calls: D2aControllerCall[],
+      instance: InstanceContext,
+    ) {
+      const before = new Map<string, D2aRunProbe>()
+      for (const runDir of new Set(calls.map((call) => call.runDir))) {
+        const dirProbe = probeD2aRunDir(runDir, instance)
+        if (dirProbe.state === "refused") {
+          before.set(runDir, { exists: false, refused: true })
+          continue
+        }
+        if (dirProbe.state === "missing") {
+          before.set(runDir, { exists: false })
+          continue
+        }
+        before.set(runDir, yield* Effect.promise(() => readD2aRunProbe(dirProbe.runDir)))
+      }
+      return before
     })
 
     const shellEnv = Effect.fn("ShellTool.shellEnv")(function* (ctx: Tool.Context, cwd: string, directory: string) {
@@ -1058,6 +1655,59 @@ export const ShellTool = Tool.define(
           ? output.replace(/<shell_metadata>[\s\S]*?<\/shell_metadata>/, sandboxHint)
           : output,
       )
+      // Post-execution state read: project each observed run to the whitelist
+      // snapshot and attach it for tool.execute.after consumers (analytics).
+      // Failures produce fixed diagnostics and never change the tool result.
+      let d2aWorkflowSnapshots: D2aShellSnapshot[] = []
+      if (input.d2a.calls.length > 0) {
+        const observed = yield* Effect.promise(() =>
+          buildD2aShellSnapshots({
+            calls: input.d2a.calls,
+            before: input.d2a.before,
+            instance: input.d2a.instance,
+            model: d2aModelOf(ctx),
+            exit: code,
+            totalCommands: input.d2a.totalCommands,
+          }),
+        )
+        d2aWorkflowSnapshots = observed.snapshots
+        for (const diagnostic of observed.diagnostics) {
+          yield* Effect.logInfo(diagnostic)
+        }
+      }
+      // A marked standalone build exited: emit its outcome observation. Only a
+      // real process exit produces a result; cancel/timeout stays skipped. The
+      // completedAtMs timestamp is sampled at result assembly right after the
+      // process exited, which is the ordering key the storage merge uses.
+      // The boolean only needs the 0/non-zero distinction. Windows PowerShell
+      // 5.1's -Command wrapper collapses a failing final native command's
+      // numeric code to 1 but never to 0; deliberately no `exit $LASTEXITCODE`
+      // fix-up — a failing PowerShell command that never sets $LASTEXITCODE
+      // would exit 0 there and be recorded as a false success.
+      if (input.d2a.build && code !== null) {
+        d2aWorkflowSnapshots.push({
+          replayed: true,
+          snapshot: input.d2a.build.snapshot,
+          buildResult: {
+            callId: input.d2a.build.callId,
+            completedAtMs: Date.now(),
+            success: code === 0,
+          },
+        })
+      }
+      // 宿主归属只留在本地 metadata：会话、assistant message、工具调用身份和
+      // 已验证工程的包名，供插件把工具与 Token 观测并进同一个运行。用户消息
+      // 由插件按 message.updated 的 parentID 解析，Shell 看不到消息序列。
+      if (d2aWorkflowSnapshots.length > 0) {
+        const bundleName = readBundleName(input.d2a.instance.directory)
+        const binding: D2aObservationBinding = {
+          sessionID: ctx.sessionID,
+          ...(ctx.messageID ? { messageID: ctx.messageID } : {}),
+          ...(ctx.callID ? { callID: ctx.callID } : {}),
+          ...(bundleName ? { bundleName } : {}),
+        }
+        d2aWorkflowSnapshots = d2aWorkflowSnapshots.map((observation) => ({ ...observation, binding }))
+      }
       return {
         title: input.description,
         metadata: {
@@ -1066,6 +1716,7 @@ export const ShellTool = Tool.define(
           description: input.description,
           truncated: state.cut,
           ...(state.cut && state.file ? { outputPath: state.file } : {}),
+          ...(d2aWorkflowSnapshots.length > 0 ? { d2aWorkflowSnapshots } : {}),
         },
         output,
       }
@@ -1141,7 +1792,7 @@ export const ShellTool = Tool.define(
               }
               const timeout = resolveShellTimeout(params.command, params.timeout ?? defaultTimeoutMs)
               const ps = Shell.ps(shell)
-              yield* Effect.scoped(
+              const d2aCalls = yield* Effect.scoped(
                 Effect.gen(function* () {
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
@@ -1149,8 +1800,33 @@ export const ShellTool = Tool.define(
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
                   if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
                   yield* ask(ctx, scan, params)
+                  // Controller recognition rides the same parsed tree and
+                  // permission context; only detections that survive
+                  // path resolution and flag parsing are observed.
+                  const calls = yield* detectD2aCalls(tree.rootNode, cwd, ps, shell)
+                  // The marked build observation rides the same tree; the run
+                  // dir resolves with Shell workdir semantics. An invalid
+                  // marker or a non-attributable command form only skips
+                  // collection — the command itself still runs.
+                  const resolvedBuildRunDir = params.d2aBuildRunDir
+                    ? yield* resolvePath(params.d2aBuildRunDir, cwd, shell)
+                    : undefined
+                  const buildRunDir = resolvedBuildRunDir || params.d2aBuildRunDir
+                  const build =
+                    buildRunDir !== undefined && ctx.callID
+                      ? yield* Effect.promise(() =>
+                          prepareD2aBuildObservation({
+                            runDir: buildRunDir,
+                            callId: ctx.callID!,
+                            instance: instanceCtx,
+                            root: tree.rootNode,
+                          }),
+                        )
+                      : undefined
+                  return { calls, build, totalCommands: commands(tree.rootNode).length, tree }
                 }),
               )
+              const d2aBefore = yield* readD2aBeforeProbes(d2aCalls.calls, instanceCtx)
 
               const env: NodeJS.ProcessEnv = { ...(yield* shellEnv(ctx, cwd, instanceCtx.directory)) }
               // ask gets a larger single-pass docs preview; every other agent has the variable
@@ -1165,6 +1841,13 @@ export const ShellTool = Tool.define(
                   env,
                   timeout,
                   description: params.description,
+                  d2a: {
+                    calls: d2aCalls.calls,
+                    before: d2aBefore,
+                    totalCommands: d2aCalls.totalCommands,
+                    instance: instanceCtx,
+                    ...(d2aCalls.build ? { build: d2aCalls.build } : {}),
+                  },
                 },
                 ctx,
               )

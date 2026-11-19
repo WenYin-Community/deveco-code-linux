@@ -26,6 +26,10 @@ export function parameterSchema(description: string) {
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
+    d2aBuildRunDir: Schema.optional(Schema.String).annotate({
+      description:
+        "The D2A run directory this standalone build command belongs to (e.g. <project>/.deveco/design-to-arkts/runs/<run>). Only pass it for a single build command of one D2A run; never combine the build with deploy or other commands in the same call.",
+    }),
     description: Schema.String.annotate({ description }),
   })
 }

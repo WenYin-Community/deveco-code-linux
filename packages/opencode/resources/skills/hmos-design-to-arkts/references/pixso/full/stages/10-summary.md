@@ -31,6 +31,8 @@
 
 ## 执行步骤
 
+> Todo 同步后读完本阶段说明。工具提示还有后续行时按 offset 继续读取。完成本阶段所有页面改动后，按下文「交付评分产物」将实际交付页面的评分依据写入 run 根目录的 `final-visual-score.json`，检查文件存在后再提交阶段 10；并按「交付任务完成率验收」把 `task-completion.json` 写到 run 根目录，确认落盘后再提交。缺少可信评分时显式记录 `{"status":"unavailable"}`，明确禁用校准时沿用跳过分支。
+
 写入 `<designToArktsRunDir>/completeness-report.md`，并向用户简洁汇报：
 
 - 输入来源和 DSL 路径。
@@ -42,6 +44,20 @@
 - 构建结果。
 - 视觉还原度校准 1 至 `maxRounds` 轮结果（或禁用时的 skipped 结果）、问题、问题等级和修复动作摘要。
 - 已知残留风险。
+
+## 交付评分产物
+
+在调用最终 `stage-complete` 前，明确本次实际交付的页面，并向 run 根目录写入 `final-visual-score.json`：
+
+- 交付最后一次有效截图对应的页面，且评分后未再修改实现时，写 `{ "status": "recorded", "source": "calibration_round", "round": N }`，N 为实际交付页面对应的那一轮校准评分。
+- 本阶段恢复某个历史候选页面，且能依据现有恢复、构建部署记录确认恢复的就是当时评分的完整实现时，同样使用 `calibration_round` 并记录实际恢复的评分轮次；只改轮次号不能说明页面已恢复。
+- 总结阶段修改了影响渲染的实现，或无法核实恢复内容与历史候选一致时，按 `hmos-d2a-arkui-scoring-workflow` 的「总结阶段单次交付复评」对当前页面重新构建、部署、截图并评分，写入 `delivery_check` 产物。
+- 无法得到可用的交付评分时写 `{ "status": "unavailable" }`。
+- `final-visual-score.json` 只描述评分依据；Controller 在阶段 10 通过时校验该文件，并把实际分数随完成状态写入 `workflow-state.json` 的 `analytics.finalScore`。
+
+## 交付任务完成率验收
+
+在调用最终 `stage-complete` 前，按主 Skill 的「交付任务完成率验收」读取本 run 的 `design-doc.md`，对照本次交付代码与已有证据逐项判定，把报告写入 run 根目录的 `task-completion.json`；确认落盘后再提交阶段 10。验收只读工程文件、复用已有验证证据，不引入新的构建或评分循环；没有可信验收范围时写 `{"tasks":[]}`。
 
 ## 必需产物
 
@@ -78,7 +94,7 @@ Controller 接受 `--result passed` 的条件：
 - 任一前序阶段 gate 未通过（`status` 不为 `passed`）。
 - `completeness-report.md` 缺失或为空。
 
-满足全部完成条件后，调用：
+满足全部完成条件，且 `final-visual-score.json` 与 `task-completion.json` 均已落盘后，调用：
 
 ```text
 workflow.mjs --mode stage-complete --run-dir <runDir> --stage 10 --result passed

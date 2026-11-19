@@ -126,6 +126,8 @@ function createHarnessCalls(state: ReturnType<typeof createHarnessState>) {
     clearQueue: mock(async () => undefined),
     flush: mock(async () => ({ success: true })),
     analyticsEnabled: mock(async () => state.shouldCollect),
+    recordD2aObservations: mock(async (_batch: unknown, _context: unknown) => 0),
+    clearD2aProgress: mock(async () => undefined),
   }
 }
 
@@ -191,6 +193,8 @@ function createHarness() {
     projectId: calls.projectId,
     codeAttribution,
     version: () => "1.2.3",
+    recordD2aObservations: calls.recordD2aObservations,
+    clearD2aProgress: calls.clearD2aProgress,
   })
   return {
     plugin,
@@ -403,6 +407,425 @@ test("ignores an unmatched tool finalizer", async () => {
   expect(harness.afterAiTool).toHaveBeenCalledTimes(0)
 })
 
+test("d2a workflow snapshots merge through tool.execute.after and flush after delivery", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  const shellAfter = (metadata: Record<string, unknown>) =>
+    hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "session-1", callID: "bash-1", args: {} },
+      { title: "", output: "", metadata },
+    )
+  const shellBefore = () =>
+    hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "bash-1" }, { args: {} })
+  const snapshots = [
+    {
+      operation: "init",
+      replayed: false,
+      model: { providerId: "deveco", modelId: "glm-4" },
+      snapshot: {
+        runId: "bbd8747b-5e09-4386-afc5-826a68c5c9fd",
+        revision: 1,
+        designSource: "pixso",
+        variant: "full",
+        status: "running",
+        completedStages: [],
+        stages: [],
+      },
+    },
+  ]
+
+  await shellBefore()
+  await shellAfter({ d2aWorkflowSnapshots: snapshots })
+  expect(harness.recordD2aObservations).toHaveBeenCalledTimes(1)
+  expect(harness.recordD2aObservations.mock.calls[0]?.[0]).toMatchObject({ snapshots })
+  // Progress-only merges (no delivery event) do not trigger a flush.
+  expect(harness.flush).toHaveBeenCalledTimes(0)
+
+  // When the merge enqueues a delivery event, the existing background flush fires.
+  harness.recordD2aObservations.mockImplementation(async () => 1)
+  await shellBefore()
+  await shellAfter({ d2aWorkflowSnapshots: snapshots })
+  expect(harness.recordD2aObservations).toHaveBeenCalledTimes(2)
+  expect(harness.flush).toHaveBeenCalledTimes(1)
+
+  // Ordinary shell results without snapshots never touch the D2A merge.
+  await shellBefore()
+  await shellAfter({})
+  expect(harness.recordD2aObservations).toHaveBeenCalledTimes(2)
+
+  // Ineligible (not logged in) sessions record nothing.
+  harness.setLoggedIn(false)
+  await shellBefore()
+  await shellAfter({ d2aWorkflowSnapshots: snapshots })
+  expect(harness.recordD2aObservations).toHaveBeenCalledTimes(2)
+})
+
+test("marked build observations ride the same tool.execute.after merge", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  const runAfter = (metadata: Record<string, unknown>) =>
+    hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "session-1", callID: "bash-build-1", args: {} },
+      { title: "", output: "", metadata },
+    )
+  const before = () =>
+    hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "bash-build-1" }, { args: {} })
+  // A pure build tool call now carries d2aWorkflowSnapshots too; the existing
+  // eligibility, merge and flush wiring applies unchanged.
+  const buildSnapshots = [
+    {
+      replayed: true,
+      snapshot: {
+        runId: "bbd8747b-5e09-4386-afc5-826a68c5c9fd",
+        revision: 1,
+        designSource: "pixso",
+        variant: "full",
+        status: "running",
+        completedStages: [],
+        stages: [],
+      },
+      buildResult: { callId: "bash-build-1", completedAtMs: 1234, success: false },
+    },
+  ]
+
+  await before()
+  await runAfter({ d2aWorkflowSnapshots: buildSnapshots })
+  expect(harness.recordD2aObservations).toHaveBeenCalledTimes(1)
+  expect(harness.recordD2aObservations.mock.calls[0]?.[0]).toMatchObject({ snapshots: buildSnapshots })
+  // A progress-only build merge (no delivery event) does not trigger a flush.
+  expect(harness.flush).toHaveBeenCalledTimes(0)
+})
+
+test("d2a attribution: a tool joins the run of its message's parent request", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  const emit = (event: Record<string, unknown>) => hooks.event!({ event } as never)
+  const runId = "bbd8747b-5e09-4386-afc5-826a68c5c9fd"
+
+  // assistant message -> the user request it answers
+  await emit({
+    type: "message.updated",
+    properties: {
+      sessionID: "session-1",
+      info: { role: "assistant", id: "msg_assistant", parentID: "msg_user", sessionID: "session-1" },
+    },
+  })
+  // tool part -> the assistant message the call belongs to
+  await emit({
+    type: "message.part.updated",
+    properties: {
+      sessionID: "session-1",
+      part: {
+        type: "tool",
+        id: "prt_skill",
+        sessionID: "session-1",
+        messageID: "msg_assistant",
+        callID: "call-skill",
+        tool: "skill",
+      },
+    },
+  })
+
+  const before = (callID: string, tool = "bash") =>
+    hooks["tool.execute.before"]!({ tool, sessionID: "session-1", callID }, { args: {} })
+  const after = (callID: string, metadata: Record<string, unknown>, tool = "bash", args: Record<string, unknown> = {}) =>
+    hooks["tool.execute.after"]!({ tool, sessionID: "session-1", callID, args }, { title: "", output: "", metadata })
+  const init = {
+    operation: "init",
+    replayed: false,
+    buildTrackingStartedAtInit: true,
+    binding: { sessionID: "session-1", messageID: "msg_assistant", callID: "call-init" },
+    snapshot: {
+      runId,
+      revision: 1,
+      designSource: "pixso",
+      variant: "full",
+      status: "running",
+      completedStages: [],
+      stages: [],
+    },
+  }
+
+  // The real init observation establishes the request's ownership.
+  await before("call-init")
+  await after("call-init", { d2aWorkflowSnapshots: [init] })
+  // The skill call measured by the hook is attributed through the part mapping.
+  await before("call-skill", "skill")
+  await after("call-skill", {}, "skill", { name: "hmos-design-to-arkts" })
+
+  const batches = harness.recordD2aObservations.mock.calls.map((call) => call[0] as Record<string, unknown>)
+  const snapshots = batches.find((batch) => Array.isArray(batch.snapshots))?.snapshots as Array<Record<string, unknown>>
+  // The run's identity is the user message, resolved from the assistant message.
+  expect((snapshots[0]?.binding as Record<string, unknown>).parentMessageID).toBe("msg_user")
+  const tools = batches.find((batch) => Array.isArray(batch.tools))?.tools
+  expect(tools).toEqual([
+    expect.objectContaining({
+      toolName: "hmos-design-to-arkts",
+      bucket: "skillTools",
+      userMessageID: "msg_user",
+      callID: "call-skill",
+    }),
+  ])
+})
+
+test("d2a settlement: idle settles the final step and drops the summary step after it", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  const emit = (event: Record<string, unknown>) => hooks.event!({ event } as never)
+  const runId = "bbd8747b-5e09-4386-afc5-826a68c5c9fd"
+
+  await emit({
+    type: "message.updated",
+    properties: {
+      sessionID: "session-1",
+      info: { role: "assistant", id: "msg_final", parentID: "msg_user", sessionID: "session-1" },
+    },
+  })
+  const part = (value: Record<string, unknown>) =>
+    emit({ type: "message.part.updated", properties: { sessionID: "session-1", part: value } })
+  // Step 1 contains the final commit call and its usage arrives first.
+  await part({ type: "step-start", id: "prt_step1", sessionID: "session-1", messageID: "msg_final" })
+  await part({
+    type: "tool",
+    id: "prt_tool",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    callID: "call-final",
+    tool: "bash",
+  })
+  await part({
+    type: "step-finish",
+    id: "prt_finish1",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    tokens: { input: 25, output: 5, cache: { read: 50, write: 0 } },
+  })
+  // A separate summary step follows the delivery and must stay out of the event.
+  await part({ type: "step-start", id: "prt_step2", sessionID: "session-1", messageID: "msg_final" })
+  await part({
+    type: "step-finish",
+    id: "prt_finish2",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    tokens: { input: 10, output: 2, cache: { read: 20, write: 0 } },
+  })
+
+  const completed = {
+    operation: "stage-complete",
+    replayed: false,
+    binding: { sessionID: "session-1", messageID: "msg_final", callID: "call-final" },
+    snapshot: {
+      runId,
+      revision: 2,
+      designSource: "pixso",
+      variant: "full",
+      status: "completed",
+      completedStages: [],
+      stages: [],
+      finalScore: { status: "unavailable" },
+    },
+  }
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "call-final" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "call-final", args: {} },
+    { title: "", output: "", metadata: { d2aWorkflowSnapshots: [completed] } },
+  )
+
+  // 完成观测只冻结身份：第一条用量到达时不会入队。
+  const before = harness.recordD2aObservations.mock.calls.map((call) => call[0] as Record<string, unknown>)
+  expect(before.map((batch) => Object.keys(batch))).toEqual([["snapshots", "settle"], ["tools"]])
+
+  // 最终会话 idle 才是结算点：带上到最终提交步骤为止的用量。
+  await emit({ type: "session.idle", properties: { sessionID: "session-1" } })
+  const batches = harness.recordD2aObservations.mock.calls.map((call) => call[0] as Record<string, unknown>)
+  const settled = batches.filter((batch) => batch.settle).at(-1)
+  expect(settled?.settle).toEqual({ sessionID: "session-1", force: true })
+  expect(settled?.usage).toEqual([
+    expect.objectContaining({
+      userMessageID: "msg_user",
+      partID: "prt_finish1",
+      inputTokens: 25,
+      outputTokens: 5,
+      cacheTokens: 50,
+    }),
+  ])
+})
+
+test("d2a settlement: an earlier confirmed step adds up, the summary step stays out", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  const emit = (event: Record<string, unknown>) => hooks.event!({ event } as never)
+  const part = (sessionID: string, value: Record<string, unknown>) =>
+    emit({ type: "message.part.updated", properties: { sessionID, part: value } })
+  const runId = "bbd8747b-5e09-4386-afc5-826a68c5c9fd"
+
+  // 先是一个已确认的前置请求：会话同一、用户消息不同，靠 stage-start 建立归属。
+  await emit({
+    type: "message.updated",
+    properties: {
+      sessionID: "session-1",
+      info: { role: "assistant", id: "msg_earlier", parentID: "msg_user-1", sessionID: "session-1" },
+    },
+  })
+  await part("session-1", {
+    type: "step-finish",
+    id: "prt_earlier",
+    sessionID: "session-1",
+    messageID: "msg_earlier",
+    tokens: { input: 100, output: 20, cache: { read: 0, write: 0 } },
+  })
+
+  const binding = (messageID: string, callID: string) => ({ sessionID: "session-1", messageID, callID })
+  const runAfter = (callID: string, metadata: Record<string, unknown>) =>
+    hooks["tool.execute.after"]!(
+      { tool: "bash", sessionID: "session-1", callID, args: {} },
+      { title: "", output: "", metadata },
+    )
+  const runBefore = (callID: string) =>
+    hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID }, { args: {} })
+
+  // init 冻结启动身份（用户消息 msg_user-1 的请求）。
+  await runBefore("call-init")
+  await runAfter("call-init", {
+    d2aWorkflowSnapshots: [
+      {
+        operation: "init",
+        replayed: false,
+        buildTrackingStartedAtInit: true,
+        binding: binding("msg_earlier", "call-init"),
+        snapshot: {
+          runId,
+          revision: 1,
+          designSource: "pixso",
+          variant: "full",
+          status: "running",
+          completedStages: [],
+          stages: [],
+        },
+      },
+    ],
+  })
+  // 第二个请求（用户消息 msg_user-2）由真实推进建立归属。
+  await emit({
+    type: "message.updated",
+    properties: {
+      sessionID: "session-1",
+      info: { role: "assistant", id: "msg_final", parentID: "msg_user-2", sessionID: "session-1" },
+    },
+  })
+  await runBefore("call-stage")
+  await runAfter("call-stage", {
+    d2aWorkflowSnapshots: [
+      {
+        operation: "stage-start",
+        replayed: false,
+        binding: binding("msg_final", "call-stage"),
+        snapshot: {
+          runId,
+          revision: 2,
+          designSource: "pixso",
+          variant: "full",
+          status: "running",
+          completedStages: [],
+          stages: [],
+        },
+      },
+    ],
+  })
+  // 最终提交所在步骤 25，提交后的总结步骤 10。
+  await part("session-1", { type: "step-start", id: "prt_step1", sessionID: "session-1", messageID: "msg_final" })
+  await part("session-1", {
+    type: "tool",
+    id: "prt_tool",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    callID: "call-final",
+    tool: "bash",
+  })
+  await part("session-1", {
+    type: "step-finish",
+    id: "prt_final",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    tokens: { input: 25, output: 5, cache: { read: 0, write: 0 } },
+  })
+  await part("session-1", { type: "step-start", id: "prt_step2", sessionID: "session-1", messageID: "msg_final" })
+  await part("session-1", {
+    type: "step-finish",
+    id: "prt_summary",
+    sessionID: "session-1",
+    messageID: "msg_final",
+    tokens: { input: 10, output: 2, cache: { read: 0, write: 0 } },
+  })
+  await runBefore("call-final")
+  await runAfter("call-final", {
+    d2aWorkflowSnapshots: [
+      {
+        operation: "stage-complete",
+        replayed: false,
+        binding: binding("msg_final", "call-final"),
+        snapshot: {
+          runId,
+          revision: 3,
+          designSource: "pixso",
+          variant: "full",
+          status: "completed",
+          completedStages: [],
+          stages: [],
+          finalScore: { status: "unavailable" },
+        },
+      },
+    ],
+  })
+
+  await emit({ type: "session.idle", properties: { sessionID: "session-1" } })
+  const batches = harness.recordD2aObservations.mock.calls.map((call) => call[0] as Record<string, unknown>)
+  const settled = batches.filter((batch) => batch.settle).at(-1)
+  const usage = (settled?.usage ?? []) as Array<Record<string, unknown>>
+  // 100（前置请求）+ 25（最终提交步骤），提交后的 10 不计入。
+  expect(usage.reduce((sum, item) => sum + ((item.inputTokens as number) ?? 0), 0)).toBe(125)
+  expect(usage.map((item) => item.partID).sort()).toEqual(["prt_earlier", "prt_final"])
+})
+
+test("d2a: a late callback cannot resurrect state after collection is disabled", async () => {
+  const harness = createHarness()
+  const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
+  harness.setShouldCollect(false)
+
+  // The disabled switch purges the local D2A progress with the queue.
+  await hooks.event!({ event: { type: "file.edited", properties: { file: "/tmp/project/main.ts" } } as never })
+  expect(harness.clearD2aProgress).toHaveBeenCalledTimes(1)
+
+  const callsBefore = harness.recordD2aObservations.mock.calls.length
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-1", callID: "call-after" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-1", callID: "call-after", args: {} },
+    {
+      title: "",
+      output: "",
+      metadata: {
+        d2aWorkflowSnapshots: [
+          {
+            operation: "init",
+            replayed: false,
+            buildTrackingStartedAtInit: true,
+            snapshot: {
+              runId: "bbd8747b-5e09-4386-afc5-826a68c5c9fd",
+              revision: 1,
+              designSource: "pixso",
+              variant: "full",
+              status: "running",
+              completedStages: [],
+              stages: [],
+            },
+          },
+        ],
+      },
+    },
+  )
+  expect(harness.recordD2aObservations.mock.calls.length).toBe(callsBefore)
+})
+
 test("updates attribution eligibility only when the value changes", async () => {
   const harness = createHarness()
   const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
@@ -583,8 +1006,20 @@ test("ignores devecocli command metadata from another session", async () => {
       metadata: { devecoCliEvents: [{ command: "docs", subcommand: "search", exitCode: 0, durationMs: 5 }] },
     },
   )
+  // The same guard covers the build channel: another session's build must not advance this
+  // round's build count, first/final outcome or elapsed time.
+  await hooks["tool.execute.before"]!({ tool: "bash", sessionID: "session-2", callID: "build-2" }, { args: {} })
+  await hooks["tool.execute.after"]!(
+    { tool: "bash", sessionID: "session-2", callID: "build-2", args: {} },
+    {
+      title: "Build",
+      output: "Build completed successfully (exitCode=0)",
+      metadata: { devecoCliEvents: [{ command: "build", exitCode: 0, durationMs: 10 }] },
+    },
+  )
 
   expect(harness.recordDevecoCliCommand).toHaveBeenCalledTimes(0)
+  expect(harness.recordBuildExecution).toHaveBeenCalledTimes(0)
 })
 
 test("flags tools whose output contains error text", async () => {
@@ -722,6 +1157,8 @@ test("end-to-end: verify_ui metadata reaches the uploaded ai_session event per w
       shutdown: async () => undefined,
     }),
     version: () => "1.2.3",
+    recordD2aObservations: async () => 0,
+    clearD2aProgress: async () => undefined,
   })
   const hooks = await plugin({ directory: "/tmp/analytics-e2e" } as never)
   const startTurn = () =>
@@ -959,6 +1396,8 @@ test("end-to-end: one turn of devecocli commands uploads sorted counts and place
       shutdown: async () => undefined,
     }),
     version: () => "1.2.3",
+    recordD2aObservations: async () => 0,
+    clearD2aProgress: async () => undefined,
   })
   const hooks = await plugin({ directory: "/tmp/analytics-cli-e2e" } as never)
 

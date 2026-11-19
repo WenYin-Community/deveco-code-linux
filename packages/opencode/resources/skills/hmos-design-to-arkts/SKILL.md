@@ -114,11 +114,55 @@ Controller 脚本：`<designToArktsSkillRoot>/scripts/workflow.mjs`。五种操�
 - 不判断 Todo UI 是否已经更新。每个阶段入口固定调用一次，重复提交同一完整列表视为安全的幂等重放。
 - `init` 后不要单独调用 `todowrite`，否则会与阶段 1 入口重复。
 - `status` 返回什么动作就按什么动作分流，不能无条件执行 `stage-start`：
-  - `stage_complete` → 读取 `completionResult`，`passed` 时调用 `stage-complete --result passed`，`blocked` 时调用 `stage-complete --result blocked --reason-code <reasonCode>`（当前阶段有 pending Gate 或已确认时）
+  - `stage_complete` → 先读取 `completionResult`：
+    - `blocked` → 调用 `stage-complete --result blocked --reason-code <reasonCode>`（当前阶段有 pending Gate 或已确认时）
+    - `passed` 且 `currentStage` 是当前 catalog 最后一阶段、运行尚未 completed → 先确认 run 根目录存在与本次交付对应的合法 `task-completion.json`；缺失或非法时按「交付任务完成率验收」用已有证据生成，确认落盘后再执行原最终 `stage-complete --result passed`。优先复用已有结果，沿用 pending Gate 的恢复逻辑，不重跑 `stage-start`、不重复阶段入口 Todo 同步
+    - 普通阶段的 `passed` → 调用 `stage-complete --result passed`
   - `running` → `stage_start`
-  - `completed` → 读取 `todoPayloadPath` → `todowrite` → 最终回复
+  - `completed` → 读取 `todoPayloadPath` → `todowrite` → 最终回复；上传字段已随首次完成快照固化，已完成 run 不补报
   - `blocked` → 报告并解决 `blockedReasonCode`，不得静默恢复 `running`
   - `awaiting_confirmation` → 恢复原确认问题，不重新执行阶段入口 Todo 同步
+
+## 交付任务完成率验收
+
+适用于全部设计来源的 Full 与 Fast。在最终阶段的既有工作和验证结束后、提交最后一次 `stage-complete --result passed` 前，由当前 Agent 完成以下动作；流程随后按原有顺序提交最终完成命令、同步 Todo 并回复用户，本验收不改变任何阶段 Gate 与交付规则。
+
+1. 读取本 run 的 `design-doc.md`。从功能范围、交互、页面接入和明确验收条款中提取本次承诺交付、能独立判定的事项；相同结果在多个章节重复出现时合并为一条；排除明确超出范围的内容、纯流程步骤，以及已单独统计的构建与视觉校准动作。
+2. 对照交付版本的 ArkTS、页面路由与资源，以及本次已有的构建、运行和验证证据逐项判定。验收过程只读工程文件，产物只写入当前 run 目录；保持原有验证范围，复用已有验证结果，由当前 Agent 判定，不引入新的构建或评分循环。
+3. 每条承诺写一项，给出在该报告内唯一的 ID 和简短证据。全部条件有证据支持时写 `passed`；代码或实测表明条件未满足时写 `failed`；证据不足时写 `unverified`。例如承诺「点击 VIP 卡片跳转」，真实跳转代码可以作为证据，空回调判 `failed`，无法确认目标行为判 `unverified`；构建成功本身只能证明编译结果。
+4. 向 run 根目录写入 `task-completion.json`：
+
+```json
+{
+  "tasks": [
+    {
+      "id": "T01",
+      "task": "点击 VIP 卡片进入会员页",
+      "status": "passed",
+      "evidence": "最终页面的 VIP 点击处理函数调用已注册的会员页路由"
+    }
+  ]
+}
+```
+
+缺少可信的设计文档或没有可验收条目时写 `{"tasks":[]}`。`task` 与 `evidence` 仅用于本地追溯，未验证项的 `evidence` 写清缺失的证据。逐项判定由模型完成，完成率由 Controller 程序计算；该文件缺失或非法时 Controller 只记录「暂不可用」，不影响交付与最终命令。
+
+除正常总结流程外，任何要求直接重试最终成功提交的入口同样适用本验收：`stage-start` 返回 pending Gate 的恢复、`status` 返回 `stage_complete` 且 `completionResult=passed` 的最终阶段、以及其他恢复指令直接要求最终 `stage-complete --result passed` 时，都必须先确认与本次交付对应的 `task-completion.json` 已落盘，缺失或非法时按本节用已有证据补齐，再执行提交。
+
+## 最终评分证据与恢复
+
+Full 的最终 `stage-complete --result passed` 在写 Gate 前校验本次交付对应的 `final-visual-score.json`；Fast 记为 `not_applicable`，明确禁用校准时沿用可信 `skipped` 报告，两者都不要求该文件。
+
+返回 `final_score_evidence_required` 时，按 `reason` 补齐或修正当前 run 的评分产物：`missing`、`invalid_artifact`、`invalid_score_evidence` 指向评分产物本身，`invalid_calibration` 指向既有视觉校准报告。能够取得本次实际交付候选的可信评分时保存 `recorded`，确实无法评分时保存显式 `{"status":"unavailable"}`，并可用非空 `reason` 记录本地原因。确认产物落盘后，按返回的 `retry.stage` / `retry.result` 重试原提交；这是可纠正的拒绝，不是永久 blocked，也不需要重新 `init`。已有 pending Gate 时沿用既定恢复操作，无需重复 `stage-start` 和阶段入口 Todo 同步。
+
+## 构建结果标记
+
+适用于六种设计来源的 Full 与 Fast。D2A Agent 每一次实际发起构建时，都在 Shell 工具调用上传 `d2aBuildRunDir` 参数，值为本次 run 的运行目录（如 `<project>/.deveco/design-to-arkts/runs/<runId-or-pageSlug>`）；组装现有视图、调用子能力和失败重试时同样遵守。规则：
+
+1. 同时用 `workdir` 指定工程目录；一次调用只运行一个构建命令。构建与部署必须分开调用，禁止 `devecocli build; devecocli run --skip-build` 之类的组合——后续命令的退出码会覆盖构建结果，导致统计失真。
+2. 默认构建命令是 `devecocli build`；工程明确指定的其他构建命令（含工程自己的构建脚本）同样传该参数，只要该独立入口的退出状态准确反映构建结果。
+3. 质量阶段、修复重试、视觉校准和交付复评中的实际构建都属于该 run，每次都带标记。部署、`run --skip-build`、类型检查和复用已有构建产物不是构建，不传该参数。
+4. 标记不影响命令本身的执行、权限检查与沙箱；目录非法或状态不可归属时仅跳过统计。
 
 ## 用户确认规则
 

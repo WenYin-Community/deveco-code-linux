@@ -77,6 +77,8 @@ test("tracks devecocli build first/final results", async () => {
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.isFirstBuildSuccess).toBe(false)
   expect(event?.isFinalBuildSuccess).toBe(true)
+  // Success, failure and the retry all count: the failed attempt is not replaced by its retry.
+  expect(event?.buildCount).toBe(2)
 })
 
 test("does not infer build results from ordinary tool executions", async () => {
@@ -267,6 +269,8 @@ test("keeps build elapsed null and token counts zero when no build or llm step r
   const event = await collector.buildEvent("project-id", "/tmp/non-harmony")
   expect(event?.firstBuildElapsed).toBe(null)
   expect(event?.finalBuildElapsed).toBe(null)
+  // No build ran in this round, so the count is a measured zero rather than a missing value.
+  expect(event?.buildCount).toBe(0)
   expect(event?.inputTokens).toBe(0)
   expect(event?.outputTokens).toBe(0)
   // No step reported a cache breakdown, so the field is omitted instead of claiming a measured 0.

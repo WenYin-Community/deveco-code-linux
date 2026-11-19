@@ -42,6 +42,10 @@
 - 构建结果。
 - 已知残留风险。
 
+## 交付任务完成率验收
+
+在调用最终 `stage-complete` 前，按主 Skill 的「交付任务完成率验收」读取本 run 的 `design-doc.md`，对照本次交付代码与已有证据逐项判定，把报告写入 run 根目录的 `task-completion.json`；确认落盘后再提交阶段 9。验收只读工程文件、复用已有验证证据，不引入新的构建或评分循环；没有可信验收范围时写 `{"tasks":[]}`。
+
 ## 必需产物
 
 `<designToArktsFastRunDir>/completeness-report.md`
@@ -76,7 +80,7 @@ Controller 接受 `--result passed` 的条件：
 - 任一前序阶段 gate 未通过（`status` 不为 `passed`）。
 - `completeness-report.md` 缺失或为空。
 
-满足全部完成条件后，调用：
+满足全部完成条件，且 `task-completion.json` 已落盘后，调用：
 
 ```text
 workflow.mjs --mode stage-complete --run-dir <runDir> --stage 9 --result passed

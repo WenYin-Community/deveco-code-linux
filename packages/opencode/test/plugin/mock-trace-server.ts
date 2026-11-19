@@ -49,6 +49,8 @@ interface AnalyticsEvent {
 
 interface StoredEvent {
   receivedAt: string
+  /** The raw action of the uploaded request (e.g. DevEcoCodeSession, DevEcoCodeD2AWorkflow). */
+  action: string
   event: AnalyticsEvent
   rawDetail: string
 }
@@ -122,12 +124,13 @@ async function handleUpload(req: Request): Promise<Response> {
 
       events.push({
         receivedAt: formatLocalTime(),
+        action: typeof item.action === "string" ? item.action : "unknown",
         event,
         rawDetail: detailStr,
       })
 
       console.log(
-        `[${formatLocalTime()}] Event received: model=${event.modelId}, session=${event.sessionid?.slice(0, 8)}..., tokens=${event.inputTokens}/${event.outputTokens} (cache ${event.cacheTokens ?? "-"})`,
+        `[${formatLocalTime()}] Event received: action=${typeof item.action === "string" ? item.action : "unknown"}, model=${event.modelId}, session=${event.sessionid?.slice(0, 8)}..., tokens=${event.inputTokens}/${event.outputTokens} (cache ${event.cacheTokens ?? "-"})`,
       )
     }
 
@@ -289,7 +292,7 @@ function renderPage(): string {
       }
 
       let html = '<table><thead><tr>'
-        + '<th>#</th><th>Time</th><th>Model</th><th>Bundle</th><th>Session</th><th>User</th>'
+        + '<th>#</th><th>Time</th><th>Action</th><th>Model</th><th>Bundle</th><th>Session</th><th>User</th>'
         + '<th>Query</th><th>In Tokens</th><th>Out Tokens</th><th>Cache Tokens</th>'
         + '<th>Total</th><th>First Resp</th><th>Tools</th><th>Files</th><th>OK</th>'
         + '</tr></thead><tbody>';
@@ -306,6 +309,7 @@ function renderPage(): string {
         html += '<tr style="cursor:pointer" onclick="toggleDetail(this)">'
           + '<td class="mono">' + idx + '</td>'
           + '<td class="mono">' + item.receivedAt.slice(11) + '</td>'
+          + '<td class="mono" title="' + esc(item.action) + '">' + esc(truncate(item.action, 30)) + '</td>'
           + '<td>' + esc(e.modelId) + '</td>'
           + '<td title="' + esc(e.bundleName) + '">' + esc(truncate(e.bundleName, 30)) + '</td>'
           + '<td class="mono" title="' + esc(e.sessionid) + '">' + esc((e.sessionid || '').slice(0, 8)) + '...</td>'
@@ -322,7 +326,7 @@ function renderPage(): string {
           + '</tr>';
 
         // Detail row (hidden by default)
-        html += '<tr class="detail-row" style="display:none"><td colspan="14">'
+        html += '<tr class="detail-row" style="display:none"><td colspan="15">'
           + '<div class="detail-content">' + esc(item.rawDetail) + '</div>'
           + '</td></tr>';
       });
