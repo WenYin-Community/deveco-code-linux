@@ -6,7 +6,7 @@
   "license": "MIT",
   "private": true,
   "builtinPlugins": {
-    "@deveco-test/deveco-harness": "0.2.0-test.12"
+    "@deveco-test/deveco-harness": "0.2.0-test.13"
   },
   "scripts": {
     "postinstall": "bun run script/postinstall.ts",
@@ -85,7 +85,7 @@
     "@aws-sdk/credential-providers": "3.1057.0",
     "@bitfun-ai/sandbox": "0.3.1",
     "@clack/prompts": "1.0.0-alpha.1",
-    "@deveco-test/deveco-harness": "0.2.0-test.12",
+    "@deveco-test/deveco-harness": "0.2.0-test.13", 
     "@effect/opentelemetry": "catalog:",
     "@effect/platform-node": "catalog:",
     "@ff-labs/fff-bun": "0.9.4",

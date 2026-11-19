@@ -9,7 +9,7 @@ npm、curl/irm、Studio 和源码开发均通过 Harness 提供 CLI、专用工�
 ```json
 {
   "dependencies": {
-    "@deveco-test/deveco-harness": "0.2.0-test.12"
+    "@deveco-test/deveco-harness": "0.2.0-test.13"
   }
 }
 ```

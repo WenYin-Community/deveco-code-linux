@@ -293,7 +293,7 @@
         "@aws-sdk/credential-providers": "3.1057.0",
         "@bitfun-ai/sandbox": "0.3.1",
         "@clack/prompts": "1.0.0-alpha.1",
-        "@deveco-test/deveco-harness": "0.2.0-test.12",
+        "@deveco-test/deveco-harness": "0.2.0-test.13",
         "@effect/opentelemetry": "catalog:",
         "@effect/platform-node": "catalog:",
         "@ff-labs/fff-bun": "0.9.4",
@@ -847,7 +847,7 @@
 
     "@corvu/utils": ["@corvu/utils@0.4.2", "https://registry.npmmirror.com/@corvu/utils/-/utils-0.4.2.tgz", { "dependencies": { "@floating-ui/dom": "^1.6.11" }, "peerDependencies": { "solid-js": "^1.8" } }, "sha512-Ox2kYyxy7NoXdKWdHeDEjZxClwzO4SKM8plAaVwmAJPxHMqA0rLOoAsa+hBDwRLpctf+ZRnAd/ykguuJidnaTA=="],
 
-    "@deveco-test/deveco-harness": ["@deveco-test/deveco-harness@0.2.0-test.12", "", { "dependencies": { "@modelcontextprotocol/sdk": "1.29.0", "@opencode-ai/plugin": "^1.17.3", "cross-spawn": "7.0.6", "diff": "8.0.2", "proper-lockfile": "4.1.2", "which": "6.0.1", "zod": "4.1.8" } }, "sha512-/D900Eqr6MIGDFGIk48OlOxRqmxUTOr2d/QhPENpELEcXNOiwamAVWtVG4hNkRbJONqph4cVzdFTUcACZWwP7w=="],
+    "@deveco-test/deveco-harness": ["@deveco-test/deveco-harness@0.2.0-test.13", "", { "dependencies": { "@modelcontextprotocol/sdk": "1.29.0", "@opencode-ai/plugin": "^1.17.3", "cross-spawn": "7.0.6", "diff": "8.0.2", "proper-lockfile": "4.1.2", "which": "6.0.1", "zod": "4.1.8" } }, "sha512-cpOJzQS1ZER74ypWDVNCuQk8Lz141SF5sPa+qfrqCQjjmmOXpCsAppz+9UlYGjvtkb99CC7ZtPiInaTB8/vBiQ=="],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.11.0", "https://registry.npmmirror.com/@drizzle-team/brocli/-/brocli-0.11.0.tgz", {}, "sha512-hD3pekGiPg0WPCCGAZmusBBJsDqGUR66Y452YgQsZOnkdQ7ViEPKuyP4huUGEZQefp8g34RRodXYmJ2TbCH+tg=="],
 
