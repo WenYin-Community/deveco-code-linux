@@ -20,6 +20,7 @@ internal object CliBinaryExtractor {
     private val isWindows = osName.startsWith("windows")
     private val binaryName = if (isWindows) "deveco.exe" else "deveco"
 
+    @Synchronized
     fun extract(): String {
         val targetDir = Path.of(PathManager.getSystemPath(), "@deveco")
         val binary = targetDir.resolve("bin").resolve(binaryName).toFile()

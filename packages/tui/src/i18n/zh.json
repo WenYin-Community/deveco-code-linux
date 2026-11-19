@@ -282,7 +282,8 @@
     "show_tips": "显示提示",
     "hide_tips": "隐藏提示",
     "commands": "命令",
-    "release_notes": "查看版本说明"
+    "release_notes": "查看版本说明",
+    "announcements": "查看 DevEco Code 公告"
   },
   "dialog": {
     "search": "搜索",
@@ -701,6 +702,11 @@
     "action_back": "返回",
     "release_notes_prev": "上一个版本",
     "release_notes_next": "下一个版本",
+    "announcements_title": "公告",
+    "announcements_unread": "{{count}} 条未读",
+    "announcements_empty": "暂无公告",
+    "announcements_read_failed": "标记已读失败",
+    "announcements_link_failed": "无法在系统默认浏览器中打开链接",
     "dialog_title_volume": "提示音音量",
     "dialog_title_sound_settings": "通知设置",
     "dialog_title_customize_sounds": "自定义音效",
