@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileChooser.FileChooser
@@ -79,6 +80,10 @@ private val log = Logger.getInstance("ComposerContent")
 
 private const val OPENCODE_TERMS_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/terms.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
 private const val OPENCODE_PRIVACY_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/privacy-statement.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
+
+// Registered by the companion DevEco plugin; absent in standalone IDEs, so the
+// complain link is hidden when the action cannot be resolved.
+private const val COMPLAIN_ACTION_ID = "deveco.code.complain"
 
 @OptIn(ExperimentalTextApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -897,6 +902,42 @@ private fun ComposerFooter() {
                         Desktop.getDesktop().browse(URI(OPENCODE_PRIVACY_URL))
                     },
             )
+            val complainAction = remember { ActionManager.getInstance().getAction(COMPLAIN_ACTION_ID) }
+            if (complainAction != null) {
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(16.dp)
+                        .background(DevEcoTheme.disclaimerFg.copy(alpha = 0.5f))
+                )
+                Spacer(Modifier.width(10.dp))
+                val complainInteraction = remember { MutableInteractionSource() }
+                val complainHovered by complainInteraction.collectIsHoveredAsState()
+                Text(
+                    MyMessageBundle.message("composer.complain"),
+                    color = if (complainHovered) linkColor.copy(alpha = DevEcoTheme.mutedActionAlpha) else linkColor,
+                    fontSize = 11.sp,
+                    softWrap = false,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .drawBehind {
+                            val y = size.height - 1f
+                            drawLine(linkColor, Offset(0f, y), Offset(size.width, y), 1f)
+                        }
+                        .hoverable(complainInteraction)
+                        .clickable(interactionSource = complainInteraction, indication = null) {
+                            ActionManager.getInstance().tryToExecute(
+                                complainAction,
+                                null,
+                                KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner,
+                                null,
+                                true,
+                            )
+                        },
+                )
+            }
         }
     }
 }
