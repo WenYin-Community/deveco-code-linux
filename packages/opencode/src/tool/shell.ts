@@ -1331,7 +1331,16 @@ export const ShellTool = Tool.define(
       // Unrestricted filesystem still blocks macOS system services (§8.22).
       // Linux remains direct execution until its npm runtime is shipped.
       const requestId = `sbx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const commandTag = input.command.trim().split(/\s+/)[0] || "unknown"
+      // Sanitized command tag: first command word, skipping env var assignments
+      // (FR-OBS-001: no unsanitized argv, env vars, user paths, or file content)
+      const commandTag = (() => {
+        const tokens = input.command.trim().split(/\s+/)
+        for (const token of tokens) {
+          if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue
+          return token || "unknown"
+        }
+        return "unknown"
+      })()
       const sandboxStartTime = Date.now()
       const isMac = process.platform === "darwin"
       const isWindows = process.platform === "win32"
