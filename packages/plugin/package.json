@@ -3,7 +3,7 @@
   "name": "@opencode-ai/plugin",
   "version": "1.17.9",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "build": "tsc"
@@ -14,7 +14,11 @@
     "./tui": "./src/tui.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "LICENSING.md",
+    "NOTICE",
+    "LICENSES/MIT.txt"
   ],
   "dependencies": {
     "@opencode-ai/sdk": "workspace:*",

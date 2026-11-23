@@ -82,6 +82,10 @@ stages:
               key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
               restore-keys: |
                 bun-${{ runner.os }}-
+          - name: 安装许可证校验工具
+            run: |
+              if command -v python3 >/dev/null; then exit 0; fi
+              (sudo apt-get install -y -qq python3) || (apt-get install -y -qq python3)
           - name: 准备构建环境
             run: NODEJS_ORG_MIRROR=https://mirrors.huaweicloud.com/nodejs NPM_CONFIG_REGISTRY=https://mirrors.huaweicloud.com/repository/npm/ bun install --frozen-lockfile
           - name: 修复 bin 可执行权限
@@ -94,6 +98,11 @@ stages:
             # deveco 阶段降到 citest 用户执行，否则 root 绕过 chmod 检查导致 EACCES/EPERM 断言失败
             # （HOME 一并切走，避免 turbo/bun 写 /root）
             run: |
+              set -e
+              if ! python3 -c 'import sys; sys.exit(not ((3, 6) <= sys.version_info < (4,)))'; then
+                echo "IntelliJ ZIP license checks require Python 3.6 or later." >&2
+                exit 1
+              fi
               TEST_ARGS=(turbo test --concurrency=4 --output-logs=errors-only --log-order=grouped --log-prefix=task)
               BUN144=/opt/bun-test/node_modules/.bin
               bun "${TEST_ARGS[@]}" --filter='!deveco'

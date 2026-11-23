@@ -16,6 +16,7 @@ process.chdir(dir)
 const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
+import { copyLicenses, licenseFiles } from "@opencode-ai/script/license"
 import pkg from "../package.json"
 import { digestSkill, digestSkills, loadResourceSkills, validateSkills, type SkillsData } from "./skill-sources"
 
@@ -334,16 +335,18 @@ for (const item of targets) {
 
   await fs.promises.copyFile(path.join(dir, "..", "..", "CHANGELOG.md"), path.join(dir, "dist", name, "CHANGELOG.md"))
 
+  await copyLicenses(path.join(dir, "dist", name))
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
         name: `@${scope}/deveco-code-${item.os === "win32" ? "windows" : item.os}-${item.arch}${item.avx2 === false ? "-baseline" : ""}`,
         version: Script.version,
+        license: pkg.license,
         preferUnplugged: true,
         os: [item.os],
         cpu: [item.arch],
         dependencies: pkg.builtinPlugins,
-        files: ["bin/**/*", "vendor/**/*", "CHANGELOG.md", "README.md"],
+        files: ["bin/**/*", "vendor/**/*", "CHANGELOG.md", "README.md", ...licenseFiles],
         ...(item.abi ? { libc: [item.abi] } : {}),
       },
       null,

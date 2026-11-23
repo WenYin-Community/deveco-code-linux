@@ -3,7 +3,7 @@
   "version": "1.17.9",
   "name": "deveco",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "builtinPlugins": {
     "@deveco-test/deveco-harness": "0.2.0-test.13"

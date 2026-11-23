@@ -11,6 +11,7 @@
  */
 import { $ } from "bun"
 import { Script } from "@opencode-ai/script"
+import { copyLicenses, licenseFiles } from "@opencode-ai/script/license"
 import { fileURLToPath } from "url"
 import path from "path"
 import fs from "fs"
@@ -74,7 +75,7 @@ const version = Object.values(binaries)[0]?.version
 await $`mkdir -p ./dist/${pkg.name}`
 await $`cp -r ./bin ./dist/${pkg.name}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
-await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+await copyLicenses(path.join(cliDir, "dist", pkg.name))
 await Bun.file(`./dist/${pkg.name}/README.md`).write(await Bun.file("../../README.md").text())
 await $`cp ../../CHANGELOG.md ./dist/${pkg.name}/CHANGELOG.md`
 
@@ -92,7 +93,7 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       license: pkg.license,
       os: ["darwin", "linux", "win32", "openharmony"],
       cpu: ["arm64", "x64"],
-      files: ["bin/**/*", "postinstall.mjs", "LICENSE", "README.md", "CHANGELOG.md"],
+      files: ["bin/**/*", "postinstall.mjs", "README.md", "CHANGELOG.md", ...licenseFiles],
       optionalDependencies: {
         ...Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
         [hmosPackageName]: version,

@@ -12,7 +12,7 @@
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" />
   <img alt="platform" src="https://img.shields.io/badge/platform-macOS%20(Arm%20%7C%20x64)%20%7C%20Windows-blue.svg" />
   <a href="https://developer.huawei.com/consumer/cn/deveco-studio/"><img alt="DevEco Studio" src="https://img.shields.io/badge/DevEco%20Studio-%3E%3D6.1-orange.svg" /></a>
-  <a href="https://gitcode.com/openharmony-sig/deveco-code/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" /></a>
+  <a href="https://gitcode.com/openharmony-sig/deveco-code/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green.svg" /></a>
 </p>
 
 <p align="center">
@@ -348,7 +348,7 @@ Skills、Agents、Plugins 也可以迁移到 `~/.config/deveco` 下的对应目�
 
 ## 开源许可
 
-[MIT License](LICENSE)
+DevEco Code 采用 [Apache-2.0](LICENSE)。自仓库切换至 Apache-2.0 的提交起，历史 MIT 项目代码在新分发版本中按 Apache-2.0 再许可，后续原创贡献同样采用 Apache-2.0。上游 [MIT 许可声明](LICENSES/MIT.txt)及版权归属随分发保留。授权范围见 [LICENSING.md](LICENSING.md)，项目归属与第三方声明见 [NOTICE](NOTICE)。
 
 ## 基于 OpenCode 构建的声明
 

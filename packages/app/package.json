@@ -27,7 +27,7 @@
     "test:e2e:report": "playwright show-report e2e/playwright-report",
     "test:bench": "bun test ./e2e/performance/unit && playwright test --config e2e/performance/playwright.config.ts"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@happy-dom/global-registrator": "20.0.11",
     "@playwright/test": "catalog:",

@@ -288,8 +288,20 @@ tasks.matching { it.name in setOf("spotlessKotlin", "spotlessJava", "spotlessXml
 
 // Never pick up an old source-tree CLI left behind by another target.
 sourceSets.main { resources.exclude("cli/**") }
+val repositoryLicensePaths = listOf("LICENSE", "LICENSING.md", "NOTICE", "LICENSES/MIT.txt")
+val repositoryLicenseFiles = repositoryLicensePaths.map { layout.projectDirectory.file("../../$it").asFile }
 tasks.named<ProcessResources>("processResources") {
+    // Capture plain files instead of the build script in the configuration-cache action.
+    val licensingFiles = repositoryLicenseFiles
+    inputs.files(licensingFiles)
+    doFirst {
+        licensingFiles.forEach { require(it.isFile) { "Required licensing file is missing: $it" } }
+    }
     from(tasks.named<BuildLocalCliTask>("bundleLocalCli").flatMap { it.cliResourceDir }) { into("cli") }
+    from(rootProject.file("../..")) {
+        include(repositoryLicensePaths)
+        into("META-INF/deveco")
+    }
 }
 
 // The CLI test fixture used by CliBinaryExtractorTest contains placeholder files

@@ -1,2 +1,8 @@
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
+
+# Keep distributed licensing texts identical across Windows and Linux.
+/LICENSE text eol=lf
+/LICENSING.md text eol=lf
+/NOTICE text eol=lf
+/LICENSES/** text eol=lf

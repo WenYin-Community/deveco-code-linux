@@ -3,7 +3,7 @@
   "name": "@opencode-ai/sdk",
   "version": "1.17.9",
   "type": "module",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "typecheck": "tsgo --noEmit",
     "build": "bun ./script/build.ts"
@@ -18,7 +18,11 @@
     "./v2/server": "./src/v2/server.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "LICENSING.md",
+    "NOTICE",
+    "LICENSES/MIT.txt"
   ],
   "devDependencies": {
     "@hey-api/openapi-ts": "0.90.10",

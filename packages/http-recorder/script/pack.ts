@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { $ } from "bun"
 import { fileURLToPath } from "node:url"
+import { packWithLicenses } from "../../script/src/license.js"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 
@@ -25,7 +26,7 @@ export const pack = async () => {
   }
   await Bun.write("package.json", JSON.stringify(pkg, null, 2))
   try {
-    await $`bun pm pack`
+    await packWithLicenses(dir)
     return fileURLToPath(new URL(`../opencode-ai-http-recorder-${pkg.version}.tgz`, import.meta.url))
   } finally {
     await Bun.write("package.json", original)

@@ -2,6 +2,7 @@
 import { Script } from "@opencode-ai/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
+import { packWithLicenses } from "../../script/src/license"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
@@ -30,7 +31,7 @@ if (await published(pkg.name, pkg.version)) {
   }
   await Bun.write("package.json", JSON.stringify(pkg, null, 2))
   try {
-    await $`bun pm pack`
+    await packWithLicenses(dir)
     await $`npm publish *.tgz --tag ${Script.channel} --access public`
   } finally {
     await Bun.write("package.json", originalText)

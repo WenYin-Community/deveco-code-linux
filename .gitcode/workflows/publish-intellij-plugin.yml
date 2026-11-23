@@ -48,7 +48,11 @@ jobs:
           node-version: 22
 
       - name: 安装 Bun
-        run: NPM_CONFIG_REGISTRY=https://registry.npmmirror.com npm install -g bun@1.4.2
+        run: |
+          NPM_CONFIG_REGISTRY=https://registry.npmmirror.com npm install -g "$(node -p 'require("./package.json").packageManager')"
+
+      - name: 安装许可证校验工具
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3
 
       - name: 设置版本
         run: |
@@ -145,23 +149,16 @@ jobs:
             -Pplatform="$PLATFORM"
 
           PLUGIN_DIR="build/compatibility-packages"
-          PLUGIN_COUNT=$(find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.zip' | wc -l | tr -d ' ')
-          if [ "$PLUGIN_COUNT" -ne 3 ]; then
-            echo "ERROR: Expected 3 IntelliJ plugin packages, found $PLUGIN_COUNT"
-            find "$PLUGIN_DIR" -maxdepth 1 -type f -name '*.zip' -print || true
-            exit 1
-          fi
-
           CHECK_DIR=$(mktemp -d)
           trap 'rm -rf "$CHECK_DIR"' EXIT
           for zipfile in "$PLUGIN_DIR"/*.zip; do
             entries=$(unzip -Z1 "$zipfile")
-            plugin_jar=$(grep -E '(^|/)lib/deveco-code-jetbrains-plugin-[^/]+\.jar$' <<< "$entries" | head -1)
-            if [ -z "$plugin_jar" ]; then
-              echo "ERROR: Plugin implementation jar is missing from $(basename "$zipfile")"
+            mapfile -t plugin_jars < <(grep -E '(^|/)lib/deveco-code-jetbrains-plugin-[^/]+\.jar$' <<< "$entries")
+            if [ "${#plugin_jars[@]}" -ne 1 ]; then
+              echo "ERROR: Expected exactly one plugin implementation JAR in $(basename "$zipfile"), found ${#plugin_jars[@]}"
               exit 1
             fi
-            unzip -p "$zipfile" "$plugin_jar" > "$CHECK_DIR/plugin.jar"
+            unzip -p "$zipfile" "${plugin_jars[0]}" > "$CHECK_DIR/plugin.jar"
             plugin_entries=$(unzip -Z1 "$CHECK_DIR/plugin.jar")
             if ! grep -qx 'META-INF/plugin.xml' <<< "$plugin_entries"; then
               echo "ERROR: plugin.xml is missing from $(basename "$zipfile")"
@@ -208,6 +205,9 @@ jobs:
               exit 1
             fi
           done
+
+      - name: 校验安装包内的许可证
+        run: python3 integrations/intellij-plugin/script/verify-licenses.py integrations/intellij-plugin/build/compatibility-packages --expected-count 3
 
       - name: 上传插件安装包为流水线制品
         id: upload
