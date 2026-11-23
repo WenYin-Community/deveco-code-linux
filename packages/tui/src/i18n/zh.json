@@ -139,8 +139,6 @@
     "feedback_description": "提交投诉、建议或反馈",
     "complain": "投诉",
     "complain_description": "打开投诉页面",
-    "collect": "收集日志",
-    "collect_desc": "选择并上传日志文件到云端",
     "privacy": "隐私",
     "privacy_description": "隐私设置",
     "switch_language": "切换语言",
@@ -733,7 +731,9 @@
     "collect_footer_click": "切换",
     "collect_footer_click_key": "空格",
     "collect_footer_view_privacy": "查看隐私政策",
-    "collect_footer_view_privacy_key": "v"
+    "collect_footer_view_privacy_key": "v",
+    "collect_privacy_notice": "发送的日志中包含DevEco Code的应用使用信息，我们将会根据隐私声明使用你提供的信息进行数据统计或产品问题定位，以此提升产品使用体验。日志中可能会打印关键信息资产等敏感信息，请在上传前做好识别、删除，否则，华为对由此发生的敏感信息泄漏不承担责任。",
+    "collect_log_dir": "日志目录"
   },
   "permission": {
     "no_diff": "没有提供差异信息",

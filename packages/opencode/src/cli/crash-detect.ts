@@ -22,8 +22,11 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    // EPERM means the process exists but cannot be signaled (e.g. owned by
+    // another session or user on Windows). It is still alive — treating it
+    // as dead misreports a live PID as a crash.
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

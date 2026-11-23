@@ -139,8 +139,6 @@
     "feedback_description": "Submit complaints, suggestions or feedback",
     "complain": "Complain",
     "complain_description": "Open the complaint page",
-    "collect": "Collect Logs",
-    "collect_desc": "Select and upload log files to cloud",
     "privacy": "Privacy",
     "privacy_description": "Privacy settings",
     "switch_language": "Switch language",
@@ -732,7 +730,9 @@
     "collect_footer_click": "toggle",
     "collect_footer_click_key": "space",
     "collect_footer_view_privacy": "view privacy policy",
-    "collect_footer_view_privacy_key": "v"
+    "collect_footer_view_privacy_key": "v",
+    "collect_privacy_notice": "The logs you send include usage information of DevEco Code. We will use the information in compliance with our privacy agreement for statistical analysis and issue troubleshooting to improve the user experience. The logs may contain sensitive information such as key information assets. Make sure you remove such sensitive information before uploading; otherwise, Huawei will not be responsible for any sensitive information leakage that may result.",
+    "collect_log_dir": "Log directory"
   },
   "permission": {
     "no_diff": "No diff provided",

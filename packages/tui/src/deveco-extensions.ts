@@ -76,7 +76,7 @@ export type DevEcoRealNameDialog = (props: { onComplete: () => void }) => JSX.El
  */
 export type DevEcoImprovementConsentDialog = (props: { onComplete: () => void }) => JSX.Element
 
-/** Log collection dialog. Shown via the `/collect` command or crash detection. */
+/** Log collection dialog. Shown automatically after crash detection on startup. */
 export type DevEcoCollectDialog = (props: { triggerType?: string }) => JSX.Element
 
 /**
