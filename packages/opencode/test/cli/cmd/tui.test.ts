@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
 import { Filesystem } from "@/util/filesystem"
-import { resolveThreadDirectory, TuiThreadCommand } from "@/cli/cmd/tui"
+import { resolveModelsDevPath, resolveThreadDirectory, TuiThreadCommand } from "@/cli/cmd/tui"
 
 describe("resolveThreadDirectory", () => {
   describe("no project argument", () => {
@@ -115,6 +115,30 @@ describe("resolveThreadDirectory", () => {
     test("should resolve to canonical path when relative project is used with symlinked PWD", async () => {
       await withSymlink(".")
     })
+  })
+})
+
+describe("resolveModelsDevPath", () => {
+  test("should resolve a relative path from the startup cwd", async () => {
+    await using tmp = await tmpdir()
+    expect(resolveModelsDevPath("./resources/models.dev.json", tmp.path)).toBe(
+      path.join(tmp.path, "resources", "models.dev.json"),
+    )
+  })
+
+  test("should preserve an absolute path", async () => {
+    await using tmp = await tmpdir()
+    const absolute = path.join(tmp.path, "resources", "models.dev.json")
+    expect(resolveModelsDevPath(absolute, path.join(tmp.path, "project"))).toBe(absolute)
+  })
+
+  test("should preserve a non-normalized absolute path", () => {
+    const absolute = `${path.sep}tmp${path.sep}models${path.sep}..${path.sep}models.dev.json`
+    expect(resolveModelsDevPath(absolute, process.cwd())).toBe(absolute)
+  })
+
+  test("should preserve an unset path", () => {
+    expect(resolveModelsDevPath(undefined, process.cwd())).toBeUndefined()
   })
 })
 

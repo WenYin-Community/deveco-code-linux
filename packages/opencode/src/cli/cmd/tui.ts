@@ -87,6 +87,11 @@ export function resolveThreadDirectory(project?: string, envPWD = process.env.PW
   return Filesystem.resolve(cwd)
 }
 
+export function resolveModelsDevPath(value: string | undefined, cwd: string) {
+  if (!value || path.isAbsolute(value)) return value
+  return path.resolve(cwd, value)
+}
+
 async function ensureDevEcoHomeForTuiStartup() {
   const configured = process.env.DEVECO_HOME?.trim()
   if (configured) return
@@ -121,6 +126,8 @@ type TuiConfigValue = Awaited<ReturnType<(typeof import("@/config/tui"))["TuiCon
 
 async function createTuiWorker(directory: string) {
   const file = await target()
+  const modelsPath = resolveModelsDevPath(process.env.DEVECO_MODELS_PATH, process.cwd())
+  if (modelsPath !== undefined) process.env.DEVECO_MODELS_PATH = modelsPath
   try {
     process.chdir(directory)
   } catch {
