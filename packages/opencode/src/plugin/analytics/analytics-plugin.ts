@@ -14,6 +14,7 @@ import type { D2aObservationBatch, D2aObservationContext } from "./storage"
 import { createEnvironmentFields } from "./events"
 import type { D2aObservationBinding, D2aToolObservation, D2aUsageObservation } from "./d2a"
 import { isD2aShellSnapshot } from "./d2a"
+import { clearPluginInventoryState, pluginOriginsFromConfig, reportPluginInventory } from "./plugin-inventory"
 import { ANALYTICS_ACTION, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
 import type { AiSessionEvent, AnalyticsSubmission, DevEcoCodeAttributionEvent, DevEcoCodeSlashEvent } from "./types"
 
@@ -223,9 +224,10 @@ class AnalyticsRuntime {
     private readonly projectPath: string,
     private readonly projectId: string,
     private readonly attribution: CodeAttributionTracker,
+    private readonly worktree?: string,
   ) {}
 
-  static async create(dependencies: AnalyticsPluginDependencies, directory: string) {
+  static async create(dependencies: AnalyticsPluginDependencies, directory: string, worktree?: string) {
     const projectPath = directory || process.cwd()
     const projectId = await dependencies.projectId(projectPath)
     const runtime = new AnalyticsRuntime(
@@ -233,6 +235,7 @@ class AnalyticsRuntime {
       projectPath,
       projectId,
       await createAttribution(dependencies, projectPath, projectId),
+      worktree,
     )
     await runtime.initialize()
     return runtime
@@ -252,6 +255,7 @@ class AnalyticsRuntime {
   hooks(): Hooks {
     return {
       event: async ({ event }) => this.event(event),
+      config: async (cfg) => this.pluginInventory(cfg),
       "command.execute.before": async (input) => this.commandBefore(input),
       "chat.message": async (input, output) => this.chatMessage(input, output),
       "tool.execute.before": async (input) => this.toolBefore(input),
@@ -305,9 +309,30 @@ class AnalyticsRuntime {
         await this.dependencies.clearD2aProgress()
         this.resetD2a()
         await this.runAttribution("purge", () => this.attribution.purge())
+        // The inventory dedup state is collected data too, so it goes with the queue.
+        await clearPluginInventoryState()
       }
     }
     this.lastAnalyticsEnabled = analyticsEnabled
+  }
+
+  // One inventory snapshot per directory instance: the plugin layer hands the resolved config to the
+  // hooks after every plugin of this instance has been applied, so the load records to report on
+  // already exist. The eligibility gate runs first, so a disabled or logged-out client neither reads
+  // the plugin directories nor writes anything.
+  private async pluginInventory(cfg: unknown) {
+    try {
+      if (!(await this.ensureEligible())) return
+      await reportPluginInventory({
+        origins: pluginOriginsFromConfig(cfg),
+        directory: this.projectPath,
+        worktree: this.worktree,
+        version: this.dependencies.version(),
+        upload: (event) => this.dependencies.uploader.upload({ action: ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN, event }),
+      })
+    } catch {
+      // Analytics must never fail config loading.
+    }
   }
 
   private async ensureEligible() {
@@ -904,7 +929,7 @@ class AnalyticsRuntime {
 }
 
 export function createAnalyticsPlugin(dependencies: AnalyticsPluginDependencies): Plugin {
-  return async ({ directory }) => (await AnalyticsRuntime.create(dependencies, directory)).hooks()
+  return async ({ directory, worktree }) => (await AnalyticsRuntime.create(dependencies, directory, worktree)).hooks()
 }
 
 const AnalyticsPlugin = createAnalyticsPlugin({

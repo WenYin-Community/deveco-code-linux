@@ -10,7 +10,9 @@ import type {
   BuildProjectAnalyticsEvent,
   CodeAttributionTotals,
   DevEcoCodeAttributionEvent,
+  DevEcoCodePluginEvent,
   DevEcoCodeSlashEvent,
+  PluginEntryInfo,
 } from "@/plugin/analytics/types"
 import {
   ANALYTICS_SCHEMA_VERSION,
@@ -870,6 +872,247 @@ test("slash command events round-trip through the encrypted pending queue", asyn
   if (pending[0]?.action === ANALYTICS_ACTION.SLASH_COMMAND) {
     expect(pending[0].event).toEqual(slashCommandEvent())
   }
+})
+
+// DevEcoCodePlugin: machine-level plugin inventory snapshot. The payload nests one entry per
+// configured plugin, so the queue validator has to police the nested key set too — a plugin entry
+// is the only place where user-controlled names and versions enter the event.
+function pluginEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "oh-my-opencode",
+    version: "0.5.12",
+    source: "npm",
+    scope: "global",
+    configSource: "user-config",
+    installed: true,
+    loadStatus: "loaded",
+    failureStage: "",
+    hasOptions: false,
+    ...overrides,
+  }
+}
+
+function pluginEvent(): DevEcoCodePluginEvent {
+  return {
+    sourceType: "DevEco-Code-Cli",
+    sourceVersion: "1.2.3",
+    os_arch: "arm64",
+    os_name: process.platform,
+    os_version: "os-version",
+    pluginCount: 2,
+    installedCount: 1,
+    loadedCount: 1,
+    failedCount: 1,
+    npmCount: 1,
+    localCount: 1,
+    // pluginEntry stays deliberately loose so the rejection cases can build malformed entries; the
+    // valid fixture asserts the shape it is meant to have.
+    plugins: [
+      pluginEntry(),
+      pluginEntry({
+        name: "hello-logger",
+        version: "",
+        source: "local",
+        scope: "project",
+        configSource: "project-config",
+        installed: false,
+        loadStatus: "missing",
+        failureStage: "",
+      }),
+    ] as PluginEntryInfo[],
+  }
+}
+
+function emptyPluginEvent(): DevEcoCodePluginEvent {
+  return {
+    ...pluginEvent(),
+    pluginCount: 0,
+    installedCount: 0,
+    loadedCount: 0,
+    failedCount: 0,
+    npmCount: 0,
+    localCount: 0,
+    plugins: [],
+  }
+}
+
+test("plugin inventory events round-trip through the encrypted pending queue", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN, event: pluginEvent() })
+  // preparePendingBatch is the uploader's read path: it re-validates every stored entry, so a
+  // payload the whitelist does not know is dropped here rather than uploaded.
+  const pending = await preparePendingBatch(10)
+
+  expect(pending).toHaveLength(1)
+  expect(pending[0]?.action).toBe(ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN)
+  if (pending[0]?.action === ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN) {
+    expect(pending[0].event).toEqual(pluginEvent())
+    expect(Object.keys(pending[0].event).sort()).toEqual([
+      "failedCount",
+      "installedCount",
+      "loadedCount",
+      "localCount",
+      "npmCount",
+      "os_arch",
+      "os_name",
+      "os_version",
+      "pluginCount",
+      "plugins",
+      "sourceType",
+      "sourceVersion",
+    ])
+    expect(Object.keys(pending[0].event.plugins[0]!).sort()).toEqual([
+      "configSource",
+      "failureStage",
+      "hasOptions",
+      "installed",
+      "loadStatus",
+      "name",
+      "scope",
+      "source",
+      "version",
+    ])
+  }
+  // The inventory is a machine-level snapshot: it never carries a per-project or per-event key.
+  expect(JSON.stringify(pending[0]?.event)).not.toContain("timestamp")
+  expect(JSON.stringify(pending[0]?.event)).not.toContain("projectId")
+})
+
+test("plugin inventory queue accepts an empty inventory", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+
+  await enqueuePendingEvent({ action: ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN, event: emptyPluginEvent() })
+
+  expect((await preparePendingBatch(10)).map((item) => item.queueId)).toHaveLength(1)
+})
+
+test("plugin inventory queue rejects forbidden fields, malformed entries and bad counts", async () => {
+  await using tmp = await tmpdir()
+  Global.Path.data = tmp.path
+  const valid = pluginEvent()
+  const withoutPlugins: Record<string, unknown> = { ...valid }
+  delete withoutPlugins.plugins
+  const withoutNpmCount: Record<string, unknown> = { ...valid }
+  delete withoutNpmCount.npmCount
+  const withoutHasOptions: Record<string, unknown> = { ...pluginEntry() }
+  delete withoutHasOptions.hasOptions
+  await stageEncryptedStorage(
+    tmp.path,
+    [
+      // Fields the contract explicitly forbids in this event.
+      { ...valid, timestamp: 1762750800000 },
+      { ...valid, projectId: "550e8400-e29b-41d4-a716-446655440000" },
+      { ...valid, errorBrief: "boom" },
+      { ...valid, isLoggedIn: true },
+      { ...valid, deviceId: "device-1" },
+      withoutPlugins,
+      withoutNpmCount,
+      // Nested entries are policed the same way: unknown or missing keys are malformed.
+      {
+        ...valid,
+        plugins: [pluginEntry({ options: { token: "secret" } })],
+        pluginCount: 1,
+        npmCount: 1,
+        installedCount: 1,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      {
+        ...valid,
+        plugins: [withoutHasOptions],
+        pluginCount: 1,
+        npmCount: 1,
+        installedCount: 1,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      // Enum members are closed sets.
+      {
+        ...valid,
+        plugins: [pluginEntry({ source: "local" })],
+        pluginCount: 1,
+        npmCount: 0,
+        localCount: 0,
+        installedCount: 1,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      {
+        ...valid,
+        plugins: [pluginEntry({ configSource: "unknown" })],
+        pluginCount: 1,
+        npmCount: 1,
+        localCount: 0,
+        installedCount: 1,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      {
+        ...valid,
+        plugins: [pluginEntry({ loadStatus: "pending" })],
+        pluginCount: 1,
+        npmCount: 1,
+        localCount: 0,
+        installedCount: 1,
+        loadedCount: 0,
+        failedCount: 0,
+      },
+      {
+        ...valid,
+        plugins: [pluginEntry({ failureStage: "network" })],
+        pluginCount: 1,
+        npmCount: 1,
+        localCount: 0,
+        installedCount: 1,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      {
+        ...valid,
+        plugins: [pluginEntry({ installed: "true" })],
+        pluginCount: 1,
+        npmCount: 1,
+        localCount: 0,
+        installedCount: 0,
+        loadedCount: 1,
+        failedCount: 0,
+      },
+      // Counts are non-negative integers that must stay consistent with the entries.
+      { ...valid, pluginCount: 3 },
+      { ...valid, failedCount: -1 },
+      { ...valid, installedCount: 1.5 },
+      // Control: the real shapes, including an entry per loadStatus/failureStage pairing.
+      valid,
+      emptyPluginEvent(),
+      {
+        ...valid,
+        pluginCount: 1,
+        installedCount: 1,
+        loadedCount: 0,
+        failedCount: 0,
+        npmCount: 0,
+        localCount: 1,
+        plugins: [
+          pluginEntry({
+            name: "hello-logger",
+            source: "local",
+            scope: "project",
+            configSource: "env-config",
+            loadStatus: "skipped",
+            failureStage: "deprecated",
+            hasOptions: true,
+          }),
+        ],
+      },
+    ],
+    ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN,
+  )
+
+  const pending = await preparePendingBatch(10)
+  expect(pending.map((item) => item.queueId)).toEqual(["queue-17", "queue-18", "queue-19"])
 })
 
 test("slash command queue rejects malformed payloads and unknown keys", async () => {

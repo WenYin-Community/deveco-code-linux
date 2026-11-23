@@ -1035,11 +1035,13 @@ test("flags tools whose output contains error text", async () => {
   expect(harness.recordToolExecution).toHaveBeenCalledWith("bash", expect.any(Number), false, undefined, undefined)
 })
 
-test("has no config hook and starts sessions without a ui_verification model", async () => {
+test("does not read the ui_verification model from config and starts sessions without one", async () => {
   const harness = createHarness()
   const hooks = await harness.plugin({ directory: "/tmp/project" } as never)
-  // The model is no longer snapshotted from config; it is recorded per verify_ui call.
-  expect(hooks.config).toBeUndefined()
+  // The model is no longer snapshotted from config; it is recorded per verify_ui call. The config hook
+  // exists for the plugin inventory, so the check is that handing it a config records no model.
+  await hooks.config!({ ui: { verification: { model: "gpt-4o" } } } as never)
+  expect(harness.recordUIVerificationModel).not.toHaveBeenCalled()
 
   await hooks["chat.message"]!(
     { sessionID: "session-1", agent: "build", model: { providerID: "openai", modelID: "model-1" } } as never,

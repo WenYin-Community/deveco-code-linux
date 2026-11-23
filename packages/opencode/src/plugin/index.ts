@@ -30,6 +30,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
+import { PluginLoadStatus } from "./load-status"
 import { isPathPluginSpec, parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
@@ -224,9 +225,15 @@ export const layer = Layer.effect(
             kind: "server",
             report: {
               start(candidate) {},
-              missing(candidate, _retry, message) {},
+              missing(candidate, _retry, message) {
+                PluginLoadStatus.record(ctx.directory, candidate.plan.spec, {
+                  loadStatus: "missing",
+                  failureStage: "",
+                })
+              },
               error(candidate, _retry, stage, error, resolved) {
                 const spec = candidate.plan.spec
+                PluginLoadStatus.record(ctx.directory, spec, { loadStatus: "failed", failureStage: stage })
                 const cause = error instanceof Error ? (error.cause ?? error) : error
                 const message = stage === "load" ? errorMessage(error) : errorMessage(cause)
 
@@ -262,9 +269,13 @@ export const layer = Layer.effect(
               const isHarness = (load.mod.default as { id?: unknown } | undefined)?.id === BuiltinHarness.ID
               if (isHarness && harnessLoaded) return
               await applyPlugin(load, input, hooks)
+              PluginLoadStatus.record(ctx.directory, load.spec, { loadStatus: "loaded", failureStage: "" })
               if (isHarness) harnessLoaded = true
             },
             catch: (err) => {
+              // The module imported fine but its server entrypoint failed: a plugin-side failure,
+              // not a loader failure, so it is reported as its own stage.
+              PluginLoadStatus.record(ctx.directory, load.spec, { loadStatus: "failed", failureStage: "server" })
               const message = errorMessage(err)
               return message
             },
@@ -302,6 +313,9 @@ export const layer = Layer.effect(
           })
         })
         yield* Effect.addFinalizer(() => unsubscribe)
+        // A server can open and dispose many directories, so the records of this one are dropped
+        // with the instance instead of living until the process exits.
+        yield* Effect.addFinalizer(() => Effect.sync(() => PluginLoadStatus.clear(ctx.directory)))
 
         yield* Effect.addFinalizer(() =>
           Effect.forEach(

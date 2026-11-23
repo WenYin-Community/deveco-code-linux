@@ -12,12 +12,24 @@ import type {
   AnalyticsTransportFields,
   BuildProjectAnalyticsEvent,
   BuildProjectInfo,
+  DevEcoCodePluginEvent,
   DevEcoCodeSlashEvent,
+  PluginEntryInfo,
   QueuedAnalyticsSubmission,
   ToolExecution,
   ToolSummary,
 } from "./types"
-import { ANALYTICS_ACTION, isAnalyticsSourceType, SLASH_COMMAND_NAME_MAX_LENGTH } from "./types"
+import {
+  ANALYTICS_ACTION,
+  derivePluginSummary,
+  isAnalyticsSourceType,
+  PLUGIN_ENTRY_FAILURE_STAGES,
+  PLUGIN_ENTRY_LOAD_STATUSES,
+  PLUGIN_ENTRY_SCOPES,
+  PLUGIN_ENTRY_SOURCES,
+  PLUGIN_CONFIG_SOURCES,
+  SLASH_COMMAND_NAME_MAX_LENGTH,
+} from "./types"
 import {
   buildD2aEvent,
   isD2aBuildResult,
@@ -462,6 +474,9 @@ function isPendingAnalyticsEvent(value: unknown): value is PendingAnalyticsEvent
   if (value.action === ANALYTICS_ACTION.D2A || value.action === ANALYTICS_ACTION.D2A_WORKFLOW) {
     return isD2aWorkflowAnalyticsEvent(value.event)
   }
+  if (value.action === ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN) {
+    return isDevEcoCodePluginEvent(value.event)
+  }
   return false
 }
 
@@ -691,6 +706,69 @@ function isDevEcoCodeSlashEvent(value: unknown): value is DevEcoCodeSlashEvent {
     isSlashCommandTimestamp(value.timestamp) &&
     isSlashCommandName(value.commandName)
   )
+}
+
+// The plugin inventory is the only event carrying a nested list, so the whitelist runs at both
+// levels: an extra key anywhere in the payload (options content, an error string, a filesystem
+// path) rejects the whole event instead of being silently dropped, and the summary numbers have to
+// equal what the entries say.
+const PLUGIN_EVENT_STRING_FIELDS = ["sourceVersion", "os_arch", "os_name", "os_version"] as const
+const PLUGIN_EVENT_COUNT_FIELDS = [
+  "pluginCount",
+  "installedCount",
+  "loadedCount",
+  "failedCount",
+  "npmCount",
+  "localCount",
+] as const
+const PLUGIN_ENTRY_KEYS = [
+  "name",
+  "version",
+  "source",
+  "scope",
+  "configSource",
+  "installed",
+  "loadStatus",
+  "failureStage",
+  "hasOptions",
+] as const
+
+function isOneOf(allowed: readonly string[], value: unknown): boolean {
+  return typeof value === "string" && allowed.includes(value)
+}
+
+function isCount(value: unknown): boolean {
+  // A negative or non-integer count can only come from a corrupted payload; rejecting it first
+  // keeps the derived-count comparison below from comparing against a nonsensical baseline.
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+function isPluginEntryInfo(value: unknown): boolean {
+  if (!isRecord(value) || !hasExactKeys(value, PLUGIN_ENTRY_KEYS)) return false
+  return (
+    typeof value.name === "string" &&
+    typeof value.version === "string" &&
+    isOneOf(PLUGIN_ENTRY_SOURCES, value.source) &&
+    isOneOf(PLUGIN_ENTRY_SCOPES, value.scope) &&
+    isOneOf(PLUGIN_CONFIG_SOURCES, value.configSource) &&
+    typeof value.installed === "boolean" &&
+    isOneOf(PLUGIN_ENTRY_LOAD_STATUSES, value.loadStatus) &&
+    isOneOf(PLUGIN_ENTRY_FAILURE_STAGES, value.failureStage) &&
+    typeof value.hasOptions === "boolean"
+  )
+}
+
+function isDevEcoCodePluginEvent(value: unknown): value is DevEcoCodePluginEvent {
+  if (!isRecord(value)) return false
+  if (!hasExactKeys(value, ["sourceType", ...PLUGIN_EVENT_STRING_FIELDS, ...PLUGIN_EVENT_COUNT_FIELDS, "plugins"]))
+    return false
+  if (!isAnalyticsSourceType(value.sourceType)) return false
+  if (!hasStrings(value, PLUGIN_EVENT_STRING_FIELDS)) return false
+  if (!PLUGIN_EVENT_COUNT_FIELDS.every((field) => isCount(value[field]))) return false
+  if (!Array.isArray(value.plugins) || !value.plugins.every(isPluginEntryInfo)) return false
+  // isPluginEntryInfo already checked every element, so the list is safe to read as the contract type.
+  const derived = derivePluginSummary(value.plugins as readonly PluginEntryInfo[])
+  return PLUGIN_EVENT_COUNT_FIELDS.every((field) => derived[field] === value[field])
 }
 
 function createPendingEvent(submission: AnalyticsQueueSubmission): PendingAnalyticsEvent {

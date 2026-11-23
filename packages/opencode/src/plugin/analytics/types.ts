@@ -227,6 +227,80 @@ export interface DevEcoCodeSlashEvent extends AnalyticsEnvironmentFields {
   commandName: string
 }
 
+export const PLUGIN_ENTRY_SOURCES = ["npm", "local"] as const
+export const PLUGIN_ENTRY_SCOPES = ["global", "project"] as const
+export const PLUGIN_CONFIG_SOURCES = [
+  "user-config",
+  "project-config",
+  "remote-config",
+  "env-config",
+  "managed-config",
+] as const
+export const PLUGIN_ENTRY_LOAD_STATUSES = ["loaded", "failed", "missing", "skipped", "unknown"] as const
+// "" means no stage applies (loaded, skipped, missing), so it is a value of the stage, not a gap.
+export const PLUGIN_ENTRY_FAILURE_STAGES = [
+  "",
+  "install",
+  "entry",
+  "compatibility",
+  "load",
+  "server",
+  "deprecated",
+] as const
+
+export type PluginEntrySource = (typeof PLUGIN_ENTRY_SOURCES)[number]
+export type PluginEntryScope = (typeof PLUGIN_ENTRY_SCOPES)[number]
+export type PluginConfigSource = (typeof PLUGIN_CONFIG_SOURCES)[number]
+export type PluginEntryLoadStatus = (typeof PLUGIN_ENTRY_LOAD_STATUSES)[number]
+// Not every stage is a loader.ts Report stage: "server" is the server-side plugin layer rejecting a
+// plugin it did load, and "deprecated" is decided from the inventory when no record exists at all.
+export type PluginEntryFailureStage = (typeof PLUGIN_ENTRY_FAILURE_STAGES)[number]
+
+// One declared plugin, as the platform sees it. Deliberately excludes the plugin path, its options
+// content and any error text: the event answers "is it installed / does it load / at which stage",
+// nothing that could identify the user's project or reproduce their configuration.
+export interface PluginEntryInfo {
+  name: string
+  version: string
+  source: PluginEntrySource
+  scope: PluginEntryScope
+  configSource: PluginConfigSource
+  installed: boolean
+  loadStatus: PluginEntryLoadStatus
+  failureStage: PluginEntryFailureStage
+  hasOptions: boolean
+}
+
+export interface PluginInventorySummary {
+  pluginCount: number
+  installedCount: number
+  loadedCount: number
+  failedCount: number
+  npmCount: number
+  localCount: number
+}
+
+// Inventory of every plugin the instance declared, enqueued once per directory instance when the
+// plugin layer finishes loading.
+export interface DevEcoCodePluginEvent extends AnalyticsEnvironmentFields, PluginInventorySummary {
+  plugins: PluginEntryInfo[]
+}
+
+// Summary counts are always derived from the entries, so an event can never contradict its own
+// detail list. failedCount counts both a load error and a declared plugin whose package is absent:
+// product-wise "the plugin is not working" is one question. loadedCount counts only loaded entries,
+// so loaded + failed + skipped + unknown <= pluginCount with the remainder being unresolved states.
+export function derivePluginSummary(entries: readonly PluginEntryInfo[]): PluginInventorySummary {
+  return {
+    pluginCount: entries.length,
+    installedCount: entries.filter((entry) => entry.installed).length,
+    loadedCount: entries.filter((entry) => entry.loadStatus === "loaded").length,
+    failedCount: entries.filter((entry) => entry.loadStatus === "failed" || entry.loadStatus === "missing").length,
+    npmCount: entries.filter((entry) => entry.source === "npm").length,
+    localCount: entries.filter((entry) => entry.source === "local").length,
+  }
+}
+
 export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
@@ -236,6 +310,7 @@ export const ANALYTICS_ACTION = {
   D2A: "DevEcoCodeD2A",
   // 升级前入队的 D2A 事件沿用原 action 继续发送，读取与发送都要兼容。
   D2A_WORKFLOW: "DevEcoCodeD2AWorkflow",
+  DEV_ECO_CODE_PLUGIN: "DevEcoCodePlugin",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -264,6 +339,10 @@ export type AnalyticsSubmission =
   | {
       action: typeof ANALYTICS_ACTION.D2A_WORKFLOW
       event: D2aWorkflowAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN
+      event: DevEcoCodePluginEvent
     }
 
 export interface AnalyticsTransportFields {
