@@ -139,6 +139,8 @@
     "feedback_description": "提交投诉、建议或反馈",
     "complain": "投诉",
     "complain_description": "打开投诉页面",
+    "collect": "收集日志",
+    "collect_desc": "选择并上传日志文件到云端",
     "privacy": "隐私",
     "privacy_description": "隐私设置",
     "switch_language": "切换语言",

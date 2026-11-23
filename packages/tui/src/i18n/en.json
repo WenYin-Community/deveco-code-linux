@@ -139,6 +139,8 @@
     "feedback_description": "Submit complaints, suggestions or feedback",
     "complain": "Complain",
     "complain_description": "Open the complaint page",
+    "collect": "Collect Logs",
+    "collect_desc": "Select and upload log files to cloud",
     "privacy": "Privacy",
     "privacy_description": "Privacy settings",
     "switch_language": "Switch language",

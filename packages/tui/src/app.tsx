@@ -1177,6 +1177,28 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
             },
           ]
         : []),
+      ...(sync.data.provider_next.connected.includes("deveco")
+        ? [
+            {
+              name: "collect.open",
+              title: t("command.collect"),
+              desc: t("command.collect_desc"),
+              slashName: "collect",
+              run: () => {
+                const CollectDialog = getDevEcoExtensions().collectDialog
+                if (!CollectDialog) {
+                  toast.show({
+                    message: t("dialog.collect_not_available"),
+                    variant: "error",
+                  })
+                  return
+                }
+                dialog.replace(() => <CollectDialog triggerType="00001" />)
+              },
+              category: t("category.system"),
+            },
+          ]
+        : []),
     ].map((command) => ({
       namespace: "palette",
       ...command,
