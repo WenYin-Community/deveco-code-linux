@@ -1,17 +1,17 @@
 import { Global } from "@opencode-ai/core/global"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createTestRenderer } from "@opentui/core/testing"
-import { expect, mock, test } from "bun:test"
+import { expect, jest, test } from "bun:test"
 import { Effect } from "effect"
+import path from "node:path"
 import { createEffect, createSignal } from "solid-js"
-import { announcementKey, type Announcement } from "../../src/announcements/model"
-import type { AnnouncementState } from "../../src/announcements/service"
+import type { Announcement } from "../../src/announcements/model"
+import { announcementCachePath } from "../../src/announcements/store"
 import { useAnnouncements } from "../../src/context/announcements"
 import { registerDevEcoExtensions, resetDevEcoExtensions } from "../../src/deveco-extensions"
+import { tmpdir } from "../fixture/fixture"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { createEventSource, createFetch, directory, json } from "../fixture/tui-sdk"
-
-const realService = { ...(await import("../../src/announcements/service")) }
 
 const announcement = {
   title: "ANNOUNCEMENT_DIALOG",
@@ -25,74 +25,48 @@ const nextAnnouncement = {
   content: "next body",
   publishTime: 2,
 }
-let promptVersion = 0
-let refreshes = 0
-let crashDetected = false
-let items: Announcement[] = []
-let publishState: ((state: AnnouncementState) => void) | undefined
 
-function publishPrompt() {
-  publishState?.({ items, promptVersion })
-}
-
-function setPromptVersion(version: number) {
-  promptVersion = version
-  publishPrompt()
-}
-
-mock.module("../../src/announcements/service", () => ({
-  ...realService,
-  createAnnouncementService: (input: { onChange: (state: AnnouncementState) => void }) => ({
-    start: async () => {
-      publishState = input.onChange
-      publishPrompt()
-    },
-    refresh: async () => {
-      refreshes++
-    },
-    markRead: async (key: string) => {
-      items = items.map((item) => (announcementKey(item) === key ? { ...item, read: true } : item))
-      publishPrompt()
-    },
-    stop: () => {
-      if (publishState === input.onChange) publishState = undefined
-    },
-    ackPrompt: (version: number) => {
-      if (promptVersion === version) setPromptVersion(0)
-    },
-  }),
-}))
-
-async function startApp(options: { items?: Announcement[]; blocked?: boolean; signed?: boolean } = {}) {
-  items = options.items ?? [announcement]
-  refreshes = 0
+async function startApp(
+  state: string,
+  options: { cached?: Announcement[]; blocked?: boolean; signed?: boolean; crash?: boolean } = {},
+) {
+  await Bun.write(path.join(state, "kv.json"), JSON.stringify({ language: "en" }))
+  await Bun.write(announcementCachePath(state), JSON.stringify(options.cached ?? []))
   const [agreement, setAgreement] = createSignal(
     options.signed === false ? undefined : { accepted: true, upload: { state: "local" } },
   )
   const [blocking, setBlocking] = createSignal(options.blocked ?? false)
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
   const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   const { CrashDialog, StartupHomeBody } = await import("./startup-dialogs")
 
-  let started!: () => void
-  const ready = new Promise<void>((resolve) => {
-    started = resolve
-  })
+  const ready = Promise.withResolvers<void>()
   let api: TuiPluginApi | undefined
+  let announcements: ReturnType<typeof useAnnouncements> | undefined
+  let onArrival: (() => void) | undefined
   const calls = createFetch((url) => {
     if (url.pathname === "/skill")
       return json({ location: { directory, project: { id: "proj_test", directory } }, data: [] })
   })
   const events = createEventSource()
+  const renderer = jest.spyOn(core, "createCliRenderer").mockResolvedValue(setup.renderer)
+  const cloud = mockAnnouncementRequest()
 
   resetDevEcoExtensions()
   registerDevEcoExtensions({
     collectDialog: CrashDialog,
-    consumeCrashInfo: () => crashDetected,
+    consumeCrashInfo: () => options.crash === true,
     agreementGate: (props) => {
-      const announcements = useAnnouncements()
-      createEffect(() => announcements.setAgreement(agreement()))
+      const context = useAnnouncements()
+      announcements = context
+      createEffect(() => context.setAgreement(agreement()))
+      createEffect(() => {
+        if (context.items().length === 0 || !onArrival) return
+        const callback = onArrival
+        onArrival = undefined
+        // Run after the prompt starts its lazy import and before the import resolves.
+        queueMicrotask(callback)
+      })
       return props.children
     },
     homeBody: (props) => StartupHomeBody({ sync: props.sync, blocking }),
@@ -110,45 +84,104 @@ async function startApp(options: { items?: Announcement[]; blocked?: boolean; si
       pluginHost: {
         async start(next) {
           api = next.api
-          started()
+          ready.resolve()
         },
         async dispose() {},
       },
-    }).pipe(Effect.provide(Global.defaultLayer)),
+    }).pipe(Effect.provide(Global.layerWith({ state }))),
   )
 
-  await ready
-  await setup.flush()
+  const finish = async () => {
+    try {
+      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+      await task
+    } finally {
+      renderer.mockRestore()
+      cloud.restore()
+      resetDevEcoExtensions()
+    }
+  }
+  try {
+    await Promise.race([ready.promise, task.then(() => Promise.reject(new Error("TUI exited during startup")))])
+    await setup.flush()
+  } catch (error) {
+    await finish().catch(() => undefined)
+    throw error
+  }
 
   return {
     setup,
     api: () => api,
     setAgreement,
     setBlocking,
-    finish: async () => {
-      process.emit("SIGHUP")
-      await task
+    items: () => announcements?.items() ?? [],
+    requests: cloud.requests,
+    reply(items: Announcement[], onItems?: () => void) {
+      onArrival = onItems
+      cloud.reply(items)
+    },
+    waitFor: (predicate: () => boolean) => waitFor(() => (predicate() ? true : undefined), "announcement state"),
+    waitForFrame: (text: string) =>
+      waitFor(async () => {
+        await setup.flush()
+        const frame = setup.captureCharFrame()
+        return frame.includes(text) ? frame : undefined
+      }, text),
+    finish,
+  }
+}
+
+function mockAnnouncementRequest() {
+  const response = Promise.withResolvers<Response>()
+  let requests = 0
+  const originalFetch = globalThis.fetch
+  const fetch = jest.spyOn(globalThis, "fetch").mockImplementation(
+    Object.assign(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input))
+        if (url.pathname !== "/sse/codeGenie/announcement") return originalFetch(input, init)
+        requests++
+        return response.promise
+      },
+      { preconnect: originalFetch.preconnect },
+    ),
+  )
+  return {
+    requests: () => requests,
+    reply: (items: Announcement[]) => response.resolve(json({ code: 200, body: items })),
+    restore() {
+      response.resolve(new Response(null, { status: 503 }))
+      fetch.mockRestore()
     },
   }
 }
 
-test("startup crash modal defers announcement prompt until it closes", async () => {
-  setPromptVersion(0)
-  crashDetected = true
-  const app = await startApp()
-  try {
-    setPromptVersion(1)
-    await app.setup.flush()
-    expect(app.setup.captureCharFrame()).not.toContain("ANNOUNCEMENT_DIALOG")
+// Disk I/O can complete after the renderer becomes idle.
+async function waitFor<T>(read: () => T | undefined | Promise<T | undefined>, description: string) {
+  const deadline = Date.now() + 3000
+  do {
+    const value = await read()
+    if (value !== undefined) return value
+    await Bun.sleep(10)
+  } while (Date.now() < deadline)
+  throw new Error(`Timed out waiting for ${description}`)
+}
 
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
+test("startup crash modal defers announcement prompt until it closes", async () => {
+  await using tmp = await tmpdir()
+  const app = await startApp(tmp.path, { crash: true })
+  try {
+    await app.waitForFrame("SYNC_DONE")
+    await app.waitForFrame("CRASH_DIALOG")
+    app.reply([announcement])
+    await app.waitFor(() => app.items().length === 1)
     await app.setup.flush()
-    await Bun.sleep(50)
-    await app.setup.flush()
-    expect(app.setup.captureCharFrame()).toContain("CRASH_DIALOG")
+    const frame = app.setup.captureCharFrame()
+    expect(frame).toContain("CRASH_DIALOG")
+    expect(frame).not.toContain("ANNOUNCEMENT_DIALOG")
 
     app.api()?.ui.dialog.clear()
-    await app.setup.waitForFrame((frame) => frame.includes("ANNOUNCEMENT_DIALOG"))
+    await app.waitForFrame("announcement body")
     expect(app.setup.captureCharFrame()).not.toContain("CRASH_DIALOG")
   } finally {
     await app.finish()
@@ -156,130 +189,126 @@ test("startup crash modal defers announcement prompt until it closes", async () 
 })
 
 test("new modal arriving during announcement import is not overwritten", async () => {
-  setPromptVersion(0)
-  crashDetected = false
-  const app = await startApp()
+  await using tmp = await tmpdir()
+  const app = await startApp(tmp.path)
   try {
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
-    setPromptVersion(1)
-    app.api()?.keymap.dispatchCommand("model.list")
-    await app.setup.waitForFrame((frame) => frame.includes("Select model"))
+    await app.waitForFrame("SYNC_DONE")
+    app.reply([announcement], () => app.api()?.keymap.dispatchCommand("model.list"))
+    await app.waitForFrame("Select model")
+    await import("../../src/component/dialog-announcements")
     expect(app.setup.captureCharFrame()).not.toContain("ANNOUNCEMENT_DIALOG")
-    expect(items.some((item) => item.read)).toBe(false)
+    expect(app.items().some((item) => item.read)).toBe(false)
     app.api()?.ui.dialog.clear()
-    await app.setup.waitForFrame((frame) => frame.includes("announcement body"))
+    await app.waitForFrame("announcement body")
   } finally {
     await app.finish()
   }
 })
 
 test("a new announcement arriving while details are open does not reopen the dialog after close", async () => {
-  setPromptVersion(0)
-  crashDetected = false
-  const app = await startApp()
+  await using tmp = await tmpdir()
+  const app = await startApp(tmp.path, { cached: [announcement] })
   try {
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
-    setPromptVersion(1)
-    await app.setup.waitForFrame((frame) => frame.includes("announcement body"))
+    await app.waitForFrame("announcement body")
 
-    items = [nextAnnouncement, ...items]
-    setPromptVersion(2)
+    app.reply([nextAnnouncement])
+    await app.waitFor(() => app.items().some((item) => item.title === nextAnnouncement.title))
     await app.setup.flush()
     expect(app.setup.captureCharFrame()).toContain("announcement body")
-    expect(items.find((item) => item.title === nextAnnouncement.title)?.read).toBe(false)
+    expect(app.items().find((item) => item.title === nextAnnouncement.title)?.read).toBe(false)
     app.api()?.ui.dialog.clear()
     await app.setup.flush()
     await Bun.sleep(50)
     await app.setup.flush()
     expect(app.setup.captureCharFrame()).not.toContain("next body")
-    expect(items.find((item) => item.title === nextAnnouncement.title)?.read).toBe(false)
+    expect(app.items().find((item) => item.title === nextAnnouncement.title)?.read).toBe(false)
   } finally {
     await app.finish()
   }
 })
 
 test("the only unread announcement is queried after signing and opens after inline startup releases", async () => {
-  setPromptVersion(0)
-  crashDetected = false
+  await using tmp = await tmpdir()
   const seen = { ...announcement, title: "Seen announcement", content: "seen body", read: true }
-  const app = await startApp({ blocked: true, items: [seen, announcement], signed: false })
+  const app = await startApp(tmp.path, { blocked: true, cached: [seen], signed: false })
   try {
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
-    setPromptVersion(1)
+    await app.waitForFrame("SYNC_DONE")
     app.api()?.keymap.dispatchCommand("announcements.open")
     await app.setup.flush()
-    expect(refreshes).toBe(0)
-    expect(publishState).toBeUndefined()
+    expect(app.requests()).toBe(0)
+    expect(app.items()).toEqual([])
     expect(app.setup.captureCharFrame()).not.toContain("ANNOUNCEMENT_DIALOG")
 
     app.setAgreement({ accepted: true, upload: { state: "review_required" } })
     await app.setup.flush()
-    expect(refreshes).toBe(0)
+    expect(app.requests()).toBe(0)
     app.setAgreement({ accepted: true, upload: { state: "pending" } })
-    await app.setup.waitFor(() => refreshes === 1)
+    await app.waitFor(() => app.requests() === 1)
+    app.reply([announcement])
+    await app.waitFor(() => app.items().length === 2)
     await app.setup.flush()
     expect(app.setup.captureCharFrame()).not.toContain("ANNOUNCEMENT_DIALOG")
-    expect(items.find((item) => item.title === announcement.title)?.read).toBe(false)
+    expect(app.items().find((item) => item.title === announcement.title)?.read).toBe(false)
 
     app.setBlocking(false)
-    await app.setup.waitForFrame((frame) => frame.includes("announcement body"))
-    expect(items.find((item) => item.title === announcement.title)?.read).toBe(true)
+    await app.waitForFrame("announcement body")
+    await app.waitFor(() => app.items().find((item) => item.title === announcement.title)?.read === true)
     app.setup.mockInput.pressArrow("left")
-    await app.setup.waitForFrame((frame) => frame.includes("Seen announcement"))
+    await app.waitForFrame("Seen announcement")
     expect(app.setup.captureCharFrame()).not.toContain("announcement body")
 
     app.setAgreement({ accepted: true, upload: { state: "review_required" } })
-    await app.setup.waitForFrame((frame) => !frame.includes("Seen announcement"))
-    expect(publishState).toBeUndefined()
-    expect(refreshes).toBe(1)
+    await app.waitForFrame("SYNC_DONE")
+    expect(app.setup.captureCharFrame()).not.toContain("Seen announcement")
+    expect(app.items()).toEqual([])
+    expect(app.requests()).toBe(1)
   } finally {
     await app.finish()
   }
 })
 
 test("multiple unread announcements open the announcement list", async () => {
-  setPromptVersion(0)
-  crashDetected = false
+  await using tmp = await tmpdir()
   const another = { ...announcement, title: "Second unread" }
-  const app = await startApp({ items: [announcement, another] })
+  const app = await startApp(tmp.path)
   try {
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
-    setPromptVersion(1)
-    await app.setup.waitForFrame((frame) => frame.includes("Second unread"))
+    await app.waitForFrame("SYNC_DONE")
+    app.reply([announcement, another])
+    await app.waitForFrame("Second unread")
     expect(app.setup.captureCharFrame()).not.toContain("announcement body")
-    expect(items.some((item) => item.read)).toBe(false)
+    expect(app.items().some((item) => item.read)).toBe(false)
   } finally {
     await app.finish()
   }
 })
 
 test("announcement command opens the list and allows automatic reminders after closing", async () => {
-  setPromptVersion(0)
-  crashDetected = false
-  const app = await startApp()
+  await using tmp = await tmpdir()
+  const app = await startApp(tmp.path, { cached: [announcement], blocked: true })
   try {
-    await app.setup.waitForFrame((frame) => frame.includes("SYNC_DONE"))
+    await app.waitForFrame("SYNC_DONE")
+    await app.waitFor(() => app.items().length === 1)
     const command = app.api()?.keymap.getCommands().find((entry) => entry.name === "announcements.open")
     expect(command?.title).toBe("View DevEco Code announcements")
     app.api()?.keymap.dispatchCommand("announcements.open")
-    const list = await app.setup.waitForFrame((frame) => frame.includes("ANNOUNCEMENT_DIALOG"))
+    const list = await app.waitForFrame("ANNOUNCEMENT_DIALOG")
     expect(list).not.toContain("announcement body")
-    expect(items.some((item) => item.read)).toBe(false)
+    expect(app.items().some((item) => item.read)).toBe(false)
 
     app.setup.mockInput.pressEnter()
-    await app.setup.waitForFrame((frame) => frame.includes("announcement body"))
+    await app.waitForFrame("announcement body")
 
     app.api()?.keymap.dispatchCommand("announcements.open")
     await app.setup.flush()
     expect(app.setup.captureCharFrame()).toContain("announcement body")
 
     app.setup.mockInput.pressArrow("left")
-    await app.setup.waitForFrame((frame) => frame.includes("○ ANNOUNCEMENT_DIALOG"))
+    await app.waitForFrame("○ ANNOUNCEMENT_DIALOG")
     app.api()?.ui.dialog.clear()
-    items = [nextAnnouncement, ...items]
-    setPromptVersion(1)
-    await app.setup.waitForFrame((frame) => frame.includes("next body"))
-    expect(items.find((item) => item.title === nextAnnouncement.title)?.read).toBe(true)
+    app.setBlocking(false)
+    app.reply([nextAnnouncement])
+    await app.waitForFrame("next body")
+    await app.waitFor(() => app.items().find((item) => item.title === nextAnnouncement.title)?.read === true)
   } finally {
     await app.finish()
   }
