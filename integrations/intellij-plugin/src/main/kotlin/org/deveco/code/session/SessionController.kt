@@ -8,7 +8,6 @@ import androidx.compose.runtime.setValue
 import com.agentclientprotocol.model.*
 import com.intellij.ide.SaveAndSyncHandler
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
@@ -72,11 +71,12 @@ import org.deveco.code.session.model.forwardedDefaultEffort
 import org.deveco.code.session.model.hasVisibleUserParts
 import org.deveco.code.session.model.mergeSnapshotItems
 import org.deveco.code.session.model.renderSessionSnapshot
+import org.deveco.code.session.update.SessionUpdateQueue
+import org.deveco.code.session.update.SessionUpdateRouter
 import org.deveco.code.session.ui.composer.isTextLikeMimeType
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -331,7 +331,6 @@ internal class SessionController(
         }
 
         private const val MAX_PROMPT_HISTORY = 50
-        private const val MAX_SESSION_UPDATES_PER_EDT_TURN = 64
         private const val MAX_TITLE_LEN = 50
         private const val COMPACTION_RATIO_THRESHOLD = 0.70
 
@@ -2875,267 +2874,192 @@ internal class SessionController(
         }
     }
 
-    private fun onSessionUpdate(notification: AcpSessionUpdate) {
-        // Filter on the calling thread so other sessions' notifications never reach
-        // the EDT. Drain a bounded batch per event-loop turn so a fast token stream
-        // cannot monopolize the EDT and prevent IDE modal windows from opening.
-        if (notification.sessionId.value != sessionId) return
-        enqueueSessionUiUpdate {
-            // Turn events flowing while a stop is pending prove the cancel lost
-            // the pipe-order race: startPrompt launches asynchronously, so a
-            // cancel sent around dispatch can still reach the server BEFORE the
-            // prompt is written and gets processed against an idle session.
-            // Flowing events prove the prompt is now admitted — a re-sent cancel
-            // queues behind it and aborts the live turn. Release the stop button
-            // too: if the re-send fails as well, a clickable button is the
-            // user's escape hatch instead of an unstop turn.
-            if (stopRequested && stopping && responding) {
-                stopping = false
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    runCatching { service.cancelSession(sessionId) }
-                        .onFailure { log.warn("Cancel re-send on live turn events failed, sessionId=$sessionId", it) }
-                }
-            }
-            // A session/update event means the backend resumed normal operation
-            // (queue resolved, or 429 retry recovered). Clear the notices so
-            // they don't persist through the rest of the turn.
-            if (retryNotice != null) {
-                retryNotice = null
-            }
-            handleSessionUpdate(notification.update)
-        }
-    }
-
-    private val pendingSessionUiUpdates = ConcurrentLinkedQueue<() -> Unit>()
-    private val sessionUpdateDrainScheduled = AtomicBoolean(false)
+    private val sessionUpdateQueue = SessionUpdateQueue(
+        isDisposed = { disposed },
+        reportFailure = { message, error -> log.error("$message, sessionId=$sessionId", error) },
+    )
+    private val sessionUpdateRouter = SessionUpdateRouter(
+        sessionId = { sessionId },
+        queue = sessionUpdateQueue,
+        onLiveTurnEvent = ::handleLiveTurnEvent,
+        isSessionLoading = { sessionLoading },
+        isPrompting = { prompting },
+        isStopped = { stopped },
+        isCompacting = { compacting },
+        finishThought = ::finishThought,
+        onAgentMessage = ::handleAgentMessage,
+        onUserMessage = ::handleUserMessage,
+        onThought = ::handleThought,
+        onToolCall = ::handleToolUpdate,
+        applyCurrentMode = { modeId ->
+            selectedMode = modes.firstOrNull { it.id == modeId }
+        },
+        updateConfigOptions = { options -> updateConfigOptions(options) },
+        acceptAvailableCommands = ::applyAvailableCommands,
+        handleUsageUpdate = ::handleUsageUpdate,
+        reportOrderingWarning = { message -> log.warn(message) },
+        log = log,
+    )
 
     private fun enqueueSessionUiUpdate(action: () -> Unit) {
-        pendingSessionUiUpdates.add(action)
-        scheduleSessionUpdateDrain()
+        sessionUpdateQueue.enqueue(action)
     }
 
-    private fun scheduleSessionUpdateDrain() {
-        if (!sessionUpdateDrainScheduled.compareAndSet(false, true)) return
-        // ModalityState.any(): a one-arg invokeLater from a background thread is
-        // NON_MODAL and would be deferred while any modal dialog (e.g. IDE Settings)
-        // is open, freezing live conversation updates behind it. The drain only writes
-        // snapshot state, so running during modality is safe.
-        ApplicationManager.getApplication().invokeLater({
-            if (disposed) {
-                pendingSessionUiUpdates.clear()
-                sessionUpdateDrainScheduled.set(false)
-                return@invokeLater
-            }
-            repeat(MAX_SESSION_UPDATES_PER_EDT_TURN) {
-                val action = pendingSessionUiUpdates.poll() ?: return@repeat
-                // One failing action must not wedge the drain: the flag reset below is
-                // unreachable through an exception, and a stuck AtomicBoolean would
-                // permanently freeze this session's UI updates.
-                try {
-                    action()
-                } catch (e: Exception) {
-                    log.error("Session update action failed, sessionId=$sessionId", e)
-                }
-            }
-            sessionUpdateDrainScheduled.set(false)
-            if (pendingSessionUiUpdates.isNotEmpty()) scheduleSessionUpdateDrain()
-        }, ModalityState.any())
+    private fun onSessionUpdate(notification: AcpSessionUpdate) {
+        sessionUpdateRouter.accept(notification)
     }
 
-    // Runs on the EDT via the bounded notification drain above.
-    private fun handleSessionUpdate(update: SessionUpdate) {
-        // During backend load, the server replays historical events — the only source of
-        // conversation history. Message-producing events fall through to normal processing;
-        // config/mode/commands/usage are handled inline and return early.
-        if (sessionLoading) {
-            when (update) {
-                is SessionUpdate.CurrentModeUpdate -> {
-                    selectedMode = modes.firstOrNull { it.id == update.currentModeId.value }
-                    return
-                }
-                is SessionUpdate.ConfigOptionUpdate -> {
-                    updateConfigOptions(update.configOptions)
-                    return
-                }
-                is SessionUpdate.AvailableCommandsUpdate -> {
-                    applyAvailableCommands(update)
-                    return
-                }
-                is SessionUpdate.UsageUpdate -> {
-                    handleUsageUpdate(update.used, update.size)
-                    return
-                }
-                // Message-producing events: fall through to normal processing below so the
-                // backend's historical replay populates the UI.
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate -> {
-                }
-                else -> return
-            }
-        } else if (!prompting && !stopped && !compacting) {
-            // Message events outside replay/turn mean the ordering contract in
-            // loadFromBackend() broke — warn so it surfaces in the field.
-            // compacting turns run without prompting=true; stopped turns drop
-            // their tail events below.
-            when (update) {
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate ->
-                    log.warn(
-                        "Message event outside replay/turn: ${update::class.java.simpleName} " +
-                            "for sessionId=$sessionId — replay ordering contract may be violated",
-                    )
-                else -> Unit
+    // Turn events flowing while a stop is pending prove the cancel lost the
+    // pipe-order race: the prompt is now admitted, so re-send the cancel behind
+    // it and release the stop feedback.
+    private fun handleLiveTurnEvent() {
+        if (stopRequested && stopping && responding) {
+            stopping = false
+            ApplicationManager.getApplication().executeOnPooledThread {
+                runCatching { service.cancelSession(sessionId) }
+                    .onFailure { log.warn("Cancel re-send on live turn events failed, sessionId=$sessionId", it) }
             }
         }
-        // After Stop (CancellationException fired), drop any queued-up message-producing
-        // SessionUpdate events still pending on EDT — otherwise they would append
-        // Thinking/Tool/new AGENT chunks AFTER the interrupted AGENT + action bar,
-        // breaking the "action bar at very bottom of the turn" layout.
-        // UsageUpdate(used=0) on the cancel path is already filtered at the publish()
-        // origin (AcpClientConnection.publish), so it never reaches here; non-zero
-        // UsageUpdate that legitimately reports partial billing is still applied below.
-        if (stopped) {
-            when (update) {
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate -> {
-                    log.info("onSessionUpdate STOPPED: dropping ${update::class.java.simpleName} for sessionId=$sessionId")
-                    return
+        // A live event means the backend resumed normal operation (queue
+        // resolved or 429 retry recovered), so stale notices no longer apply.
+        if (retryNotice != null) {
+            retryNotice = null
+        }
+    }
+
+    private fun handleAgentMessage(update: SessionUpdate.AgentMessageChunk) {
+        // ACP mirrors terminal session.error into an agent_message_chunk. Its
+        // text is the same human-readable message the TUI renders. Normal
+        // chunks fall through. The messageId shape selects attribution: live
+        // failures use "error-<eventId>" and keep last-agent semantics, while
+        // replayed failures carry the server message id that owns the error.
+        val msgId = update.messageId?.value
+        val chunkMeta = update._meta as? JsonObject
+        val errorMeta = chunkMeta?.get("error") as? JsonObject
+        // Sticky /debug markers ride the same mirror as agent chunks. They are
+        // status lines, not model output, so render them as SYSTEM markers.
+        val debugStateMeta = chunkMeta?.get("debugState") as? JsonObject
+        val text = (update.content as? ContentBlock.Text)?.text
+        when {
+            debugStateMeta != null -> appendDebugStateMarker(debugStateMeta, text)
+
+            errorMeta != null && !text.isNullOrEmpty() -> {
+                if (msgId != null && !msgId.startsWith("error-")) {
+                    markAgentError(msgId, text)
+                } else {
+                    markLastAgentWithError(text)
                 }
-                else -> Unit
+            }
+
+            else -> (update.content as? ContentBlock.Text)?.let {
+                appendAgent(msgId ?: "streaming-agent", it.text)
             }
         }
-        if (update is SessionUpdate.AgentMessageChunk ||
-            update is SessionUpdate.UserMessageChunk ||
-            update is SessionUpdate.ToolCall) finishThought()
+    }
+
+    private fun handleUserMessage(update: SessionUpdate.UserMessageChunk) {
+        activeAssistantMessageId = null
+        val textContent = update.content as? ContentBlock.Text
+        val internalOnly = textContent != null && isAssistantAudience(textContent)
+        // Internal notifications must be processed even mid-turn, otherwise
+        // background cards keep spinning until the next reload.
+        if (prompting && !internalOnly) return
+
+        SessionStorage.markInteracted(project, sessionId)
+        val msgId = update.messageId?.value
+        if (textContent != null) {
+            val isFirstChunk = msgId == null || !replayMessageIdToIndex.containsKey(msgId)
+            val userMsgIdx = if (isFirstChunk) {
+                val idx = if (internalOnly) -1 else replayUserMsgCount++
+                if (msgId != null) replayMessageIdToIndex[msgId] = idx
+                idx
+            } else {
+                replayMessageIdToIndex[msgId]!!
+            }
+            val origText = replayOrigTexts[userMsgIdx]
+            // Only the first chunk of a messageId creates a message. Later text
+            // and non-text chunks are merged through that same message.
+            if (!isFirstChunk) return
+
+            // Saved typed text wins; skill reverse-matching only rescues turns
+            // that no local decoration covers.
+            val displayText = origText
+                ?: restoreSkillExpansion(textContent.text)
+                ?: textContent.text
+            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
+            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
+            appendMessageNow(
+                ChatRole.USER,
+                MyMessageBundle.message("session.message.you"),
+                displayText,
+                attachments,
+                fileRefs,
+                internalOnly = internalOnly,
+                sourceMessageId = msgId,
+            )
+            if (internalOnly) {
+                // Wire text is authoritative; replay index mappings can skew.
+                mergeBackgroundNotification(textContent.text)
+                return
+            }
+            saveToHistory(displayText, attachments, fileRefs)
+            return
+        }
+
+        // Non-text content chunks need a message when their messageId first
+        // appears so image, resource, and resource-link chips remain visible.
+        if (msgId == null || msgId == replayLastNonTextMsgId || replayMessageIdToIndex.containsKey(msgId)) return
+        replayLastNonTextMsgId = msgId
+        val userMsgIdx = replayUserMsgCount++
+        replayMessageIdToIndex[msgId] = userMsgIdx
+        val displayText = replayOrigTexts[userMsgIdx] ?: ""
+        val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
+        val attachments = replayAttachments[userMsgIdx] ?: emptyList()
+        appendMessageNow(
+            ChatRole.USER,
+            MyMessageBundle.message("session.message.you"),
+            displayText,
+            attachments,
+            fileRefs,
+            sourceMessageId = msgId,
+        )
+        saveToHistory(displayText, attachments, fileRefs)
+    }
+
+    private fun handleThought(update: SessionUpdate.AgentThoughtChunk) {
+        (update.content as? ContentBlock.Text)?.let {
+            appendThought(update.messageId?.value, it.text)
+        }
+    }
+
+    private fun handleToolUpdate(update: SessionUpdate) {
         when (update) {
-            is SessionUpdate.AgentMessageChunk -> {
-                // ACP server mirrors terminal session.error into an
-                // agent_message_chunk (packages/opencode/src/acp/event.ts:
-                // sessionErrorChunk). Its content.text carries the human-readable
-                // message — the same field TUI's formatError reads from
-                // error.data.message. Route these to the error path so the
-                // GUI shows a terminal error card instead of ordinary agent
-                // text, matching the TUI. Normal chunks fall through. The
-                // messageId shape picks the attribution: live failures are
-                // tagged "error-<eventId>" and keep the last-agent semantics;
-                // replayed failures carry the server message id and must be
-                // attributed to that exact message — during replay the last
-                // incomplete AGENT belongs to an earlier turn, and stamping it
-                // both puts the error on a successful reply and displaces that
-                // item after the failed turn's prompt.
-                val msgId = update.messageId?.value
-                val chunkMeta = update._meta as? JsonObject
-                val errorMeta = chunkMeta?.get("error") as? JsonObject
-                // Sticky /debug transcript markers ride the same mirror as
-                // agent chunks tagged _meta.debugState (event.ts:debugStateChunk).
-                // Status lines, not model output — render a SYSTEM marker.
-                val debugStateMeta = chunkMeta?.get("debugState") as? JsonObject
-                val text = (update.content as? ContentBlock.Text)?.text
-                when {
-                    debugStateMeta != null -> appendDebugStateMarker(debugStateMeta, text)
+            is SessionUpdate.ToolCall -> updateTool(
+                ToolUpdate(
+                    update.toolCallId.value,
+                    update.title,
+                    update.kind,
+                    update.status,
+                    update.content,
+                    update.rawInput,
+                    update.rawOutput,
+                    update.locations,
+                ),
+            )
 
-                    errorMeta != null && !text.isNullOrEmpty() -> {
-                        if (msgId != null && !msgId.startsWith("error-")) {
-                            markAgentError(msgId, text)
-                        } else {
-                            markLastAgentWithError(text)
-                        }
-                    }
+            is SessionUpdate.ToolCallUpdate -> updateTool(
+                ToolUpdate(
+                    update.toolCallId.value,
+                    update.title,
+                    update.kind,
+                    update.status,
+                    update.content,
+                    update.rawInput,
+                    update.rawOutput,
+                    update.locations,
+                ),
+            )
 
-                    else -> (update.content as? ContentBlock.Text)?.let {
-                        appendAgent(msgId ?: "streaming-agent", it.text)
-                    }
-                }
-            }
-            is SessionUpdate.UserMessageChunk -> {
-                activeAssistantMessageId = null
-                val textContent = update.content as? ContentBlock.Text
-                val internalOnly = textContent != null && isAssistantAudience(textContent)
-                // Internal notifications must be processed even mid-turn, otherwise
-                // background cards keep spinning until the next reload.
-                if (!prompting || internalOnly) {
-                    SessionStorage.markInteracted(project, sessionId)
-                    val msgId = update.messageId?.value
-                    if (textContent != null) {
-                        // Text content chunk
-                        val isFirstChunk = msgId == null || !replayMessageIdToIndex.containsKey(msgId)
-                        val userMsgIdx = if (isFirstChunk) {
-                            val idx = if (internalOnly) -1 else replayUserMsgCount++
-                            if (msgId != null) replayMessageIdToIndex[msgId] = idx
-                            idx
-                        } else {
-                            replayMessageIdToIndex[msgId]!!
-                        }
-                        val origText = replayOrigTexts[userMsgIdx]
-                        // Only create message for the first chunk of this messageId.
-                        // Subsequent chunks (text or non-text) are skipped to avoid duplicates.
-                        if (isFirstChunk) {
-                            // Saved typed text wins; the skill reverse-match only
-                            // rescues turns no local decoration covers.
-                            val displayText = origText
-                                ?: restoreSkillExpansion(textContent.text)
-                                ?: textContent.text
-                            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
-                            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
-                            appendMessageNow(
-                                ChatRole.USER, MyMessageBundle.message("session.message.you"), displayText, attachments, fileRefs,
-                                internalOnly = internalOnly,
-                                sourceMessageId = msgId,
-                            )
-                            if (internalOnly) {
-                                // Wire text is authoritative; replay index mappings can skew.
-                                mergeBackgroundNotification(textContent.text)
-                            } else {
-                                saveToHistory(displayText, attachments, fileRefs)
-                            }
-                        }
-                    } else {
-                        // Non-text content chunk (image, resource, resource_link).
-                        // Create a message if this is a new messageId so attachment chips show.
-                        if (msgId != null && msgId != replayLastNonTextMsgId && !replayMessageIdToIndex.containsKey(msgId)) {
-                            replayLastNonTextMsgId = msgId
-                            val userMsgIdx = replayUserMsgCount++
-                            replayMessageIdToIndex[msgId] = userMsgIdx
-                            val displayText = replayOrigTexts[userMsgIdx] ?: ""
-                            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
-                            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
-                            appendMessageNow(
-                                ChatRole.USER,
-                                MyMessageBundle.message("session.message.you"),
-                                displayText,
-                                attachments,
-                                fileRefs,
-                                sourceMessageId = msgId,
-                            )
-                            saveToHistory(displayText, attachments, fileRefs)
-                        }
-                    }
-                }
-            }
-            is SessionUpdate.AgentThoughtChunk -> (update.content as? ContentBlock.Text)?.let {
-                appendThought(update.messageId?.value, it.text)
-            }
-            is SessionUpdate.ToolCall -> updateTool(ToolUpdate(
-                update.toolCallId.value, update.title, update.kind, update.status, update.content,
-                update.rawInput, update.rawOutput, update.locations,
-            ))
-            is SessionUpdate.ToolCallUpdate -> updateTool(ToolUpdate(
-                update.toolCallId.value, update.title, update.kind, update.status, update.content,
-                update.rawInput, update.rawOutput, update.locations,
-            ))
-            is SessionUpdate.CurrentModeUpdate ->
-                selectedMode = modes.firstOrNull { it.id == update.currentModeId.value }
-            is SessionUpdate.AvailableCommandsUpdate -> applyAvailableCommands(update)
-            is SessionUpdate.UsageUpdate -> handleUsageUpdate(update.used, update.size)
             else -> Unit
         }
     }
