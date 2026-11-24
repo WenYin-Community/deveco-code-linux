@@ -29,16 +29,16 @@ Signed-off-by: <git config user.name> <git config user.email>
 Group changes by feature; do not commit after every small edit. Keep each PR
 within 10 commits so the history stays easy to bisect and revert.
 
-## CHANGELOG Ownership
+## CHANGELOG
 
-Root `CHANGELOG.md` is generated from commits at release time — do not edit it
-during development. Put user-facing details in the commit message / PR body.
+This fork maintains `CHANGELOG.md` for its own Linux releases. Update it on
+`develop` or a release branch when cutting a release; entries describe the
+user-facing changes in that release. Release-specific detail belongs in the
+CHANGELOG, while implementation detail can stay in the commit message.
 
-If a commit is rejected: `git restore --staged CHANGELOG.md`, then commit again
-(no working-tree changes lost). Do not bypass with `--no-verify`.
-
-Only the release owner updates it, on a `*-changelog` branch via
-`bun script/changelog.ts`.
+`script/changelog.ts` remains available when a model-backed run is usable, but
+it is not required. A hand-written entry is acceptable when the generator is
+unavailable.
 
 ## Style Guide
 
