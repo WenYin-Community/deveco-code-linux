@@ -4,6 +4,9 @@ import { client } from "./client.gen.js"
 import { buildClientParams, type Client, type Options as Options2, type TDataShape } from "./client/index.js"
 import type {
   AgentPartInput,
+  AnalyticsClientCommandPayload,
+  AnalyticsCommandErrors,
+  AnalyticsCommandResponses,
   AppAgentsErrors,
   AppAgentsResponses,
   AppLogErrors,
@@ -1584,6 +1587,45 @@ export class Event extends HeyApiClient {
       url: "/event",
       ...options,
       ...params,
+    })
+  }
+}
+
+export class Analytics extends HeyApiClient {
+  /**
+   * Report a client-executed slash command
+   *
+   * Record a slash command the client (e.g. the TUI) executed locally. Server-dispatched commands are recorded by the command hook instead.
+   */
+  public command<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      analyticsClientCommandPayload?: AnalyticsClientCommandPayload
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "analyticsClientCommandPayload", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<AnalyticsCommandResponses, AnalyticsCommandErrors, ThrowOnError>({
+      url: "/analytics/command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -7255,6 +7297,11 @@ export class OpencodeClient extends HeyApiClient {
   private _event?: Event
   get event(): Event {
     return (this._event ??= new Event({ client: this.client }))
+  }
+
+  private _analytics?: Analytics
+  get analytics(): Analytics {
+    return (this._analytics ??= new Analytics({ client: this.client }))
   }
 
   private _config?: Config2

@@ -49,11 +49,13 @@ export type Event =
   | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
-  | EventModelsDevRefreshed
-  | EventPermissionAsked
-  | EventPermissionReplied
   | EventPermissionV2Asked
   | EventPermissionV2Replied
+  | EventPermissionAsked
+  | EventPermissionReplied
+  | EventHdcRequestStarted
+  | EventHdcRequestFinished
+  | EventModelsDevRefreshed
   | EventReferenceUpdated
   | EventProjectDirectoriesUpdated
   | EventFileEdited
@@ -62,6 +64,8 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventSandboxRequestStarted
+  | EventSandboxRequestFinished
   | EventQuestionV2Asked
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
@@ -1316,9 +1320,26 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "models-dev.refreshed"
+        type: "permission.v2.asked"
         properties: {
-          [key: string]: unknown
+          id: string
+          sessionID: string
+          action: string
+          resources: Array<string>
+          save?: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+          source?: PermissionV2Source
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: PermissionV2Reply
         }
       }
     | {
@@ -1350,26 +1371,35 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "permission.v2.asked"
+        type: "hdc_request_started"
         properties: {
-          id: string
-          sessionID: string
-          action: string
-          resources: Array<string>
-          save?: Array<string>
-          metadata?: {
-            [key: string]: unknown
-          }
-          source?: PermissionV2Source
+          requestID: string
+          platform: string
+          opCategory: string
         }
       }
     | {
         id: string
-        type: "permission.v2.replied"
+        type: "hdc_request_finished"
         properties: {
-          sessionID: string
           requestID: string
-          reply: PermissionV2Reply
+          policyDecision: string
+          approvalResult?: string
+          executionResult: string
+          failureStage: string
+          errorType?: string
+          durationMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          decisionId?: string
+          policySource?: string
+          reasonCode?: string
+          operationKind?: string
+        }
+      }
+    | {
+        id: string
+        type: "models-dev.refreshed"
+        properties: {
+          [key: string]: unknown
         }
       }
     | {
@@ -1428,6 +1458,33 @@ export type GlobalEvent = {
         type: "pty.deleted"
         properties: {
           id: string
+        }
+      }
+    | {
+        id: string
+        type: "sandbox_request_started"
+        properties: {
+          request_id: string
+          capability: string
+          platform: string
+          profile_type: string
+          network_state: string
+          timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          command_tag: string
+        }
+      }
+    | {
+        id: string
+        type: "sandbox_request_finished"
+        properties: {
+          request_id: string
+          enforcement_result: string
+          execution_result: string
+          failure_stage?: string
+          error_type?: string
+          duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          prepare_duration_ms?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          cleanup_result: string
         }
       }
     | {
@@ -2176,11 +2233,6 @@ export type Config = {
       tail_messages?: number
       threshold_tokens?: number
     }
-    memory?: {
-      enabled?: boolean
-      minimum_message_tokens_to_init?: number
-      minimum_tokens_between_update?: number
-    }
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -2198,6 +2250,7 @@ export type Config = {
     privacy_id?: string
     terms_id?: string
   }
+  sandbox?: ConfigV2SandboxSandboxConfig
 }
 
 export type DirectoryMissingError = {
@@ -2210,6 +2263,12 @@ export type DirectoryUnreadableError = {
   _tag: "DirectoryUnreadableError"
   directory: string
   message: string
+}
+
+export type AnalyticsClientCommandPayload = {
+  name: string
+  sessionID?: string
+  directory?: string
 }
 
 export type Model = {
@@ -2552,6 +2611,7 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  sandbox?: ConfigV2SandboxSandboxConfig
 }
 
 export type SkillNotFoundError = {
@@ -3917,6 +3977,38 @@ export type ConfigV2ExperimentalPolicy = {
   resource: string
 }
 
+export type ConfigV2SandboxAccessMode = "read" | "write" | "deny"
+
+export type ConfigV2SandboxNetworkOverride = {
+  enabled: boolean
+}
+
+export type ConfigV2SandboxProcessOverride = {
+  deny_exec: Array<string>
+}
+
+export type ConfigV2SandboxProfileDefinition = {
+  description?: string
+  extends?: string
+  workspace_roots?: Array<string>
+  filesystem?: {
+    [key: string]: ConfigV2SandboxAccessMode
+  }
+  network?: ConfigV2SandboxNetworkOverride
+  process?: ConfigV2SandboxProcessOverride
+}
+
+export type ConfigV2SandboxProfiles = {
+  [key: string]: ConfigV2SandboxProfileDefinition
+}
+
+export type ConfigV2SandboxSandboxConfig = {
+  profile?: string
+  profiles?: ConfigV2SandboxProfiles
+  allowed_profiles?: Array<string>
+  network?: ConfigV2SandboxNetworkOverride
+}
+
 export type ProjectDirectories = Array<{
   directory: string
   strategy?: string
@@ -5080,11 +5172,29 @@ export type EventSessionError = {
   }
 }
 
-export type EventModelsDevRefreshed = {
+export type EventPermissionV2Asked = {
   id: string
-  type: "models-dev.refreshed"
+  type: "permission.v2.asked"
   properties: {
-    [key: string]: unknown
+    id: string
+    sessionID: string
+    action: string
+    resources: Array<string>
+    save?: Array<string>
+    metadata?: {
+      [key: string]: unknown
+    }
+    source?: PermissionV2Source
+  }
+}
+
+export type EventPermissionV2Replied = {
+  id: string
+  type: "permission.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    reply: PermissionV2Reply
   }
 }
 
@@ -5117,29 +5227,39 @@ export type EventPermissionReplied = {
   }
 }
 
-export type EventPermissionV2Asked = {
+export type EventHdcRequestStarted = {
   id: string
-  type: "permission.v2.asked"
+  type: "hdc_request_started"
   properties: {
-    id: string
-    sessionID: string
-    action: string
-    resources: Array<string>
-    save?: Array<string>
-    metadata?: {
-      [key: string]: unknown
-    }
-    source?: PermissionV2Source
+    requestID: string
+    platform: string
+    opCategory: string
   }
 }
 
-export type EventPermissionV2Replied = {
+export type EventHdcRequestFinished = {
   id: string
-  type: "permission.v2.replied"
+  type: "hdc_request_finished"
   properties: {
-    sessionID: string
     requestID: string
-    reply: PermissionV2Reply
+    policyDecision: string
+    approvalResult?: string
+    executionResult: string
+    failureStage: string
+    errorType?: string
+    durationMs: number | "NaN" | "Infinity" | "-Infinity"
+    decisionId?: string
+    policySource?: string
+    reasonCode?: string
+    operationKind?: string
+  }
+}
+
+export type EventModelsDevRefreshed = {
+  id: string
+  type: "models-dev.refreshed"
+  properties: {
+    [key: string]: unknown
   }
 }
 
@@ -5206,6 +5326,35 @@ export type EventPtyDeleted = {
   type: "pty.deleted"
   properties: {
     id: string
+  }
+}
+
+export type EventSandboxRequestStarted = {
+  id: string
+  type: "sandbox_request_started"
+  properties: {
+    request_id: string
+    capability: string
+    platform: string
+    profile_type: string
+    network_state: string
+    timestamp: number | "NaN" | "Infinity" | "-Infinity"
+    command_tag: string
+  }
+}
+
+export type EventSandboxRequestFinished = {
+  id: string
+  type: "sandbox_request_finished"
+  properties: {
+    request_id: string
+    enforcement_result: string
+    execution_result: string
+    failure_stage?: string
+    error_type?: string
+    duration_ms: number | "NaN" | "Infinity" | "-Infinity"
+    prepare_duration_ms?: number | "NaN" | "Infinity" | "-Infinity"
+    cleanup_result: string
   }
 }
 
@@ -6018,6 +6167,42 @@ export type EventSubscribeResponses = {
 }
 
 export type EventSubscribeResponse = EventSubscribeResponses[keyof EventSubscribeResponses]
+
+export type AnalyticsCommandData = {
+  body?: AnalyticsClientCommandPayload
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/analytics/command"
+}
+
+export type AnalyticsCommandErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
+}
+
+export type AnalyticsCommandError = AnalyticsCommandErrors[keyof AnalyticsCommandErrors]
+
+export type AnalyticsCommandResponses = {
+  /**
+   * Command report accepted
+   */
+  200: boolean
+}
+
+export type AnalyticsCommandResponse = AnalyticsCommandResponses[keyof AnalyticsCommandResponses]
 
 export type ConfigGetData = {
   body?: never
@@ -8746,6 +8931,7 @@ export type ProviderOauthCancelResponses = {
 }
 
 export type ProviderOauthCancelResponse = ProviderOauthCancelResponses[keyof ProviderOauthCancelResponses]
+
 export type ProviderDeleteModelData = {
   body?: never
   path: {
@@ -9880,6 +10066,14 @@ export type SessionGoalErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * DirectoryMissingError
+   */
+  409: DirectoryMissingError
+  /**
+   * DirectoryUnreadableError
+   */
+  500: DirectoryUnreadableError
 }
 
 export type SessionGoalError = SessionGoalErrors[keyof SessionGoalErrors]
