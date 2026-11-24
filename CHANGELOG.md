@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-11-24 (Linux x64)
+
+### DevEco Code Linux
+
+#### 新特性
+
+- 同步上游 v0.2.6 架构：CLI 路由、ArkTS 规则与 SDD 工作流由内置 Harness 插件提供，移除旧的 devecocli vendor 链路
+- Release 包内置 Harness 依赖，`install.sh` 支持离线安装，`update.sh` 更新，`uninstall.sh` 卸载
+- Linux 下自动探测 Command Line Tools，并注入 `DEVECO_CLI_CLT_PATH` 与 libbz2 兼容路径
+- CI 从 GitCode workflows 迁移到 GitHub Actions，Release 按日期 tag 发布 Linux x64 压缩包
+
+#### 缺陷修复
+
+- 修复 postinstall 在非 Windows 平台使用 `deveco.exe` 作为目标二进制名的问题
+
+## v0.2.6 (2026-11-19)
+
+### DevEco Code 核心
+
+#### 缺陷修复
+
+- 修复鸿蒙版本若干已知问题
+
 ## v0.2.5 (2026-10-28)
 
 ### DevEco Code 核心
