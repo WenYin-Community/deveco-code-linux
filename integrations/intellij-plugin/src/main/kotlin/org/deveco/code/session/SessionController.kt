@@ -71,6 +71,9 @@ import org.deveco.code.session.model.forwardedDefaultEffort
 import org.deveco.code.session.model.hasVisibleUserParts
 import org.deveco.code.session.model.mergeSnapshotItems
 import org.deveco.code.session.model.renderSessionSnapshot
+import org.deveco.code.session.configuration.filterSessionModels
+import org.deveco.code.session.configuration.isDefaultModelChoice
+import org.deveco.code.session.configuration.planModelSelection
 import org.deveco.code.session.update.SessionUpdateQueue
 import org.deveco.code.session.update.SessionUpdateRouter
 import org.deveco.code.session.ui.composer.isTextLikeMimeType
@@ -316,19 +319,6 @@ internal class SessionController(
 
         // Matches queue position in backend messages: "position N of the queue"
         private val QUEUE_POSITION_REGEX = Regex("position\\s+(\\d+)\\s+of\\s+the\\s+queue", RegexOption.IGNORE_CASE)
-
-        // 默认模型：新建/首次打开项目（本项目从未配置过模型）时自动选择 GLM-5.3，而非 Auto 或后端默认模型
-        private const val DEFAULT_MODEL_NAME = "GLM-5.3"
-
-        // 精确匹配 "DevEco Code/GLM-5.3" 或 "DevEco Code\GLM-5.3"（大小写不敏感），
-        // 排除其他来源的同名模型（如 Alibaba(China)/GLM-5.3）
-        private fun isDefaultModelChoice(choice: ModelChoice): Boolean {
-            val normalized = choice.name.replace('\\', '/')
-            val prefix = "deveco code/"
-            return normalized.length > prefix.length &&
-                normalized.substring(0, prefix.length).equals(prefix, ignoreCase = true) &&
-                normalized.substring(prefix.length).equals(DEFAULT_MODEL_NAME, ignoreCase = true)
-        }
 
         private const val MAX_PROMPT_HISTORY = 50
         private const val MAX_TITLE_LEN = 50
@@ -1107,15 +1097,12 @@ internal class SessionController(
         val blacklistedIds = modelStore.getBlacklist()
             .map { "${it.providerId}/${it.modelId}" }
             .toSet()
-        rawModels = if (connectedProviderIds.isNotEmpty() || manualProviderIds.isNotEmpty()) {
-            backendModels.filter {
-                (it.providerId.lowercase() in connectedProviderIds ||
-                    it.providerId.lowercase() in manualProviderIds) &&
-                    it.id !in blacklistedIds
-            }
-        } else {
-            backendModels.filter { it.id !in blacklistedIds }
-        }
+        rawModels = filterSessionModels(
+            backendModels = backendModels,
+            connectedProviderIds = connectedProviderIds,
+            manualProviderIds = manualProviderIds,
+            blacklistedModelIds = blacklistedIds,
+        )
         models = rawModels
         log.debug("rebuildRawModels: backendModels=${backendModels.size} cachedCatalogProviders=${connectedProviderIds} manualProviders=${manualProviderIds} blacklisted=${blacklistedIds.size} models=${models.size} modelIds=${models.map { it.id }}")
     }
@@ -3560,95 +3547,41 @@ internal class SessionController(
         backendModels = choices
         log.debug("updateModels: sessionId=$sessionId backendModels=${choices.size} ids=${choices.map { it.id }}")
         rebuildRawModels()
-        // A session whose model the user explicitly switched keeps that choice on
-        // reload instead of being reset to the global preferred default. The
-        // locally remembered pick wins over the backend's value: the backend
-        // recomputes a zero-message session's model back to its default on
-        // reload, which would silently discard a pick the user never
-        // exercised with a prompt.
-        // When the manual pick is no longer available, whatever replaces it
-        // below is a CORRECTION of an invalid selection and must reach the
-        // backend even though the session is manual: the manual guard exists
-        // to protect a valid user choice, not to leave the backend silently
-        // prompting with a model the UI has already abandoned (deleted
-        // provider, edited-away model).
-        var correctedFromInvalidPick = false
-        if (modelStore.wasManuallySelected(sessionId)) {
-            val remembered = viewStateStore.get(sessionId)?.selectedModelId
-            val found = remembered?.let { rem -> models.firstOrNull { it.id == rem } }
-                ?: models.firstOrNull { it.id == option.currentValue.value }
-            if (found != null && (selectedModel == null || found.id == selectedModel?.id)) {
-                selectedModel = found
-                // The backend lost the pick (recomputed default on a
-                // zero-message reload): re-assert it so the next prompt uses
-                // what the user actually chose.
-                if (found.id != option.currentValue.value) {
-                    ApplicationManager.getApplication().executeOnPooledThread {
-                        try {
-                            modelConfigId?.let { writeModelAndApplyDefault(it, found.id) }
-                        } catch (e: Exception) {
-                            log.warn("updateModels: re-asserting remembered model failed", e)
-                        }
-                    }
-                }
-                return
-            }
-            // found == null: the manually selected model is no longer in the
-            // session's list (edited/deleted/disconnected). Fall through to
-            // the global/default selection — flagged as a correction.
-            correctedFromInvalidPick = true
-        }
-        var globalModelId = modelStore.getGlobalModelId()
-        // 首次使用（本项目从未配置过模型）时默认选择 GLM-5.3，而非 Auto/后端默认模型。
-        // globalModelConfigured 用于区分"从未配置"与"用户主动选择 Auto"，后者不做默认回填。
-        if (globalModelId == null && !modelStore.isGlobalModelConfigured()) {
-            globalModelId = models.firstOrNull { isDefaultModelChoice(it) }?.also { default ->
-                modelStore.setGlobalModelId(default.id)
-            }?.id
-        }
-        selectedModel = when {
-            globalModelId != null -> resolveStoredModel(globalModelId)
-            else -> models.firstOrNull { it.id == option.currentValue.value }
-        }
-        // globalModelId expired: the preferred model no longer resolves in
-        // this session's list. Only clear the stored preference when the
-        // model is gone from the FULL catalog — a session-filtered miss
-        // (blacklisted model, catalog not yet refreshed) must not wipe a
-        // global-level preference; the session falls back locally and the
-        // preference survives for sessions/refreshes where the model is
-        // visible again.
-        if (globalModelId != null && selectedModel == null) {
-            val ids = modelStore.catalogModelIds()
-            if (!modelStore.catalogEverFed()) {
-                log.debug("updateModels: deferring stale-preference clear for globalModelId={}; catalog not yet fed", globalModelId)
-            } else if (!ModelPreferenceResolver.existsInCatalog(globalModelId, ids)) {
-                modelStore.setGlobalModelId(null)
-            }
-            selectedModel = models.firstOrNull { isDefaultModelChoice(it) } ?: models.firstOrNull()
-        }
+        val plan = planModelSelection(
+            models = models,
+            backendModelId = option.currentValue.value,
+            rememberedModelId = viewStateStore.get(sessionId)?.selectedModelId,
+            manuallySelected = modelStore.wasManuallySelected(sessionId),
+            globalModelId = modelStore.getGlobalModelId(),
+            globalConfigured = modelStore.isGlobalModelConfigured(),
+            catalogModelIds = modelStore.catalogModelIds(),
+            catalogEverFed = modelStore.catalogEverFed(),
+            currentSelectedModelId = selectedModel?.id,
+        )
+        plan.defaultGlobalModelId?.let { modelStore.setGlobalModelId(it) }
+        plan.storedPreferenceUpgradeTo?.let(modelStore::upgradeGlobalModelIdSilently)
+        if (plan.clearGlobalPreference) modelStore.setGlobalModelId(null)
+        selectedModel = plan.selectedModelId?.let { id -> models.firstOrNull { it.id == id } }
         val chosen = selectedModel ?: return
-        if (correctedFromInvalidPick) {
+        if (plan.correctedInvalidPick) {
             // Repoint the remembered pick at the replacement so reloads stop
             // retrying the deleted model.
             viewStateStore.update(sessionId) { existing ->
                 (existing ?: SessionViewState.initial()).copy(selectedModelId = chosen.id)
             }
         }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                // Manual sessions keep their backend model — UNLESS this pass
-                // replaced an invalid pick, in which case the correction must
-                // reach the backend or the next prompt silently uses the
-                // deleted model.
-                if (modelStore.wasManuallySelected(sessionId) && !correctedFromInvalidPick) return@executeOnPooledThread
-                val configId = modelConfigId ?: return@executeOnPooledThread
-                // The backend already holds this value (e.g. just re-asserted
-                // by refreshConfigOptions) — skip the redundant write.
-                if (chosen.id == option.currentValue.value) return@executeOnPooledThread
-                writeModelAndApplyDefault(configId, chosen.id)
-            } catch (e: Exception) {
-                log.warn("updateModels: setSessionConfigOption failed, clearing globalModelId", e)
-                modelStore.setGlobalModelId(null)
+        plan.backendWrite?.let { write ->
+            ApplicationManager.getApplication().executeOnPooledThread {
+                try {
+                    // Re-read the flag here: it can change while this write waits in the pool.
+                    if (modelStore.wasManuallySelected(sessionId) && !plan.correctedInvalidPick && !write.manualReassert) {
+                        return@executeOnPooledThread
+                    }
+                    modelConfigId?.let { writeModelAndApplyDefault(it, write.modelId) }
+                } catch (e: Exception) {
+                    log.warn("updateModels: setSessionConfigOption failed", e)
+                    if (!write.manualReassert) modelStore.setGlobalModelId(null)
+                }
             }
         }
     }

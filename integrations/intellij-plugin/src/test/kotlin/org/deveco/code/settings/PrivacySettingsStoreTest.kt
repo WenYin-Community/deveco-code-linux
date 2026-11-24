@@ -1,32 +1,36 @@
 package org.deveco.code.settings
 
+import org.deveco.code.util.devecoStorageRoot
+import org.junit.After
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
-import org.junit.BeforeClass
 import org.junit.Test
+import java.nio.file.Files
 
 class PrivacySettingsStoreTest {
 
-    companion object {
-        @BeforeClass
-        @JvmStatic
-        fun pinStorageRoot() {
-            // devecoStorageRoot caches PathManager.getSystemPath() on first access; pinning
-            // it to a temp directory keeps this test self-contained on a plain-JUnit
-            // classpath and isolated from any real IDE state.
-            System.setProperty(
-                "idea.system.path",
-                java.nio.file.Files.createTempDirectory("privacy-store-test").toAbsolutePath().toString(),
-            )
-        }
-    }
+    private var originalKv: ByteArray? = null
 
     @Before
-    fun resetArbitration() {
+    fun prepareStore() {
+        val kv = kvJsonPath()
+        originalKv = if (Files.isRegularFile(kv)) Files.readAllBytes(kv) else null
+        deleteKvPath()
+        Files.createDirectories(kv.parent)
         // The store is a process-wide object, so the "applied in this session" flag would
         // otherwise leak from one test into the next.
+        PrivacySettingsStore.resetToolImprovementArbitrationForTest()
+    }
+
+    @After
+    fun restoreStore() {
+        deleteKvPath()
+        originalKv?.let {
+            Files.createDirectories(kvJsonPath().parent)
+            Files.write(kvJsonPath(), it)
+        }
         PrivacySettingsStore.resetToolImprovementArbitrationForTest()
     }
 
@@ -104,20 +108,18 @@ class PrivacySettingsStoreTest {
 
     @Test
     fun `a failed settings page apply still lets the migration write`() {
-        // Swapping state/ for a regular file makes createDirectories throw, so the apply fails
-        // without persisting anything; the migration must not read that as a deliberate choice,
-        // or it would decline and the migrator would retire the legacy key anyway.
-        val state = kvJsonPath().parent
-        java.nio.file.Files.createDirectories(state)
-        java.nio.file.Files.deleteIfExists(kvJsonPath())
-        java.nio.file.Files.deleteIfExists(state)
-        java.nio.file.Files.writeString(state, "not a directory")
+        // A non-empty directory at the atomic-move destination makes the apply fail without
+        // persisting anything. The migration must not read that as a deliberate choice, or it
+        // would decline and the migrator would retire the legacy key anyway.
+        val kv = kvJsonPath()
+        Files.createDirectories(kv)
+        Files.writeString(kv.resolve("sentinel"), "keep")
         try {
             PrivacySettingsStore.writeToolImprovementEnabled(true)
             fail("expected the apply to throw")
         } catch (expected: java.io.IOException) {
         } finally {
-            java.nio.file.Files.deleteIfExists(state)
+            kv.toFile().deleteRecursively()
         }
         assertTrue(PrivacySettingsStore.writeToolImprovementEnabledForced(true))
         assertTrue(PrivacySettingsStore.readToolImprovementEnabled())
@@ -129,6 +131,9 @@ class PrivacySettingsStoreTest {
         java.nio.file.Files.writeString(file, content)
     }
 
-    private fun kvJsonPath(): java.nio.file.Path =
-        java.nio.file.Path.of(System.getProperty("idea.system.path"), "deveco-code", "v1", "state", "kv.json")
+    private fun kvJsonPath(): java.nio.file.Path = devecoStorageRoot.resolve("state").resolve("kv.json")
+
+    private fun deleteKvPath() {
+        kvJsonPath().toFile().deleteRecursively()
+    }
 }

@@ -87,13 +87,12 @@ class CliBinaryExtractorTest {
     }
 
     @Test
-    fun extractWritesVendorCliEntryWhenCliJsIsPresent() {
+    fun extractCopiesVendorCliWithoutWritingTheRemovedLegacyEntry() {
         extractFresh()
 
-        val entry = File(targetDir(), "vendor/.deveco-cli-entry")
-        assertTrue(entry.isFile)
         val cliJs = File(targetDir(), "node_modules/@deveco/deveco-cli/dist/cli.js")
-        assertEquals(cliJs.absolutePath + "\n", entry.readText())
+        assertTrue(cliJs.isFile)
+        assertFalse(File(targetDir(), "vendor/.deveco-cli-entry").exists())
     }
 
     @Test
