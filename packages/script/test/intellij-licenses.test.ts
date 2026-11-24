@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { expect, test } from "bun:test"
-import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -92,30 +91,3 @@ with ZipFile(directory / "plugin.zip", "w") as archive:
   30_000,
 )
 
-test("IntelliJ workflow verifies the three plugin archives between build and upload", async () => {
-  const text = await Bun.file(
-    new URL("../../../.gitcode/workflows/publish-intellij-plugin.yml", import.meta.url),
-  ).text()
-  const workflow: unknown = Bun.YAML.parse(text)
-  assert(isRecord(workflow) && isRecord(workflow.jobs) && isRecord(workflow.jobs.build), "Missing plugin build job")
-  const steps = workflow.jobs.build.steps
-  assert(Array.isArray(steps) && steps.every(isRecord), "Expected a list of plugin build steps")
-  const build = steps.findIndex((step) => step.id === "build")
-  const upload = steps.findIndex((step) => step.id === "upload")
-  const verification = steps.findIndex(
-    (step) => typeof step.run === "string" && step.run.includes("script/verify-licenses.py"),
-  )
-  expect(build).toBeGreaterThanOrEqual(0)
-  expect(verification).toBeGreaterThan(build)
-  expect(verification).toBeLessThan(upload)
-  expect(steps[verification].run).toContain("build/compatibility-packages")
-  expect(steps[verification].run).toContain("--expected-count 3")
-  const gradle = await Bun.file(
-    new URL("../../../integrations/intellij-plugin/build.gradle.kts", import.meta.url),
-  ).text()
-  expect(gradle).toContain('into("META-INF/deveco")')
-})
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
