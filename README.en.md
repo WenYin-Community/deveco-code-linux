@@ -53,7 +53,7 @@ cd deveco-linux-x64
 deveco
 ```
 
-The installer never downloads anything; it uses the extracted `bin/` and `vendor/` in the current directory.
+The installer never downloads anything; it uses the extracted `bin/`, `vendor/` and `node_modules/` (bundled Harness dependencies) in the current directory.
 
 ### 3. Start a conversation
 
@@ -69,7 +69,7 @@ Describe your HarmonyOS development task directly in the terminal, for example:
 
 DevEco Code is an AI Agent tool for HarmonyOS development. It supports code writing, project building, device deployment, documentation lookup, runtime debugging, and ArkTS issue fixing.
 
-DevEco Code extends the open-source project [OpenCode](https://opencode.ai), keeping its terminal UI, configuration system, and Provider / MCP / Skill / Plugin capabilities, and adds HarmonyOS-focused integrations for the Command Line Tools, Hvigor, HDC, Skills, the HarmonyOS knowledge base, ArkTS checking, and device debugging.
+DevEco Code extends the open-source project [OpenCode](https://opencode.ai), keeping its terminal UI, configuration system, and Provider / MCP / Skill / Plugin capabilities, and adds HarmonyOS-focused integrations for the Command Line Tools, Hvigor, HDC, Skills, the HarmonyOS knowledge base, ArkTS checking, and device debugging. CLI routing, ArkTS rules and SDD workflows are provided by the built-in Harness plugin.
 
 ## Supported Platforms
 
@@ -94,7 +94,7 @@ DevEco Code extends the open-source project [OpenCode](https://opencode.ai), kee
 
 **Runtime and toolchain**
 
-- [Node.js](https://nodejs.org) **22 or newer** (runs the bundled devecocli)
+- [Node.js](https://nodejs.org) **22 or newer** (runs the built-in Harness plugin and devecocli)
 - [Bun](https://bun.sh) **1.4.2 or newer** (only needed to build from source)
 - [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos) **26.0.0 or newer** (manual install)
 
@@ -152,7 +152,7 @@ The installation lives in `~/.local/share/deveco`, with the command linked to `~
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`install.sh` never downloads anything. It looks for the extracted `bin/` and `vendor/` in the script directory, the current directory, or `packages/opencode/dist/deveco-linux-x64`. You can also pass a directory or `.tar.gz` explicitly:
+`install.sh` never downloads anything. It looks for the extracted `bin/`, `vendor/` and `node_modules/` in the script directory, the current directory, or `packages/opencode/dist/deveco-linux-x64`. You can also pass a directory or `.tar.gz` explicitly:
 
 ```bash
 ./install.sh /path/to/deveco-linux-x64
@@ -193,7 +193,9 @@ cd deveco-code-linux
 bun install
 cd packages/opencode
 bun run script/build.ts --target=linux-x64 --skip-install
-cd ../..
+cd dist/deveco-linux-x64
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
+cd ../../../..
 ./install.sh
 ```
 

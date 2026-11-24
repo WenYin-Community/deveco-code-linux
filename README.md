@@ -53,7 +53,7 @@ cd deveco-linux-x64
 deveco
 ```
 
-安装脚本不会联网，只使用当前目录中已解压的 `bin/` 与 `vendor/`。
+安装脚本不会联网，只使用当前目录中已解压的 `bin/`、`vendor/` 与 `node_modules/`（内置 Harness 依赖）。
 
 ### 3. 开始对话
 
@@ -69,7 +69,7 @@ deveco
 
 DevEco Code 是一款面向 HarmonyOS 开发场景的 AI Agent 工具，支持代码编写、编译构建、设备运行、文档查阅、运行时调试及 ArkTS 问题修复等能力。
 
-DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终端交互、配置体系、 Provider / MCP / Skill / Plugin 等能力，并针对 HarmonyOS 工程增加了 Command Line Tools、Hvigor、HDC、Skill、HarmonyOS 知识库、ArkTS 检查和设备调试相关集成。
+DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终端交互、配置体系、 Provider / MCP / Skill / Plugin 等能力，并针对 HarmonyOS 工程增加了 Command Line Tools、Hvigor、HDC、Skill、HarmonyOS 知识库、ArkTS 检查和设备调试相关集成。CLI 路由、ArkTS 规则与 SDD 工作流由内置 Harness 插件提供。
 
 ## 支持平台
 
@@ -94,7 +94,7 @@ DevEco Code 基于开源项目 OpenCode 扩展开发，保留了 OpenCode 的终
 
 **运行时与工具链**
 
-- [Node.js](https://nodejs.org) **22 及以上**（运行内置 devecocli）
+- [Node.js](https://nodejs.org) **22 及以上**（运行内置 Harness 插件与 devecocli）
 - [Bun](https://bun.sh) **1.4.2 及以上**（仅从源码构建时需要）
 - [HarmonyOS Command Line Tools](https://developer.huawei.com/consumer/cn/download/command-line-tools-for-hmos) **26.0.0 及以上**（需手动安装）
 
@@ -152,7 +152,7 @@ cd deveco-linux-x64
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`install.sh` 不会联网，它会从脚本目录、当前目录或 `packages/opencode/dist/deveco-linux-x64` 查找已解压的 `bin/` 与 `vendor/`。也支持直接传入目录或 `.tar.gz`：
+`install.sh` 不会联网，它会从脚本目录、当前目录或 `packages/opencode/dist/deveco-linux-x64` 查找已解压的 `bin/`、`vendor/` 与 `node_modules/`。也支持直接传入目录或 `.tar.gz`：
 
 ```bash
 ./install.sh /path/to/deveco-linux-x64
@@ -193,7 +193,9 @@ cd deveco-code-linux
 bun install
 cd packages/opencode
 bun run script/build.ts --target=linux-x64 --skip-install
-cd ../..
+cd dist/deveco-linux-x64
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
+cd ../../../..
 ./install.sh
 ```
 
