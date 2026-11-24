@@ -3,7 +3,15 @@ NOTICE
 DevEco Code
 Copyright (c) 2025-present DevEco Code Contributors
 
-This project is licensed under the MIT License.
+DevEco Code is distributed under the Apache License 2.0 (LICENSE).
+See LICENSING.md for the scope of the Apache-2.0 sublicense.
+The original MIT license and copyright notices are in LICENSES/MIT.txt.
+
+This project is derived from OpenCode (https://github.com/anomalyco/opencode)
+and includes modifications for HarmonyOS development and DevEco integration.
+Copyright (c) 2025 opencode
+
+Third-party components retain their respective licenses and notices.
 
 ===================================================================
 THIRD-PARTY SOFTWARE NOTICES AND INFORMATION

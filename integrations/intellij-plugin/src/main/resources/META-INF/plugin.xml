@@ -42,6 +42,9 @@
          instances can survive and surface as ClassCastException on the next
          lookup (cross-classloader cast). -->
     <applicationService serviceImplementation="org.deveco.code.acp.SharedAcpBackend" />
+    <applicationService serviceImplementation="org.deveco.code.announcement.AnnouncementService" />
+    <postStartupActivity implementation="org.deveco.code.announcement.AnnouncementStartup" />
+    <notificationGroup id="DevEco Code Announcements" displayType="STICKY_BALLOON" />
     <applicationService serviceImplementation="org.deveco.code.skill.GlobalSkillStateService" />
     <projectService serviceImplementation="org.deveco.code.acp.AcpClientService" />
     <projectService serviceImplementation="org.deveco.code.session.SessionControllerRegistry" />

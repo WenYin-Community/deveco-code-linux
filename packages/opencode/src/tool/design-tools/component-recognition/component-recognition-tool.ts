@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import { define, type ExecuteResult } from "../../tool"
-import { resolveUIVerifyParams } from "../../ui-verification/ui-verification-tool"
+import { resolveVisionModel } from "@/provider/vision-model"
 import { resolveImage } from "../image-compare/image-compare-tool"
 import { formatError, readLimitedText, resolveChatCompletionEndpoint, resolveWorktree } from "../utils"
 import DESCRIPTION from "./description.txt"
@@ -61,9 +61,7 @@ interface ImageDimensions {
   height: number
 }
 
-export type VisionContentPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } }
+export type VisionContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }
 
 interface VisionMessage {
   role: string
@@ -144,7 +142,7 @@ export const RecognizeUIComponentsTool: ReturnType<
       execute: (args, ctx): Effect.Effect<ExecuteResult<Metadata>> =>
         Effect.gen(function* () {
           const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
-          const params = yield* Effect.promise(() => resolveUIVerifyParams(worktree))
+          const params = yield* Effect.promise(() => resolveVisionModel(worktree))
 
           if (!params.baseURL || !params.apiKey || !params.modelName) {
             return {
@@ -157,7 +155,9 @@ export const RecognizeUIComponentsTool: ReturnType<
 
           if (args.requirements && args.requirements.length > MAX_REQUIREMENTS_CHARS) {
             // A raw throw here becomes a defect that the outer Effect.catch cannot recover.
-            yield* Effect.fail(new Error(`Component recognition requirements exceed ${MAX_REQUIREMENTS_CHARS} characters`))
+            yield* Effect.fail(
+              new Error(`Component recognition requirements exceed ${MAX_REQUIREMENTS_CHARS} characters`),
+            )
           }
 
           const input = yield* Effect.tryPromise({
@@ -472,7 +472,11 @@ function inventoryError(rawContent: string): string {
   return `components inventory is missing or invalid [rawContentPreview]: ${preview}`
 }
 
-async function requestVisionModel(input: VisionModelInput, client: VisionRequestClient, retry = true): Promise<Response> {
+async function requestVisionModel(
+  input: VisionModelInput,
+  client: VisionRequestClient,
+  retry = true,
+): Promise<Response> {
   const response = await fetchVisionModelOnce(input, client).catch(async (error) => {
     if (!retry) throw error
     await Bun.sleep(RETRY_DELAY_MS)

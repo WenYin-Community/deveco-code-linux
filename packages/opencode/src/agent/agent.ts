@@ -10,7 +10,6 @@ import { Auth } from "../auth"
 import { ProviderTransform } from "@/provider/transform"
 
 import { AgentPromptProfile } from "./prompt/profile"
-import PROMPT_DFX from "./prompt/dfx.txt"
 import PROMPT_ASK from "./prompt/ask.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
@@ -99,6 +98,9 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Agent.state")(function* (ctx) {
+        // Plugin config hooks own workflow agents and must finish before the
+        // resolved agent list is cached, including callers without bootstrap.
+        yield* plugin.init()
         const cfg = yield* config.get()
         const skillDirs = yield* skill.dirs()
         const referenceDirs = yield* Effect.gen(function* () {
@@ -109,7 +111,6 @@ export const layer = Layer.effect(
           Truncate.GLOB,
           path.join(Global.Path.config, "*"),
           path.join(Global.Path.tmp, "*"),
-          path.join(Global.Path.data, "specs", "*"),
           ...skillDirs.map((dir) => path.join(dir, "*")),
           ...referenceDirs.map((dir) => path.join(dir, "*")),
         ]
@@ -184,64 +185,6 @@ export const layer = Layer.effect(
             hidden: true,
             prompt: AgentPromptProfile.current.prompts.debug,
           },
-          goal: {
-            name: "goal",
-            description: "Multi-turn goal-driven agent with verifiable termination",
-            options: {},
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                question: "allow",
-                plan_enter: "allow",
-                webfetch: "allow",
-                websearch: "allow",
-                todowrite: "allow",
-                spec_write: "allow",
-                task: "allow",
-              }),
-              user,
-            ),
-            mode: "primary",
-            native: true,
-            prompt: AgentPromptProfile.current.prompts.goal,
-            color: "info",
-          },
-          "spec-implementation": {
-            name: "spec-implementation",
-            description: "Execute implementation tasks from an approved spec",
-            options: {},
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                question: "allow",
-              }),
-              user,
-            ),
-            mode: "subagent",
-            native: true,
-            hidden: true,
-            prompt: AgentPromptProfile.current.prompts.specImplementation,
-          },
-          "spec-verify": {
-            name: "spec-verify",
-            description: "Build, deploy, and UI-verify Harmony features against spec",
-            options: {},
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                question: "allow",
-                verify_ui: "allow",
-                save_ui_screenshot: "allow",
-                get_ui_verification_log: "allow",
-              }),
-              user,
-            ),
-            mode: "subagent",
-            native: true,
-            hidden: true,
-            temperature: 0.2,
-            prompt: AgentPromptProfile.current.prompts.specVerify,
-          },
           plan: {
             name: "plan",
             description: "Plan mode. Disallows all edit tools.",
@@ -303,58 +246,6 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
-          },
-          dfx: {
-            name: "dfx",
-            description: `HarmonyOS DFX fault diagnosis and repair-planning specialist running in an isolated sub-session. Delegate to this agent when the user reports HarmonyOS application faults — freezes (AppFreeze / ANR / 冻屏 / 卡死 / 无响应), native C/C++ crashes (CppCrash), ArkTS/TypeScript runtime crashes (JSCrash / 闪退 / 崩溃 / 白屏退出), or non-crashing white screens (页面空白但进程未退出 / 空白页) — whether the user asks for analysis or repair, with FaultLog files, directories, pasted log content, or symptom descriptions alone and no log at all. If the hmos-dfx-analyzer skill is already loaded in your session, execute its analysis flow directly instead of delegating — the subagent would only load it a second time. Do not handle these faults yourself: its structured diagnosis (deterministic triage, root cause, target file:line) is the foundation that repair work should build on. This agent is also the executor of the explicit /analyze command. When delegating, pass the user's original request text verbatim plus any log file paths; do not paraphrase or trim fault descriptions. CRITICAL DELIVERY RULE: when the task result returns, you MUST immediately relay the DFX summary (the "## DFX 故障分析结论 block) verbatim to the user BEFORE doing any other work — the summary IS user-facing output, never absorb it as internal reference. Do not add, drop or reformat its lines, and never rewrite its absolute report path (under dfx-reports/ in the project directory) as a relative path. After relaying, for repair requests execute the repair following the summary's repair suggestions and minimal-fix execution constraints (the agent itself never edits source); for analysis requests, answer any follow-up questions. Do NOT delegate compile errors, general feature development, static-check issues, raw HiLog streams, or performance problems (memory leaks / OOM).`,
-            permission: Permission.merge(
-              defaults,
-              Permission.fromConfig({
-                grep: "allow",
-                glob: "allow",
-                read: "allow",
-                skill: {
-                  // FR-16: only the DFX main skill is exposed to the dfx agent;
-                  // everything else routes through its internal analyzers.
-                  "*": "deny",
-                  "hmos-dfx-analyzer": "allow",
-                },
-                arkts_knowledge_search: "allow",
-                question: "allow", // 当期仅交互模式取 allow；非交互模式（后续支持时）此键需取 deny 而非 ask，否则 ask 在无应答者时会无限阻塞（V2 缺陷根源）
-                webfetch: "allow",
-                websearch: "allow",
-                edit: "deny",
-                bash: "allow",
-                build_project: "deny",
-                task: "deny",
-                patch: "deny",
-                switch_cwd: "deny",
-                hdc_log: "deny",
-                start_app: "deny",
-                verify_ui: "deny",
-                save_ui_screenshot: "deny",
-                get_ui_verification_log: "deny",
-                perform_ui_action: "deny",
-                get_app_ui_tree: "deny",
-                plan_enter: "deny",
-                plan_exit: "deny",
-                plan_write: "deny",
-                spec_write: "deny",
-                repo_clone: "deny",
-                repo_overview: "deny",
-                todowrite: "deny",
-              }),
-              user,
-            ),
-            options: {},
-            mode: "subagent",
-            native: true,
-            // SR1 v1.6: dfx always runs in a sub-session — via the /analyze
-            // command (subtask: true) or natural-language Task delegation from
-            // the main agent. Hidden from agent pickers and @-mention
-            // autocomplete; delegation is model-initiated via the task tool.
-            hidden: true,
-            prompt: PROMPT_DFX,
           },
           compaction: {
             name: "compaction",
@@ -440,7 +331,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
-            color: "success",
+            color: "#A89FF9",
             // ArkTS codegen rules arrive via the RULES_AGENTS injection of
             // rules/common.txt — single source of truth shared with build/goal.
             prompt: PROMPT_ASK,
@@ -531,7 +422,6 @@ export const layer = Layer.effect(
                   cfg.default_agent ? x.name === cfg.default_agent : x.name === AgentPromptProfile.current.defaultAgent,
                 "desc",
               ],
-              [(x) => x.name, "asc"],
             ),
           )
         })

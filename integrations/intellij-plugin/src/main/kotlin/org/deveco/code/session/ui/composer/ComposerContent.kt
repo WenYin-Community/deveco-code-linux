@@ -1,22 +1,28 @@
 package org.deveco.code.session.ui.composer
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.ScrollbarStyle
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldDecorator
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -25,10 +31,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -38,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileChooser.FileChooser
@@ -70,6 +80,10 @@ private val log = Logger.getInstance("ComposerContent")
 
 private const val OPENCODE_TERMS_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/terms.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
 private const val OPENCODE_PRIVACY_URL = "https://legal.cloud.huawei.com/terms/scope/huawei/deveco-code/privacy-statement.htm?code=CN&language=zh-CN&branchid=0&contenttag=default"
+
+// Registered by the companion DevEco plugin; absent in standalone IDEs, so the
+// complain link is hidden when the action cannot be resolved.
+private const val COMPLAIN_ACTION_ID = "deveco.code.complain"
 
 @OptIn(ExperimentalTextApi::class, ExperimentalFoundationApi::class)
 @Composable
@@ -158,6 +172,13 @@ internal fun ComposerContent(
     // Marks the synthetic bare-Enter dispatch below so onPreviewKeyEvent lets it
     // through to the text field (NEW_LINE) instead of treating it as a send.
     var pendingSyntheticNewline by remember { mutableStateOf(false) }
+    // TUI parity (prompt/history.tsx move(): "if (current.input !== input &&
+    // input.length) return"): history navigation is a no-op while a non-empty
+    // draft that doesn't match the recalled entry occupies the field, so an
+    // unsent draft can never be overwritten by recall — and the ↓-past-newest
+    // clear only ever restores the empty state navigation started from.
+    var recalledText by remember(controller.sessionId) { mutableStateOf<String?>(null) }
+    fun recallAllowed(input: String) = input.isEmpty() || input == recalledText
 
     val slashItems = remember(input, slashDismissed, controller.models, controller.commands) {
         if (slashDismissed) emptyList()
@@ -360,47 +381,46 @@ internal fun ComposerContent(
         Column(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(7.dp))
-                .background(background)
-                .border(1.dp, borderColor, RoundedCornerShape(7.dp))
-                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 2.dp),
+                // Same surface token as the session-list sidebar so both themes match.
+                .background(DevEcoTheme.panel)
+                .padding(start = 7.dp, top = 0.dp, end = 12.dp, bottom = 4.dp),
         ) {
             val attachments = localAttachments ?: controller.attachments
             val fileRefs = localFileReferences ?: controller.fileReferences
-            ComposerAttachments(
-                attachments = attachments,
-                onRemove = { index ->
-                    if (localAttachments != null) {
-                        if (index in localAttachments.indices) localAttachments.removeAt(index)
-                    } else controller.removeAttachment(index)
-                },
-                onPreview = { controller.showImageViewer(it) },
-                onOpenFile = { path -> controller.openFileAtLine(path, 0) },
-            )
-            if (fileRefs.isNotEmpty() || controller.pendingPrompt != null) {
-                FileReferenceChipRow(
-                    fileRefs = fileRefs,
-                    onRemove = { fileRef ->
-                        if (localFileReferences != null) {
-                            val idx = localFileReferences.indexOf(fileRef)
-                            if (idx >= 0) localFileReferences.removeAt(idx)
-                        } else controller.fileReferences.remove(fileRef)
-                    },
-                    onClick = { fileRef ->
-                        val line = if (fileRef.hasLineRange) fileRef.startLine - 1 else 0
-                        controller.openFileAtLine(fileRef.path, line)
-                    },
-                ) {
-                    controller.pendingPrompt?.let { pending ->
-                        val preview = pending.lineSequence().firstOrNull()?.trim()?.take(20) ?: pending.take(20)
-                        PendingPromptChip(
-                            preview = preview,
-                            onRemove = { controller.pendingPrompt = null },
-                        )
-                    }
-                }
+            val composerScrollState = rememberScrollState()
+            val composerOverflow by remember { derivedStateOf { composerScrollState.maxValue > 0 } }
+            val scrollbarAlpha by animateFloatAsState(if (composerOverflow) 1f else 0f)
+            // Chips and text share one fixed-height scrollable zone, so adding
+            // attachments never grows the card; the caret is followed into view
+            // manually because the field's own scroller stays idle here.
+            var composerLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+            // Top of the text field in scroll-content pixels: the cursor rect from
+            // onTextLayout is field-local, while the scroller spans attachments and
+            // chips above the field, so caret following needs this offset.
+            var fieldTopInContent by remember { mutableStateOf(0f) }
+            LaunchedEffect(fieldState.selection, composerLayout, fieldTopInContent) {
+                val layout = composerLayout ?: return@LaunchedEffect
+                val state = composerScrollState
+                if (state.maxValue == 0) return@LaunchedEffect
+                val cursor = layout.getCursorRect(fieldState.selection.end)
+                val top = fieldTopInContent + cursor.top
+                val bottom = fieldTopInContent + cursor.bottom
+                val viewport = state.viewportSize.toFloat()
+                val target = when {
+                    bottom > state.value + viewport -> bottom - viewport
+                    top < state.value -> top
+                    else -> return@LaunchedEffect
+                }.toInt().coerceIn(0, state.maxValue)
+                state.scrollTo(target)
             }
             val fieldTextStyle = TextStyle(color = if (!enabled) muted else textColor, fontSize = 13.sp, lineHeight = 19.sp)
-            val fieldModifier = Modifier.fillMaxWidth().heightIn(min = 52.dp, max = 140.dp)
+            val fieldModifier = Modifier.fillMaxWidth()
+                .onGloballyPositioned { coords ->
+                    // positionInParent is relative to the scrolled Column, whose
+                    // origin now coincides with the scroll content origin (the
+                    // 12dp top inset wraps the scroller, not the content).
+                    fieldTopInContent = coords.positionInParent().y
+                }
                 .focusRequester(focusRequester)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -419,6 +439,7 @@ internal fun ComposerContent(
                     // flags in the snapshotFlow above.
                     fun applyRecalledInput(text: String) {
                         setInputText(text)
+                        recalledText = text
                         slashDismissed = true
                         mentionDismissed = true
                     }
@@ -471,6 +492,7 @@ internal fun ComposerContent(
                                 .substring(0, fieldState.selection.min)
                             val caretAtFirstLine = '\n' !in textBeforeCaret
                             if (!caretAtFirstLine) return@onPreviewKeyEvent false
+                            if (!recallAllowed(fieldState.text.toString())) return@onPreviewKeyEvent false
                             val prev = controller.navigateHistory(-1)
                             if (prev != null) {
                                 applyRecalledInput(prev.text)
@@ -490,6 +512,7 @@ internal fun ComposerContent(
                                 .substring(fieldState.selection.max)
                             val caretAtLastLine = '\n' !in textAfterCaret
                             if (!caretAtLastLine) return@onPreviewKeyEvent false
+                            if (!recallAllowed(fieldState.text.toString())) return@onPreviewKeyEvent false
                             val next = controller.navigateHistory(1)
                             val target = localAttachments ?: controller.attachments
                             val targetRefs = localFileReferences ?: controller.fileReferences
@@ -564,48 +587,115 @@ internal fun ComposerContent(
                             )
                         }
                         innerTextField()
-                        // Read at composition time: the dismiss callback compares the
-                        // generation of the show cycle it was attached to with the current one.
-                        val slashGeneration = slashPopupGeneration
-                        val mentionGeneration = mentionPopupGeneration
-                        ComposerPopups(
-                            slashVisible = slashVisible,
-                            slashItems = slashItems,
-                            effectiveSlashIndex = effectiveSlashIndex,
-                            onSlashSelect = { selectSlashItem(it) },
-                            onSlashDismiss = {
-                                if (slashGeneration == slashPopupGeneration) {
-                                    slashDismissed = true
-                                }
-                            },
-                            mentionVisible = mentionVisible,
-                            mentionItems = mentionItems,
-                            effectiveMentionIndex = effectiveMentionIndex,
-                            onMentionSelect = { selectMentionItem(it) },
-                            onMentionDismiss = {
-                                if (mentionGeneration == mentionPopupGeneration) {
-                                    mentionDismissed = true
-                                }
-                            },
-                            background = background,
-                            muted = muted,
-                            accent = accent,
-                            popupMaxHeight = popupMaxHeight,
-                        )
                     }
                 }
             }
-            BasicTextField(
-                state = fieldState,
-                enabled = enabled,
-                textStyle = fieldTextStyle,
-                interactionSource = interactionSource,
-                cursorBrush = SolidColor(caretColor),
-                decorator = fieldDecorator,
-                scrollState = rememberScrollState(),
-                modifier = fieldModifier,
-            )
-            Spacer(Modifier.height(2.dp))
+            // Input zone: 112dp by default, grows with content up to 161dp and
+            // scrolls beyond that; chips and text share this one scroll area, so
+            // the card height stays bounded either way. The outer cap+clip is a
+            // defensive second bound so no child measure pass can stretch the card.
+            Box(Modifier.fillMaxWidth().heightIn(max = 161.dp).clipToBounds()) {
+                Column(
+                    Modifier.fillMaxWidth()
+                        .heightIn(min = 112.dp, max = 161.dp)
+                        // Top/start inset wraps the scroller: a fixed 12dp chrome
+                        // gap that content scrolls beneath, never away.
+                        .padding(start = 5.dp, top = 12.dp)
+                        .verticalScroll(composerScrollState),
+                ) {
+                    ComposerAttachments(
+                        attachments = attachments,
+                        onRemove = { index ->
+                            if (localAttachments != null) {
+                                if (index in localAttachments.indices) localAttachments.removeAt(index)
+                            } else controller.removeAttachment(index)
+                        },
+                        onPreview = { controller.showImageViewer(it) },
+                        onOpenFile = { path -> controller.openFileAtLine(path, 0) },
+                    )
+                    if (fileRefs.isNotEmpty() || controller.pendingPrompt != null) {
+                        FileReferenceChipRow(
+                            fileRefs = fileRefs,
+                            onRemove = { fileRef ->
+                                if (localFileReferences != null) {
+                                    val idx = localFileReferences.indexOf(fileRef)
+                                    if (idx >= 0) localFileReferences.removeAt(idx)
+                                } else controller.fileReferences.remove(fileRef)
+                            },
+                            onClick = { fileRef ->
+                                val line = if (fileRef.hasLineRange) fileRef.startLine - 1 else 0
+                                controller.openFileAtLine(fileRef.path, line)
+                            },
+                        ) {
+                            controller.pendingPrompt?.let { pending ->
+                                val preview = pending.lineSequence().firstOrNull()?.trim()?.take(20) ?: pending.take(20)
+                                PendingPromptChip(
+                                    preview = preview,
+                                    onRemove = { controller.pendingPrompt = null },
+                                )
+                            }
+                        }
+                    }
+                    if (attachments.isNotEmpty() || fileRefs.isNotEmpty() || controller.pendingPrompt != null) {
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    BasicTextField(
+                        state = fieldState,
+                        enabled = enabled,
+                        textStyle = fieldTextStyle,
+                        interactionSource = interactionSource,
+                        cursorBrush = SolidColor(caretColor),
+                        decorator = fieldDecorator,
+                        onTextLayout = { layoutResult -> composerLayout = layoutResult() },
+                        modifier = fieldModifier,
+                    )
+                }
+                // Overlay only while the content is actually clipped: maxValue > 0
+                // means chips + text exceed the fixed viewport height.
+                if (composerOverflow || scrollbarAlpha > 0f) {
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(composerScrollState),
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(10.dp)
+                            .padding(start = 2.dp, end = 2.dp, top = 14.dp, bottom = 2.dp).alpha(scrollbarAlpha),
+                        style = ScrollbarStyle(
+                            minimalHeight = 16.dp,
+                            thickness = 6.dp,
+                            shape = RoundedCornerShape(3.dp),
+                            hoverDurationMillis = 300,
+                            unhoverColor = DevEcoTheme.scrollbarThumb,
+                            hoverColor = DevEcoTheme.scrollbarThumbHover,
+                        ),
+                    )
+                }
+                // Read at composition time: the dismiss callback compares the
+                // generation of the show cycle it was attached to with the current one.
+                val slashGeneration = slashPopupGeneration
+                val mentionGeneration = mentionPopupGeneration
+                ComposerPopups(
+                    slashVisible = slashVisible,
+                    slashItems = slashItems,
+                    effectiveSlashIndex = effectiveSlashIndex,
+                    onSlashSelect = { selectSlashItem(it) },
+                    onSlashDismiss = {
+                        if (slashGeneration == slashPopupGeneration) {
+                            slashDismissed = true
+                        }
+                    },
+                    mentionVisible = mentionVisible,
+                    mentionItems = mentionItems,
+                    effectiveMentionIndex = effectiveMentionIndex,
+                    onMentionSelect = { selectMentionItem(it) },
+                    onMentionDismiss = {
+                        if (mentionGeneration == mentionPopupGeneration) {
+                            mentionDismissed = true
+                        }
+                    },
+                    background = background,
+                    muted = muted,
+                    accent = accent,
+                    popupMaxHeight = popupMaxHeight,
+                )
+            }
             Box(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.fillMaxWidth().padding(top = 0.dp),
@@ -651,8 +741,7 @@ internal fun ComposerContent(
                                     } else {
                                         onSend()
                                     }
-                                }
-                                .padding(4.dp),
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             // While a stop is in flight the button shows the same grey
@@ -765,14 +854,14 @@ private fun ComposerFooter() {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Box(
                 Modifier
                     .width(1.dp)
-                    .height(12.dp)
+                    .height(16.dp)
                     .background(DevEcoTheme.disclaimerFg.copy(alpha = 0.5f))
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             val linkColor = DevEcoTheme.disclaimerFg
             val termsInteraction = remember { MutableInteractionSource() }
             val termsHovered by termsInteraction.collectIsHoveredAsState()
@@ -793,7 +882,7 @@ private fun ComposerFooter() {
                         Desktop.getDesktop().browse(URI(OPENCODE_TERMS_URL))
                     },
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             val privacyInteraction = remember { MutableInteractionSource() }
             val privacyHovered by privacyInteraction.collectIsHoveredAsState()
             Text(
@@ -813,6 +902,42 @@ private fun ComposerFooter() {
                         Desktop.getDesktop().browse(URI(OPENCODE_PRIVACY_URL))
                     },
             )
+            val complainAction = remember { ActionManager.getInstance().getAction(COMPLAIN_ACTION_ID) }
+            if (complainAction != null) {
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(16.dp)
+                        .background(DevEcoTheme.disclaimerFg.copy(alpha = 0.5f))
+                )
+                Spacer(Modifier.width(10.dp))
+                val complainInteraction = remember { MutableInteractionSource() }
+                val complainHovered by complainInteraction.collectIsHoveredAsState()
+                Text(
+                    MyMessageBundle.message("composer.complain"),
+                    color = if (complainHovered) linkColor.copy(alpha = DevEcoTheme.mutedActionAlpha) else linkColor,
+                    fontSize = 11.sp,
+                    softWrap = false,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .drawBehind {
+                            val y = size.height - 1f
+                            drawLine(linkColor, Offset(0f, y), Offset(size.width, y), 1f)
+                        }
+                        .hoverable(complainInteraction)
+                        .clickable(interactionSource = complainInteraction, indication = null) {
+                            ActionManager.getInstance().tryToExecute(
+                                complainAction,
+                                null,
+                                KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner,
+                                null,
+                                true,
+                            )
+                        },
+                )
+            }
         }
     }
 }

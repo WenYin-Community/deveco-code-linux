@@ -4,9 +4,11 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.util.concurrency.AppExecutorUtil
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.action.DevEcoSessionActions
+import org.deveco.code.action.PendingChatHandoff
 import org.deveco.code.session.SessionController
 import org.deveco.code.session.SessionStorage
 import org.deveco.code.session.editor.SessionEditorRegistry
@@ -15,6 +17,7 @@ import org.deveco.code.session.editor.revealChatTab
 import org.deveco.code.util.errorMessage
 import org.deveco.code.util.runInEdt
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Entry point DevEco Studio calls, by reflection, to hand a compile error over to a DevEco Code
@@ -35,6 +38,11 @@ object DevEcoCodeBridge {
 
     private const val TYPE_FILE = "FILE"
     private const val TOOL_WINDOW_ID = "DevEco Code"
+
+    // Settlement window for a staged delivery: far above any observed editor construction
+    // time (seconds even on a cold start), yet bounded enough that a failed placement
+    // cannot pin the creation guard or leave a stale prompt deliverable for long.
+    private const val HANDOFF_SETTLE_SECONDS = 60L
 
     private val log = Logger.getInstance(DevEcoCodeBridge::class.java)
 
@@ -99,12 +107,19 @@ object DevEcoCodeBridge {
             }
 
             // Creating a conversation takes seconds (connect, then session/new); a second trigger
-            // in that window would create another one and fight over the single chat tab. Set here
-            // on the EDT and cleared by createAndDeliver once the tab is bound, so the guard spans
-            // the whole placement instead of just the backend call.
+            // in that window would create another one and fight over the single chat tab. The
+            // delivery guard spans the whole async placement — until its handoff is consumed,
+            // superseded or settled — and unlike the toolbar's busy flag it is never cleared
+            // by the sidebar's own list refreshes, which start right here via uiOnRefresh.
             Target.CreateNew -> {
                 if (actions.busy) return report(project, MyMessageBundle.message("bridge.delivery.busy"), error = false)
-                actions.busy = true
+                if (!actions.deliveryGuard.begin()) {
+                    return report(
+                        project,
+                        MyMessageBundle.message("bridge.delivery.busy"),
+                        error = false,
+                    )
+                }
                 pooled { createAndDeliver(project, actions, request, prompt) }
             }
 
@@ -157,7 +172,7 @@ object DevEcoCodeBridge {
      * process is not in this connection's `sessions` map, so `setSessionMode` would fail on it with
      * "ACP session is not loaded" — and it would stay in the pool, failing every later call too.
      *
-     * Owns `actions.busy` from here on; dispatch set it on the EDT.
+     * Owns the delivery guard from here on; dispatch claimed it on the EDT.
      */
     private fun createAndDeliver(
         project: Project,
@@ -165,10 +180,11 @@ object DevEcoCodeBridge {
         request: BridgeRequest,
         prompt: String,
     ) {
-        // dispatch set busy = true on the EDT; every exit path — including unexpected
-        // exceptions from SessionStorage or applyMode — must clear it, or the next bridge
-        // delivery would be rejected forever. The finally block dispatches back to the EDT
-        // so the write happens on the same thread that set it.
+        // dispatch claimed the delivery guard. Pre-staging failures release it here; once
+        // a delivery is staged the guard spans the whole async placement instead and is
+        // released by consumption, supersession or timeout — a second delivery arriving in
+        // that window is rejected rather than allowed to clobber the first one's handoff.
+        var handedOff = false
         try {
             val service = project.getService(AcpClientService::class.java)
             val sessionId = runCatching {
@@ -192,22 +208,52 @@ object DevEcoCodeBridge {
             }
             project.runInEdt {
                 if (project.isDisposed) return@runInEdt
+                // Stage the handoff before openSession: when the chat tab is already open,
+                // openSession's re-bind consumes the handoff from switchTo — staging after
+                // it would strand the handoff, since nothing re-consumes it for a session
+                // the editor already renders. When the tab is closed, the editor constructed
+                // by the async open takes the handoff at attach time, with no ordering
+                // assumption between staging and construction left to hold. A just-created
+                // session's controller is never ready yet, hence the auto-send parking; the
+                // load serves the configOptions cached at session/new, which still name the
+                // default mode, so the mirror is what keeps the selector showing the mode
+                // applyMode landed.
+                val handoff = PendingChatHandoff(
+                    fullPrompt = if (request.sendImmediately) null else prompt,
+                    autoSendPrompt = if (request.sendImmediately) prompt else null,
+                    mode = request.mode,
+                    releaseGuardOnConsume = true,
+                )
+                actions.stageHandoff(sessionId, handoff)
+                scheduleHandoffSettlement(project, actions, sessionId, handoff)
                 actions.ops.openSession(sessionId, MyMessageBundle.message("toolwindow.deveco.new.title"), true)
                 actions.uiOnRefresh?.invoke()
-                val controller = SessionEditorRegistry.getInstance(project).chatEditor()?.controller
-                if (controller == null) {
-                    report(project, MyMessageBundle.message("bridge.delivery.no.editor"), error = true)
-                    return@runInEdt
-                }
-                // The load serves the configOptions cached at session/new, which still name the default
-                // mode, and set_mode pushes no update of its own — so without this the selector would
-                // show the default while the backend runs the requested mode.
-                controller.onReady = { mirrorMode(controller, request.mode) }
-                handOff(controller, prompt, request.sendImmediately)
             }
+            handedOff = true
         } finally {
-            project.runInEdt { actions.busy = false }
+            if (!handedOff) actions.deliveryGuard.release()
         }
+    }
+
+    /**
+     * Settles a staged delivery nothing consumed: with the composite loading off the EDT's
+     * blocking path, a failed editor creation or an empty composite closed by the platform
+     * is not observable from here, so the timeout is the settlement — it reports the
+     * delivery as failed, drops the handoff (a later open of the session must not deliver
+     * a stale prompt) and releases the creation guard. Consumption or supersession wins
+     * the identity-conditional removal, in which case there is nothing to settle.
+     */
+    private fun scheduleHandoffSettlement(
+        project: Project,
+        actions: DevEcoSessionActions,
+        sessionId: String,
+        handoff: PendingChatHandoff,
+    ) {
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (!actions.removeHandoff(sessionId, handoff)) return@schedule
+            actions.deliveryGuard.release()
+            report(project, MyMessageBundle.message("bridge.delivery.no.editor"), error = true)
+        }, HANDOFF_SETTLE_SECONDS, TimeUnit.SECONDS)
     }
 
     /**
@@ -239,7 +285,7 @@ object DevEcoCodeBridge {
                 return@pooled
             }
             project.runInEdt {
-                mirrorMode(controller, request.mode)
+                controller.mirrorModeSelection(request.mode)
                 handOff(controller, prompt, request.sendImmediately)
             }
         }
@@ -260,18 +306,6 @@ object DevEcoCodeBridge {
             return null
         }
         return MyMessageBundle.message("bridge.delivery.mode.failed", mode, errorMessage(failure))
-    }
-
-    /**
-     * `session/set_mode` does not push `current_mode_update` — only the plan_enter/plan_exit tools
-     * do (`packages/opencode/src/acp/event.ts`, `syncMode`) — so without this the selector would keep
-     * showing the mode the user left it in even though the backend already switched. Going through
-     * the controller is what a click on the dropdown does; the write it fires carries the value
-     * [applyMode] just landed, so it is idempotent. A no-op while the mode list is unloaded.
-     */
-    private fun mirrorMode(controller: SessionController, mode: String?) {
-        if (mode == null || controller.selectedMode?.id == mode) return
-        controller.selectMode(mode)
     }
 
     /**

@@ -1,0 +1,79 @@
+import { existsSync, mkdirSync, symlinkSync } from "node:fs"
+import { createRequire } from "node:module"
+import os from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
+import { Global } from "@opencode-ai/core/global"
+import { resolveInstallRoot } from "@opencode-ai/core/installation/vendor-path"
+import { isCltLayout } from "@/tool/lib/env"
+import type { ConfigPlugin } from "@/config/plugin"
+import pkg from "../../package.json"
+
+export const ID = "deveco-harness"
+export const PACKAGE = "@deveco-test/deveco-harness"
+export const VERSION = pkg.builtinPlugins[PACKAGE]
+
+// The Harness runs the bundled CLI as a child process. Point it at the Command
+// Line Tools and expose a libbz2.so.1.0 compat directory on Fedora/RHEL, where
+// the Emulator links against the older soname.
+function applyLinuxCltEnv() {
+  if (process.platform !== "linux") return
+  const home = [
+    process.env.DEVECO_CLI_CLT_PATH,
+    process.env.DEVECO_HOME,
+    path.join(os.homedir(), "command-line-tools"),
+    "/opt/harmony-clt",
+  ].find((candidate) => candidate && isCltLayout(candidate))
+  if (!home) return
+  process.env.DEVECO_CLI_CLT_PATH ??= home
+  const source = [
+    "/lib64/libbz2.so.1.0.8",
+    "/usr/lib64/libbz2.so.1.0.8",
+    "/lib64/libbz2.so.1",
+    "/usr/lib64/libbz2.so.1",
+  ].find(existsSync)
+  if (!source) return
+  const dir = path.join(Global.Path.state, "clt-libs")
+  mkdirSync(dir, { recursive: true })
+  const link = path.join(dir, "libbz2.so.1.0")
+  if (!existsSync(link)) {
+    try {
+      symlinkSync(source, link)
+    } catch {
+      return
+    }
+  }
+  process.env.LD_LIBRARY_PATH = [dir, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":")
+}
+
+export function origin(input: {
+  root?: string
+  disableDefaultPlugins: boolean
+  pure: boolean
+}): ConfigPlugin.Origin | undefined {
+  if (input.disableDefaultPlugins || input.pure) return
+  // Resolve from the installed npm host, including hoisted dependencies. The
+  // compiled binary's import.meta.url points into bunfs, not node_modules.
+  // irm copies the launcher outside the version directory. Reuse the existing
+  // resource root as a fallback while keeping the npm host's dependency first.
+  const roots = [input.root ?? path.resolve(path.dirname(process.execPath), ".."), resolveInstallRoot()]
+  // Source checkouts install the same plugin spec as a normal package dependency.
+  if (!input.root) roots.unshift(path.resolve(import.meta.dirname, "../.."))
+  for (const root of roots) {
+    const resolve = createRequire(path.join(root, "package.json")).resolve
+    const spec = `${PACKAGE}/server`
+    // Bun can satisfy a missing dependency from its install cache. Only probe
+    // actual npm dependencies so a copied launcher can fall back to its version directory.
+    if (!resolve.paths(spec)?.some((dir) => existsSync(path.join(dir, PACKAGE, "package.json")))) continue
+    try {
+      const entry = resolve(spec)
+      applyLinuxCltEnv()
+      return { spec: pathToFileURL(entry).href, source: "builtin:deveco-harness", scope: "global" }
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND") continue
+      throw error
+    }
+  }
+}
+
+export * as BuiltinHarness from "./builtin-harness"

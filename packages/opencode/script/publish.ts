@@ -2,6 +2,7 @@
 import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
+import { copyLicenses, licenseFiles } from "@opencode-ai/script/license"
 import { fileURLToPath } from "url"
 import path from "path"
 
@@ -11,17 +12,6 @@ process.chdir(dir)
 const scope = process.env.DEVECO_SCOPE || "deveco"
 const registry = process.env.NPM_REGISTRY || "https://registry.npmjs.org"
 const token = process.env.NPM_TOKEN
-const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
-if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
-// Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
-const homegraphVersion = pkg.dependencies.homegraph
-if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
-if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
-  throw new Error(
-    `Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`,
-  )
-}
-
 // HarmonyOS arm64 is prebuilt and published from a separate repo, so it never lands in
 // ./dist and is never compiled here. It gates itself via its own os/cpu fields. That repo
 // must publish this exact version; npm silently skips an optional dependency whose version
@@ -41,7 +31,9 @@ async function publish(cwd: string, name: string, version: string) {
   }
   await $`bun pm pack`.cwd(cwd)
   if (token) {
-    await $`npm publish *.tgz --access public --registry ${registry} --tag ${Script.channel} --//registry.npmjs.org/:_authToken=${token}`.cwd(cwd)
+    await $`npm publish *.tgz --access public --registry ${registry} --tag ${Script.channel} --//registry.npmjs.org/:_authToken=${token}`.cwd(
+      cwd,
+    )
   } else {
     await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(cwd)
   }
@@ -71,7 +63,7 @@ const version = Object.values(binaries)[0]?.version
 await $`mkdir -p ./dist/${pkg.name}`
 await $`cp -r ./bin ./dist/${pkg.name}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
-await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+await copyLicenses(path.join(dir, "dist", pkg.name))
 await Bun.file(`./dist/${pkg.name}/README.md`).write(await Bun.file("../../README.md").text())
 await $`cp ../../CHANGELOG.md ./dist/${pkg.name}/CHANGELOG.md`
 
@@ -89,22 +81,13 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       license: pkg.license,
       os: ["darwin", "linux", "win32", "openharmony"],
       cpu: ["arm64", "x64"],
-      files: [
-        "bin/**/*",
-        "postinstall.mjs",
-        "LICENSE",
-        "README.md",
-        "CHANGELOG.md",
-      ],
+      files: ["bin/**/*", "postinstall.mjs", "README.md", "CHANGELOG.md", ...licenseFiles],
       optionalDependencies: {
         ...Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
         [hmosPackageName]: version,
       },
       dependencies: {
-        "@deveco/deveco-cli": devecoCliVersion,
-        // npm installs: runtime prefers this package (postinstall marker). Platform
-        // vendor/homegraph remains for curl/irm zip (same split as @deveco/deveco-cli).
-        homegraph: homegraphVersion,
+        ...pkg.builtinPlugins,
       },
     },
     null,

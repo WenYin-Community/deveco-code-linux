@@ -1,6 +1,8 @@
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { createRequire } from "node:module"
+import { BuiltinHarness } from "../../src/plugin/builtin-harness"
 import { findDevEcoHome, hdcPath } from "../../src/tool/lib/env"
 import type { CaseContext, RunCommandResult } from "./types"
 
@@ -9,7 +11,10 @@ export const repoRoot = path.resolve(opencodeRoot, "../..")
 export const cliEntry = path.join(opencodeRoot, "src/index.ts")
 export const latestReportDir = path.join(repoRoot, "reports", "live-e2e", "latest")
 export const artifactDir = path.join(latestReportDir, "artifacts")
-const bundledDevecoCliEntry = path.join(opencodeRoot, "node_modules", "@deveco", "deveco-cli", "cli.js")
+function harnessCliEntry() {
+  const entry = createRequire(import.meta.url).resolve(`${BuiltinHarness.PACKAGE}/server`)
+  return path.join(path.dirname(entry), "deveco-cli", "proxy.js")
+}
 
 export function realUserEnv() {
   const env = { ...process.env }
@@ -49,7 +54,17 @@ export async function createHarmonyProject(
 ) {
   const projectRoot = path.join(workspace, appName)
   const proc = Bun.spawn(
-    [process.execPath, bundledDevecoCliEntry, "create", "--project-path", projectRoot, "--app-name", appName, "--bundle-name", bundleName],
+    [
+      "node",
+      harnessCliEntry(),
+      "create",
+      "--project-path",
+      projectRoot,
+      "--app-name",
+      appName,
+      "--bundle-name",
+      bundleName,
+    ],
     { cwd: workspace, env, stdout: "pipe", stderr: "pipe" },
   )
   const [exitCode, stdout, stderr] = await Promise.all([
@@ -68,7 +83,7 @@ export async function buildHarmonyProject(
   env: Record<string, string | undefined> = realUserEnv(),
   timeoutMs = 300_000,
 ) {
-  const proc = Bun.spawn([process.execPath, bundledDevecoCliEntry, "build", "--build-mode", "debug"], {
+  const proc = Bun.spawn(["node", harnessCliEntry(), "build", "--build-mode", "debug"], {
     cwd: projectRoot,
     env,
     stdout: "pipe",
@@ -85,7 +100,14 @@ export async function buildHarmonyProject(
 
 export async function runDeveco(
   args: string[],
-  options: { timeoutMs?: number; cwd?: string; stdin?: string; env?: Record<string, string | undefined>; entry?: string; stallMs?: number } = {},
+  options: {
+    timeoutMs?: number
+    cwd?: string
+    stdin?: string
+    env?: Record<string, string | undefined>
+    entry?: string
+    stallMs?: number
+  } = {},
 ): Promise<RunCommandResult> {
   const start = Date.now()
   const entry = options.entry ?? cliEntry
@@ -366,7 +388,9 @@ export async function runHdcGuardExecDriver(options: {
   const parsed = (await file.exists()) ? await file.json() : undefined
   await fs.rm(resultFile, { force: true }).catch(() => undefined)
   if (!parsed || typeof parsed !== "object") {
-    throw new Error(`hdc guard exec driver did not write a result (exit ${exitCode})\nstdout: ${stdout}\nstderr: ${stderr}`)
+    throw new Error(
+      `hdc guard exec driver did not write a result (exit ${exitCode})\nstdout: ${stdout}\nstderr: ${stderr}`,
+    )
   }
   return {
     driver: parsed as import("./fixtures/hdc-guard-exec-driver").HdcGuardExecDriverResult,

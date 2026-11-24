@@ -113,7 +113,7 @@ for (const item of targets) {
       {
         name: `@opencode-ai/${name}`,
         version: Script.version,
-        license: "MIT",
+        license: pkg.license,
         repository: { type: "git", url: "git+https://github.com/anomalyco/opencode.git" },
         os: [item.os],
         cpu: [item.arch],

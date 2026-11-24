@@ -34,12 +34,6 @@ import { checkOnStartup as crashCheckOnStartup, cleanupOnExit as crashCleanupOnE
 
 const args = hideBin(process.argv)
 
-if (args[0] === "__devecocli-proxy") {
-  const proxyArgs = args[1] === "--" ? args.slice(2) : args.slice(1)
-  const { runDevecoCliProxy } = await import("./deveco-cli/router")
-  process.exit(await runDevecoCliProxy(proxyArgs, process.cwd()))
-}
-
 // HDC guard shim re-entry (SR1): the `hdc` shim script in
 // Global.Path.bin execs `deveco __hdc-shim -- <argv>`, which
 // routes the call through the in-process guard over IPC.
@@ -153,12 +147,6 @@ try {
   }
   process.exitCode = 1
 } finally {
-  try {
-    const { stopUiVerificationMcp } = await import("./tool/ui-verification")
-    await stopUiVerificationMcp()
-  } catch {
-    // UI verification MCP may be absent or stop may fail; proceed to exit.
-  }
   // Some subprocesses don't react properly to SIGTERM and similar signals.
   // Most notably, some docker-container-based MCP servers don't handle such signals unless
   // run using `docker run --init`.

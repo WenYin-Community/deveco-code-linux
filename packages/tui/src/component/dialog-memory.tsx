@@ -83,16 +83,48 @@ export function DialogMemory(props: { current?: string }) {
     return { config, dir, memories, pendingExpiry }
   })
 
+  const autoMemoryEnabled = createMemo(() => {
+    const config = snapshot()?.config
+    if (!config) return true
+    const autoMemory = Memory.SETTINGS.find((setting) => setting.key === Memory.AUTO_MEMORY_KEY)
+    return autoMemory ? Memory.isEnabled(config, autoMemory) : true
+  })
+
+  function settingDisabled(setting: Memory.Setting) {
+    return !autoMemoryEnabled() && Memory.isDependentSetting(setting)
+  }
+
   const options = createMemo<DialogSelectOption<string>[]>(() => {
     const data = snapshot()
     if (!data) return []
-    return [
-      ...Memory.SETTINGS.map((setting) => ({
+    const settings = Memory.SETTINGS.map((setting) => {
+      const off = settingDisabled(setting)
+      return {
         value: SETTING + setting.key,
         title: t(`dialog.memory_setting.${setting.id}`),
-        footer: <State enabled={Memory.isEnabled(data.config, setting)} />,
-        category: t("category.memory_settings"),
-      })),
+        // A disabled row shows its effective state, not the stored value that will
+        // come back when the Auto memory switch is turned on again.
+        footer: <State enabled={off ? false : Memory.isEnabled(data.config, setting)} />,
+        category:
+          setting.key === Memory.AUTO_MEMORY_KEY
+            ? t("category.memory_settings")
+            : setting.key === "skills.enabled"
+              ? t("category.memory_skills")
+              : t("category.memory_advanced"),
+        categoryView:
+          setting.key === "memoryRecall.enabled" && !autoMemoryEnabled() ? (
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.accent} attributes={TextAttributes.BOLD}>
+                {t("category.memory_advanced")}
+              </text>
+              <text fg={theme.textMuted}>{t("dialog.memory_advanced_hint")}</text>
+            </box>
+          ) : undefined,
+        disabled: off,
+      }
+    })
+    return [
+      ...settings,
       ...(data.memories.length === 0
         ? [
             {
@@ -129,7 +161,7 @@ export function DialogMemory(props: { current?: string }) {
 
   async function toggle(option: DialogSelectOption<string>) {
     const setting = Memory.SETTINGS.find((item) => SETTING + item.key === option.value)
-    if (!setting || busy()) return
+    if (!setting || busy() || settingDisabled(setting)) return
     setBusy(true)
     try {
       await Memory.writeSetting(scope(), setting, !Memory.isEnabled(snapshot()?.config ?? {}, setting))
@@ -164,6 +196,13 @@ export function DialogMemory(props: { current?: string }) {
   }
 
   const active = createMemo(() => current() ?? options()[0]?.value ?? "")
+  const activeSetting = createMemo(() =>
+    Memory.SETTINGS.find((setting) => SETTING + setting.key === active()),
+  )
+  const activeDisabled = createMemo(() => {
+    const setting = activeSetting()
+    return setting ? settingDisabled(setting) : false
+  })
 
   // The rows come off disk, so the restored row can only be resolved once they exist, and it is a
   // one-shot move. DialogSelect's `current` is not a live cursor: every change to it re-centers the
@@ -185,20 +224,25 @@ export function DialogMemory(props: { current?: string }) {
       }}
       title={t("dialog.title_memory")}
       options={options()}
+      maxHeight={Math.max(6, dimensions().height - 16)}
       current={props.current}
       showCurrentMarker={false}
       onMove={(option) => setCurrent(option.value)}
       // The note is about config changes, and the footer row is narrow: on a memory row the
       // action hints need that space instead.
       footerHints={
-        active().startsWith(SETTING) ? [{ title: t("dialog.memory_config_note"), label: "", side: "right" }] : []
+        active().startsWith(SETTING) && !activeDisabled()
+          ? [{ title: t("dialog.memory_config_note"), label: "", side: "right" }]
+          : []
       }
       actions={[
         {
           command: "dialog.memory.toggle",
           title: t("dialog.action_toggle"),
-          // hidden instead of disabled so the footer only offers what the row can do.
+          // Keep the command registered while disabled so space is consumed here
+          // instead of leaking into the filter input.
           hidden: !active().startsWith(SETTING),
+          disabled: activeDisabled(),
           onTrigger: toggle,
         },
         {

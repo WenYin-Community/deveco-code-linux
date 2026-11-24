@@ -12,7 +12,7 @@ import { useI18n } from "@opencode-ai/tui/i18n"
  * `getDevEcoExtensions().homeBody` — when absent, it falls back to the
  * upstream (generic) Home layout.
  */
-import { createEffect, createMemo, createSignal, Match, on, onMount, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createRenderEffect, createSignal, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "@opencode-ai/tui/context/theme"
 import {
@@ -28,6 +28,7 @@ import { useRouteData } from "@opencode-ai/tui/context/route"
 import { usePromptRef } from "@opencode-ai/tui/context/prompt"
 import { useLocal } from "@opencode-ai/tui/context/local"
 import { useSDK } from "@opencode-ai/tui/context/sdk"
+import { useAnnouncements } from "@opencode-ai/tui/context/announcements"
 import { providerRevision } from "@opencode-ai/tui/context/sync"
 import { Prompt, type PromptRef } from "@opencode-ai/tui/component/prompt"
 import { usePluginRuntime } from "@opencode-ai/tui/plugin/runtime"
@@ -86,7 +87,11 @@ type HomeGate = ReturnType<typeof createHomeGate>
 
 export function DevEcoHomeBody(props: HomeProps) {
   const dimensions = useTerminalDimensions()
+  const dialog = useDialog()
   const gate = createHomeGate(props.sync)
+  createRenderEffect(() => {
+    if (!gate.ready()) onCleanup(dialog.blockAutomatic())
+  })
   const prompt = createHomePrompt(props.sync)
   createImprovementPrompt(props.sync, gate.ready)
   createReservedProviderWarning(props.sync, gate.ready)
@@ -119,15 +124,19 @@ function createHomeGate(sync: SyncObject) {
 
 function createGateCheck(sync: SyncObject, apply: (destination: GateDestination) => void) {
   const sdk = useSDK()
+  const announcements = useAnnouncements()
   const { t } = useI18n()
   let checked = false
   let revision = 0
+  onCleanup(() => revision++)
   const run = async () => {
     if (!canCheckHome(sync)) return
     if (checked) return
     checked = true
     const current = ++revision
-    const destination = await resolveHomeDestination(sync, sdk, t).catch(homeCheckFailure)
+    const destination = await resolveHomeDestination(sync, sdk, t, (agreement) => {
+      if (current === revision) announcements.setAgreement(agreement)
+    }).catch(homeCheckFailure)
     if (current === revision) apply(destination)
   }
   return {
@@ -147,8 +156,10 @@ async function resolveHomeDestination(
   sync: SyncObject,
   sdk: ReturnType<typeof useSDK>,
   t: ReturnType<typeof useI18n>["t"],
+  onAgreement: (agreement: ProductState) => void,
 ): Promise<GateDestination> {
   const product = await sdk.client.global.productAgreement({ throwOnError: true })
+  onAgreement(product.data)
   const review = reviewDestination(product.data)
   if (review) return review
   if (hasThirdPartyProvider(sync)) return thirdPartyDestination(product.data)

@@ -8,6 +8,22 @@
       "dependsOn": [],
       "outputs": ["dist/**"]
     },
+    "@opencode-ai/script#test": {
+      "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/LICENSE",
+        "$TURBO_ROOT$/LICENSING.md",
+        "$TURBO_ROOT$/NOTICE",
+        "$TURBO_ROOT$/LICENSES/**",
+        "$TURBO_ROOT$/packages/opencode/package.json",
+        "$TURBO_ROOT$/packages/opencode/script/generate-notice.ts",
+        "$TURBO_ROOT$/integrations/intellij-plugin/script/verify-licenses.py",
+        "$TURBO_ROOT$/integrations/intellij-plugin/build.gradle.kts",
+        "$TURBO_ROOT$/.gitcode/workflows/publish-intellij-plugin.yml"
+      ]
+    },
     "test": {
       "dependsOn": ["^build"],
       "outputs": [],

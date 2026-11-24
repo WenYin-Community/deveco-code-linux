@@ -2,20 +2,15 @@ import { Schema } from "effect"
 import * as path from "path"
 import { Effect } from "effect"
 import * as Tool from "./tool"
-import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch } from "diff"
 import DESCRIPTION from "./write.txt"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { FileSystem } from "@opencode-ai/core/filesystem"
-import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
-
-const MAX_PROJECT_DIAGNOSTICS_FILES = 5
+import { fileWriteNotifier } from "./file-write"
 
 export const Parameters = Schema.Struct({
   content: Schema.String.annotate({ description: "The content to write to the file" }),
@@ -27,10 +22,9 @@ export const Parameters = Schema.Struct({
 export const WriteTool = Tool.define(
   "write",
   Effect.gen(function* () {
-    const lsp = yield* LSP.Service
     const fs = yield* FSUtil.Service
-    const events = yield* EventV2Bridge.Service
     const format = yield* Format.Service
+    const notifyFileChange = yield* fileWriteNotifier
 
     return {
       description: DESCRIPTION,
@@ -65,38 +59,16 @@ export const WriteTool = Tool.define(
           if (yield* format.file(filepath)) {
             yield* Bom.syncFile(fs, filepath, desiredBom)
           }
-          yield* events.publish(FileSystem.Event.Edited, { file: filepath })
-          yield* events.publish(Watcher.Event.Updated, {
-            file: filepath,
-            event: exists ? "change" : "add",
-          })
-
-          let output = "Wrote file successfully."
-          yield* lsp.touchFile(filepath, "document")
-          const diagnostics = yield* lsp.diagnostics()
-          const normalizedFilepath = FSUtil.normalizePath(filepath)
-          let projectDiagnosticsCount = 0
-          for (const [file, issues] of Object.entries(diagnostics)) {
-            const current = file === normalizedFilepath
-            if (!current && projectDiagnosticsCount >= MAX_PROJECT_DIAGNOSTICS_FILES) continue
-            const block = LSP.Diagnostic.report(current ? filepath : file, issues)
-            if (!block) continue
-            if (current) {
-              output += `\n\nLSP errors detected in this file, please fix:\n${block}`
-              continue
-            }
-            projectDiagnosticsCount++
-            output += `\n\nLSP errors detected in other files:\n${block}`
-          }
+          const notification = yield* notifyFileChange({ file: filepath, event: exists ? "change" : "add" })
 
           return {
             title: path.relative(instance.worktree, filepath),
             metadata: {
-              diagnostics,
+              diagnostics: notification.diagnostics,
               filepath,
               exists: exists,
             },
-            output,
+            output: `Wrote file successfully.${notification.output}`,
           }
         }).pipe(Effect.orDie),
     }

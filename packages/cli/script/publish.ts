@@ -2,6 +2,7 @@
 import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@opencode-ai/script"
+import { copyLicenses } from "@opencode-ai/script/license"
 import { fileURLToPath } from "url"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
@@ -14,6 +15,7 @@ async function published(name: string, version: string) {
 async function publish(dir: string, name: string, version: string) {
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
   if (await published(name, version)) return console.log(`already published ${name}@${version}`)
+  await copyLicenses(dir)
   await $`bun pm pack`.cwd(dir)
   await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
 }

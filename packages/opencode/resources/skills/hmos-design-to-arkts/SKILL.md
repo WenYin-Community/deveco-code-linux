@@ -17,11 +17,13 @@ description: 处理 Pixso、Figma、MasterGo、蓝湖或 HTML 设计稿转 Harmo
 
 蓝湖开始使用：识别到 lanhuapp.com 链接后，先读 `references/lanhu/mcp-setup.md` 并运行 `scripts/lanhu-setup.mjs --action status`。按状态完成安装、浏览器登录和独立连接验证；这是来源预检，不要求先确定工程或启动 Controller。无需用户自行下载 GitHub 源码、安装 Python、编辑 MCP 配置或复制 Cookie。依赖与连接验证通过后继续需求预检和原设计链接选定的 Full/Fast 流程；等待登录时保留链接和用户已提供的信息。
 
+MasterGo 开始使用：识别到 MasterGo 链接或客户端选区后，先读 `references/mastergo/mcp-setup.md` 并运行 `scripts/mastergo-preflight.mjs` 探测桌面客户端本地服务（Vibe 截图通道）。客户端本地服务可达时按默认 Magic+Vibe 混合取数继续需求预检；不可达时停止并一次性给出两条路——**路径 A** 恢复客户端后继续自动化取数；**路径 B** 不用客户端继续：Magic 通道按 `references/mastergo/mcp-setup.md` 的判定顺序以本机已配置连接优先、`MG_MCP_TOKEN` 只作无连接时的依据，可用则纯 Magic + 手工导出图片，并在同一条消息一次给全导出清单（1× 必须、2× 可选、资源原图条件）、放置目录 `<runDir>/source/mastergo/export/`、导入配置 `recognition.scale=1` 与 `reference.scale` 为 1 或 2、单文件 ≤10 MiB / 总量 ≤100 MiB / 像素 ≤4000 万，同时立即索要图片路径或文件——未提供前不把阶段 1 当作已完成取数，capture 脚本强制校验截图，缺图时按其报错向用户索图或按 `missing_asset` 阻塞；Magic 也不可用则按社区插件通道是否可行判定，都不行按 blocked 报告。两条路可与其余澄清问题同批提出，用户选定后才继续；选定结果由阶段 1 记录进 `requirement-clarification.json` 的 `mastergo.channel`，入口与阶段文档沿用该记录。这是来源预检，不要求先确定工程、安装 runtime 或启动 Controller；用户已声明社区插件模式时该探测不作为门禁。
+
 预检完成后必须生成需求澄清文档，由阶段 1 写入运行目录的 `requirement-clarification.json`。
 
 ## 选择工作流
 
-先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`；用户给出 HTML 设计源路径（`.html` 文件或含 `index.html` 的导出目录）→ `others-html`；用户给出整页截图图片（`.png`/`.jpg`）→ `others-visual`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；首次接入默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按 mcp-setup 的降级路径执行，已有用户明确选择且可用的连接直接复用。Vibe 可用性按桌面客户端本地服务探针判定（见 mcp-setup）；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
+先选择设计来源：Figma `design/file` URL 且含 file key 与 `node-id` → `figma`；Pixso 链接、Pixso 选中节点或开发者提供 Pixso DSL → `pixso`；用户给出 HTML 设计源路径（`.html` 文件或含 `index.html` 的导出目录）→ `others-html`；用户给出整页截图图片（`.png`/`.jpg`）→ `others-visual`。同时提供多种来源、来源无法识别或 Figma 缺少 `node-id` 时先一次性澄清，不得猜测。当前不支持在同一个 run 中混合来源。MasterGo 链接或当前选区 → `mastergo`；初次接入默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），取数路径按来源预检的结论与用户选择执行，已有用户明确选择且可用的连接直接复用。客户端可用性按来源预检的本地服务探针判定（见 mcp-setup）；私有化先验证实际服务支持，读取 `references/mastergo/mcp-setup.md`。蓝湖链接 → `lanhu`；项目列表先通过 lanhu_get_designs 确定画板。蓝湖支持 Full/Fast：Full 阶段 2 人工确认方案后继续实现，阶段 5 复用视觉校准；Fast 自动接受方案且不评分。
 
 用户选择社区插件 MCP 时，使用独立的 `community` 模式和 `nodes` 输入格式，仍保留 MasterGo 来源；安装、连接与能力边界见 `references/mastergo/mcp-setup.md`。不得将社区节点响应冒充官方 Magic DSL 或 Vibe 前端代码。
 
@@ -35,7 +37,7 @@ description: 处理 Pixso、Figma、MasterGo、蓝湖或 HTML 设计稿转 Harmo
 
 选择后由 `workflow-state.json.designSource` 和 `.variant` 共同锁定，恢复时不得重新识别来源或切换 catalog。
 
-variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」已通过；蓝湖按 `references/lanhu/mcp-setup.md` 验证独立脚本连接（见下节）；不满足时不得 `init`，按检查结果给出安装建议或引导并停止。
+variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」已通过；蓝湖按 `references/lanhu/mcp-setup.md` 验证独立脚本连接（见下节）；MasterGo 来源预检已给出结论且用户已选定取数通道（阶段 1 记录进 `requirement-clarification.json` 的 `mastergo.channel`）；不满足时不得 `init`（用户已声明社区插件模式时，以通道选择为准），按检查结果给出安装建议或引导并停止。
 
 ## MCP 依赖检查
 
@@ -48,7 +50,7 @@ variant 确定后、执行 `init` 前，Pixso/Figma 确认「MCP 依赖检查」
 
 Pixso/Figma 依赖不满足时：停止并给出安装建议/修复引导（见 `references/mcp-dependency.md`；只给指引不代装），不得进入 `init`、不得获取 DSL/JSX。Pixso 路径下开发者直接提供 DSL/截图/本地资源（全程不调用 MCP）时，依赖检查记录为不适用并继续。
 
-MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图），连接不可用时按该指引的降级路径执行，保留用户已明确选择且可用的方案。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
+MasterGo 路径单独按 `references/mastergo/mcp-setup.md` 完成连接检查与接入：`init` 前先完成来源预检——运行 `scripts/mastergo-preflight.mjs` 探测桌面客户端本地服务，`available` 时用默认 Magic+Vibe 混合取数（Magic 出结构化 DSL 与素材、Vibe 补截图）；`unavailable` 时按该指引的判定顺序交给用户选定（Magic 可用按本机已配置连接优先判定→纯 Magic + 手工导出截图，导出清单、放置目录、导入 scale 与体积上限一次给全；Magic 不可用→社区通道可行则引导，否则 blocked），选择由阶段 1 记录进 `mastergo.channel` 并沿用；已有用户明确选择且可用的方案直接复用。依赖未就绪时不初始化工作流，按该指引完成配置或报告阻塞；不要套用 Pixso/Anchor 工具名或安装步骤。初始化并启动 MasterGo 阶段 1 后，在工程目录运行 `scripts/mastergo-capture.mjs --config <capture-config.json> --connection <connection.json> --runtime <runtime>`。脚本独立连接外部 MCP，完成只读检查、取数与原始响应落盘，不需要新增 Code 内置工具或注册内部 MCP 会话。沿用命令执行权限，用户禁用的服务或工具不能改用脚本绕过。工具可见只证明协议可达，目标文件、节点与资源是否可读仍须实际验证。详情见 `references/mastergo/acquire.md`。
 
 ## 运行目录
 
@@ -112,11 +114,55 @@ Controller 脚本：`<designToArktsSkillRoot>/scripts/workflow.mjs`。五种操�
 - 不判断 Todo UI 是否已经更新。每个阶段入口固定调用一次，重复提交同一完整列表视为安全的幂等重放。
 - `init` 后不要单独调用 `todowrite`，否则会与阶段 1 入口重复。
 - `status` 返回什么动作就按什么动作分流，不能无条件执行 `stage-start`：
-  - `stage_complete` → 读取 `completionResult`，`passed` 时调用 `stage-complete --result passed`，`blocked` 时调用 `stage-complete --result blocked --reason-code <reasonCode>`（当前阶段有 pending Gate 或已确认时）
+  - `stage_complete` → 先读取 `completionResult`：
+    - `blocked` → 调用 `stage-complete --result blocked --reason-code <reasonCode>`（当前阶段有 pending Gate 或已确认时）
+    - `passed` 且 `currentStage` 是当前 catalog 最后一阶段、运行尚未 completed → 先确认 run 根目录存在与本次交付对应的合法 `task-completion.json`；缺失或非法时按「交付任务完成率验收」用已有证据生成，确认落盘后再执行原最终 `stage-complete --result passed`。优先复用已有结果，沿用 pending Gate 的恢复逻辑，不重跑 `stage-start`、不重复阶段入口 Todo 同步
+    - 普通阶段的 `passed` → 调用 `stage-complete --result passed`
   - `running` → `stage_start`
-  - `completed` → 读取 `todoPayloadPath` → `todowrite` → 最终回复
+  - `completed` → 读取 `todoPayloadPath` → `todowrite` → 最终回复；上传字段已随首次完成快照固化，已完成 run 不补报
   - `blocked` → 报告并解决 `blockedReasonCode`，不得静默恢复 `running`
   - `awaiting_confirmation` → 恢复原确认问题，不重新执行阶段入口 Todo 同步
+
+## 交付任务完成率验收
+
+适用于全部设计来源的 Full 与 Fast。在最终阶段的既有工作和验证结束后、提交最后一次 `stage-complete --result passed` 前，由当前 Agent 完成以下动作；流程随后按原有顺序提交最终完成命令、同步 Todo 并回复用户，本验收不改变任何阶段 Gate 与交付规则。
+
+1. 读取本 run 的 `design-doc.md`。从功能范围、交互、页面接入和明确验收条款中提取本次承诺交付、能独立判定的事项；相同结果在多个章节重复出现时合并为一条；排除明确超出范围的内容、纯流程步骤，以及已单独统计的构建与视觉校准动作。
+2. 对照交付版本的 ArkTS、页面路由与资源，以及本次已有的构建、运行和验证证据逐项判定。验收过程只读工程文件，产物只写入当前 run 目录；保持原有验证范围，复用已有验证结果，由当前 Agent 判定，不引入新的构建或评分循环。
+3. 每条承诺写一项，给出在该报告内唯一的 ID 和简短证据。全部条件有证据支持时写 `passed`；代码或实测表明条件未满足时写 `failed`；证据不足时写 `unverified`。例如承诺「点击 VIP 卡片跳转」，真实跳转代码可以作为证据，空回调判 `failed`，无法确认目标行为判 `unverified`；构建成功本身只能证明编译结果。
+4. 向 run 根目录写入 `task-completion.json`：
+
+```json
+{
+  "tasks": [
+    {
+      "id": "T01",
+      "task": "点击 VIP 卡片进入会员页",
+      "status": "passed",
+      "evidence": "最终页面的 VIP 点击处理函数调用已注册的会员页路由"
+    }
+  ]
+}
+```
+
+缺少可信的设计文档或没有可验收条目时写 `{"tasks":[]}`。`task` 与 `evidence` 仅用于本地追溯，未验证项的 `evidence` 写清缺失的证据。逐项判定由模型完成，完成率由 Controller 程序计算；该文件缺失或非法时 Controller 只记录「暂不可用」，不影响交付与最终命令。
+
+除正常总结流程外，任何要求直接重试最终成功提交的入口同样适用本验收：`stage-start` 返回 pending Gate 的恢复、`status` 返回 `stage_complete` 且 `completionResult=passed` 的最终阶段、以及其他恢复指令直接要求最终 `stage-complete --result passed` 时，都必须先确认与本次交付对应的 `task-completion.json` 已落盘，缺失或非法时按本节用已有证据补齐，再执行提交。
+
+## 最终评分证据与恢复
+
+Full 的最终 `stage-complete --result passed` 在写 Gate 前校验本次交付对应的 `final-visual-score.json`；Fast 记为 `not_applicable`，明确禁用校准时沿用可信 `skipped` 报告，两者都不要求该文件。
+
+返回 `final_score_evidence_required` 时，按 `reason` 补齐或修正当前 run 的评分产物：`missing`、`invalid_artifact`、`invalid_score_evidence` 指向评分产物本身，`invalid_calibration` 指向既有视觉校准报告。能够取得本次实际交付候选的可信评分时保存 `recorded`，确实无法评分时保存显式 `{"status":"unavailable"}`，并可用非空 `reason` 记录本地原因。确认产物落盘后，按返回的 `retry.stage` / `retry.result` 重试原提交；这是可纠正的拒绝，不是永久 blocked，也不需要重新 `init`。已有 pending Gate 时沿用既定恢复操作，无需重复 `stage-start` 和阶段入口 Todo 同步。
+
+## 构建结果标记
+
+适用于六种设计来源的 Full 与 Fast。D2A Agent 每一次实际发起构建时，都在 Shell 工具调用上传 `d2aBuildRunDir` 参数，值为本次 run 的运行目录（如 `<project>/.deveco/design-to-arkts/runs/<runId-or-pageSlug>`）；组装现有视图、调用子能力和失败重试时同样遵守。规则：
+
+1. 同时用 `workdir` 指定工程目录；一次调用只运行一个构建命令。构建与部署必须分开调用，禁止 `devecocli build; devecocli run --skip-build` 之类的组合——后续命令的退出码会覆盖构建结果，导致统计失真。
+2. 默认构建命令是 `devecocli build`；工程明确指定的其他构建命令（含工程自己的构建脚本）同样传该参数，只要该独立入口的退出状态准确反映构建结果。
+3. 质量阶段、修复重试、视觉校准和交付复评中的实际构建都属于该 run，每次都带标记。部署、`run --skip-build`、类型检查和复用已有构建产物不是构建，不传该参数。
+4. 标记不影响命令本身的执行、权限检查与沙箱；目录非法或状态不可归属时仅跳过统计。
 
 ## 用户确认规则
 

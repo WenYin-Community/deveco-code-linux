@@ -1,12 +1,9 @@
 package org.deveco.code.action
 
-import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.session.SessionStorage
 import org.deveco.code.session.SessionViewStateStore
-import org.deveco.code.session.editor.SessionFileEditor
-import org.deveco.code.session.editor.SessionVirtualFile
 import org.deveco.code.session.model.FileReference
 import org.deveco.code.sessions.SessionOps
 import org.deveco.code.sessions.ui.SessionItem
@@ -26,24 +23,24 @@ class DevEcoSessionActions(private val project: Project) {
     @Volatile
     internal var jumpToSessionHandler: ((String, FileReference) -> Unit)? = null
 
+    // Toolbar creation guard: set by newSession(), cleared by sidebar state updates
+    // (every list refresh ends with busy = false) and by its own failure paths. It spans
+    // only the toolbar's own creation flow — bridge deliveries hold [deliveryGuard]
+    // instead, precisely because this flag's lifetime is not theirs to own.
     @Volatile
     var busy: Boolean = false
 
-    /** Draft text to pre-fill in the next new session (e.g., from "Jump to Chat" action). */
-    @Volatile
-    var pendingDraft: String? = null
+    // Creation guard for a staged bridge delivery, claimed at dispatch and released by
+    // the handoff lifecycle alone (consumption, supersession, settlement, pre-staging
+    // failure). Separate from [busy] by construction: the sidebar's state writes can
+    // clear busy mid-delivery, but no code path from them reaches this guard.
+    internal val deliveryGuard = HandoffDeliveryGuard()
 
-    /** Full prompt to send instead of the draft preview (consumed once on first send). */
-    @Volatile
-    var pendingFullPrompt: String? = null
-
-    /** Prompt to automatically send after session is created (consumed once). */
-    @Volatile
-    var autoSendPrompt: String? = null
-
-    /** File reference to display as a chip in the composer (e.g., from "Jump to Chat" action). */
-    @Volatile
-    internal var pendingFileReference: FileReference? = null
+    // Staged handoffs, keyed by their target session. Keyed entries are isolated: a jump
+    // or bridge delivery for one session never clobbers another's. The next-session slot
+    // addresses whichever session a creation flow produces (Quick Chat, a jump whose
+    // target was deleted) and is promoted to a keyed entry by that flow before its tab opens.
+    private val handoffs = ChatHandoffMailbox()
 
     /** Last session ID targeted by a "Jump to DevEco Code" action, for sticky reuse. */
     @Volatile
@@ -55,6 +52,31 @@ class DevEcoSessionActions(private val project: Project) {
 
     @Volatile
     internal var uiOnRefresh: (() -> Unit)? = null
+
+    /** Stages [handoff] for the editor that binds [sessionId]. */
+    internal fun stageHandoff(sessionId: String, handoff: PendingChatHandoff) {
+        // A superseded bridge delivery held the delivery guard until consumption; the
+        // replacing handoff will not release it, so release it here.
+        if (handoffs.stage(sessionId, handoff)?.releaseGuardOnConsume == true) deliveryGuard.release()
+    }
+
+    /** Stages [handoff] for whichever session the next creation produces. */
+    internal fun stageNextSessionHandoff(handoff: PendingChatHandoff) = handoffs.stageNext(handoff)
+
+    /** Drops the next-session handoff; for callers that know no creation will consume it. */
+    internal fun removeNextSessionHandoff() {
+        handoffs.takeNext()
+    }
+
+    /** Promotes the next-session slot to a keyed entry once the created session id is known. */
+    internal fun rekeyNextSessionHandoff(sessionId: String) = handoffs.rekeyNext(sessionId)
+
+    /** Atomically takes the handoff staged for [sessionId], next-session slot as fallback. */
+    internal fun takeHandoff(sessionId: String): PendingChatHandoff? = handoffs.take(sessionId)
+
+    /** Removes [handoff] for [sessionId] only if it is still the staged instance. */
+    internal fun removeHandoff(sessionId: String, handoff: PendingChatHandoff): Boolean =
+        handoffs.remove(sessionId, handoff)
 
     // Project-level session operations: /new and the other action handlers must work
     // while the sidebar tool window is hidden — its Compose UI used to own them and is
@@ -92,27 +114,10 @@ class DevEcoSessionActions(private val project: Project) {
 
     init {
         newSessionHandler = {
-            val existingHandled = ops.createNewSession(
+            ops.createNewSession(
                 onStateChange = effectiveOnStateChange,
                 onRefresh = effectiveOnRefresh,
             )
-            if (existingHandled) {
-                // If the reused session's tab is already open, init didn't consume
-                // pendingFileReference — add it directly to the live controller.
-                val pendingRef = pendingFileReference
-                if (pendingRef != null) {
-                    val mgr = FileEditorManager.getInstance(project)
-                    val editor = mgr.openFiles.filterIsInstance<SessionVirtualFile>()
-                        .flatMap { mgr.getEditors(it).toList() }
-                        .filterIsInstance<SessionFileEditor>()
-                        .firstOrNull()
-                    if (editor != null) {
-                        editor.controller.addFileReference(pendingRef)
-                        pendingFileReference = null
-                    }
-                }
-                busy = false
-            }
         }
         stopSessionHandler = { id -> ops.stopSession(id) }
         jumpToSessionHandler = { sessionId, fileRef ->
@@ -149,9 +154,15 @@ class DevEcoSessionActions(private val project: Project) {
         }
     }
 
-    fun newSession() {
-        if (busy) return
-        val handler = newSessionHandler ?: return
+    /**
+     * Runs the new-session handler under the creation guards: rejected while a toolbar
+     * creation is already in flight or while a bridge delivery is staged and unconsumed,
+     * and when no handler is registered (the tool window is not composed yet); a staged
+     * next-session handoff then simply waits for a later creation to consume it.
+     */
+    fun newSession(): Boolean {
+        if (busy || deliveryGuard.inFlight) return false
+        val handler = newSessionHandler ?: return false
         busy = true
         try {
             handler.invoke()
@@ -159,6 +170,7 @@ class DevEcoSessionActions(private val project: Project) {
             busy = false
             throw error
         }
+        return true
     }
 
     fun stopSession(sessionId: String) {

@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm"
 import { sanitizePath } from "@opencode-ai/core/sanitize-path"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@opencode-ai/core/project/sql"
@@ -426,6 +426,89 @@ export const layer = Layer.effect(
         )
     })
 
+    // Sessions follow the resolved identity when their directory gains a VCS
+    // identity, including the global transit for empty repos.
+    const adoptInto = Effect.fn("Project.adoptInto")(function* (
+      projectID: ProjectV2.ID,
+      directory: string,
+      previous: ProjectV2.ID | undefined,
+    ) {
+      const range = { lo: AbsolutePath.make(directory), hi: AbsolutePath.make(directory + "\uffff") }
+      const markerless = yield* db
+        .select({ id: ProjectTable.id, worktree: ProjectTable.worktree })
+        .from(ProjectTable)
+        .where(
+          and(
+            isNull(ProjectTable.vcs),
+            ne(ProjectTable.id, projectID),
+            gte(ProjectTable.worktree, range.lo),
+            lte(ProjectTable.worktree, range.hi),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const adopted = yield* Effect.filter(markerless, (candidate) =>
+        Effect.gen(function* () {
+          const found = yield* fs
+            .up({ targets: [".git"], start: candidate.worktree, stop: directory })
+            .pipe(Effect.orElseSucceed(() => [] as string[]))
+          if (!found[0]) return false
+          return path.resolve(path.dirname(found[0])) === path.resolve(directory)
+        }),
+      )
+      const sources = [
+        ...new Set([previous ?? ProjectV2.ID.global, ProjectV2.ID.global, ...adopted.map((row) => row.id)]),
+      ].filter((id) => id !== projectID)
+      if (sources.length === 0) return
+      const adoptedIDs = new Set(adopted.map((row) => row.id))
+      const rows = yield* db
+        .select({
+          id: SessionTable.id,
+          directory: SessionTable.directory,
+          projectID: SessionTable.project_id,
+          worktree: ProjectTable.worktree,
+        })
+        .from(SessionTable)
+        .innerJoin(ProjectTable, eq(SessionTable.project_id, ProjectTable.id))
+        .where(
+          and(
+            inArray(SessionTable.project_id, sources),
+            isNull(SessionTable.workspace_id),
+            or(
+              adopted.length ? inArray(SessionTable.project_id, adopted.map((row) => row.id)) : undefined,
+              and(gte(SessionTable.directory, range.lo), lte(SessionTable.directory, range.hi)),
+            ),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const resolved = path.resolve(directory)
+      yield* Effect.forEach(
+        rows,
+        (row) => {
+          const checkDir = adoptedIDs.has(row.projectID) ? row.worktree : row.directory
+          const target = path.resolve(checkDir)
+          const rel = path.relative(resolved, target)
+          // "..foo" is a valid subdirectory: exclude only on the exact ".."
+          // or the ".." + separator prefix, not the bare ".." prefix.
+          if (rel !== "" && (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel))) {
+            return Effect.void
+          }
+          return db
+            .update(SessionTable)
+            .set({
+              project_id: projectID,
+              path: rel ? rel.replaceAll("\\", "/") : null,
+              time_updated: sql`${SessionTable.time_updated}`,
+            })
+            .where(eq(SessionTable.id, row.id))
+            .run()
+            .pipe(Effect.asVoid, Effect.orDie)
+        },
+        { discard: true },
+      )
+    })
+
     const fromDirectory = Effect.fn("Project.fromDirectory")(function* (directory: string) {
       yield* Effect.logInfo("fromDirectory", { directory: sanitizePath(directory) })
 
@@ -504,14 +587,7 @@ export const layer = Layer.effect(
         .run()
         .pipe(Effect.orDie)
 
-      if (projectID !== ProjectV2.ID.global) {
-        yield* db
-          .update(SessionTable)
-          .set({ project_id: projectID })
-          .where(and(eq(SessionTable.project_id, ProjectV2.ID.global), eq(SessionTable.directory, data.directory)))
-          .run()
-          .pipe(Effect.orDie)
-      }
+      yield* adoptInto(projectID, data.directory, data.previous ? ProjectV2.ID.make(data.previous) : undefined)
 
       yield* saveProjectDirectory({
         projectID,

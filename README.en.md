@@ -10,7 +10,7 @@
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20x64-blue.svg" />
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" />
   <img alt="Command Line Tools" src="https://img.shields.io/badge/Command%20Line%20Tools-%3E%3D26.0.0-orange.svg" />
-  <a href="https://github.com/WenYin-Community/deveco-code-linux/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green.svg" /></a>
+  <a href="https://github.com/WenYin-Community/deveco-code-linux/blob/develop/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-green.svg" /></a>
 </p>
 
 <p align="center">
@@ -410,7 +410,7 @@ Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
 
 ## License
 
-[MIT License](LICENSE)
+DevEco Code is distributed under [Apache-2.0](LICENSE). Beginning with the repository-wide Apache-2.0 licensing commit, previously MIT-licensed project code is sublicensed under Apache-2.0 and new original contributions use Apache-2.0. Distributions retain upstream copyright and [MIT license notices](LICENSES/MIT.txt). See [LICENSING.md](LICENSING.md) for scope and [NOTICE](NOTICE) for attribution.
 
 ## Built on OpenCode
 

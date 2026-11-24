@@ -38,6 +38,13 @@ export class SessionInjectionSnapshotCache {
         this.snapshots.delete(sessionID)
     }
 
+    /** Drop every entry the predicate rejects; used on hot reload to keep fork snapshots. */
+    prune(keep: (sessionID: string) => boolean): void {
+        for (const sessionID of this.snapshots.keys()) {
+            if (!keep(sessionID)) this.snapshots.delete(sessionID)
+        }
+    }
+
     clear(): void {
         this.snapshots.clear()
     }

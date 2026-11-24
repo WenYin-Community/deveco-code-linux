@@ -1,7 +1,6 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
-import { PlanExitTool, PlanWriteTool, PlanEnterTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -16,8 +15,6 @@ import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
-import { SwitchCwdTool } from "./switch-cwd"
-import { GetUiVerificationLogTool, SaveUiScreenshotTool, VerifyUiTool } from "./ui-verification/ui-verification-tool"
 import { CompareImagesTool } from "./design-tools/image-compare/image-compare-tool"
 import { RecognizeUIComponentsTool } from "./design-tools/component-recognition/component-recognition-tool"
 import * as Tool from "./tool"
@@ -33,7 +30,6 @@ import { WebSearchTool } from "./websearch"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
-import { SpecWriteTool } from "./spec"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -61,6 +57,7 @@ import { DebugExitTool } from "./debug-exit"
 import { SessionDebugState } from "@/session/debug-state"
 import { UpdateGoalTool } from "./goal"
 import { SessionGoal } from "@/session/goal"
+import { fileWriteNotifier } from "./file-write"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
@@ -104,9 +101,6 @@ export const layer = Layer.effect(
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
-    const plan = yield* PlanExitTool
-    const planwrite = yield* PlanWriteTool
-    const planenter = yield* PlanEnterTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -116,16 +110,12 @@ export const layer = Layer.effect(
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
-    const specwrite = yield* SpecWriteTool
-    const switchcwd = yield* SwitchCwdTool
     const debugexit = yield* DebugExitTool
-    const verifyui = yield* VerifyUiTool
-    const getuilog = yield* GetUiVerificationLogTool
-    const saveuiscreenshot = yield* SaveUiScreenshotTool
     const compareimages = yield* CompareImagesTool
     const recognizeuicomponents = yield* RecognizeUIComponentsTool
     const updategoal = yield* UpdateGoalTool
     const agent = yield* Agent.Service
+    const notifyFileChange = yield* fileWriteNotifier
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -160,6 +150,7 @@ export const layer = Layer.effect(
                   ask: (req) => bridge.promise(toolCtx.ask(req)),
                   directory: ctx.directory,
                   worktree: ctx.worktree,
+                  notifyFileChange: (input) => bridge.promise(notifyFileChange(input)),
                 }
                 yield* toolCtx.ask({ permission: id, metadata: {}, patterns: ["*"], always: ["*"] })
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
@@ -233,14 +224,6 @@ export const layer = Layer.effect(
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
-          plan: Tool.init(plan),
-          planwrite: Tool.init(planwrite),
-          planenter: Tool.init(planenter),
-          spec_write: Tool.init(specwrite),
-          switchcwd: Tool.init(switchcwd),
-          verify_ui: Tool.init(verifyui),
-          get_ui_verification_log: Tool.init(getuilog),
-          save_ui_screenshot: Tool.init(saveuiscreenshot),
           compare_images: Tool.init(compareimages),
           recognize_ui_components: Tool.init(recognizeuicomponents),
           debugexit: Tool.init(debugexit),
@@ -264,20 +247,7 @@ export const layer = Layer.effect(
             tool.search,
             tool.skill,
             tool.patch,
-            tool.spec_write,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            // plan_enter/plan_exit ask a Question and then hand the session to
-            // another agent, so they stay limited to clients that can answer one
-            // and follow the switch. Per-agent availability is the permission
-            // layer's job: plan_enter/plan_exit are deny by default and only the
-            // plan agent allows plan_exit, while plan_write is denied for build,
-            // explore and dfx and otherwise rides the "*" allow default.
-            ...(["cli", "acp"].includes(flags.client) ? [tool.plan, tool.planwrite, tool.planenter] : []),
-            // HarmonyOS tools
-            tool.switchcwd,
-            tool.verify_ui,
-            tool.get_ui_verification_log,
-            tool.save_ui_screenshot,
             tool.compare_images,
             tool.recognize_ui_components,
             tool.debugexit,

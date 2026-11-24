@@ -8,7 +8,13 @@
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
 import { logger } from '../util/logger'
-import { setSessionPermissions, getExtractionPermissionRules, createForkedChildSession, type ForkedSessionInfo } from '../util/forkManager'
+import {
+  setSessionPermissions,
+  getExtractionPermissionRules,
+  createForkedChildSession,
+  type ForkedSessionInfo,
+  type ForkMemoryConfig,
+} from '../util/forkManager'
 import type { ExtractionConfig, SkillConfig } from './types'
 import type { ExtractionPendingContext } from './extractionThreshold'
 import type { ReviewMode } from './extractionRunner'
@@ -24,6 +30,7 @@ export interface ExtractionAgentContext {
   prompt: string
   reviewMode?: ReviewMode
   skillConfig?: SkillConfig
+  forkConfig?: ForkMemoryConfig
 }
 
 export interface ExtractionAgentResult {
@@ -53,10 +60,7 @@ export async function runExtractionAgent(
 
   try {
     forkInfo = await createForkedChildSession(
-      context.client,
-      context.sessionID,
-      'extraction',
-      context.directory,
+      context.client, context.sessionID, 'extraction', context.directory, context.forkConfig,
     ) ?? undefined
 
     if (!forkInfo) {

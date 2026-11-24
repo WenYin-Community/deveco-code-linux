@@ -173,17 +173,10 @@ const table = sqliteTable("session", {
 
 Skills come in two modes. Decide by intent:
 
-- **Built-in** — ships to every user. Two sources, merged at build time:
-  - `packages/opencode/resources/skills/` — skills this repository owns.
-  - `<deveco-cli>-common/skills/` — skills the CLI package ships. Only the
-    names in `CLI_BUNDLED_SKILLS` (`packages/opencode/script/skill-sources.ts`)
-    are read from it.
-
-  A directory under `packages/opencode/resources/skills/` **without**
-  `SKILL.md` is an overlay: repository-owned companion files for a CLI-sourced
-  skill, applied on top of the CLI copy so a CLI upgrade cannot drop them.
-  `hmos-dfx-analyzer/FILES.md` (the companion-path whitelist `src/tool/skill.ts`
-  reads) is the only one today.
+- **Built-in** — host-owned Skills come from `packages/opencode/resources/skills/`
+  and are embedded at build time. Harness owns `deveco-cli`,
+  `hmos-arkui-develop-skill`, `hmos-dfx-analyzer`, and
+  `ui-verification-with-deeplink`; its config hook installs these resources.
 - **User** — personal or temporary. Lives in a user directory: global
   `~/.config/deveco/skills/`, or project `.deveco/skills/`.
 
@@ -205,3 +198,5 @@ authoring convention.
 - Keep delivery vocabulary explicit. Prompts steer by default and coalesce into the active activity at the next safe provider-turn boundary. Explicit `queue` inputs open FIFO future activities one at a time after the active activity settles.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the System Context algebra, registry, and built-ins in `src/system-context`; keep Context Source producers with their observed domains, and keep Session History selection plus Context Epoch persistence Session-owned.
+
+Harness ships the DFX companion file list in the skill's `FILES.md`. The host reads it through the generic skill loader.

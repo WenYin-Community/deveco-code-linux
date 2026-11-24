@@ -4,6 +4,7 @@ import npa from "npm-package-arg"
 import semver from "semver"
 import { Filesystem } from "@/util/filesystem"
 import { isRecord } from "@/util/record"
+import { Global } from "@opencode-ai/core/global"
 import { Npm } from "@opencode-ai/core/npm"
 
 // Old npm package names for plugins that are now built-in
@@ -51,7 +52,7 @@ export type PluginEntry = {
   entry?: string
 }
 
-const INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"]
+const INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.cjs"]
 
 export function pluginSource(spec: string): PluginSource {
   if (isPathPluginSpec(spec)) return "file"
@@ -118,7 +119,7 @@ function targetPath(target: string) {
   if (path.isAbsolute(target)) return target
 }
 
-async function resolveDirectoryIndex(dir: string) {
+export async function resolveDirectoryIndex(dir: string) {
   for (const name of INDEX_FILES) {
     const file = path.join(dir, name)
     if (await Filesystem.exists(file)) return file
@@ -204,11 +205,30 @@ export async function checkPluginCompatibility(target: string, opencodeVersion: 
   }
 }
 
+// The npm cache layout a spec maps to, computed without touching the filesystem or the registry.
+// Npm.add keys the install directory by the whole spec, expanding a bare name to "@latest", so the
+// analytics inventory can decide "installed" from "not installed" by reading that same directory:
+// identical key, identical path, and no install.
+function npmPackageKey(spec: string) {
+  const hit = parse(spec)
+  return hit?.name && hit.raw === hit.name ? `${hit.name}@latest` : spec
+}
+
+export function npmPluginPackage(spec: string) {
+  const key = npmPackageKey(spec)
+  const name = parse(key)?.name ?? ""
+  const root = path.join(Global.Path.cache, "packages", Npm.sanitize(key))
+  return {
+    key,
+    name,
+    root,
+    dir: path.join(root, "node_modules", name),
+  }
+}
+
 export async function resolvePluginTarget(spec: string) {
   if (isPathPluginSpec(spec)) return resolvePathPluginTarget(spec)
-  const hit = parse(spec)
-  const pkg = hit?.name && hit.raw === hit.name ? `${hit.name}@latest` : spec
-  const result = await Npm.add(pkg)
+  const result = await Npm.add(npmPackageKey(spec))
   return result.directory
 }
 

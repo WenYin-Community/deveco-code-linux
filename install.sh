@@ -96,9 +96,19 @@ STAGING="$PREFIX/share/.deveco-staging.$$"
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -a "$SOURCE/bin" "$SOURCE/vendor" "$STAGING/"
-[ -f "$SOURCE/VERSION" ] && cp "$SOURCE/VERSION" "$STAGING/VERSION"
+if [ -d "$SOURCE/node_modules" ]; then
+  cp -a "$SOURCE/node_modules" "$STAGING/node_modules"
+fi
+if [ -f "$SOURCE/package.json" ]; then
+  cp "$SOURCE/package.json" "$STAGING/package.json"
+fi
+if [ -f "$SOURCE/VERSION" ]; then
+  cp "$SOURCE/VERSION" "$STAGING/VERSION"
+fi
 for helper in install.sh update.sh uninstall.sh; do
-  [ -f "$SCRIPT_DIR/$helper" ] && cp "$SCRIPT_DIR/$helper" "$STAGING/$helper"
+  if [ -f "$SCRIPT_DIR/$helper" ]; then
+    cp "$SCRIPT_DIR/$helper" "$STAGING/$helper"
+  fi
 done
 
 if [ -e "$SHARE_DIR" ]; then

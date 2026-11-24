@@ -94,25 +94,20 @@ describe("ensure version check", () => {
 })
 
 describe("backup user skills", () => {
-  const cleanConfig = Effect.promise(() =>
-    fs.rm(configSkillsDir, { recursive: true, force: true }).catch(() => {}),
-  )
+  const cleanConfig = Effect.promise(() => fs.rm(configSkillsDir, { recursive: true, force: true }).catch(() => {}))
 
   it.live("backs up user-installed skills to config directory", () =>
     Effect.gen(function* () {
       yield* cleanEffect
       yield* cleanConfig
       const userSkillDir = path.join(skillsDir, "my-user-skill")
-      yield* Effect.promise(() =>
-        fs.mkdir(userSkillDir, { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(userSkillDir, "SKILL.md"), "# My Skill"),
-      )
+      yield* Effect.promise(() => fs.mkdir(userSkillDir, { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(userSkillDir, "SKILL.md"), "# My Skill"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("6.0.0", fsys)
       const backedUp = yield* Effect.promise(() =>
-        fs.access(path.join(configSkillsDir, "my-user-skill"))
+        fs
+          .access(path.join(configSkillsDir, "my-user-skill"))
           .then(() => true)
           .catch(() => false),
       )
@@ -129,16 +124,13 @@ describe("backup user skills", () => {
       yield* cleanEffect
       yield* cleanConfig
       const builtinDir = path.join(skillsDir, "builtin-skill")
-      yield* Effect.promise(() =>
-        fs.mkdir(builtinDir, { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(builtinDir, ".version"), "builtin-skill"),
-      )
+      yield* Effect.promise(() => fs.mkdir(builtinDir, { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(builtinDir, ".version"), "builtin-skill"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("7.0.0", fsys)
       const exists = yield* Effect.promise(() =>
-        fs.access(path.join(configSkillsDir, "builtin-skill"))
+        fs
+          .access(path.join(configSkillsDir, "builtin-skill"))
           .then(() => true)
           .catch(() => false),
       )
@@ -148,12 +140,8 @@ describe("backup user skills", () => {
 
   it.live("handles missing skills directory gracefully during backup", () =>
     Effect.gen(function* () {
-      yield* Effect.promise(() =>
-        fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {}),
-      )
-      yield* Effect.promise(() =>
-        fs.rm(configSkillsDir, { recursive: true, force: true }).catch(() => {}),
-      )
+      yield* Effect.promise(() => fs.rm(skillsDir, { recursive: true, force: true }).catch(() => {}))
+      yield* Effect.promise(() => fs.rm(configSkillsDir, { recursive: true, force: true }).catch(() => {}))
       const fsys = yield* FSUtil.Service
       // Backup readdir fails but is caught by Effect.catch
       const result = yield* Defaults.ensure("8.0.0", fsys)
@@ -166,12 +154,8 @@ describe("backup user skills", () => {
       yield* cleanEffect
       yield* cleanConfig
       // Create a user skill directory and a blocking file at backup destination
-      yield* Effect.promise(() =>
-        fs.mkdir(path.join(skillsDir, "failing-skill"), { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "failing-skill", "SKILL.md"), "# Fail"),
-      )
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "failing-skill"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(skillsDir, "failing-skill", "SKILL.md"), "# Fail"))
       yield* Effect.promise(async () => {
         await fs.mkdir(path.join(configSkillsDir, "failing-skill"), { recursive: true })
       })
@@ -185,27 +169,21 @@ describe("backup user skills", () => {
     Effect.gen(function* () {
       yield* cleanEffect
       yield* cleanConfig
-      yield* Effect.promise(() =>
-        fs.mkdir(path.join(skillsDir, "user-a"), { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "user-a", "SKILL.md"), "# User A"),
-      )
-      yield* Effect.promise(() =>
-        fs.mkdir(path.join(skillsDir, "builtin-b"), { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "builtin-b", ".version"), "builtin-b"),
-      )
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "user-a"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(skillsDir, "user-a", "SKILL.md"), "# User A"))
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "builtin-b"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(skillsDir, "builtin-b", ".version"), "builtin-b"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("9.0.0", fsys)
       const userExists = yield* Effect.promise(() =>
-        fs.access(path.join(configSkillsDir, "user-a"))
+        fs
+          .access(path.join(configSkillsDir, "user-a"))
           .then(() => true)
           .catch(() => false),
       )
       const builtinExists = yield* Effect.promise(() =>
-        fs.access(path.join(configSkillsDir, "builtin-b"))
+        fs
+          .access(path.join(configSkillsDir, "builtin-b"))
           .then(() => true)
           .catch(() => false),
       )
@@ -220,19 +198,16 @@ describe("cleanup builtin skills", () => {
     Effect.gen(function* () {
       yield* cleanEffect
       const builtinDir = path.join(skillsDir, "old-builtin")
-      yield* Effect.promise(() =>
-        fs.mkdir(builtinDir, { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(builtinDir, ".version"), "old-builtin"),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(builtinDir, "SKILL.md"), "old content"),
-      )
+      yield* Effect.promise(() => fs.mkdir(builtinDir, { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(builtinDir, ".version"), "old-builtin"))
+      yield* Effect.promise(() => fs.writeFile(path.join(builtinDir, "SKILL.md"), "old content"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("9.0.0", fsys)
       const exists = yield* Effect.promise(() =>
-        fs.access(builtinDir).then(() => true).catch(() => false),
+        fs
+          .access(builtinDir)
+          .then(() => true)
+          .catch(() => false),
       )
       expect(exists).toBe(false)
       const ver = yield* readVersionEffect
@@ -244,16 +219,15 @@ describe("cleanup builtin skills", () => {
     Effect.gen(function* () {
       yield* cleanEffect
       const userDir = path.join(skillsDir, "keep-me")
-      yield* Effect.promise(() =>
-        fs.mkdir(userDir, { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(userDir, "SKILL.md"), "# Keep this"),
-      )
+      yield* Effect.promise(() => fs.mkdir(userDir, { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(userDir, "SKILL.md"), "# Keep this"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("10.0.0", fsys)
       const exists = yield* Effect.promise(() =>
-        fs.access(userDir).then(() => true).catch(() => false),
+        fs
+          .access(userDir)
+          .then(() => true)
+          .catch(() => false),
       )
       expect(exists).toBe(true)
     }),
@@ -262,25 +236,23 @@ describe("cleanup builtin skills", () => {
   it.live("cleans multiple builtins while preserving multiple user skills", () =>
     Effect.gen(function* () {
       yield* cleanEffect
-      yield* Effect.promise(() =>
-        fs.mkdir(path.join(skillsDir, "built-1"), { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "built-1", ".version"), "built-1"),
-      )
-      yield* Effect.promise(() =>
-        fs.mkdir(path.join(skillsDir, "user-1"), { recursive: true }),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "user-1", "SKILL.md"), "# User 1"),
-      )
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "built-1"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(skillsDir, "built-1", ".version"), "built-1"))
+      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "user-1"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(skillsDir, "user-1", "SKILL.md"), "# User 1"))
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("11.0.0", fsys)
       const builtExists = yield* Effect.promise(() =>
-        fs.access(path.join(skillsDir, "built-1")).then(() => true).catch(() => false),
+        fs
+          .access(path.join(skillsDir, "built-1"))
+          .then(() => true)
+          .catch(() => false),
       )
       const userExists = yield* Effect.promise(() =>
-        fs.access(path.join(skillsDir, "user-1")).then(() => true).catch(() => false),
+        fs
+          .access(path.join(skillsDir, "user-1"))
+          .then(() => true)
+          .catch(() => false),
       )
       expect(builtExists).toBe(false)
       expect(userExists).toBe(true)
@@ -294,97 +266,43 @@ describe("loadSkillsFromDisk fallback", () => {
       yield* cleanEffect
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("10.0.0", fsys)
-      const entries = yield* Effect.promise(() =>
-        fs.readdir(skillsDir, { withFileTypes: true }),
-      )
+      const entries = yield* Effect.promise(() => fs.readdir(skillsDir, { withFileTypes: true }))
       const dirs = entries.filter((e) => e.isDirectory())
       // At least one skill should have been extracted from resources/skills
       expect(dirs.length).toBeGreaterThan(0)
     }),
   )
 
-  it.live("extracts the router-aware deveco-cli skill from repository resources", () =>
+  it.live("keeps Harness Skills out of native extraction", () =>
     Effect.gen(function* () {
       yield* cleanEffect
       const fsys = yield* FSUtil.Service
-      yield* Defaults.ensure("10.0.0", fsys)
-      const extracted = yield* Effect.promise(() =>
-        fs.readFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "utf-8"),
-      )
-      const source = yield* Effect.promise(() =>
-        fs.readFile(path.join(import.meta.dir, "../../resources/skills/deveco-cli/SKILL.md"), "utf-8"),
-      )
-      expect(extracted).toBe(source)
-    }),
-  )
-
-  it.live("replaces a previously extracted native CLI skill on version upgrade", () =>
-    Effect.gen(function* () {
-      yield* cleanEffect
-      yield* writeVersionEffect("9.0.0")
-      yield* Effect.promise(() => fs.mkdir(path.join(skillsDir, "deveco-cli"), { recursive: true }))
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "# stale native CLI skill\n"),
-      )
-      yield* Effect.promise(() =>
-        fs.writeFile(path.join(skillsDir, "deveco-cli", ".version"), "deveco-cli"),
-      )
-      const fsys = yield* FSUtil.Service
-      yield* Defaults.ensure("10.0.0", fsys)
-      const extracted = yield* Effect.promise(() =>
-        fs.readFile(path.join(skillsDir, "deveco-cli", "SKILL.md"), "utf-8"),
-      )
-      const source = yield* Effect.promise(() =>
-        fs.readFile(path.join(import.meta.dir, "../../resources/skills/deveco-cli/SKILL.md"), "utf-8"),
-      )
-      expect(extracted).toBe(source)
-      expect(yield* readVersionEffect).toBe("10.0.0")
-      expect(yield* fsys.existsSafe(path.join(configSkillsDir, "deveco-cli"))).toBe(false)
-    }),
-  )
-
-  it.live("writes version marker after extraction", () =>
-    Effect.gen(function* () {
-      yield* cleanEffect
-      const fsys = yield* FSUtil.Service
-      yield* Defaults.ensure("14.0.0", fsys)
-      const ver = yield* readVersionEffect
-      expect(ver).toBe("14.0.0")
-    }),
-  )
-
-  it.live("extracts skills with .version subfiles", () =>
-    Effect.gen(function* () {
-      yield* cleanEffect
-      const fsys = yield* FSUtil.Service
-      yield* Defaults.ensure("13.0.0", fsys)
-      const entries = yield* Effect.promise(() =>
-        fs.readdir(skillsDir, { withFileTypes: true }),
-      )
-      const dirs = entries.filter((e) => e.isDirectory())
-      expect(dirs.length).toBeGreaterThan(0)
-      // Each extracted skill should have a .version file with its own name
-      for (const d of dirs) {
-        const subVersionPath = path.join(skillsDir, d.name, ".version")
-        const subVer = yield* Effect.promise(() =>
-          fs.readFile(subVersionPath, "utf-8"),
-        )
-        expect(subVer).toBe(d.name)
+      yield* Defaults.ensure("8.0.0", fsys)
+      for (const name of [
+        "deveco-cli",
+        "hmos-arkui-develop-skill",
+        "hmos-dfx-analyzer",
+        "ui-verification-with-deeplink",
+      ]) {
+        expect(yield* fsys.existsSafe(path.join(skillsDir, name))).toBe(false)
       }
+      expect(yield* fsys.existsSafe(path.join(skillsDir, "hmos-design-to-arkts", "SKILL.md"))).toBe(true)
     }),
   )
 
-  it.live("skips .DS_Store and symlinks during walk", () =>
+  it.live("removes retired native Skills on upgrade without overwriting plugin or user configuration", () =>
     Effect.gen(function* () {
       yield* cleanEffect
       const fsys = yield* FSUtil.Service
-      yield* Defaults.ensure("15.0.0", fsys)
-      const entries = yield* Effect.promise(() =>
-        fs.readdir(skillsDir, { withFileTypes: true }),
-      )
-      // Walk filters out .DS_Store — it should not appear as an extracted file
-      const hasDsStore = entries.some((e) => e.name === ".DS_Store")
-      expect(hasDsStore).toBe(false)
+      const retired = path.join(skillsDir, "deveco-cli")
+      const configured = path.join(configSkillsDir, "deveco-cli", "SKILL.md")
+      yield* Effect.promise(() => fs.mkdir(retired, { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(path.join(retired, ".version"), "deveco-cli"))
+      yield* Effect.promise(() => fs.writeFile(path.join(retired, "SKILL.md"), "old native skill"))
+      yield* fsys.writeWithDirs(configured, "plugin or user skill")
+      yield* Defaults.ensure("9.0.0", fsys)
+      expect(yield* fsys.existsSafe(retired)).toBe(false)
+      expect(yield* Effect.promise(() => fs.readFile(configured, "utf8"))).toBe("plugin or user skill")
     }),
   )
 })
@@ -395,20 +313,14 @@ describe("data extraction string and binary", () => {
       yield* cleanEffect
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("12.0.0", fsys)
-      const entries = yield* Effect.promise(() =>
-        fs.readdir(skillsDir, { withFileTypes: true }),
-      )
+      const entries = yield* Effect.promise(() => fs.readdir(skillsDir, { withFileTypes: true }))
       const dirs = entries.filter((e) => e.isDirectory())
       let foundText = false
       for (const d of dirs) {
-        const subEntries = yield* Effect.promise(() =>
-          fs.readdir(path.join(skillsDir, d.name)),
-        )
+        const subEntries = yield* Effect.promise(() => fs.readdir(path.join(skillsDir, d.name)))
         const mdFile = subEntries.find((f: string) => f.endsWith(".md"))
         if (mdFile) {
-          const content = yield* Effect.promise(() =>
-            fs.readFile(path.join(skillsDir, d.name, mdFile), "utf-8"),
-          )
+          const content = yield* Effect.promise(() => fs.readFile(path.join(skillsDir, d.name, mdFile), "utf-8"))
           if (content.length > 0) {
             foundText = true
             break
@@ -424,15 +336,11 @@ describe("data extraction string and binary", () => {
       yield* cleanEffect
       const fsys = yield* FSUtil.Service
       yield* Defaults.ensure("4.0.0", fsys)
-      const entries = yield* Effect.promise(() =>
-        fs.readdir(skillsDir, { withFileTypes: true }),
-      )
+      const entries = yield* Effect.promise(() => fs.readdir(skillsDir, { withFileTypes: true }))
       const skillDirs = entries.filter((e) => e.isDirectory())
       for (const d of skillDirs) {
         const subVersionPath = path.join(skillsDir, d.name, ".version")
-        const subVer = yield* Effect.promise(() =>
-          fs.readFile(subVersionPath, "utf-8"),
-        )
+        const subVer = yield* Effect.promise(() => fs.readFile(subVersionPath, "utf-8"))
         expect(subVer).toBe(d.name)
       }
     }),

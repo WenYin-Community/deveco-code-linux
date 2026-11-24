@@ -1,4 +1,4 @@
-import type { AiCodeAttributionEvent } from "../types"
+import type { CodeAttributionTotals } from "../types"
 import { GitRepository, type GitCommitChange, type GitReflogEntry } from "./git-repository"
 import {
   ATTRIBUTION_SOURCE,
@@ -28,7 +28,7 @@ export interface CodeAttributionTrackerOptions {
   pollInterval?: number
   discoveryInterval?: number
   diagnostic?(message: string): void | Promise<void>
-  submit(event: AiCodeAttributionEvent): Promise<boolean>
+  submit(event: CodeAttributionTotals): Promise<boolean>
 }
 
 class NoopCodeAttributionTracker implements CodeAttributionTracker {
@@ -56,8 +56,8 @@ function appendBounded(list: string[], value: string): void {
 }
 
 function addTotals(
-  target: Omit<AiCodeAttributionEvent, "projectId">,
-  source: Omit<AiCodeAttributionEvent, "projectId">,
+  target: Omit<CodeAttributionTotals, "projectId">,
+  source: Omit<CodeAttributionTotals, "projectId">,
 ): void {
   target.aiGeneratedLines += source.aiGeneratedLines
   target.humanGeneratedLines += source.humanGeneratedLines
@@ -320,7 +320,7 @@ class LocalCodeAttributionTracker implements CodeAttributionTracker {
     commit: string,
     change: GitCommitChange,
     fallback: AttributionSource,
-  ): Promise<Omit<AiCodeAttributionEvent, "projectId">> {
+  ): Promise<Omit<CodeAttributionTotals, "projectId">> {
     const ledger = this.ledger
     const basePath = change.oldPath ?? change.path
     const baseContent = await this.repository.readBlob(base, basePath)

@@ -2,17 +2,10 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
 import {
-  CLI_BUNDLED_SKILLS,
   digestSkill,
   digestSkills,
-  loadCliSkills,
   loadResourceSkills,
-  loadSkillOverlays,
-  mergeSkills,
-  REPO_OWNED_SKILLS,
   readSkillFile,
-  resolveCliCommonPackageJson,
-  resolveCliSkillsRoot,
   validateSkills,
   walkSkillDir,
   type SkillsData,
@@ -42,208 +35,6 @@ async function rejection(promise: Promise<unknown>): Promise<string> {
   }
   throw new Error("expected the promise to reject")
 }
-
-describe("CLI_BUNDLED_SKILLS", () => {
-  test("covers every skill the code requires by name", async () => {
-    // DevEcoRequiredSkills is a subset: only skills that need DEVECO_HOME are listed.
-    const tool = await fs.promises.readFile(path.join(packageDir, "src/tool/skill.ts"), "utf8")
-    const required = tool.slice(tool.indexOf("DevEcoRequiredSkills"), tool.indexOf("])", tool.indexOf("DevEcoRequiredSkills")))
-    const names = [...required.matchAll(/"([^"]+)"/g)].map((match) => match[1])
-    expect(names.length).toBeGreaterThan(0)
-
-    // Subagent skill permissions are the other place a bundled skill is referenced
-    // by name (the dfx agent exposes hmos-dfx-analyzer).
-    const agents = await fs.promises.readFile(path.join(packageDir, "src/agent/agent.ts"), "utf8")
-    const permitted = [...agents.matchAll(/"(hmos-[a-z0-9-]+)"\s*:\s*"allow"/g)].map((match) => match[1])
-    expect(permitted.length).toBeGreaterThan(0)
-
-    const bundled: readonly string[] = CLI_BUNDLED_SKILLS
-    for (const name of names) {
-      expect(bundled).toContain(name)
-    }
-    for (const name of permitted) {
-      expect(bundled).toContain(name)
-    }
-  })
-
-  test("no bundled skill still lives in resources/skills", () => {
-    // A repository copy of a CLI-bundled skill would drift. A directory without
-    // SKILL.md is allowed: that is the overlay for repository-owned companion files.
-    for (const name of CLI_BUNDLED_SKILLS) {
-      expect(fs.existsSync(path.join(packageDir, "resources/skills", name, "SKILL.md"))).toBe(false)
-    }
-  })
-})
-
-describe("resolveCliCommonPackageJson", () => {
-  test("resolves the implementation package from the installed shell", () => {
-    const manifest = resolveCliCommonPackageJson(packageDir)
-    if (!manifest) {
-      // The pinned CLI release predates the -common package; nothing to assert.
-      return
-    }
-    expect(manifest.endsWith(path.join("deveco-cli-common", "package.json"))).toBe(true)
-  })
-
-  test("returns undefined when nothing is installed", async () => {
-    const dir = await tempRoot("skill-sources-none-")
-    try {
-      expect(resolveCliCommonPackageJson(dir)).toBeUndefined()
-      expect(resolveCliSkillsRoot(dir)).toBeUndefined()
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("finds a pre-release build published under the test scope", async () => {
-    const dir = await tempRoot("skill-sources-testscope-")
-    try {
-      const common = path.join(dir, "node_modules", "@deveco-test", "deveco-cli-common")
-      await fs.promises.mkdir(path.join(common, "skills"), { recursive: true })
-      await fs.promises.writeFile(
-        path.join(common, "package.json"),
-        JSON.stringify({ name: "@deveco-test/deveco-cli-common", version: "2.0.0-Test.1" }),
-      )
-      await fs.promises.writeFile(
-        path.join(dir, "package.json"),
-        JSON.stringify({ dependencies: { "@deveco-test/deveco-cli": "2.0.0-Test.1" } }),
-      )
-
-      const manifest = resolveCliCommonPackageJson(dir)
-      expect(manifest).toBeDefined()
-      expect(manifest).toContain(path.join("@deveco-test", "deveco-cli-common"))
-
-      const loaded = await loadCliSkills(dir, [])
-      expect(loaded.packageName).toBe("@deveco-test/deveco-cli-common")
-      expect(loaded.version).toBe("2.0.0-Test.1")
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("prefers the scope pinned in package.json", async () => {
-    const dir = await tempRoot("skill-sources-pinned-")
-    try {
-      for (const scope of ["@deveco", "@deveco-test"]) {
-        const common = path.join(dir, "node_modules", scope, "deveco-cli-common")
-        await fs.promises.mkdir(path.join(common, "skills"), { recursive: true })
-        await fs.promises.writeFile(
-          path.join(common, "package.json"),
-          JSON.stringify({ name: `${scope}/deveco-cli-common`, version: `${scope}@1.0.0` }),
-        )
-      }
-      await fs.promises.writeFile(
-        path.join(dir, "package.json"),
-        JSON.stringify({ dependencies: { "@deveco/deveco-cli": "1.0.0" } }),
-      )
-      expect((await loadCliSkills(dir, [])).packageName).toBe("@deveco/deveco-cli-common")
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("resolves the real -common package through an npm alias pin", async () => {
-    const dir = await tempRoot("skill-sources-alias-")
-    try {
-      // The dependency key keeps @deveco/, but the installed package's own `name`
-      // is the @deveco-test shell and its -common is nested beneath it (bun's
-      // isolated linker). The resolver must follow the real name, not the alias key.
-      await fs.promises.writeFile(
-        path.join(dir, "package.json"),
-        JSON.stringify({ dependencies: { "@deveco/deveco-cli": "npm:@deveco-test/deveco-cli@1.3.11-Test.4" } }),
-      )
-      const shell = path.join(dir, "node_modules", "@deveco", "deveco-cli")
-      await fs.promises.mkdir(shell, { recursive: true })
-      await fs.promises.writeFile(
-        path.join(shell, "package.json"),
-        JSON.stringify({ name: "@deveco-test/deveco-cli", version: "1.3.11-Test.4" }),
-      )
-      const common = path.join(shell, "node_modules", "@deveco-test", "deveco-cli-common")
-      await fs.promises.mkdir(path.join(common, "skills"), { recursive: true })
-      await fs.promises.writeFile(
-        path.join(common, "package.json"),
-        JSON.stringify({ name: "@deveco-test/deveco-cli-common", version: "1.3.11-Test.4" }),
-      )
-
-      const manifest = resolveCliCommonPackageJson(dir)
-      expect(manifest).toBeDefined()
-      expect(manifest).toContain(path.join("@deveco-test", "deveco-cli-common"))
-      expect((await loadCliSkills(dir, [])).packageName).toBe("@deveco-test/deveco-cli-common")
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-})
-
-describe("loadCliSkills", () => {
-  test("fails loudly when the CLI package is missing", async () => {
-    const dir = await tempRoot("skill-sources-missing-")
-    try {
-      expect(await rejection(loadCliSkills(dir))).toContain("deveco-cli-common not found")
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("fails loudly when a whitelisted skill is missing", async () => {
-    const dir = await tempRoot("skill-sources-partial-")
-    try {
-      const common = path.join(dir, "node_modules", "@deveco", "deveco-cli-common")
-      await fs.promises.mkdir(path.join(common, "skills"), { recursive: true })
-      await fs.promises.writeFile(
-        path.join(common, "package.json"),
-        JSON.stringify({ name: "@deveco/deveco-cli-common", version: "9.9.9" }),
-      )
-      await writeSkill(path.join(common, "skills"), "hmos-arkui-develop-skill", {
-        "SKILL.md": "---\nname: hmos-arkui-develop-skill\ndescription: x\n---\n",
-      })
-      expect(await rejection(loadCliSkills(dir))).toContain('Bundled skill "hmos-dfx-analyzer" is missing')
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("ignores skill directories outside the whitelist", async () => {
-    const dir = await tempRoot("skill-sources-extra-")
-    try {
-      const common = path.join(dir, "node_modules", "@deveco", "deveco-cli-common")
-      const skills = path.join(common, "skills")
-      await fs.promises.mkdir(skills, { recursive: true })
-      await fs.promises.writeFile(
-        path.join(common, "package.json"),
-        JSON.stringify({ name: "@deveco/deveco-cli-common", version: "9.9.9" }),
-      )
-      for (const name of CLI_BUNDLED_SKILLS) {
-        await writeSkill(skills, name, { "SKILL.md": `---\nname: ${name}\ndescription: x\n---\n` })
-      }
-      await writeSkill(skills, "not-whitelisted", { "SKILL.md": "---\nname: not-whitelisted\n---\n" })
-
-      const loaded = await loadCliSkills(dir)
-      expect(loaded.version).toBe("9.9.9")
-      expect(Object.keys(loaded.skills).sort()).toEqual([...CLI_BUNDLED_SKILLS].sort())
-      expect(loaded.skills["not-whitelisted"]).toBeUndefined()
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("reads the real installed package when it ships skills", async () => {
-    const root = resolveCliSkillsRoot(packageDir)
-    if (!root) {
-      // The pinned CLI release predates bundled skills; the build fails loudly in
-      // that state, so there is nothing to assert here.
-      return
-    }
-    if (CLI_BUNDLED_SKILLS.some((name) => !fs.existsSync(path.join(root, name)))) {
-      // The installed release predates these whitelisted skills; skip until it ships them.
-      return
-    }
-    const loaded = await loadCliSkills(packageDir)
-    for (const name of CLI_BUNDLED_SKILLS) {
-      expect(loaded.skills[name]?.["SKILL.md"]).toBeString()
-    }
-  })
-})
 
 describe("walkSkillDir", () => {
   test("encodes binary assets as base64 and skips .DS_Store", async () => {
@@ -278,48 +69,6 @@ describe("walkSkillDir", () => {
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true })
     }
-  })
-})
-
-describe("mergeSkills", () => {
-  test("CLI skills win over repository copies of the same name", () => {
-    const local: SkillsData = { a: { "SKILL.md": "local" }, b: { "SKILL.md": "local-b" } }
-    const cli: SkillsData = { a: { "SKILL.md": "cli" }, c: { "SKILL.md": "cli-c" } }
-    const merged = mergeSkills(local, cli)
-    expect(merged.a["SKILL.md"]).toBe("cli")
-    expect(merged.b["SKILL.md"]).toBe("local-b")
-    expect(merged.c["SKILL.md"]).toBe("cli-c")
-  })
-
-  test("repository-owned deveco-cli is never replaced by the CLI copy", () => {
-    // The two packages ship different documents under the same name: the CLI has
-    // the plain command reference, this repo has the Router-aware adaptation.
-    const local: SkillsData = { "deveco-cli": { "SKILL.md": "router-aware repo copy" } }
-    const cli: SkillsData = { "deveco-cli": { "SKILL.md": "plain CLI copy" } }
-    expect(mergeSkills(local, cli)["deveco-cli"]["SKILL.md"]).toBe("router-aware repo copy")
-  })
-
-  test("REPO_OWNED_SKILLS stays out of CLI_BUNDLED_SKILLS", () => {
-    const bundled: readonly string[] = CLI_BUNDLED_SKILLS
-    for (const name of REPO_OWNED_SKILLS) {
-      expect(bundled).not.toContain(name)
-    }
-  })
-
-  test("overlay files survive the CLI copy they are merged onto", () => {
-    // The CLI copy replaces the whole skill, which is how `FILES.md` disappeared
-    // when hmos-dfx-analyzer moved to the CLI package.
-    const local: SkillsData = { a: { "FILES.md": "repo whitelist" } }
-    const cli: SkillsData = { a: { "SKILL.md": "cli copy" } }
-    const overlays: SkillsData = { a: { "FILES.md": "repo whitelist" } }
-    const merged = mergeSkills(local, cli, overlays)
-    expect(merged.a["SKILL.md"]).toBe("cli copy")
-    expect(merged.a["FILES.md"]).toBe("repo whitelist")
-  })
-
-  test("an overlay never creates a skill on its own", () => {
-    const merged = mergeSkills({}, { a: { "SKILL.md": "cli copy" } }, { ghost: { "FILES.md": "x" } })
-    expect(Object.keys(merged)).toEqual(["a"])
   })
 })
 
@@ -358,11 +107,6 @@ describe("validateSkills", () => {
     expect(validateSkills({ demo: { "README.md": "x" } }).join("\n")).toContain("no readable SKILL.md")
   })
 
-  test("rejects a repository-owned skill in the CLI whitelist", () => {
-    const data: SkillsData = { "deveco-cli": { "SKILL.md": "---\nname: deveco-cli\ndescription: x\n---\n" } }
-    expect(validateSkills(data, ["deveco-cli"]).join("\n")).toContain("is repository-owned")
-  })
-
   test("reports unsafe paths", () => {
     const data: SkillsData = {
       demo: { "SKILL.md": "---\nname: demo\ndescription: x\n---\n", "../escape.md": "x", "/abs.md": "x" },
@@ -378,7 +122,9 @@ describe("validateSkills", () => {
   })
 
   test("reports an overlay that matches no skill", () => {
-    expect(validateSkills({}, [], { ghost: { "FILES.md": "a.md" } })).toEqual(['overlay "ghost" matches no built-in skill'])
+    expect(validateSkills({}, [], { ghost: { "FILES.md": "a.md" } })).toEqual([
+      'overlay "ghost" matches no built-in skill',
+    ])
   })
 
   test("reports an overlay that carries its own SKILL.md", () => {
@@ -405,86 +151,14 @@ describe("validateSkills", () => {
 describe("loadResourceSkills", () => {
   test("reads the repository skills that remain local", async () => {
     const data = await loadResourceSkills(path.join(packageDir, "resources/skills"))
-    expect(data["deveco-cli"]?.["SKILL.md"]).toBeString()
+    expect(data["deveco-cli"]).toBeUndefined()
+    expect(data["ui-verification-with-deeplink"]).toBeUndefined()
+    expect(validateSkills(data)).toEqual([])
+    expect(data["customize-deveco"]?.["SKILL.md"]).toBeString()
     expect(data["hmos-design-to-arkts"]?.["SKILL.md"]).toBeString()
-    for (const name of CLI_BUNDLED_SKILLS) {
-      expect(data[name]).toBeUndefined()
-    }
   })
 
   test("returns an empty map when the directory is absent", async () => {
     expect(await loadResourceSkills(path.join(packageDir, "resources/does-not-exist"))).toEqual({})
-  })
-})
-
-describe("loadSkillOverlays", () => {
-  test("reads a directory without SKILL.md as an overlay", async () => {
-    const dir = await tempRoot("skill-sources-overlay-")
-    try {
-      await writeSkill(dir, "bundled", { "FILES.md": "references/a.md\n" })
-      await writeSkill(dir, "local", { "SKILL.md": "---\nname: local\ndescription: x\n---\n" })
-      expect(Object.keys(await loadSkillOverlays(dir))).toEqual(["bundled"])
-      expect(Object.keys(await loadResourceSkills(dir))).toEqual(["local"])
-    } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true })
-    }
-  })
-
-  test("returns an empty map when the directory is absent", async () => {
-    expect(await loadSkillOverlays(path.join(packageDir, "resources/does-not-exist"))).toEqual({})
-  })
-})
-
-describe("bundled skill overlays (real package)", () => {
-  // Regression guard: `hmos-dfx-analyzer/FILES.md` is a repository-owned companion
-  // file the CLI package deliberately does not ship (they folded the list into
-  // SKILL.md). Without the overlay the skill still builds, but `src/tool/skill.ts`
-  // falls back to a sampled `rg --files` list and silently drops the curated paths.
-  async function merged() {
-    const resources = path.join(packageDir, "resources/skills")
-    const overlays = await loadSkillOverlays(resources)
-    const cli = await loadCliSkills(packageDir)
-    return {
-      overlays,
-      data: mergeSkills(await loadResourceSkills(resources), cli.skills, overlays),
-    }
-  }
-
-  function whitelist(files: SkillsData[string]): string[] {
-    const content = files["FILES.md"]
-    if (typeof content !== "string") throw new Error("hmos-dfx-analyzer has no FILES.md")
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#") && !line.startsWith("@note "))
-  }
-
-  test("hmos-dfx-analyzer keeps its FILES.md whitelist after the CLI copy", async () => {
-    const { data, overlays } = await merged()
-    expect(data["hmos-dfx-analyzer"]?.["FILES.md"]).toBeString()
-    expect(validateSkills(data, CLI_BUNDLED_SKILLS, overlays)).toEqual([])
-  })
-
-  test("every whitelisted path exists in the merged skill", async () => {
-    // `skill.ts` resolves these with `existsSafe` and drops misses without an error,
-    // so a CLI rename would degrade the skill silently. Fail the build here instead.
-    const { data } = await merged()
-    const files = data["hmos-dfx-analyzer"]
-    const listed = whitelist(files)
-    expect(listed.length).toBeGreaterThan(0)
-    expect(listed.filter((entry) => files[entry] === undefined)).toEqual([])
-  })
-
-  test("the whitelist keeps the analyzer routes the skill routes to", async () => {
-    const { data } = await merged()
-    const listed = whitelist(data["hmos-dfx-analyzer"])
-    for (const route of [
-      "references/appfreeze/analyzer.md",
-      "references/cppcrash/analyzer.md",
-      "references/jscrash/analyzer.md",
-      "references/white-screen/analyzer.md",
-    ]) {
-      expect(listed).toContain(route)
-    }
   })
 })

@@ -214,4 +214,4 @@ Cassettes are readable JSON files intended to be committed with your tests. HTTP
 
 ## License
 
-MIT
+Apache-2.0. See the repository licensing policy and the license files included with the package.

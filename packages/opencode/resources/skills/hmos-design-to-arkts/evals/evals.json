@@ -179,6 +179,17 @@
         { "text": "按 blocked（dependency_unavailable）处理并引导用户核对席位，未切换设计来源或伪造取数成功", "type": "behavioral" },
         { "text": "失败响应作为证据保留，未被当作成功设计输入导入", "type": "behavioral" }
       ]
+    },
+    {
+      "id": 13,
+      "prompt": "用 MasterGo 把这个画板转成鸿蒙页面：https://mastergo.com/file/207413499401404?layer_id=1:02，工程在 D:/work/MyApplication。本机没有 MasterGo 客户端。",
+      "expected_output": "判定来源为 mastergo 后，在需求预检/选源阶段先读 references/mastergo/mcp-setup.md 并运行 scripts/mastergo-preflight.mjs 探测桌面客户端本地服务；unavailable 时按该指引的判定顺序（Magic 可用→纯 Magic + 用户手工导出；Magic 不可用→社区通道可行则引导，否则 blocked）向用户给出两条路——A 恢复客户端后继续自动化取数（含打开目标文件、确认文件内 MasterGo MCP 连接、用客户端显示地址重跑探测），B 不用客户端继续（含 1× 必须、2× 可选的导出清单，放进 run 的 source/mastergo/export/、按 1×/2× 的 scale 与体积限制放置），等用户选定后才继续；不得进入 init 或等到 01-acquire 才暴露取数失败",
+      "assertions": [
+        { "text": "在 MasterGo 阶段 1 取数之前完成客户端本地服务探测，未等到 01-acquire 才暴露不可用", "type": "behavioral" },
+        { "text": "客户端本地服务不可达时立即给出“恢复客户端”与“不用客户端继续（纯 Magic + 手工导出或社区、否则 blocked）”两条路并等待用户选择", "type": "behavioral" },
+        { "text": "手工导出路径给出具体导出清单（1× 必须、2× 可选）与放置路径、倍率和体积要求", "type": "behavioral" },
+        { "text": "用户选定前不 init，不伪造截图或 DSL", "type": "behavioral" }
+      ]
     }
   ]
 }

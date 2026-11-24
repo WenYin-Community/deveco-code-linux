@@ -5,15 +5,7 @@ import { Flock } from "@opencode-ai/core/util/flock"
 import { Global } from "@opencode-ai/core/global"
 import { Filesystem } from "@/util/filesystem"
 import { createEnvironmentFields } from "./events"
-import type {
-  AiSessionEvent,
-  BuildProjectAnalyticsEvent,
-  BuildProjectInfo,
-  BuildResults,
-  Operations,
-  SessionContext,
-  ToolBucket,
-} from "./types"
+import type { AiSessionEvent, BuildResults, Operations, SessionContext, ToolBucket } from "./types"
 import { isBuiltinTool, isSkillTool, resolveTaskType, UI_RECONSTRUCTION_SCORE_UNAVAILABLE } from "./types"
 
 export type SessionStart = {
@@ -65,7 +57,7 @@ function isHarmonyProject(projectRoot: string): boolean {
   )
 }
 
-function readBundleName(projectPath: string): string {
+export function readBundleName(projectPath: string): string {
   if (!isHarmonyProject(projectPath)) return ""
   const appJson5Path = path.join(projectPath, "AppScope", "app.json5")
   if (!exists(appJson5Path)) return ""
@@ -79,6 +71,15 @@ function readBundleName(projectPath: string): string {
   } catch {
     return ""
   }
+}
+
+// Single source of the tool taxonomy: the session collector and the D2A run attribution both
+// classify by the same rules, so the buckets cannot drift apart.
+export function toolBucket(toolName: string, source?: "builtin" | "custom" | "mcp"): ToolBucket {
+  if (source === "mcp") return "mcpTools"
+  if (source === "custom") return "customTools"
+  if (isSkillTool(toolName)) return "skillTools"
+  return source === "builtin" || isBuiltinTool(toolName) ? "builtinTools" : "customTools"
 }
 
 export class SessionCollector {
@@ -124,7 +125,6 @@ export class SessionCollector {
       toolExecutions: [],
       toolCounts: new Map(),
       devecoCliCommandCounts: new Map(),
-      buildProjectInfo: [],
       workflow: "",
       workflows: new Set(),
       buildResults: {
@@ -162,34 +162,15 @@ export class SessionCollector {
     this.context.uiVerificationModel = model
   }
 
-  // Per-build sidecar ledger for the DevEcoCodeBuild event; entries carry the log preview
-  // and parsed error code that AiSessionEvent.toolExecutions intentionally omits.
-  recordBuildProjectInfo(entry: BuildProjectInfo): void {
-    if (!this.context) return
-    this.context.buildProjectInfo.push(entry)
-  }
-
-  // isSuccess: whether the tool execution itself succeeded (not whether the build succeeded).
-  // isBuildSuccess: only meaningful for build_project — true when output contains "build successful".
   recordToolExecution(
     toolName: string,
     duration: number,
     isSuccess: boolean,
-    isBuildSuccess = false,
     source?: "builtin" | "custom" | "mcp",
     skillName?: string,
   ): void {
     if (!this.context) return
-    const category: ToolBucket =
-      source === "mcp"
-        ? "mcpTools"
-        : source === "custom"
-          ? "customTools"
-          : isSkillTool(toolName)
-            ? "skillTools"
-            : source === "builtin" || isBuiltinTool(toolName)
-              ? "builtinTools"
-              : "customTools"
+    const category: ToolBucket = toolBucket(toolName, source)
     // toolExecutions records the executed tool identity, never a renamed label: a skill call stays
     // "skill" so the tool dimension stays enumerable. The per-skill breakdown is carried by
     // operations.skillTools only, which reads toolCounts below.
@@ -208,9 +189,6 @@ export class SessionCollector {
       category,
       count: (this.context.toolCounts.get(key)?.count ?? 0) + 1,
     })
-    // Skip build result tracking when the tool execution itself failed — no build actually ran.
-    if (toolName === "build_project" && isSuccess)
-      this.updateBuildResults(this.context.buildResults, isBuildSuccess, Date.now() - this.context.startTime)
   }
 
   recordBuildExecution(isBuildSuccess: boolean): void {
@@ -302,6 +280,8 @@ export class SessionCollector {
       firstResultElapsed,
       isFirstBuildSuccess: this.context.buildResults.isFirstBuildSuccess,
       isFinalBuildSuccess: this.context.buildResults.isFinalBuildSuccess,
+      // Same counter the first/final outcomes come from: one increment per recorded build.
+      buildCount: this.context.buildResults.buildCount,
       uiVerificationModel: this.context.uiVerificationModel,
       uiReconstructionScore: UI_RECONSTRUCTION_SCORE_UNAVAILABLE,
       inputTokens: this.context.inputTokens,
@@ -310,18 +290,6 @@ export class SessionCollector {
       firstBuildElapsed: this.context.buildResults.firstBuildElapsed,
       finalBuildElapsed: this.context.buildResults.finalBuildElapsed,
       workflow: this.context.workflow,
-    }
-  }
-
-  // DevEcoCodeBuild sidecar: only turns with at least one build_project execution
-  // produce an event; an empty list would be pure noise.
-  buildProjectEvent(): BuildProjectAnalyticsEvent | null {
-    if (!this.context || this.context.buildProjectInfo.length === 0) return null
-    return {
-      ...createEnvironmentFields(this.context.sourceVersion),
-      sessionid: this.context.sessionID,
-      messageId: this.context.messageId,
-      buildProjectInfo: this.context.buildProjectInfo,
     }
   }
 

@@ -28,41 +28,6 @@ const scope = packageJson.name && packageJson.name.includes("/") ? packageJson.n
 const base = `${scope}/deveco-code-${platform}-${arch}`
 const sourceBinary = platform === "windows" ? "deveco.exe" : "deveco"
 const targetBinary = path.join(__dirname, "bin", sourceBinary)
-const devecoCliPackageName = "@deveco/deveco-cli"
-const devecoCliBinName = "devecocli"
-
-function resolveLocalDevecoCliEntry() {
-  const packageJsonPath = require.resolve(`${devecoCliPackageName}/package.json`)
-  const packageRoot = path.dirname(packageJsonPath)
-  const bin = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).bin
-  // The platform-split shell package declares `bin.devecocli` at its root; bundled builds ship `dist/cli.js`.
-  const declared = typeof bin === "string" ? bin : bin?.[devecoCliBinName]
-  const entry = [declared && path.join(packageRoot, declared), path.join(packageRoot, "dist", "cli.js")]
-    .filter(Boolean)
-    .find((candidate) => fs.existsSync(candidate))
-  if (entry) return entry
-  throw new Error(`Local dependency "${devecoCliPackageName}" has no CLI entry under ${packageRoot}.`)
-}
-
-function writeDevecoCliEntryMarker(installRoot) {
-  const marker = path.join(installRoot, "vendor", ".deveco-cli-entry")
-  fs.mkdirSync(path.dirname(marker), { recursive: true })
-  fs.writeFileSync(marker, `${resolveLocalDevecoCliEntry()}\n`, "utf8")
-}
-
-function writeHomegraphEntryMarker(installRoot) {
-  try {
-    const hgRoot = path.dirname(require.resolve("homegraph/package.json"))
-    const entry = path.join(hgRoot, "dist", "bin", "homegraph.js")
-    if (!fs.existsSync(entry)) return
-    const marker = path.join(installRoot, "vendor", ".homegraph-entry")
-    fs.mkdirSync(path.dirname(marker), { recursive: true })
-    fs.writeFileSync(marker, `${entry}\n`, "utf8")
-  } catch {
-    // optional when homegraph is not a dependency of this install
-  }
-}
-
 function supportsAvx2() {
   if (arch !== "x64") return false
 
@@ -236,8 +201,6 @@ function installPackage(name) {
     const packageDir = path.join(temp, "node_modules", name)
     copyBinary(path.join(packageDir, "bin", sourceBinary), targetBinary)
     copyVendor(packageDir)
-    // Do not write marker into packageDir: it lives under mkdtemp and is deleted in finally.
-    // Marker for the install root is written in main() via writeDevecoCliEntryMarker(__dirname).
     return true
   } finally {
     fs.rmSync(temp, { recursive: true, force: true })
@@ -266,15 +229,11 @@ function verifyBinary() {
 }
 
 function main() {
-  writeDevecoCliEntryMarker(__dirname)
-  writeHomegraphEntryMarker(__dirname)
-
   for (const name of packageNames()) {
     try {
       const packageDir = resolvePackageDir(name)
       copyBinary(resolveBinary(name), targetBinary)
       copyVendor(packageDir)
-      writeDevecoCliEntryMarker(packageDir)
       if (verifyBinary()) return
     } catch {
       if (installPackage(name) && verifyBinary()) return

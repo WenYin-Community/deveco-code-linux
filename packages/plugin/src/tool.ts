@@ -17,6 +17,11 @@ export type ToolContext = {
   abort: AbortSignal
   metadata(input: { title?: string; metadata?: { [key: string]: any } }): void
   ask(input: AskInput): Promise<void>
+  /** Notify the host after a file write and receive its language diagnostics. */
+  notifyFileChange?(input: { file: string; event: "add" | "change" }): Promise<{
+    output: string
+    diagnostics: Record<string, unknown>
+  }>
 }
 
 type AskInput = {

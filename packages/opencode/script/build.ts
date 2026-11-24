@@ -16,24 +16,9 @@ process.chdir(dir)
 const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
+import { copyLicenses, licenseFiles } from "@opencode-ai/script/license"
 import pkg from "../package.json"
-import {
-  bundleDevecoCliVendor,
-  resolveDevecoCliVersionFromPackageJson,
-  type DevecoCliVendorTarget,
-} from "./vendor-deveco-cli"
-import { copyHomegraphRuntime } from "./vendor-homegraph.ts"
-import {
-  CLI_BUNDLED_SKILLS,
-  digestSkill,
-  digestSkills,
-  loadCliSkills,
-  loadResourceSkills,
-  loadSkillOverlays,
-  mergeSkills,
-  validateSkills,
-  type SkillsData,
-} from "./skill-sources"
+import { digestSkill, digestSkills, loadResourceSkills, validateSkills, type SkillsData } from "./skill-sources"
 
 const require = createRequire(import.meta.url)
 
@@ -78,19 +63,9 @@ const migrations = await Promise.all(
 )
 console.log(`Loaded ${migrations.length} migrations`)
 
-// Load default skills from resources/skills/ and the installed CLI package.
-// Structure: { skillName: { relPath: content } } — must match defaults.ts extraction.
-// The CLI package is the source of truth for CLI_BUNDLED_SKILLS only; repository
-// skills it also ships (REPO_OWNED_SKILLS, e.g. `deveco-cli`) keep the repo copy.
-// A `resources/skills/<name>/` directory without SKILL.md is an overlay: files this
-// repository owns that the CLI package does not ship (e.g. `FILES.md`), merged on
-// top of the CLI copy so a CLI upgrade cannot silently drop them.
-const localSkills = await loadResourceSkills(path.join(dir, "resources/skills"))
-const skillOverlays = await loadSkillOverlays(path.join(dir, "resources/skills"))
-const cliSkills = await loadCliSkills(dir)
-const defaultSkillsData: SkillsData = mergeSkills(localSkills, cliSkills.skills, skillOverlays)
-
-const skillProblems = validateSkills(defaultSkillsData, CLI_BUNDLED_SKILLS, skillOverlays)
+// Harness installs its own Skills through its config hook. Embed only host-owned resources.
+const defaultSkillsData: SkillsData = await loadResourceSkills(path.join(dir, "resources/skills"))
+const skillProblems = validateSkills(defaultSkillsData)
 if (skillProblems.length > 0) {
   console.error(`ERROR: invalid default skills:\n${skillProblems.map((p) => `  - ${p}`).join("\n")}`)
   process.exit(1)
@@ -101,87 +76,7 @@ const skillDigests = Object.keys(defaultSkillsData)
   .sort()
   .map((name) => `${name}=${digestSkill(defaultSkillsData[name])}`)
   .join(" ")
-console.log(
-  `Loaded ${Object.keys(defaultSkillsData).length} default skills ` +
-    `(${Object.keys(localSkills).length} local + ${Object.keys(cliSkills.skills).length} ${cliSkills.packageName}@${cliSkills.version} + ` +
-    `${Object.keys(skillOverlays).length} overlay, ` +
-    `hash=${defaultSkillsHash}) [${skillDigests}]`,
-)
-
-// Load default spec resources
-//
-// Mirrors the loader in src/spec/defaults.ts: the top level of resources/spec/
-// may contain both files (embedded as strings / base64) and subdirectories
-// (embedded as { [relPath]: content } maps). Build output shape:
-//
-//   {
-//     "some-top-level-file.md": "<content>",
-//     "commands":   { "spec-implement.md": "<content>", ... },
-//     "templates":  { "plan-template.md":  "<content>", ... },
-//   }
-const defaultSpecDir = path.join(dir, "resources/spec")
-const binaryExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bin"])
-
-type EmbeddedSpecFile = string | { encoding: "base64"; content: string }
-// Recursive mirror of src/spec/defaults.ts's EmbeddedSpecFileMap. Top-level
-// entries can be files (string/base64) or subdirectory maps (Record<string, EmbeddedSpecEntry>).
-type EmbeddedSpecEntry = EmbeddedSpecFile | Record<string, EmbeddedSpecFile>
-
-async function readSpecFile(filePath: string): Promise<EmbeddedSpecFile> {
-  if (binaryExtensions.has(path.extname(filePath).toLowerCase())) {
-    const buf = await Bun.file(filePath).arrayBuffer()
-    return { encoding: "base64", content: Buffer.from(buf).toString("base64") }
-  }
-  return await Bun.file(filePath).text()
-}
-
-async function walkSpecDir(dir: string): Promise<Record<string, EmbeddedSpecFile>> {
-  const result: Record<string, EmbeddedSpecFile> = {}
-  const entries = await fs.promises.readdir(dir, { withFileTypes: true })
-  for (const entry of entries) {
-    if (entry.name === ".DS_Store") continue
-    const full = path.join(dir, entry.name)
-    if (entry.isFile()) {
-      const rel = path.relative(dir, full).replaceAll("\\", "/")
-      result[rel] = await readSpecFile(full)
-    } else if (entry.isDirectory()) {
-      // Flatten nested subdirs (resources/spec/<subdir>/<deep>/<file>.md) into a
-      // single-level map keyed by path relative to <subdir>.
-      const nested = await walkSpecDir(full)
-      for (const [k, v] of Object.entries(nested)) result[k] = v
-    }
-  }
-  return result
-}
-
-const defaultSpecData: Record<string, EmbeddedSpecEntry> = fs.existsSync(defaultSpecDir)
-  ? await (async () => {
-      const data: Record<string, EmbeddedSpecEntry> = {}
-      for (const entry of await fs.promises.readdir(defaultSpecDir, { withFileTypes: true })) {
-        if (entry.name === ".DS_Store") continue
-        const full = path.join(defaultSpecDir, entry.name)
-        if (entry.isFile()) {
-          data[entry.name] = await readSpecFile(full)
-        } else if (entry.isDirectory()) {
-          data[entry.name] = await walkSpecDir(full)
-        }
-      }
-      return data
-    })()
-  : {}
-
-const countSpecEntries = (obj: Record<string, EmbeddedSpecEntry>): number => {
-  let n = 0
-  for (const v of Object.values(obj)) {
-    if (typeof v === "string" || (typeof v === "object" && v !== null && "encoding" in v)) {
-      n += 1
-    } else if (typeof v === "object" && v !== null) {
-      n += countSpecEntries(v as Record<string, EmbeddedSpecEntry>)
-    }
-  }
-  return n
-}
-console.log(`Loaded ${countSpecEntries(defaultSpecData)} default spec resources`)
+console.log(`Loaded ${Object.keys(defaultSkillsData).length} host skills (hash=${defaultSkillsHash}) [${skillDigests}]`)
 
 const createEmbeddedWebUIBundle = async () => {
   console.log(`Building Web UI to embed in the binary`)
@@ -262,39 +157,17 @@ const rgCacheDir = path.join(cacheDir, "ripgrep")
 const RG_VERSION = "15.1.0"
 const rgArchiveMap: Record<string, { archive: string; binary: string }> = {
   "darwin-arm64": { archive: `ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz`, binary: "rg" },
-  "darwin-x64":   { archive: `ripgrep-${RG_VERSION}-x86_64-apple-darwin.tar.gz`, binary: "rg" },
-  "linux-x64":    { archive: `ripgrep-${RG_VERSION}-x86_64-unknown-linux-gnu.tar.gz`, binary: "rg" },
-  "win32-x64":    { archive: `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`, binary: "rg.exe" },
+  "darwin-x64": { archive: `ripgrep-${RG_VERSION}-x86_64-apple-darwin.tar.gz`, binary: "rg" },
+  "linux-x64": { archive: `ripgrep-${RG_VERSION}-x86_64-unknown-linux-gnu.tar.gz`, binary: "rg" },
+  "win32-x64": { archive: `ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip`, binary: "rg.exe" },
 }
 
 const binaries: Record<string, string> = {}
-function resolveUiVerificationPackageDir() {
-  try {
-    const pkgJson = createRequire(import.meta.url).resolve('ui-verification-mcp/package.json');
-    return path.dirname(pkgJson);
-  } catch {
-    console.error(`  ERROR: ui-verification-mcp package not found. Run "bun install" first.`);
-    return process.exit(1);
-  }
-}
-
-async function copyUiVerificationRuntime(name: string) {
-  const packageDir = resolveUiVerificationPackageDir()
-  const vendorDir = path.join(dir, "dist", name, "vendor", "ui-verification-mcp")
-  await fs.promises.mkdir(vendorDir, { recursive: true })
-  await fs.promises.copyFile(
-    path.join(packageDir, "dist", "uiVerification.mjs"),
-    path.join(vendorDir, "uiVerification.mjs"),
-  )
-  await fs.promises.copyFile(path.join(packageDir, "package.json"), path.join(vendorDir, "package.json"))
-  console.log("  Bundled ui-verification-mcp");
-}
 if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
   await $`bun install --os="*" --cpu="*" @ff-labs/fff-bun@${pkg.dependencies["@ff-labs/fff-bun"]}`
 }
-let homegraphSmokeDone = false
 for (const item of targets) {
   const name = [
     pkg.name,
@@ -364,7 +237,6 @@ for (const item of targets) {
       DEVECO_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       DEVECO_DEFAULT_SKILLS: JSON.stringify(defaultSkillsData),
       DEVECO_DEFAULT_SKILLS_HASH: JSON.stringify(defaultSkillsHash),
-      DEVECO_DEFAULT_SPEC_RESOURCES: JSON.stringify(defaultSpecData),
       DEVECO_SKIP_AGREEMENT: skipAgreementFlag ? "true" : "false",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
@@ -440,38 +312,15 @@ for (const item of targets) {
 
   await $`rm -rf ./dist/${name}/bin/tui`
 
-  await copyUiVerificationRuntime(name)
-  // Vendor-only HomeGraph: platform packages ship a complete vendor/homegraph tree.
-  await copyHomegraphRuntime({
-    packageDir: dir,
-    destVendorDir: path.join(dir, "dist", name, "vendor", "homegraph"),
-    platform: `${item.os}-${item.arch}`,
-  })
-
-  // Smoke: vendor HomeGraph is plain JS+wasm — run with host `node` on any CI OS
-  // (Linux builders never match mac/win targets, so do not gate on platform).
-  // Once per build is enough; the vendor tree is identical across targets.
-  if (!homegraphSmokeDone) {
-    const hgEntry = path.join(dir, "dist", name, "vendor", "homegraph", "dist", "bin", "homegraph.js")
-    const probeDir = path.join(dir, "dist", name, ".hg-smoke")
-    console.log(`Running homegraph MCP smoke: ${hgEntry}`)
-    const listed = await $`node ${path.join(dir, "script", "homegraph-mcp-smoke.mjs")} ${hgEntry} ${probeDir}`.nothrow()
-    if (listed.exitCode !== 0) {
-      console.error(`HomeGraph MCP smoke failed for ${name}`)
-      process.exit(1)
-    }
-    console.log(`HomeGraph MCP smoke passed`)
-    await fs.promises.rm(probeDir, { recursive: true, force: true }).catch(() => {})
-    homegraphSmokeDone = true
-  }
-
   // Copy ripgrep from cache
   const rgKey = `${item.os}-${item.arch}`
   const rgInfo = rgArchiveMap[rgKey]
   if (rgInfo) {
     const cachePath = path.join(rgCacheDir, rgKey, rgInfo.binary)
     if (!fs.existsSync(cachePath)) {
-      console.error(`  ERROR: ripgrep cache not found for ${rgKey}. Run "bun install" first to download vendored binaries.`)
+      console.error(
+        `  ERROR: ripgrep cache not found for ${rgKey}. Run "bun install" first to download vendored binaries.`,
+      )
       process.exit(1)
     }
     {
@@ -487,44 +336,22 @@ for (const item of targets) {
     }
   }
 
-  // Per-target @deveco/deveco-cli runtime bundled into the standalone distribution.
-  if (item.os === "darwin" || item.os === "win32" || item.os === "linux") {
-    const cliTarget: DevecoCliVendorTarget = { os: item.os, arch: item.arch }
-    try {
-      await bundleDevecoCliVendor({
-        version: resolveDevecoCliVersionFromPackageJson(pkg),
-        cacheDir: path.join(dir, ".build-cache"),
-        vendorDir: path.join(dir, "dist", name, "vendor", "deveco-cli"),
-        target: cliTarget,
-        offline: offlineVendorFlag,
-      })
-    } catch (error) {
-      console.error(`  ERROR: failed to vendor @deveco/deveco-cli for ${item.os}-${item.arch}:`, error)
-      process.exit(1)
-    }
-  }
-
   await $`rm -rf ./dist/${name}/bin/tui`
 
-  await fs.promises.copyFile(
-    path.join(dir, "..", "..", "CHANGELOG.md"),
-    path.join(dir, "dist", name, "CHANGELOG.md"),
-  )
+  await fs.promises.copyFile(path.join(dir, "..", "..", "CHANGELOG.md"), path.join(dir, "dist", name, "CHANGELOG.md"))
 
+  await copyLicenses(path.join(dir, "dist", name))
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
         name: `@${scope}/deveco-code-${item.os === "win32" ? "windows" : item.os}-${item.arch}${item.avx2 === false ? "-baseline" : ""}`,
         version: Script.version,
+        license: pkg.license,
         preferUnplugged: true,
         os: [item.os],
         cpu: [item.arch],
-        files: [
-          "bin/**/*",
-          "vendor/**/*",
-          "CHANGELOG.md",
-          "README.md",
-        ],
+        dependencies: pkg.builtinPlugins,
+        files: ["bin/**/*", "vendor/**/*", "CHANGELOG.md", "README.md", ...licenseFiles],
         ...(item.abi ? { libc: [item.abi] } : {}),
       },
       null,

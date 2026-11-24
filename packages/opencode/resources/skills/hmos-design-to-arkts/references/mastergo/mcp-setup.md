@@ -2,7 +2,63 @@
 
 先确认使用网页版、桌面客户端还是企业私有化版本。网页登录本身不等于已授权 Magic MCP。
 
-已有用户明确选择且可用的 MCP 时直接复用。首次接入默认 Magic+Vibe 混合取数：Magic 负责结构化 DSL 与原始素材（getDesignSections/getDsl、extractSvg、CDN 资源 URL），Vibe 补 1×/2× 渲染截图（混合模式下 Vibe 连接仅用于截图与连通性探针，HTML/JSX 导出属纯 Vibe 模式），两通道对同一节点互验。一条连接不可用时按降级路径执行：无 Vibe 本地服务则纯 Magic，截图由用户从同一画板导出 PNG；Magic 令牌或席位不可用则纯 Vibe，由 get_frontend_code 出 HTML 与资源；Magic 上游提供 exportRender 等位图导出工具后，截图直接由 Magic 获取，混合收敛为纯 Magic。两条官方通道均不适用或无法完成目标取数时，再说明原因并引导用户选择社区插件。配置错误、服务未启动等问题先修复，不把工具列表可访问当作目标设计可读。Magic 的团队版要求不作为 Vibe 或全部官方 MCP 的统一门槛。社区插件继续沿用账号的文件权限和团队策略，不绕过权限限制。
+已有用户明确选择且可用的 MCP 时直接复用。初次接入默认 Magic+Vibe 混合取数：Magic 负责结构化 DSL 与原始素材（getDesignSections/getDsl、extractSvg、CDN 资源 URL），Vibe 补 1×/2× 渲染截图（混合模式下 Vibe 连接仅用于截图与连通性探针，HTML/JSX 导出属纯 Vibe 模式），两通道对同一节点互验。通道选择按下方「来源预检」的判定顺序执行：客户端本地服务可达时用混合取数，Magic 令牌或席位不可用时退为纯 Vibe，由 get_frontend_code 出 HTML 与资源；客户端本地服务不可达时，Magic 可用则纯 Magic + 用户手工导出截图，Magic 也不可用则看社区通道是否可行，都不行按 blocked 处理。Magic 上游提供 exportRender 等位图导出工具后，截图直接由 Magic 获取，混合收敛为纯 Magic。两条官方通道均不适用或无法完成目标取数时，再说明原因并引导用户选择社区插件。配置错误、服务未启动等问题先修复，不把工具列表可访问当作目标设计可读。Magic 的团队版要求不作为 Vibe 或全部官方 MCP 的统一门槛。社区插件继续沿用账号的文件权限和团队策略，不绕过权限限制。
+
+## 来源预检：客户端与 Magic 通道可用性
+
+MasterGo 来源在 `init` 与阶段 1 取数之前先做来源预检，不要求先确定工程、安装 runtime 或启动 Controller。默认 Magic+Vibe 混合取数，截图来自 MasterGo 桌面客户端的本地服务；客户端本地服务是否可达决定截图来源与整条取数路径，因此在选源阶段一次问清，不把这件事留到阶段 1。预检用端口探测确认客户端本地服务（Vibe 截图通道）；Magic 通道按下方「Magic 通道可用性」判定；社区插件连接由 `community/README.md` 的连接验证确认。
+
+探测本机客户端本地服务（默认 `http://127.0.0.1:30678`；客户端被占用端口时会自动改用其余地址，以客户端界面显示的地址为准）。命令用本机 Node.js，版本要求见下方「工作流调用方式」：
+
+```sh
+node "<skillRoot>/scripts/mastergo-preflight.mjs"
+node "<skillRoot>/scripts/mastergo-preflight.mjs" --connection "<connection.json>"
+node "<skillRoot>/scripts/mastergo-preflight.mjs" --endpoint "http://127.0.0.1:30678"
+```
+
+`--endpoint` 与 `--connection` 互斥（同传 exit 1）。`--endpoint` 须为完整 URL（`http://` 或 `https://`）并带显式端口：`localhost:30678`、`127.0.0.1:30678`、`http://localhost` 都按参数错误退出 1；端口也不能写成 scheme 默认的 80/443——WHATWG URL 会把它们归一化掉，脚本按"缺端口"报错，从而避免去探本机 80/443 再误报 `available`。`--connection` 传的是连接文件：只有其中 `type: local`、loopback `--url` 且带显式端口时才改探测地址，其余（Magic 云端 `--url`、社区本机服务、企业私有化地址、无端口或无法解析的地址）一律探测默认地址（配置缺省，不报错）；精确定址用 `--endpoint`。
+
+stdout 输出一行 JSON：`{"status":"available","endpoint":"http://127.0.0.1:30678"}`，或 `{"status":"unavailable","endpoint":"…","reason":"ECONNREFUSED|ENOTFOUND|EHOSTDOWN|timeout|error|disabled"}`。`reason` 是底层系统错误码（如 `ECONNREFUSED`、`ENOTFOUND`、`EHOSTDOWN`）、`timeout`、无错误码时的 `error`，或连接文件里 `enabled: false` 时的 `disabled`；状态查询恒以退出码 0 输出这一行，只有参数或文件错误才非零。
+
+探测只确认客户端本地服务端口存活，不建立 MCP 会话：Vibe 适配器在客户端停止时仍本地应答 `tools/list` 和 `get_version`，这两项不能作为探针；真实读取在阶段 1 完成。端口可达不等于取数成功：其余程序占用同一端口同样返回 `available`，这是端口口径的已知边界，不用 MCP 协议探测替代。loopback 地址探测失败可判定客户端本地服务不可用；非 loopback `--endpoint` 的结果受本机网络（TUN、透明代理等）影响，只能作为参考，不能据此判定客户端可用性。
+
+### Magic 通道可用性
+
+Magic 通道是否可用以真实只读结果为准，不按某个环境变量是否存在判定。按下面顺序判定，结论分为 `未配置`、`已配置`、`已配置但鉴权/席位失败` 三种：
+
+1. 先查本机已配置的 MasterGo Magic 连接：全局 `~/.config/deveco/deveco.jsonc` 的 `mcp.mastergo-magic`（或项目级配置文件中的同名条目），或技能 runtime 里已有的 `connection.json`。存在时复用该连接及其启动脚本的令牌装载方式，不以 `MG_MCP_TOKEN` 缺失判定不可用；令牌与席位以该连接的真实只读调用（`getMeta` 或目标画板的 `getDesignSections`）结果为准。
+2. 没有已配置连接时，才检查 `MG_MCP_TOKEN` 是否存在并按下方令牌引导配置一次；存在时同样以真实只读调用为准。
+3. 两处都没有判定为 `未配置`。已配置但真实读取返回鉴权错误或席位不足（如 10003）判定为 `已配置但鉴权/席位失败`，按下方令牌/席位引导一次性给全，不把“新建个人访问令牌”当作默认动作。
+4. 预检在 `init` 前确定配置状态；真实只读调用需要 run 目录时，在用户选定通道并 `init` 后、阶段 1 的初次真实读取时立即执行，读取成功即可用，失败按第 3 条处理并回到社区通道或 blocked。任何情况下都不读取、打印、复制或回显令牌内容（也不通过遍历 shell profile、Keychain 或系统凭据库来判断可用性），只判断可用或不可用，也不把令牌写进聊天、工程、capture 配置或设计产物。
+
+`available` / `unavailable` 按下面顺序决定通道，用户确认后继续：
+
+1. `available`（客户端本地服务可达，默认端口 30678）→ 默认混合取数：Vibe 补 1×/2× 截图，Magic 出结构化 DSL 与素材；Magic 通道不可用（按上文「Magic 通道可用性」判定）时退为纯 Vibe，由 get_frontend_code 出 HTML 与资源。
+2. `unavailable`：
+   a. Magic 通道可用（按上文「Magic 通道可用性」判定：本机已配置连接优先，`MG_MCP_TOKEN` 只作无连接时的依据，令牌与席位以真实读取为准；`未配置` 时先按下方令牌/席位引导一次，`已配置但鉴权/席位失败` 按引导给全后仍失败才算不可用）→ 纯 Magic + 用户手工导出截图，用户确认后继续。
+   b. Magic 不可用 → 社区通道可行时（用户能在 MasterGo 里运行插件，本机 3000 服务可启动）按社区插件通道引导；社区截图来自 `node.exportAsync`，不以客户端本地服务端口为前提。
+   c. 以上都不行，或用户不接受任何通道 → blocked（`dependency_unavailable`）。
+
+面对用户时仍是两条路：**路径 A** 恢复客户端本地服务（回到 1）；**路径 B** 不用客户端继续——Magic 可用走 B1 手工导出（2a），Magic 不可用走 B2 社区插件（2b），都不行即 2c blocked。用户选定后才继续，不得直接 `init` 让阶段 1 才暴露取数失败。
+
+用户已声明社区插件模式时，本预检不作为门禁：社区截图来自 `node.exportAsync`，不依赖客户端本地服务端口，按 `community/README.md` 校验插件运行与本机服务。
+
+**路径 A · 启动或安装客户端后继续自动化取数**：未安装时从 [MasterGo 官网](https://mastergo.com) 下载安装桌面客户端；未启动时打开客户端，窗口关闭但 Dock/任务栏图标仍在的后台运行态同样可用，从 Dock 完全退出则不可用。网页版登录不等于客户端可用；本 skill 的本地开发插件导入流程（`community/README.md`）需要桌面客户端，网页版走团队已发布插件列表运行。随后登录、打开目标文件，确认文件内 MasterGo MCP 处于连接状态，用客户端显示的地址重跑一次探测，`available` 后继续。
+
+**路径 B1 · 手工导出图片（2a）**：用户只导出图片，DSL 与素材仍走 Magic。向用户提出这条路径时，同一条消息一次给全下面四项，不分轮补充：
+
+- 导出清单：目标画板整页 PNG 1×（用于组件识别，必须提供）；同一画板 2× PNG（用于参考比对，可选；只有 1× 图时可同时作 reference 与 recognition）；DSL 中图片资源 URL 无法下载时，按画板导出这些图片的原图，SVG 图标由 `extractSvg` 提供，不需要导出。
+- 放置目录：本次 run 的导出根目录 `<runDir>/source/mastergo/export/`（相对工程根；`init` 后 run 目录已存在，`export` 子目录按需创建），文件名能区分倍数（如 `board-1x.png`、`board-2x.png`）；预检阶段用户可直接给出图片所在路径，`init` 后复制进该目录再导入，不放进工程其余目录，也不改写设计源。
+- 导入配置：以 `recognition.scale=1`、`reference.scale` 为 1 或 2 引用。
+- 体积与像素上限：单文件 ≤10 MiB、总量 ≤100 MiB、像素 ≤4000 万。
+
+索要图片与这四项同批给出：明确要求用户提供图片，用户可直接给出图片所在路径，`init` 后复制进上述导出目录。索图时同时说明：用户无法提供截图时按缺失输入（`missing_asset`）把阶段 1 置为 blocked。capture 脚本会校验导出目录里的截图，缺图或图片过小时拒绝取数。未拿到 1× PNG（及可选的 2×）前，阶段 1 不算完成取数——缺图按缺失输入阻塞，不先把 DSL 与素材取完再回头要图，也不以占位图、渲染图或生成图代替；阻塞命令为 `node <skillRoot>/scripts/workflow.mjs --mode stage-complete --run-dir <runDir> --stage 1 --result blocked --reason-code missing_asset`。
+
+**路径 B2 · 社区插件通道（2b）**：Magic 不可用时按下方「用户选择的社区插件 MCP」引导安装、启动本机 3000 服务并连接插件；社区截图来自 `node.exportAsync`，不依赖客户端本地服务端口。
+
+按 2c 报告 blocked（`dependency_unavailable`）时如实说明，不伪造截图或 DSL，也不切换设计来源。
+
+预检结论与用户选择由阶段 1 写入 `requirement-clarification.json` 的 `mastergo` 块（`channel`=mixed/vibe/magic-manual/community，见 `references/requirement-clarification.md`）；入口、阶段 1 与恢复流程按该记录沿用通道，不重复询问；记录缺失或按记录读取失败时，按上面的判定顺序重新取得用户选择。
 
 ## 工作流调用方式：独立 skill 脚本
 
@@ -15,6 +71,8 @@ npm install --prefix "<runtime>" --save-exact @modelcontextprotocol/sdk@1.29.0
 ```
 
 连接信息保存到用户配置目录中的独立 `connection.json`，字段见下面各方案。它是单个连接描述，不是完整的 Code 配置文件。复用已授权的现有配置时，只提取对应连接的 type、command、environment 或 url、headers，并补上 server 名；不覆盖 Code 配置、不读取并输出令牌。environment 和 headers 的值只支持 `{env:NAME}` 引用，不支持内联密钥、配置继承或远程 OAuth 登录。禁用的配置必须保留 `enabled: false`，不能换通道绕过用户的禁用决定。
+
+本机已存在从本地令牌文件读取令牌的 MasterGo Magic 连接时（例如连接命令指向本机启动脚本，脚本从 `~/.config/deveco/mastergo/token.txt` 读取权限 600 的令牌），优先复用该连接的启动方式，`connection.json` 的 `command` 与环境变量按该连接原样写，不需要 `MG_MCP_TOKEN`。需要使用技能独立 `connection.json` 的 `{env:MG_MCP_TOKEN}` 时，在运行 capture 的命令行上从本地令牌文件注入该环境变量：`MG_MCP_TOKEN="$(cat <令牌文件>)" node "<skillRoot>/scripts/mastergo-capture.mjs" --config <capture-config.json> --connection <connection.json> --runtime <runtime>`；不回显令牌内容、不写入任何文件、不改用户的全局配置。两种令牌装载机制二选一即可。
 
 连接配置就绪并初始化 MasterGo 阶段 1 后，以以下内容创建 `<capture-config.json>`：
 
@@ -40,11 +98,11 @@ node "<skillRoot>/scripts/mastergo-capture.mjs" --config "<capture-config.json>"
 
 ## Magic MCP：结构化 DSL 与原始素材
 
-官方 Magic 文档要求团队版及以上的编辑席位或研发席位，设计文件位于有访问权限的团队。令牌正确但账号席位不足时，Magic 服务端返回错误码 10003；席位生效后同一令牌即可继续取数。还需要 Node.js 18+、npm 8+，以及个人设置 → 安全设置生成的个人访问令牌。令牌由用户保存在本机环境变量 `MG_MCP_TOKEN`，不要粘贴到聊天、工程或设计产物中。
+官方 Magic 文档要求团队版及以上的编辑席位或研发席位，设计文件位于有访问权限的团队。令牌正确但账号席位不足时，Magic 服务端返回错误码 10003；席位生效后同一令牌即可继续取数。还需要 Node.js 18+、npm 8+，以及个人设置 → 安全设置生成的个人访问令牌。令牌由本机既有连接或启动脚本从本地令牌文件读取（如 `~/.config/deveco/mastergo/token.txt`，权限 600），或由用户在运行 Code 的本机环境中设为 `MG_MCP_TOKEN`；任何情况下都不读取、打印、复制或回显令牌内容，也不写入聊天、工程、capture 配置或设计产物。
 
 席位门槛速查：Magic 数据读取（getDesignSections、getDsl、extractSvg、getPageLayers、getMeta）= 团队版及以上的编辑席位或研发席位，席位不足返回 10003；D2C PRO 页面与「发送数据」插件（contentId 唯一来源）、getD2c = 企业版研发席位或编辑席位，且文档所在团队必须为企业版，门槛不符返回 10013（权限校验先于 contentId 校验）。遇到 10003/10013、找不到 D2C PRO 入口或「发送数据」按钮时，结论是席位/团队版本门槛而非配置错误：引导用户核对席位与团队版本，不反复重试配置、不猜测 contentId。
 
-令牌获取与配置引导：个人访问令牌在 MasterGo 网页的个人设置 → 安全设置 → 个人访问令牌区块新增并复制。判定令牌缺失、失效或席位不足（连接失败、鉴权错误或 10003）时，一次性给出完整引导：在上述页面新增个人访问令牌；按席位门槛速查核对席位与文档团队权限；把令牌保存到运行 Code 的本机环境变量 `MG_MCP_TOKEN`（connection.json 以 `{env:MG_MCP_TOKEN}` 引用，不粘贴到聊天、工程或设计产物）；再用同一 connection.json 重跑一次真实读取（如 `getMeta` 或目标画板的 `getDesignSections`）验证令牌生效——工具列表可访问不等于目标可读。引导一次到位，不反复重试或改猜其他配置；生成与生效的权威步骤以官方帮助页为准。
+令牌获取与配置引导：个人访问令牌在 MasterGo 网页的个人设置 → 安全设置 → 个人访问令牌区块新增并复制。判定令牌缺失、失效或席位不足（连接失败、鉴权错误或 10003）时，一次性给出完整引导：在上述页面新增个人访问令牌；按席位门槛速查核对席位与文档团队权限；把令牌保存到本机令牌文件并由既有连接读取，或设为运行 Code 的本机环境变量 `MG_MCP_TOKEN`（独立 connection.json 以 `{env:MG_MCP_TOKEN}` 引用；两种装载机制二选一，不粘贴到聊天、工程或设计产物，也不读取或回显令牌内容）；再用同一连接重跑一次真实读取（如 `getMeta` 或目标画板的 `getDesignSections`）验证令牌生效——工具列表可访问不等于目标可读。引导一次到位，不反复重试或改猜其余配置；具体生成与生效步骤以官方帮助页为准。
 
 `getDesignSections` / `getPageLayers` 读取服务端缓存，画布编辑后不即时反映：重定位节点后 DSL 仍返回旧坐标，新增画板不会出现在页面枚举中。编辑后的取数以 `get_screenshot` 截图校验为准；由此产生的 DSL↔截图不一致即缓存滞后，按 acquire.md §5 记录差异并与用户澄清，不以陈旧 DSL 否定当前画布。定位新增画板用其 nodeId（网页链接 layer_id）直连读取，不依赖页面枚举。
 
@@ -66,11 +124,11 @@ npm install --prefix "<runtime>" --save-exact @mastergo/magic-mcp@0.2.10
 }
 ```
 
-使用安装包 package.json 的真实 bin 入口；本示例适用于固定 Magic 版本。用 Node 执行入口文件，避免 Windows 的 npx.cmd/shell 差异。环境变量由用户在运行 Code 的本机环境中设置，不传入命令行、capture 配置或设计产物。已有明确选择的官方连接优先复用其授权与安装目录；脚本仍独立建立客户端连接。
+使用安装包 package.json 的真实 bin 入口；本示例适用于固定 Magic 版本。用 Node 执行入口文件，避免 Windows 的 npx.cmd/shell 差异。走该示例时 `MG_MCP_TOKEN` 按上文从本机令牌文件注入命令或由本机既有连接装载，不写入 capture 配置或设计产物；本机已存在从令牌文件读取令牌的 MasterGo 连接时优先复用其启动方式与安装目录，脚本仍独立建立客户端连接。
 
 ## Vibe MCP：渲染截图与前端代码
 
-Vibe 可用性取决于 MasterGo 桌面客户端的本地服务：打开客户端，或保持后台运行（窗口关闭、Dock 图标仍在），且目标文件已打开、文件内 MasterGo MCP 处于连接状态，Vibe 即可用；从 Dock 完全退出后不可用，工具调用返回「获取失败: Network Error」。判定可用性用实现层探针：本地端口存活（默认 30678，被占用时自动切换，以客户端显示地址为准），或执行一次 `get_selection_node` 真实读取；`get_version` 由 vibe-mcp 适配器本地应答，本地服务停止时同样返回成功，不能作为探针。客户端主进程可能已退出而服务进程存活（后台运行态），不以进程状态判定可用性。用户当前在网页版还是客户端编辑与 Vibe 可用性无关，只按上述探针判定。不需要个人令牌。官方 Vibe 文档的准备项未列出会员或团队版门槛；按实际客户端连接和工具读取结果判断可用性，不据此承诺所有账号均免费或可用。
+Vibe 可用性取决于 MasterGo 桌面客户端的本地服务：打开客户端，或保持后台运行（窗口关闭、Dock 图标仍在），且目标文件已打开、文件内 MasterGo MCP 处于连接状态，Vibe 即可用；从 Dock 完全退出后不可用，工具调用返回「获取失败: Network Error」。判定可用性用实现层探针：入口按上方「来源预检」运行 `scripts/mastergo-preflight.mjs` 确认本地服务端口存活（默认 30678，被占用时自动切换，以客户端显示地址为准），阶段 1 再用一次 `get_selection_node` 真实读取确认目标可读；`get_version` 由 vibe-mcp 适配器本地应答，本地服务停止时同样返回成功，不能作为探针。客户端主进程可能已退出而服务进程存活（后台运行态），不以进程状态判定可用性。用户当前在网页版还是客户端编辑与 Vibe 可用性无关，只按上述探针判定。不需要个人令牌。官方 Vibe 文档的准备项未列出会员或团队版门槛；按实际客户端连接和工具读取结果判断可用性，不据此承诺所有账号均免费或可用。
 
 在 runtime 安装 `@mastergo/vibe-mcp@1.0.31`，从安装包 package.json 的 bin 字段取得实际 JavaScript 入口；以 Node 执行该入口，并传入 `--url=http://localhost:30678`。connection.json 使用 `server: "mastergo-vibe"`、`type: "local"`、上述 command 数组、`enabled: true`，不需要令牌。不要猜入口文件名或改为执行 Windows `.cmd` 文件。
 

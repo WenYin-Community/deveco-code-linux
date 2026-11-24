@@ -21,6 +21,7 @@ import { AppProcess } from "@opencode-ai/core/process"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectDirectories } from "@opencode-ai/core/project/directories"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { AbsolutePath } from "@opencode-ai/core/schema"
 import { testEffect } from "../lib/effect"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -812,6 +813,260 @@ describe("Project.fromDirectory with bare repos", () => {
 
       const correctCache = path.join(barePath, "opencode")
       expect(yield* Effect.promise(() => Bun.file(correctCache).exists())).toBe(true)
+    }),
+  )
+})
+
+describe("Project.fromDirectory directory adoption (upstream semantics)", () => {
+  const insertSession = (input: {
+    id: SessionID
+    projectID: ProjectV2.ID
+    directory: AbsolutePath
+    title: string
+    workspaceID?: WorkspaceV2.ID
+  }) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: input.id,
+          project_id: input.projectID,
+          workspace_id: input.workspaceID ?? null,
+          slug: input.id,
+          directory: input.directory,
+          title: input.title,
+          version: "0.0.0-test",
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+  it.live("re-parents pre-git sessions into global when an empty repo resolves to global", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped()
+      const before = yield* projects.fromDirectory(tmp)
+
+      const sessionID = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: sessionID, projectID: before.project.id, directory: AbsolutePath.make(tmp), title: "pre-git" })
+
+      yield* Effect.promise(() => $`git init`.cwd(tmp).quiet())
+      yield* projects.fromDirectory(tmp)
+
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(ProjectV2.ID.global)
+    }),
+  )
+
+  it.live("moves global-transit sessions to the remote identity when origin appears", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped()
+      const before = yield* projects.fromDirectory(tmp)
+
+      const sessionID = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: sessionID, projectID: before.project.id, directory: AbsolutePath.make(tmp), title: "pre-git" })
+
+      yield* Effect.promise(() => $`git init`.cwd(tmp).quiet())
+      yield* projects.fromDirectory(tmp)
+      yield* Effect.promise(() => $`git remote add origin git@github.com:acme/adopt.git`.cwd(tmp).quiet())
+      const after = yield* projects.fromDirectory(tmp)
+
+      expect(after.project.id).toBe(remoteProjectID("github.com/acme/adopt"))
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(remoteProjectID("github.com/acme/adopt"))
+    }),
+  )
+
+  it.live("leaves sessions of other directories on the global transit untouched", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped()
+      const foreign = yield* tmpdirScoped()
+      const before = yield* projects.fromDirectory(tmp)
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      const local = crypto.randomUUID() as SessionID
+      const other = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: local, projectID: before.project.id, directory: AbsolutePath.make(tmp), title: "local" })
+      yield* insertSession({ id: other, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(foreign), title: "foreign" })
+
+      yield* Effect.promise(() => $`git init`.cwd(tmp).quiet())
+      yield* projects.fromDirectory(tmp)
+      yield* Effect.promise(() => $`git remote add origin git@github.com:acme/adopt.git`.cwd(tmp).quiet())
+      yield* projects.fromDirectory(tmp)
+
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, local)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(remoteProjectID("github.com/acme/adopt"))
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, other)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(ProjectV2.ID.global)
+    }),
+  )
+
+  it.live("keeps workspace sessions out of the adoption", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped()
+      const before = yield* projects.fromDirectory(tmp)
+
+      const workspaceID = WorkspaceV2.ID.ascending()
+      yield* db
+        .insert(WorkspaceTable)
+        .values({ id: workspaceID, type: "local", name: "test", project_id: before.project.id })
+        .run()
+        .pipe(Effect.orDie)
+
+      const plain = crypto.randomUUID() as SessionID
+      const workspace = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: plain, projectID: before.project.id, directory: AbsolutePath.make(tmp), title: "plain" })
+      yield* insertSession({
+        id: workspace,
+        projectID: before.project.id,
+        directory: AbsolutePath.make(tmp),
+        title: "workspace",
+        workspaceID,
+      })
+
+      yield* Effect.promise(() => $`git init`.cwd(tmp).quiet())
+      yield* projects.fromDirectory(tmp)
+
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, plain)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(ProjectV2.ID.global)
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, workspace)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(before.project.id)
+    }),
+  )
+
+  it.live("does not steal sessions from sibling directories sharing a prefix", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const { project } = yield* projects.fromDirectory(tmp)
+      expect(project.id).not.toBe(ProjectV2.ID.global)
+
+      const sibling = path.join(path.dirname(tmp), path.basename(tmp) + "-foreign")
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`rm -rf ${sibling}`.quiet().nothrow()).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => $`mkdir ${sibling}`.quiet())
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const local = crypto.randomUUID() as SessionID
+      const foreign = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: local, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(tmp), title: "local" })
+      yield* insertSession({
+        id: foreign,
+        projectID: ProjectV2.ID.global,
+        directory: AbsolutePath.make(sibling),
+        title: "sibling",
+      })
+
+      yield* projects.fromDirectory(tmp)
+
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, local)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(project.id)
+      expect(
+        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, foreign)).get().pipe(Effect.orDie))
+          ?.project_id,
+      ).toBe(ProjectV2.ID.global)
+    }),
+  )
+
+  it.live("adopts sessions from a subdirectory named ..foo without treating it as a parent", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const { project } = yield* projects.fromDirectory(tmp)
+
+      const dotfoo = path.join(tmp, "..foo")
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`rm -rf ${dotfoo}`.quiet().nothrow()).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => $`mkdir ${dotfoo}`.quiet())
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const id = crypto.randomUUID() as SessionID
+      yield* insertSession({ id, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(dotfoo), title: "dotfoo" })
+
+      yield* projects.fromDirectory(tmp)
+
+      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+      expect(row).toBeDefined()
+      expect(row!.project_id).toBe(project.id)
+      expect(row!.path).toBe("..foo")
+    }),
+  )
+
+  it.live("recomputes session path relative to the adopted worktree", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const projects = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const subdir = path.join(tmp, "src")
+      yield* Effect.promise(() => $`mkdir ${subdir}`.quiet())
+      const { project } = yield* projects.fromDirectory(tmp)
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+      const root = crypto.randomUUID() as SessionID
+      const nested = crypto.randomUUID() as SessionID
+      yield* insertSession({ id: root, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(tmp), title: "root" })
+      yield* insertSession({ id: nested, projectID: ProjectV2.ID.global, directory: AbsolutePath.make(subdir), title: "nested" })
+
+      yield* projects.fromDirectory(tmp)
+
+      const rootRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, root)).get().pipe(Effect.orDie)
+      expect(rootRow!.project_id).toBe(project.id)
+      expect(rootRow!.path).toBeNull()
+
+      const nestedRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, nested)).get().pipe(Effect.orDie)
+      expect(nestedRow!.project_id).toBe(project.id)
+      expect(nestedRow!.path).toBe("src")
     }),
   )
 })

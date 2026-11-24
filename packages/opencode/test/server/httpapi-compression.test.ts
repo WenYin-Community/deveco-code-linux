@@ -1,8 +1,15 @@
+import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { afterEach, describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
+import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/unstable/http"
 import { gunzipSync, inflateSync } from "node:zlib"
+import { compressionLayer } from "../../src/server/routes/instance/httpapi/middleware/compression"
 import { Server } from "../../src/server/server"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { testEffect } from "../lib/effect"
+
+const it = testEffect(Layer.mergeAll(NodeHttpServer.layerTest, NodeServices.layer))
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -94,17 +101,24 @@ describe("HttpApi compression", () => {
       expect(response.headers.get("content-encoding")).toBeNull()
     })
 
-    test("when the response body is below the 1024-byte threshold", async () => {
-      // A bare config produces a tiny response (~few hundred bytes).
-      await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
-      const response = await app().request("/config", {
-        headers: { "x-deveco-directory": tmp.path, "accept-encoding": "gzip" },
-      })
-      expect(response.status).toBe(200)
-      const body = new Uint8Array(await response.arrayBuffer())
-      expect(body.byteLength).toBeLessThan(1024)
-      expect(response.headers.get("content-encoding")).toBeNull()
-    })
+    it.live("when the response body is below the 1024-byte threshold", () =>
+      Effect.gen(function* () {
+        // Built-in plugins can grow /config independently of the compression policy.
+        const body = "x".repeat(1023)
+        yield* HttpRouter.add("GET", "/small", HttpServerResponse.text(body)).pipe(
+          Layer.provide(compressionLayer),
+          HttpRouter.serve,
+          Layer.build,
+        )
+        const response = yield* HttpClientRequest.get("/small").pipe(
+          HttpClientRequest.setHeader("accept-encoding", "gzip"),
+          HttpClient.execute,
+        )
+        expect(response.status).toBe(200)
+        expect(response.headers["content-encoding"]).toBeUndefined()
+        expect(yield* response.text).toBe(body)
+      }),
+    )
 
     test("HEAD requests", async () => {
       await using tmp = await tmpdir({ config: fatConfig() })

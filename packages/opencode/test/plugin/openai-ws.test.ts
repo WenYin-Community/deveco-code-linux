@@ -48,7 +48,10 @@ describe("plugin.openai.ws", () => {
         url: server.wsUrl,
         headers: {},
       }),
-    ).rejects.toThrow("Expected 101 status code")
+    // bun's native WebSocket says "Expected 101 status code"; the npm ws client
+    // says "Unexpected server response: <status>". Which one surfaces depends on
+    // the bun version resolving "ws", so accept either wording.
+    ).rejects.toThrow(/Expected 101 status code|Unexpected server response/)
   })
 
   test("enforces websocket send idle timeout", async () => {

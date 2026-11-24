@@ -27,6 +27,7 @@ import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
@@ -107,6 +108,15 @@ internal class SessionEditorPreview(
                 log.debug("Preview: skipping directory '${virtualFile.name}'")
                 return@executeOnPooledThread
             }
+            // The platform creates documents for text files only, so a binary file (image,
+            // archive) can never mount in the text preview; open it in the main editor
+            // instead, which renders images natively — same as the composer chips do.
+            if (virtualFile.fileType.isBinary) {
+                project.runInEdt {
+                    OpenFileDescriptor(project, virtualFile, 0, 0).navigate(true)
+                }
+                return@executeOnPooledThread
+            }
             val document = try {
                 ApplicationManager.getApplication().runReadAction<Document?> {
                     FileDocumentManager.getInstance().getDocument(virtualFile)
@@ -116,7 +126,9 @@ internal class SessionEditorPreview(
                 null
             }
             if (document == null) {
-                log.error("Preview: no document for '${virtualFile.name}'")
+                // Not a programming error: the file can have vanished or become unreadable
+                // between the resolve above and this read, so keep it out of error reports.
+                log.warn("Preview: no document for '${virtualFile.name}'")
                 return@executeOnPooledThread
             }
             UIUtil.invokeAndWaitIfNeeded {

@@ -1,5 +1,6 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Entry } from "@opencode-ai/core/filesystem/schema"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -10,10 +11,13 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import { pathToFileURL } from "url"
 import type { Permission } from "../../src/permission"
-import type { Tool } from "@/tool/tool"
+import { Agent } from "@/agent/agent"
+import { Skill } from "@/skill"
+import { Tool } from "@/tool/tool"
+import { Truncate } from "@/tool/truncate"
 import { SkillTool } from "../../src/tool/skill"
 import { ToolRegistry } from "@/tool/registry"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
 
@@ -31,13 +35,10 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-let ripgrepCalls = 0
-
 const node = CrossSpawnSpawner.defaultLayer
 const ripgrep = Layer.mock(Ripgrep.Service, {
   find: (input) =>
     Effect.sync(() => {
-      ripgrepCalls++
       expect(path.basename(input.cwd)).toBe("tool-skill")
       expect(input.pattern).toBe("!**/SKILL.md")
       expect(input.hidden).toBe(true)
@@ -55,6 +56,19 @@ const ripgrep = Layer.mock(Ripgrep.Service, {
 })
 
 const it = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, node).pipe(Layer.provide(ripgrep)))
+const unit = testEffect(
+  Layer.mergeAll(
+    node,
+    FSUtil.defaultLayer,
+    Truncate.defaultLayer,
+    Layer.mock(Agent.Service, {
+      get: () => Effect.succeed({ name: "build", mode: "primary", permission: [], options: {} }),
+    }),
+    Layer.mock(Ripgrep.Service, {
+      find: (input) => Effect.die(new Error(`unexpected file sampling in ${input.cwd}`)),
+    }),
+  ),
+)
 
 describe("tool.skill", () => {
   it.instance("execute returns skill content block with files", () =>
@@ -113,22 +127,10 @@ Use this skill.
     15_000,
   )
 
-  it.instance("execute lists FILES.md whitelist paths instead of a sampled rg list", () =>
+  unit.live("execute lists FILES.md whitelist paths instead of a sampled rg list", () =>
     Effect.gen(function* () {
-      const dir = (yield* TestInstance).directory
-      const skill = path.join(dir, ".deveco", "skill", "whitelist-skill")
-      yield* Effect.promise(() =>
-        Bun.write(
-          path.join(skill, "SKILL.md"),
-          `---
-name: whitelist-skill
-description: Skill with a companion whitelist.
----
-
-# Whitelist Skill
-`,
-        ),
-      )
+      const dir = yield* tmpdirScoped()
+      const skill = path.join(dir, "whitelist-skill")
       yield* Effect.promise(() => Bun.write(path.join(skill, "references", "analyzer.md"), "analyzer"))
       yield* Effect.promise(() => Bun.write(path.join(skill, "scripts", "run.py"), "print(1)"))
       // Not whitelisted: must not leak into the listing.
@@ -147,20 +149,21 @@ description: Skill with a companion whitelist.
         ),
       )
 
-      const registry = yield* ToolRegistry.Service
-      const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
-      const tool = (yield* registry.tools({
-        providerID: ProviderV2.ID.opencode,
-        modelID: ModelV2.ID.make("gpt-5"),
-        agent,
-      })).find((tool) => tool.id === SkillTool.id)
-      if (!tool) throw new Error("Skill tool not found")
-
-      const before = ripgrepCalls
+      // The registry and Harness integration are exercised separately below. Test the real tool with a known skill.
+      const tool = yield* Tool.init(
+        yield* SkillTool.pipe(
+          Effect.provide(
+            Layer.mock(Skill.Service, {
+              require: (name) => {
+                expect(name).toBe("whitelist-skill")
+                return Effect.succeed({ name, location: path.join(skill, "SKILL.md"), content: "# Whitelist Skill" })
+              },
+            }),
+          ),
+        ),
+      )
       const result = yield* tool.execute({ name: "whitelist-skill" }, { ...baseCtx, ask: () => Effect.void })
 
-      // The whitelist branch must not fall back to sampling the directory.
-      expect(ripgrepCalls).toBe(before)
       expect(result.output).toContain(`<file>${path.resolve(skill, "references", "analyzer.md")}</file>`)
       expect(result.output).toContain(`<file>${path.resolve(skill, "scripts", "run.py")}</file>`)
       expect(result.output).toContain(`<file>note-from-whitelist</file>`)
@@ -168,7 +171,32 @@ description: Skill with a companion whitelist.
       // A whitelisted path that does not exist is dropped instead of being listed.
       expect(result.output).not.toContain("absent.py")
     }),
-    15_000,
+  )
+
+  it.instance(
+    "execute lists curated DFX companions from the installed Harness manifest",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* ToolRegistry.Service
+        const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+        const tool = (yield* registry.tools({
+          providerID: ProviderV2.ID.opencode,
+          modelID: ModelV2.ID.make("gpt-5"),
+          agent,
+        })).find((tool) => tool.id === SkillTool.id)
+        if (!tool) throw new Error("Skill tool not found")
+        const result = yield* tool.execute({ name: "hmos-dfx-analyzer" }, { ...baseCtx, ask: () => Effect.void })
+        const directory = String(result.metadata.dir)
+        expect(yield* Effect.promise(() => Bun.file(path.join(directory, "FILES.md")).exists())).toBe(true)
+        for (const route of ["appfreeze", "cppcrash", "jscrash", "white-screen"]) {
+          expect(result.output).toContain(`<file>${path.join(directory, "references", route, "analyzer.md")}</file>`)
+        }
+        expect(result.output).toContain(
+          `<file>${path.join(directory, "scripts", "collect", "collect-hilog.mjs")}</file>`,
+        )
+        expect(result.output).not.toMatch(/<file>[^<]*test-cases/)
+      }),
+    45_000,
   )
 
   it.instance("execute preserves not found message", () =>

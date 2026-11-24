@@ -14,6 +14,15 @@
  */
 
 import type { OpencodeClient } from '@opencode-ai/sdk'
+import type {
+  AutoDreamConfig,
+  ExtractionConfig,
+  MemoryConfig,
+  MemoryExpiryConfig,
+  MemoryRecallConfig,
+  SemanticSelectionConfig,
+  SkillConfig,
+} from '../memory/types'
 import { logger } from './logger'
 import { sleep } from './async'
 
@@ -68,6 +77,35 @@ export interface ForkedSessionInfo {
   model?: { providerID: string; modelID: string }
 }
 
+// ── Per-Fork Memory Config Snapshot ─────────────────────────────────
+
+/**
+ * Memory configuration frozen when a dream/extraction fork is created.
+ * The fork reads this snapshot for every memory decision (tools, injection,
+ * compaction, notifications), so toggling the config mid-run never disturbs
+ * an already-started background agent. Live objects are replaced wholesale by
+ * applyPluginConfig, so the captured references stay valid; never mutate them.
+ */
+export interface ForkMemoryConfig {
+  memory: MemoryConfig
+  autoDream: AutoDreamConfig
+  extraction: ExtractionConfig
+  skills: SkillConfig
+  recall: MemoryRecallConfig
+  semantic: SemanticSelectionConfig
+  expiry: MemoryExpiryConfig
+}
+
+const forkMemoryConfigs = new Map<string, ForkMemoryConfig>()
+
+export function setForkConfig(sessionID: string, config: ForkMemoryConfig): void {
+  forkMemoryConfigs.set(sessionID, config)
+}
+
+export function getForkConfig(sessionID: string): ForkMemoryConfig | undefined {
+  return forkMemoryConfigs.get(sessionID)
+}
+
 // ── Child Session Creation (shared by all forked agent spawn sites) ──
 
 const CREATE_VERIFY_SLEEP_MS = 500
@@ -96,6 +134,7 @@ export async function createForkedChildSession(
   parentSessionID: string,
   agentKey: ForkedAgentType,
   _directory?: string,
+  forkConfig?: ForkMemoryConfig,
 ): Promise<ForkedSessionInfo | null> {
   // Wait for SessionProcessor.cleanup() to finish its DB writes
   await sleep(FORK_DELAY_MS)
@@ -136,9 +175,11 @@ export async function createForkedChildSession(
     // window where the child session could emit session.idle before being
     // recognized as a forked session by the event handler.
     registerForkSession(childID, agentKey)
+    if (forkConfig) setForkConfig(childID, forkConfig)
 
     if (!(await verifySessionReady(client, childID))) {
       logger.error('[ForkManager]', `${agentKey} child session verification failed:`, childID)
+      unregisterForkSession(childID)
       return null
     }
 
@@ -185,6 +226,7 @@ export function registerForkSession(sessionID: string, agentType?: ForkedAgentTy
 export function unregisterForkSession(sessionID: string): void {
   activeForkSessionIDs.delete(sessionID)
   forkSessionAgentType.delete(sessionID)
+  forkMemoryConfigs.delete(sessionID)
 }
 
 export function isForkedSession(sessionID: string): boolean {
@@ -202,6 +244,7 @@ function getActiveForkSessions(): string[] {
 function clearAllForkSessions(): void {
   activeForkSessionIDs.clear()
   forkSessionAgentType.clear()
+  forkMemoryConfigs.clear()
 }
 
 export type PermissionRule = {

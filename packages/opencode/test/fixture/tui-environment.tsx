@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/solid */
+import { AnnouncementsProvider } from "@opencode-ai/tui/context/announcements"
 import {
   TuiPathsProvider,
   TuiStartupProvider,
@@ -27,7 +28,9 @@ export function TestTuiContexts(
       }}
     >
       <TuiTerminalEnvironmentProvider value={{ platform: "linux" }}>
-        <TuiStartupProvider value={{ skipInitialLoading: false }}>{props.children}</TuiStartupProvider>
+        <TuiStartupProvider value={{ skipInitialLoading: false }}>
+          <AnnouncementsProvider>{props.children}</AnnouncementsProvider>
+        </TuiStartupProvider>
       </TuiTerminalEnvironmentProvider>
     </TuiPathsProvider>
   )

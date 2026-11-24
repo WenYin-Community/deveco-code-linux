@@ -813,31 +813,33 @@ it.instance("subtask child inherits parent session external_directory allow", ()
   }),
 )
 
-noLLMServer.instance("prompt tools replace previous prompt tool rules", () =>
-  Effect.gen(function* () {
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const session = yield* sessions.create({ title: "Prompt tools" })
+noLLMServer.instance(
+  "prompt tools replace previous prompt tool rules",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Prompt tools" })
 
-    yield* prompt.prompt({
-      sessionID: session.id,
-      agent: "build",
-      noReply: true,
-      tools: { bash: false },
-      parts: [{ type: "text", text: "first" }],
-    })
-    yield* prompt.prompt({
-      sessionID: session.id,
-      agent: "build",
-      noReply: true,
-      tools: { read: true },
-      parts: [{ type: "text", text: "second" }],
-    })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        tools: { bash: false },
+        parts: [{ type: "text", text: "first" }],
+      })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        tools: { read: true },
+        parts: [{ type: "text", text: "second" }],
+      })
 
-    const reloaded = yield* sessions.get(session.id)
-    expect(reloaded.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
-    expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("ask")
-  }),
+      const reloaded = yield* sessions.get(session.id)
+      expect(reloaded.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
+      expect(Permission.evaluate("bash", "anything", reloaded.permission ?? []).action).toBe("ask")
+    }),
   { config: cfg },
 )
 
@@ -958,7 +960,9 @@ it.instance(
       yield* llm.pushMatch(
         isTitleHit,
         reply()
-          .text('The user message is "你好" which means "hello" in Chinese.\n\nI will write the title in Chinese.</think>打招呼')
+          .text(
+            'The user message is "你好" which means "hello" in Chinese.\n\nI will write the title in Chinese.</think>打招呼',
+          )
           .stop()
           .item(),
       )
@@ -2072,9 +2076,9 @@ noLLMServer.instance(
         parts: [{ type: "file", mime: "text/plain", url: pathToFileURL(secret).href, filename: "secret.txt" }],
       })
 
-      expect(
-        message.parts.some((part) => part.type === "text" && part.text.includes("allowed external content")),
-      ).toBe(true)
+      expect(message.parts.some((part) => part.type === "text" && part.text.includes("allowed external content"))).toBe(
+        true,
+      )
     }),
   { config: cfg },
 )
@@ -2222,20 +2226,30 @@ it.instance("does not loop empty assistant turns for a simple reply", () =>
   }),
 )
 
-it.instance("explicit /analyze runs the dfx agent in an isolated sub-session (SR1 v1.6)", () =>
+it.instance("a configured analysis command runs its agent in an isolated sub-session", () =>
   Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { "fixture-diagnosis": { mode: "subagent", hidden: true, prompt: "Analyze the supplied evidence." } },
+      command: {
+        "fixture-analyze": {
+          agent: "fixture-diagnosis",
+          subtask: true,
+          template: "FIXTURE_ANALYSIS_ARGUMENTS\n$ARGUMENTS",
+        },
+      },
+    }))
     const commands = yield* Command.Service
     const { prompt, sessions, chat } = yield* boot()
-    const command = yield* commands.get(Command.Default.ANALYZE)
+    const command = yield* commands.get("fixture-analyze")
 
-    expect(command?.agent).toBe("dfx")
+    expect(command?.agent).toBe("fixture-diagnosis")
     expect(command?.subtask).toBe(true)
 
-    yield* llm.text("dfx-summary")
+    yield* llm.text("analysis-summary")
     yield* prompt.command({
       sessionID: chat.id,
-      command: Command.Default.ANALYZE,
+      command: "fixture-analyze",
       arguments: "analyze crash.log",
       agent: "build",
     })
@@ -2243,17 +2257,16 @@ it.instance("explicit /analyze runs the dfx agent in an isolated sub-session (SR
     // The command creates a subtask part in the parent session...
     const messages = yield* sessions.messages({ sessionID: chat.id })
     expect(messages.some((message) => message.parts.some((part) => part.type === "subtask"))).toBe(true)
-    // ...and runs the dfx agent in a child session (analysis process isolated
+    // ...and runs the configured agent in a child session (analysis process isolated
     // from the root session; only the final summary returns).
     const children = yield* sessions.children(chat.id)
     expect(children).toHaveLength(1)
-    expect(children[0]?.agent).toBe("dfx")
-    // The /analyze template carries the DFX_USER_ARGUMENTS block verbatim.
+    expect(children[0]?.agent).toBe("fixture-diagnosis")
+    // The host forwards configured templates and arguments to the subagent.
     const rendered = JSON.stringify((yield* llm.inputs).at(-1)?.messages)
-    expect(rendered).toContain("由显式 /analyze 启动的隔离子会话单次执行")
-    expect(rendered).toContain("DFX_USER_ARGUMENTS")
+    expect(rendered).toContain("FIXTURE_ANALYSIS_ARGUMENTS")
     expect(rendered).toContain("analyze crash.log")
-    expect(rendered).toContain("dfx-summary")
+    expect(rendered).toContain("analysis-summary")
   }),
 )
 

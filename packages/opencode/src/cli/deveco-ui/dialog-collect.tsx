@@ -5,10 +5,11 @@ import { DialogConfirmButtons } from '@opencode-ai/tui/ui/dialog-confirm';
 import { useToast } from '@opencode-ai/tui/ui/toast';
 import { useI18n } from '@opencode-ai/tui/i18n';
 import { createStore } from 'solid-js/store';
-import { onMount, Show, createSignal, createMemo, createEffect, For } from 'solid-js';
+import { onMount, onCleanup, Show, createSignal, createMemo, createEffect, For } from 'solid-js';
 import { useBindings } from '@opencode-ai/tui/keymap';
 import { useTerminalDimensions } from '@opentui/solid';
 import open from 'open';
+import { Global } from '@opencode-ai/core/global';
 import { AGREEMENT_DEFAULTS } from '@/cli/deveco-legal';
 import { listLogFiles, packLogs, uploadLogs, logInfo, logError } from '@/cli/cmd/debug/log-export';
 import { deleteCrashedFlag } from '@/cli/crash-detect';
@@ -46,6 +47,13 @@ export function DialogCollect(props: { triggerType?: string }) {
 
   onMount(() => {
     dialog.setSize('large');
+  });
+
+  // Any dismissal path (Esc, X, replacement by another dialog) consumes the
+  // crashed flags the same way as the "Skip" button — otherwise the dialog
+  // would reappear on every startup until the user uploads or clicks Skip.
+  onCleanup(() => {
+    deleteCrashedFlag();
   });
 
   // Build the list of navigable fields: group headers + files
@@ -234,6 +242,10 @@ export function DialogCollect(props: { triggerType?: string }) {
         </text>
       </box>
 
+      <box paddingLeft={4} paddingRight={4}>
+        <text fg={theme.textMuted}>{t('dialog.collect_log_dir')}: {Global.Path.log}</text>
+      </box>
+
       <Show when={logFiles().length === 0}>
         <box paddingLeft={4} paddingRight={4}>
           <text fg={theme.textMuted}>No log files found</text>
@@ -322,6 +334,10 @@ export function DialogCollect(props: { triggerType?: string }) {
           </For>
         </scrollbox>
       </Show>
+
+      <box paddingLeft={4} paddingRight={4}>
+        <text fg={theme.textMuted}>{t('dialog.collect_privacy_notice')}</text>
+      </box>
 
       <Show when={errorMsg()}>
         <box paddingLeft={4} paddingRight={4}>

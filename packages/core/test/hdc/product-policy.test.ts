@@ -118,11 +118,11 @@ describe("SEC2-004: Product policy matrix (§1/§2)", () => {
     expect(policy.productCeiling).toBe("allow")
   })
 
-  // 验证: install 默认 ask, 上限 allow (需用户审批, 可持久化)
-  it("install_start: default=ask, ceiling=allow", () => {
+  // 验证: install 默认 allow, 上限 allow
+  it("install_start: default=allow, ceiling=allow", () => {
     const op = mk({ kind: "install", packagePath: "/app.hap" })
     const policy = getProductPolicy(op)
-    expect(policy.productDefault).toBe("ask")
+    expect(policy.productDefault).toBe("allow")
     expect(policy.productCeiling).toBe("allow")
   })
 
@@ -134,12 +134,12 @@ describe("SEC2-004: Product policy matrix (§1/§2)", () => {
     expect(policy.productCeiling).toBe("allow")
   })
 
-  // 验证: 应用生命周期 (uninstall) 默认 ask, 上限 ask (不允许持久化 allow)
-  it("app_lifecycle: default=ask, ceiling=ask", () => {
+  // 验证: 应用生命周期 (uninstall) 默认 allow, 上限 allow
+  it("app_lifecycle: default=allow, ceiling=allow", () => {
     const op = mk({ kind: "uninstall", bundleName: "com.example.app" })
     const policy = getProductPolicy(op)
-    expect(policy.productDefault).toBe("ask")
-    expect(policy.productCeiling).toBe("ask")
+    expect(policy.productDefault).toBe("allow")
+    expect(policy.productCeiling).toBe("allow")
   })
 
   // 验证: 设备文件变更 (shell rm) 默认 ask, 上限 ask (每次需审批)
@@ -203,14 +203,14 @@ describe("SEC2-004/007: canAlwaysAllow (§3)", () => {
     expect(canAlwaysAllow(mk({ kind: "appControl", action: "aa start", bundleName: "com.example.app" }))).toBe(true)
   })
 
-  // 验证: aa force-stop (app_lifecycle, ceiling=ask) 不提供 Always allow
-  it("aa force-stop (ceiling=ask) → false", () => {
-    expect(canAlwaysAllow(mk({ kind: "appControl", action: "aa force-stop", bundleName: "com.example.app" }))).toBe(false)
+  // 验证: aa force-stop (app_lifecycle, ceiling=allow) 提供 Always allow
+  it("aa force-stop (ceiling=allow) → true", () => {
+    expect(canAlwaysAllow(mk({ kind: "appControl", action: "aa force-stop", bundleName: "com.example.app" }))).toBe(true)
   })
 
-  // 验证: uninstall (ceiling=ask) 不允许持久化 → canAlwaysAllow=false
-  it("uninstall (ceiling=ask) → false", () => {
-    expect(canAlwaysAllow(mk({ kind: "uninstall", bundleName: "com.example" }))).toBe(false)
+  // 验证: uninstall (ceiling=allow) 允许持久化 → canAlwaysAllow=true
+  it("uninstall (ceiling=allow) → true", () => {
+    expect(canAlwaysAllow(mk({ kind: "uninstall", bundleName: "com.example" }))).toBe(true)
   })
 
   // 验证: system_state (ceiling=deny) 不允许持久化 → canAlwaysAllow=false

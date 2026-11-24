@@ -1,5 +1,15 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
+import {
+  batch,
+  createContext,
+  createEffect,
+  createSignal,
+  onCleanup,
+  Show,
+  useContext,
+  type JSX,
+  type ParentProps,
+} from "solid-js"
 import { useTheme } from "../context/theme"
 import { MouseButton, Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
@@ -72,6 +82,7 @@ export function Dialog(
 }
 
 function init() {
+  const [automaticBlockers, setAutomaticBlockers] = createSignal(0)
   const [store, setStore] = createStore({
     stack: [] as {
       element: JSX.Element
@@ -144,6 +155,19 @@ function init() {
   }))
 
   return {
+    get canOpenAutomatic() {
+      return store.stack.length === 0 && automaticBlockers() === 0
+    },
+    /** Inline onboarding can defer automatic dialogs without opening a dialog of its own. */
+    blockAutomatic() {
+      let active = true
+      setAutomaticBlockers((count) => count + 1)
+      return () => {
+        if (!active) return
+        active = false
+        setAutomaticBlockers((count) => count - 1)
+      }
+    },
     clear() {
       for (const item of store.stack) {
         if (item.onClose) item.onClose()

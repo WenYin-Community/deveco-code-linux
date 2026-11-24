@@ -4,7 +4,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 import { define, type ExecuteResult } from "../../tool"
-import { resolveUIVerifyParams } from "../../ui-verification/ui-verification-tool"
+import { resolveVisionModel } from "@/provider/vision-model"
 import { formatError, readLimitedText, resolveChatCompletionEndpoint, resolveWorktree } from "../utils"
 import DESCRIPTION from "./description.txt"
 import COMPARISON_PROMPT from "./comparison-prompt.txt"
@@ -75,7 +75,7 @@ export const CompareImagesTool: ReturnType<
       execute: (args, ctx): Effect.Effect<ExecuteResult<{ error?: string }>> =>
         Effect.gen(function* () {
           const worktree = yield* Effect.promise(() => resolveWorktree(ctx, sessions))
-          const params = yield* Effect.promise(() => resolveUIVerifyParams(worktree))
+          const params = yield* Effect.promise(() => resolveVisionModel(worktree))
 
           if (!params.baseURL || !params.apiKey || !params.modelName) {
             return {
@@ -192,10 +192,10 @@ async function compareWithVisionModel(input: VisionModelInput): Promise<string> 
 
 async function requestVisionModel(input: VisionModelInput, retry = true): Promise<Response> {
   const response = await fetchVisionModel(input).catch(async (error) => {
-      if (!retry) throw error
-      await Bun.sleep(RETRY_DELAY_MS)
-      return fetchVisionModel(input)
-    })
+    if (!retry) throw error
+    await Bun.sleep(RETRY_DELAY_MS)
+    return fetchVisionModel(input)
+  })
 
   if (!retry || response.status < 500) return response
   await response.body?.cancel()

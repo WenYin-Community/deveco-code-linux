@@ -52,11 +52,11 @@ describe("SEC2-004: evaluateKnownPolicy output (§4)", () => {
     expect(result.productCeiling).toBe("deny")
   })
 
-  // 验证: install 默认 ask, ceiling=allow (允许用户审批后持久化)
-  it("install: effect=ask, ceiling=allow", () => {
+  // 验证: install 默认 allow, ceiling=allow
+  it("install: effect=allow, ceiling=allow", () => {
     const op = mk({ kind: "install", packagePath: "/app.hap" })
     const result = evaluateKnownPolicy(op)
-    expect(result.effect).toBe("ask")
+    expect(result.effect).toBe("allow")
     expect(result.productCeiling).toBe("allow")
   })
 
@@ -107,11 +107,11 @@ describe("SEC2-005: evaluateFallbackPolicy (§1/§2/§3)", () => {
     expect(result.productCeiling).toBe("ask")
   })
 
-  // 验证: 非 unclassified operation 走 fallback 时被重定向到 known policy (如 install 仍是 ask)
+  // 验证: 非 unclassified operation 走 fallback 时被重定向到 known policy (如 install 仍是 allow)
   it("non-unclassified operation redirected to known policy", () => {
     const op = mk({ kind: "install", packagePath: "/app.hap" })
     const result = evaluateFallbackPolicy(op)
     // Should fall back to evaluateKnownPolicy for known operations
-    expect(result.effect).toBe("ask")
+    expect(result.effect).toBe("allow")
   })
 })

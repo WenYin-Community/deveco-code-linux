@@ -1,5 +1,5 @@
 import { diffArrays } from "diff"
-import type { AiCodeAttributionEvent } from "../types"
+import type { CodeAttributionTotals } from "../types"
 
 export const ATTRIBUTION_SOURCE = {
   AI: "DevEcoAI",
@@ -181,7 +181,7 @@ export function attributeContent(previous: AttributedFile, content: string, sour
 export function countAddedLines(
   parentContent: string,
   committed: AttributedFile,
-): Omit<AiCodeAttributionEvent, "projectId"> {
+): Omit<CodeAttributionTotals, "projectId"> {
   const parentLines = splitLines(parentContent)
   const committedLines = splitLines(committed.content)
   let committedIndex = 0

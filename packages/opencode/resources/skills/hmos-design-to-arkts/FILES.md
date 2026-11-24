@@ -133,7 +133,7 @@ references/capabilities/hmos-d2a-solution-design/INSTRUCTIONS.md
 references/capabilities/hmos-d2a-ui-reconstruction-score/INSTRUCTIONS.md
 
 # --- Evals (dev-time) ---
-# @note evals/evals.json 定义入口决策点校验用例（来源识别/双来源冲突/参数冲突/缺 node-id 澄清/sections+extractSvg 图标流程/10003 席位门槛 blocked），开发态产物，运行时不加载
+# @note evals/evals.json 定义入口决策点校验用例（来源识别/双来源冲突/参数冲突/缺 node-id 澄清/sections+extractSvg 图标流程/10003 席位门槛 blocked/MasterGo 客户端不可用时来源预检提前提示两路径），开发态产物，运行时不加载
 evals/evals.json
 
 # --- MasterGo Full/Fast ---
@@ -158,6 +158,8 @@ references/mastergo/stage-catalog-fast.json
 references/mastergo/stage-catalog-full.json
 scripts/mastergo-source.mjs
 scripts/mastergo-capture.mjs
+# @note scripts/mastergo-preflight.mjs 是 MasterGo 来源预检：`init` 前探测桌面客户端本地服务端口（默认 127.0.0.1:30678），输出 {status,endpoint[,reason]}；--connection 传连接文件，只有其中 local 连接的 loopback --url 带显式端口才改探测地址（无端口或无法解析按缺省回落默认地址），精确定址用 --endpoint（须为完整 http:// 或 https:// URL 且带显式端口；80/443 会被 URL 归一化掉，按缺端口处理）；--connection 与 --endpoint 互斥；不可达时入口按 mcp-setup 的判定顺序给出两条路（恢复客户端 / 纯 Magic + 手工导出或社区通道，否则 blocked）等用户选定
+scripts/mastergo-preflight.mjs
 scripts/mastergo-connection.mjs
 scripts/mastergo-evidence.mjs
 scripts/mastergo-community-start.mjs

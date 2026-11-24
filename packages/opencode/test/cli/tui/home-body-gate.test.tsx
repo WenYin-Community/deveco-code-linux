@@ -20,7 +20,7 @@ import { ExitProvider } from "@opencode-ai/tui/context/exit"
 import { ArgsProvider } from "@opencode-ai/tui/context/args"
 import { PromptRefProvider } from "@opencode-ai/tui/context/prompt"
 import { RouteProvider } from "@opencode-ai/tui/context/route"
-import { DialogProvider } from "@opencode-ai/tui/ui/dialog"
+import { DialogProvider, useDialog, type DialogContext } from "@opencode-ai/tui/ui/dialog"
 import { ToastProvider } from "@opencode-ai/tui/ui/toast"
 import { DevEcoHomeBody, resetDevecoHomeCheck } from "@/cli/deveco-ui/home-body"
 import { ProductAgreementGate } from "@/cli/deveco-ui/agreement-panel"
@@ -186,7 +186,13 @@ function makeHarness(
   home: () => boolean,
   openHome: () => void,
   session: { mounted: number; disposed: number },
+  captureDialog: (dialog: DialogContext) => void,
 ) {
+  function ObserveDialog() {
+    captureDialog(useDialog())
+    return null
+  }
+
   return function Harness() {
     const renderer = useRenderer()
     const keymap = createDefaultOpenTuiKeymap(renderer)
@@ -201,6 +207,7 @@ function makeHarness(
                 <ThemeProvider mode="dark">
                   <ToastProvider>
                     <DialogProvider>
+                      <ObserveDialog />
                       <SDKProvider url="http://127.0.0.1:9" fetch={fetcher}>
                         <ProjectProvider>
                           <SyncContext.Provider value={sync}>
@@ -279,11 +286,15 @@ async function mount(options: MountOptions) {
   const sync = { ...initial, data }
   const [home, setHome] = createSignal(options.home ?? true)
   const session = { mounted: 0, disposed: 0 }
-  const Harness = makeHarness(tmp.path, fetcher, sync, home, () => setHome(true), session)
+  let dialog: DialogContext | undefined
+  const Harness = makeHarness(tmp.path, fetcher, sync, home, () => setHome(true), session, (value) => {
+    dialog = value
+  })
   const setup = await testRender(() => <Harness />, { width: 100, height: 40, kittyKeyboard: true })
   return {
     ...makePanelHelpers(setup, server, tmp),
     session,
+    canOpenAutomatic: () => dialog?.canOpenAutomatic,
     openSession: () => setHome(false),
     refreshProviders: () => bumpProviderRevision(sync.data),
   }
@@ -314,11 +325,13 @@ test("accepting an online update on restored startup clears the old gate decisio
     env: { studioConfigured: true },
   })
   await panel.frame("I have read and agree")
+  expect(panel.canOpenAutomatic()).toBe(false)
   panel.server.uploadState = "uploaded"
   await panel.setup.mockInput.typeText(" ")
   await panel.frame("[✓]")
   panel.setup.mockInput.pressEnter()
   await panel.frame("PROMPT_READY")
+  expect(panel.canOpenAutomatic()).toBe(true)
   panel.openSession()
   expect(await panel.frame("SESSION_READY")).not.toContain("PROMPT_READY")
 })
@@ -518,6 +531,7 @@ test("a later gate decision is not shadowed by the real-name flag of an earlier 
 test("refreshing agreement status keeps the active session mounted", async () => {
   await using panel = await mount({ home: false, accepted: true, uploadState: "uploaded" })
   await panel.frame("SESSION_READY")
+  expect(panel.canOpenAutomatic()).toBe(true)
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
   panel.server.read = release.promise
@@ -526,12 +540,14 @@ test("refreshing agreement status keeps the active session mounted", async () =>
     panel.refreshProviders()
     await entered.promise
     expect(await panel.frame("SESSION_READY")).not.toContain("Checking setup")
+    expect(panel.canOpenAutomatic()).toBe(false)
     expect(panel.session).toEqual({ mounted: 1, disposed: 0 })
   } finally {
     release.resolve()
     await panel.settle()
   }
   expect(panel.session).toEqual({ mounted: 1, disposed: 0 })
+  expect(panel.canOpenAutomatic()).toBe(true)
 })
 
 test("an old home check cannot overwrite a newer login decision", async () => {

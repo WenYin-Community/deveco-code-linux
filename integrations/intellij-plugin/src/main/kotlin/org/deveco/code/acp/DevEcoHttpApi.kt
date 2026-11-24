@@ -153,6 +153,7 @@ internal class DevEcoHttpApi(baseUrl: String, username: String?, password: Strin
         val parentID: String? = null,
         val partIds: Set<String> = emptySet(),
         val hasSubtaskPart: Boolean = false,
+        val finish: String? = null,
         // The turn's user message carries only a compaction part: ACP replay emits
         // no chunk for it, so callers reconciling replayed USER rows must skip it.
         val hasCompactionPart: Boolean = false,

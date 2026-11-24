@@ -282,7 +282,8 @@
     "show_tips": "显示提示",
     "hide_tips": "隐藏提示",
     "commands": "命令",
-    "release_notes": "查看版本说明"
+    "release_notes": "查看版本说明",
+    "announcements": "查看 DevEco Code 公告"
   },
   "dialog": {
     "search": "搜索",
@@ -329,6 +330,7 @@
       "on": "开",
       "off": "关",
       "disabled_not_in_whitelist": "不在 allowed_profiles 白名单内",
+      "disabled_windows_unsupported": "Windows 不支持：{{reason}}",
       "custom": "Custom",
       "custom_desc": "自定义 profile（从配置文件查看）",
       "custom_edit_hint": "自定义 profile 只能在配置文件中编辑",
@@ -575,15 +577,16 @@
     "memory_content_title": "记忆：{{name}}",
     "memory_missing": "记忆文件已不存在",
     "memory_expired": "已过期",
-    "memory_config_note": "插件初始化时读取，重启后生效",
+    "memory_config_note": "修改后立即生效",
+    "memory_advanced_hint": "请先开启自动记忆",
     "memory_setting": {
       "auto_memory": "自动记忆",
-      "auto_dream": "自动梦境整合",
-      "extraction": "自动提取记忆",
-      "recall": "记忆召回",
-      "recall_visible": "对话中显示召回",
-      "write_visible": "对话中显示写入",
-      "skills": "技能沉淀"
+      "auto_dream": "自动整合",
+      "extraction": "自动提取",
+      "recall": "自动召回",
+      "recall_visible": "在对话中显示记忆召回",
+      "write_visible": "在对话中显示记忆写入",
+      "skills": "技能提取"
     },
     "memory_delete_title": "删除记忆：{{name}}",
     "memory_delete_message": "确定删除这条记忆文件？删除后插件无法再召回它。",
@@ -699,6 +702,11 @@
     "action_back": "返回",
     "release_notes_prev": "上一个版本",
     "release_notes_next": "下一个版本",
+    "announcements_title": "公告",
+    "announcements_unread": "{{count}} 条未读",
+    "announcements_empty": "暂无公告",
+    "announcements_read_failed": "标记已读失败",
+    "announcements_link_failed": "无法在系统默认浏览器中打开链接",
     "dialog_title_volume": "提示音音量",
     "dialog_title_sound_settings": "通知设置",
     "dialog_title_customize_sounds": "自定义音效",
@@ -725,7 +733,9 @@
     "collect_footer_click": "切换",
     "collect_footer_click_key": "空格",
     "collect_footer_view_privacy": "查看隐私政策",
-    "collect_footer_view_privacy_key": "v"
+    "collect_footer_view_privacy_key": "v",
+    "collect_privacy_notice": "发送的日志中包含DevEco Code的应用使用信息，我们将会根据隐私声明使用你提供的信息进行数据统计或产品问题定位，以此提升产品使用体验。日志中可能会打印关键信息资产等敏感信息，请在上传前做好识别、删除，否则，华为对由此发生的敏感信息泄漏不承担责任。",
+    "collect_log_dir": "日志目录"
   },
   "permission": {
     "no_diff": "没有提供差异信息",
@@ -839,7 +849,9 @@
     "plugin_internal": "内部",
     "plugin_external": "外部",
     "memory": "记忆",
-    "memory_settings": "记忆配置",
+    "memory_settings": "记忆设置",
+    "memory_advanced": "高级记忆设置",
+    "memory_skills": "技能设置",
     "memory_items": "记忆列表"
   },
   "prompt": {
@@ -1176,6 +1188,9 @@
     },
     "hmos-design-to-arkts": {
       "desc": "处理 Pixso 或 Figma 设计稿转 HarmonyOS ArkTS 代码的任务。当用户使用 `$hmos-design-to-arkts`、提供 Pixso/Figma 链接、Pixso 客户端选中节点、设计稿 DSL/截图/本地资源，或要求把 UI 设计稿转换为 ArkTS 时，必须使用本 skill"
+    },
+    "ui-verification-with-deeplink": {
+      "desc": "在 DevEco Code 中，为 HarmonyOS 应用临时添加受控的自定义 scheme URI 路由，简化 UI 意图校验。使用 `devecocli build` 编译、`devecocli run --skip-build` 部署，并调用 verify_ui 执行精简后的测试计划，随后还原源文件和已安装的应用，即使项目未使用 Git 也需完成还原。当用户要求简化某个功能的校验、简化 UI 意图校验、减少校验步骤、优化 verify_ui 流程或跳过重复的测试准备时，即使未提及 URI 或 DeepLink，也应使用此技能。当 UI 测试包含登录、数据准备、多层导航、列表查找或参数输入，且这些前置步骤可在不改变待测业务行为的情况下被替代时，也应使用此技能。"
     }
   }
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import { chmod, stat } from "node:fs/promises"
 import { HttpServer } from "effect/unstable/http"
@@ -62,19 +62,19 @@ type TestServices =
 type TestScope = Scope.Scope | TestServices
 type RipgrepBackup = { data: Uint8Array; mode: number } | undefined
 type RipgrepFixture = { target: string; backup: RipgrepBackup; unlock: () => void }
+type ServerFetchOptions = {
+  password?: string
+  username?: string
+  onRequest?: (request: Request) => void
+  onResponse?: (response: Response) => void
+}
 
 let ripgrepFixtureLock = Promise.resolve()
 
 function client(
   serverPath: ServerPath,
   directory?: string,
-  input?: {
-    password?: string
-    username?: string
-    headers?: Record<string, string>
-    workspaceID?: string
-    onRequest?: (request: Request) => void
-  },
+  input?: ServerFetchOptions & { headers?: Record<string, string>; workspaceID?: string },
 ) {
   return serverFetch(serverPath, input).pipe(
     Effect.map((fetch) =>
@@ -89,10 +89,7 @@ function client(
   )
 }
 
-function serverFetch(
-  serverPath: ServerPath,
-  input?: { password?: string; username?: string; onRequest?: (request: Request) => void },
-) {
+function serverFetch(serverPath: ServerPath, input?: ServerFetchOptions) {
   return HttpServer.HttpServer.use((server) =>
     Effect.sync(() => {
       void serverPath
@@ -104,7 +101,9 @@ function serverFetch(
           const source = request instanceof Request ? request : new Request(request, init)
           input?.onRequest?.(source)
           const url = new URL(source.url)
-          return globalThis.fetch(new Request(new URL(`${url.pathname}${url.search}`, baseUrl), source))
+          const response = await globalThis.fetch(new Request(new URL(`${url.pathname}${url.search}`, baseUrl), source))
+          input?.onResponse?.(response)
+          return response
         },
         { preconnect: globalThis.fetch.preconnect },
       ) satisfies typeof globalThis.fetch
@@ -219,27 +218,37 @@ function expectStatus(request: () => Promise<{ response: Response }>, status: nu
   )
 }
 
-function firstEvent(open: (signal: AbortSignal) => Promise<{ stream: AsyncIterator<unknown> }>) {
-  return Effect.acquireRelease(
-    Effect.sync(() => new AbortController()),
-    (controller) => Effect.sync(() => controller.abort()),
-  ).pipe(
-    Effect.flatMap((controller) =>
-      Effect.acquireRelease(
+function firstEvent(
+  open: (signal: AbortSignal) => Promise<{ stream: AsyncIterator<unknown> }>,
+  headers?: Deferred.Deferred<Response, unknown>,
+) {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const controller = new AbortController()
+      const events = yield* Effect.acquireRelease(
         call(() => open(controller.signal)),
-        (events) => call(async () => void (await events.stream.return?.(undefined))).pipe(Effect.ignore),
-      ).pipe(
-        Effect.flatMap((events) =>
-          call(() => events.stream.next()).pipe(
-            Effect.timeoutOrElse({
-              duration: "1 second",
-              orElse: () => Effect.fail(new Error("timed out waiting for SDK event")),
-            }),
-          ),
-        ),
-        Effect.map((result) => result.value),
-      ),
-    ),
+        (events) =>
+          call(async () => {
+            controller.abort()
+            await events.stream.return?.(undefined)
+          }).pipe(Effect.ignoreCause),
+      )
+
+      // The SDK starts the request on next(). A cold project may need to initialize before it sends headers.
+      const next = yield* call(() => events.stream.next()).pipe(Effect.forkScoped)
+      if (headers) {
+        const response = yield* awaitWithTimeout(
+          Deferred.await(headers),
+          "timed out opening SDK event stream",
+          "10 seconds",
+        )
+        expect(response.status).toBe(200)
+        expect(response.headers.get("content-type")).toContain("text/event-stream")
+      }
+      const result = yield* awaitWithTimeout(Fiber.join(next), "timed out waiting for SDK event", "1 second")
+      expect(result.done).toBe(false)
+      return result.value
+    }),
   )
 }
 
@@ -298,10 +307,7 @@ function httpapiInstance<A, E>(
   )
 }
 
-function serverPathParity<A, E>(
-  name: string,
-  scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>,
-) {
+function serverPathParity<A, E>(name: string, scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>) {
   it.live(name, scenario("raw"))
 }
 
@@ -514,11 +520,23 @@ describe("HttpApi SDK", () => {
   )
 
   serverPathParity("matches generated SDK instance event stream", (serverPath) =>
-    withStandardProject(serverPath, ({ sdk }) =>
-      firstEvent((signal) => sdk.event.subscribe(undefined, { signal })).pipe(
-        Effect.map((event) => ({ type: record(record(event).payload).type })),
-      ),
-    ),
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped({ config: { formatter: false, lsp: false } })
+      const headers = yield* Deferred.make<Response, unknown>()
+      const sdk = yield* client(serverPath, directory, {
+        onResponse: (response) => Deferred.doneUnsafe(headers, Effect.succeed(response)),
+      })
+      const event = yield* firstEvent(
+        (signal) =>
+          sdk.event.subscribe(undefined, {
+            signal,
+            sseMaxRetryAttempts: 1,
+            onSseError: (error) => Deferred.doneUnsafe(headers, Effect.fail(error)),
+          }),
+        headers,
+      )
+      expect(event).toMatchObject({ type: "server.connected", properties: {} })
+    }),
   )
 
   serverPathParity("matches generated SDK missing session errors", (serverPath) =>
@@ -819,7 +837,7 @@ describe("HttpApi SDK", () => {
   )
 
   serverPathParity("matches generated SDK prompt no-reply routes", (serverPath) =>
-    withStandardProject(serverPath, ({ sdk }) =>
+    withFakeLlm(serverPath, ({ sdk, llm }) =>
       Effect.gen(function* () {
         const session = yield* capture(() => sdk.session.create({ title: "prompt" }))
         const sessionID = String(record(session.data).id)
@@ -840,6 +858,13 @@ describe("HttpApi SDK", () => {
           }),
         )
         const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+
+        expect(prompt.status).toBe(200)
+        expect(asyncPrompt.status).toBe(204)
+        expect(
+          array(messages.data).flatMap((item) => array(record(item).parts).map((part) => record(part).text)),
+        ).toContain("async hello")
+        expect(yield* llm.calls).toBe(0)
 
         return {
           statuses: statuses({ session, prompt, asyncPrompt, messages }),

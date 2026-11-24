@@ -328,6 +328,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      if (ctx.payload.noReply) {
+        // Tool handoffs must be visible to the running session before their
+        // caller resumes. This branch only persists input; it runs no model.
+        yield* promptSvc
+          .prompt({ ...ctx.payload, sessionID: ctx.params.sessionID })
+          .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        return HttpApiSchema.NoContent.make()
+      }
       yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -369,7 +377,30 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         return { goal: null, replaced: false }
       }
       if (ctx.payload.action === "resume") {
-        const current = yield* goals.resume(ctx.params.sessionID, ctx.payload.tokenBudget)
+        const current = yield* goals.resume(ctx.params.sessionID, {
+          tokenBudget: ctx.payload.tokenBudget,
+          admitPrompt: Effect.fnUntraced(function* (goal) {
+            const lastBuildPrompt = yield* session
+              .findMessage(
+                ctx.params.sessionID,
+                (message) => message.info.role === "user" && message.info.agent === SessionGoal.AGENT,
+              )
+              .pipe(Effect.orDie)
+            const previous = Option.getOrUndefined(lastBuildPrompt)?.info
+            const model = previous?.role === "user" ? previous.model : undefined
+            const message = yield* promptSvc
+              .prompt({
+                sessionID: ctx.params.sessionID,
+                agent: SessionGoal.AGENT,
+                model,
+                variant: model?.variant,
+                noReply: true,
+                parts: [{ type: "text", text: SessionGoal.continuationPrompt(goal), synthetic: true }],
+              })
+              .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+            return message.info.id
+          }),
+        })
         if (current?.budgetExhaustedAt != null) {
           return yield* Effect.fail(
             new InvalidRequestError({
@@ -512,12 +543,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       // Fork the aside as a background fiber; return immediately
-      yield* asideSvc.btw({
-        sessionID: ctx.params.sessionID,
-        asideID: ctx.payload.asideID,
-        text: ctx.payload.text,
-        model: ctx.payload.model,
-      }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+      yield* asideSvc
+        .btw({
+          sessionID: ctx.params.sessionID,
+          asideID: ctx.payload.asideID,
+          text: ctx.payload.text,
+          model: ctx.payload.model,
+        })
+        .pipe(Effect.forkIn(scope, { startImmediately: true }))
       return { asideID: ctx.payload.asideID }
     })
 

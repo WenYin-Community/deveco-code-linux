@@ -1,11 +1,13 @@
 import { useI18n } from "@opencode-ai/tui/i18n"
-import { createEffect, createMemo, createResource, createSignal, Show, type ParentProps } from "solid-js"
+import { createEffect, createMemo, createRenderEffect, createResource, createSignal, onCleanup, Show, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useSync, providerRevision } from "@opencode-ai/tui/context/sync"
+import { useAnnouncements } from "@opencode-ai/tui/context/announcements"
 import { useSDK } from "@opencode-ai/tui/context/sdk"
 import { useTheme } from "@opencode-ai/tui/context/theme"
 import { useBindings } from "@opencode-ai/tui/keymap"
 import { Link } from "@opencode-ai/tui/ui/link"
+import { useDialog } from "@opencode-ai/tui/ui/dialog"
 import { DialogSelect } from "@opencode-ai/tui/ui/dialog-select"
 import open from "open"
 import { hasDevecoOAuthEntry } from "@/plugin/deveco"
@@ -25,6 +27,7 @@ export function AgreementPanel(props: {
 }) {
   const { t, lng } = useI18n()
   const sdk = useSDK()
+  const announcements = useAnnouncements()
   const { theme } = useTheme()
   const [state, setState] = createStore({ checked: false, busy: false, error: "" })
   const [agreement, { refetch }] = createResource(async () => {
@@ -89,6 +92,7 @@ export function AgreementPanel(props: {
       setState("checked", false)
       return
     }
+    announcements.setAgreement(agreement.error ? undefined : agreement())
     props.onComplete?.()
   }
 
@@ -285,6 +289,7 @@ export function AgreementReviewDialog(props: { onComplete: () => void }) {
   const { t } = useI18n()
   const { theme } = useTheme()
   const sdk = useSDK()
+  const announcements = useAnnouncements()
   const [state, setState] = createStore({ checked: false, busy: false, error: "" })
   const [agreement, { refetch }] = createResource(async () => {
     const result = await sdk.client.global.productAgreement({ throwOnError: true })
@@ -299,10 +304,11 @@ export function AgreementReviewDialog(props: { onComplete: () => void }) {
     setState("checked", true)
     setState({ busy: true, error: "" })
     try {
-      await sdk.client.global.acceptProductAgreement(
+      const result = await sdk.client.global.acceptProductAgreement(
         { version: current.version, accepted: true, serviceRevision: current.upload.revision },
         { throwOnError: true },
       )
+      announcements.setAgreement(result.data)
       props.onComplete()
     } catch (error) {
       setState("error", error instanceof Error ? error.message : t("account.update_failed"))
@@ -397,6 +403,8 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
   const { t } = useI18n()
   const { theme } = useTheme()
   const sdk = useSDK()
+  const announcements = useAnnouncements()
+  const dialog = useDialog()
   const [agreement, { refetch }] = createResource(
     () => (props.home ? undefined : providerRevision(sync.data)),
     async () => {
@@ -405,6 +413,11 @@ export function ProductAgreementGate(props: ParentProps<{ home: boolean; onConse
       return result.data
     },
   )
+  createRenderEffect(() => {
+    if (props.home) return
+    if (!agreement.loading) announcements.setAgreement(agreement.error ? undefined : agreement())
+    if (agreement.loading || !agreementAllowed(agreement)) onCleanup(dialog.blockAutomatic())
+  })
   createEffect(() => {
     if (props.home) return
     if (!agreementSettled(agreement)) return

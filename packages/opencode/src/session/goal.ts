@@ -90,7 +90,10 @@ export interface Interface {
   }) => Effect.Effect<Info | null>
   readonly pause: (sessionID: SessionID, reason?: string) => Effect.Effect<Info | null>
   readonly complete: (sessionID: SessionID, reason?: string) => Effect.Effect<Info | null>
-  readonly resume: (sessionID: SessionID, tokenBudget?: number | null) => Effect.Effect<Info | null>
+  readonly resume: <E>(
+    sessionID: SessionID,
+    input: { tokenBudget?: number | null; admitPrompt: (goal: Info) => Effect.Effect<MessageID, E> },
+  ) => Effect.Effect<Info | null, E>
   readonly clear: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly canUpdateFrom: (sessionID: SessionID, messageID: MessageID) => Effect.Effect<boolean>
   readonly tokenUsage: (sessionID: SessionID) => Effect.Effect<number>
@@ -236,27 +239,28 @@ export const layer = Layer.effect(
       return yield* stop(sessionID, "complete", reason)
     })
 
-    const resume = Effect.fn("SessionGoal.resume")(function* (sessionID: SessionID, tokenBudget?: number | null) {
+    const resume: Interface["resume"] = Effect.fn("SessionGoal.resume")(function* <E>(
+      sessionID: SessionID,
+      input: { tokenBudget?: number | null; admitPrompt: (goal: Info) => Effect.Effect<MessageID, E> },
+    ) {
       const current = yield* get(sessionID)
       if (!current || current.status !== "paused") return current
-      let resumedBudget = current.tokenBudget
-      if (current.budgetExhaustedAt !== null) {
-        if (tokenBudget === undefined) return current
-        const usedTokens = yield* tokenUsage(sessionID)
-        if (tokenBudget !== null && usedTokens >= tokenBudget) return current
-        resumedBudget = tokenBudget
-      }
+      const tokenBudget = current.budgetExhaustedAt === null ? current.tokenBudget : input.tokenBudget
+      if (tokenBudget === undefined) return current
+      if (current.budgetExhaustedAt !== null && tokenBudget !== null && current.usedTokens >= tokenBudget)
+        return current
+
+      const sourceMessageID = yield* input.admitPrompt(current)
+      const latest = yield* get(sessionID)
+      if (!latest || latest.status !== "paused" || latest.createdAt !== current.createdAt) return latest
       const now = Date.now()
-      const messages = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
-      const sourceMessageID =
-        messages.findLast((message) => message.info.role === "user")?.info.id ?? messages.at(-1)?.info.id ?? null
       return yield* write(sessionID, {
-        ...current,
+        ...latest,
         status: "active",
         updatedAt: now,
         activeSince: now,
         reason: null,
-        tokenBudget: resumedBudget,
+        tokenBudget,
         budgetExhaustedAt: null,
         sourceMessageID,
       })

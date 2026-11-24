@@ -192,12 +192,13 @@ passed 流程：
 5. 执行阶段特有确定性校验：Pixso Full 阶段 9 视觉校准证据、Figma Full 阶段 5 视觉校准证据；others-html 与 others-visual 的 Full 阶段 5 都走**评分**校验——报告 schema、轮次、结束原因、评分产物与 checks 与 Figma 阶段 5 同构，另加评分输入完整性校验（candidate / reference 规范路径与哈希对账、各轮截图互不相同、单轮评分目录唯一、报告分数与脚本产物一致、忽略带取值受上限约束）与源独特护栏（临时预览必须字节恢复、确认快照不得变化、参考帧不得为拼接图或解裁预览，工程根缺失时修复对账拒收）；其余按来源：others-visual 阶段 1 校验截图/`visual_probe`/识别三份证据与 spec↔probe 对账、阶段 2 校验六文件确认快照、`stage2/initial-build-report.json`（success/command/exitCode/completedAt）与实现保真（确认字号/圆角/色值必须落盘）、阶段 4 复核实现保真；所有来源的阶段 1 必须存在合法需求澄清证据（见下）；Pixso 阶段 3 现场完成时必须存在通过 repo-context 断言的 `stage2/repo-context.json`，Pixso 阶段 5 现场完成时 `design-doc.md` 必须包含与 repo-context 一致的存量复用结论（契约见 [repo-context.md](repo-context.md)；两者均为 live-only，已完成阶段的重放不追溯）。
 
    **源独特策略（不影响主流源行为）**：others-html 额外执行时间戳文件窗（`clarificationTimestamp` 不得为整分零秒、不得早于文件写入 15 分钟以上或晚于写入）、ledger 时序校验（首笔 `invokedAt` 不得晚于 ledger 文件创建、末笔 `completedAt` 不得晚于 ledger 最后写入）；others-visual 的构建报告与确认记录也执行文件时间窗。这些是有意的源独特加固，不是主流源的通用要求；主流源只要求合法 ISO 字段。
-6. 构造 canonical passed Gate 并写入。
-7. Figma 阶段 2 passed 时，由 Controller 在 Gate 之后、state 推进之前原子更新 run-index 当前记录（见 [Figma run-index 语义](#figma-run-index-语义)）。
-8. 推进 `completedStages/currentStage/status`。
-9. 原子写 `workflow-state.json`。
-10. 重新生成 `todo-payload.json`。
-11. 返回下一动作。
+6. 最终阶段 `passed` 的 Full 运行在写 Gate 前校验交付评分证据：`<runDir>/final-visual-score.json` 必须存在、可解析，状态与来源合法；`recorded` 引用的评分 JSON 与证据文件必须位于 run 内且有效。缺失或无效时返回 `final_score_evidence_required`（含 `stage`、`artifactPath`、`reason`、`retry`），不写 Gate、不推进状态、不产生完成快照；补齐产物后按 `retry` 重试同一提交。`reason` 取值为 `missing`、`invalid_artifact`、`invalid_calibration`、`invalid_score_evidence`，其中 `invalid_calibration` 表示既有视觉校准报告不可用。Fast 记 `not_applicable`，可信 `skipped` 校准记 `skipped`，两者不受此校验约束；显式 `unavailable` 产物允许完成，其 `reason` 只保留在本地产物中。
+7. 构造 canonical passed Gate 并写入。
+8. Figma 阶段 2 passed 时，由 Controller 在 Gate 之后、state 推进之前原子更新 run-index 当前记录（见 [Figma run-index 语义](#figma-run-index-语义)）。
+9. 推进 `completedStages/currentStage/status`。
+10. 原子写 `workflow-state.json`。最终阶段写入的 `analytics.finalScore` 直接复用第 6 步校验得到的结构。
+11. 重新生成 `todo-payload.json`。
+12. 返回下一动作。
 
 blocked 流程：
 
@@ -239,6 +240,7 @@ Gate 必须先于 state 写入，因为已推进的 state 不允许缺少对应 
 - 非最终阶段 `passed`：返回 `nextRequiredAction: stage_start`，不指示立即调用 `todowrite`。
 - 最终阶段 `passed`：返回 `nextRequiredAction: sync_final_todo_then_finish` 和 `todoPayloadPath`，要求最终同步。
 - `blocked`：返回 `nextRequiredAction: resolve_blocking_issue`。
+- 最终阶段 `passed` 缺少可用交付评分：非零退出并返回 `final_score_evidence_required`，这是可纠正的拒绝，不是 `blocked`，补齐产物后重试同一 `stage`/`result`。
 
 不允许批量完成多个阶段。普通 `stage-complete` 后不得调用 `todowrite`。
 

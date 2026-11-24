@@ -24,6 +24,7 @@ async function loadSkillsFromDisk(): Promise<Record<string, Record<string, strin
       const files: Record<string, string> = {}
       const skillPath = path.join(skillsDir, entry.name)
       await walk(skillPath, skillPath, files)
+      if (!files["SKILL.md"]) continue
       result[entry.name] = files
     }
   } catch {
@@ -76,9 +77,7 @@ export namespace Defaults {
 
     // Backup user-installed skills before cleaning built-in skills
     const userSkillBackupDir = path.join(Global.Path.config, "skills")
-    yield* Effect.tryPromise(() =>
-      fs.readdir(dir, { withFileTypes: true }),
-    ).pipe(
+    yield* Effect.tryPromise(() => fs.readdir(dir, { withFileTypes: true })).pipe(
       Effect.flatMap((entries) =>
         Effect.forEach(
           entries.filter((e) => e.isDirectory()),
@@ -90,9 +89,9 @@ export namespace Defaults {
               // Copy user-installed skill to config directory
               const src = path.join(dir, entry.name)
               const dest = path.join(userSkillBackupDir, entry.name)
-              yield* Effect.tryPromise(() =>
-                fs.cp(src, dest, { recursive: true }),
-              ).pipe(Effect.catch(() => Effect.void))
+              yield* Effect.tryPromise(() => fs.cp(src, dest, { recursive: true })).pipe(
+                Effect.catch(() => Effect.void),
+              )
             }),
           { concurrency: "unbounded" },
         ),
@@ -101,13 +100,12 @@ export namespace Defaults {
     )
 
     // Clean up built-in skill subdirectories only, preserving user skills
-    const data = typeof DEVECO_DEFAULT_SKILLS !== "undefined"
-      ? DEVECO_DEFAULT_SKILLS
-      : yield* Effect.promise(() => loadSkillsFromDisk())
+    const data =
+      typeof DEVECO_DEFAULT_SKILLS !== "undefined"
+        ? DEVECO_DEFAULT_SKILLS
+        : yield* Effect.promise(() => loadSkillsFromDisk())
 
-    yield* Effect.tryPromise(() =>
-      fs.readdir(dir, { withFileTypes: true }),
-    ).pipe(
+    yield* Effect.tryPromise(() => fs.readdir(dir, { withFileTypes: true })).pipe(
       Effect.flatMap((entries) =>
         Effect.forEach(
           entries.filter((e) => e.isDirectory()),
@@ -116,9 +114,9 @@ export namespace Defaults {
               const subVersionFile = path.join(dir, entry.name, ".version")
               const isBuiltin = yield* fsys.existsSafe(subVersionFile)
               if (!isBuiltin) return
-              yield* Effect.tryPromise(() =>
-                fs.rm(path.join(dir, entry.name), { recursive: true, force: true }),
-              ).pipe(Effect.catch(() => Effect.void))
+              yield* Effect.tryPromise(() => fs.rm(path.join(dir, entry.name), { recursive: true, force: true })).pipe(
+                Effect.catch(() => Effect.void),
+              )
             }),
           { concurrency: "unbounded" },
         ),

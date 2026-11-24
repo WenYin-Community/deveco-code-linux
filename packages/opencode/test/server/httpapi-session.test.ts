@@ -25,6 +25,7 @@ import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
+import { SessionGoal } from "@/session/goal"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@opencode-ai/core/database/database"
@@ -38,7 +39,7 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 
 const originalWorkspaces = Flag.DEVECO_EXPERIMENTAL_WORKSPACES
 const workspaceLayer = Workspace.defaultLayer.pipe(
@@ -476,11 +477,16 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
-  it.instance(
+  it.live(
     "requires a larger token budget to resume an exhausted goal",
     () =>
       Effect.gen(function* () {
-        const test = yield* TestInstance
+        const llm = yield* TestLLMServer
+        const directory = yield* tmpdirScoped({
+          git: true,
+          config: { ...testProviderConfig(llm.url), model: "test/test-model" },
+        })
+        const headers = { "x-deveco-directory": directory, "content-type": "application/json" }
         const now = Date.now()
         const created = yield* createSession({
           title: "goal budget exhausted",
@@ -496,12 +502,14 @@ describe("session HttpApi", () => {
               reason: "token budget exhausted",
               tokenBudget: 1_000,
               budgetExhaustedAt: now,
+              usedTokens: 1_000,
             },
           },
-        })
+        }).pipe(provideInstanceEffect(directory))
+        const getSession = Session.use.get(created.id).pipe(provideInstanceEffect(directory))
 
         const response = yield* request(pathFor(SessionPaths.goal, { sessionID: created.id }), {
-          headers: { "x-deveco-directory": test.directory, "content-type": "application/json" },
+          headers,
           method: "POST",
           body: JSON.stringify({ action: "resume" }),
         })
@@ -511,25 +519,38 @@ describe("session HttpApi", () => {
           kind: "goalBudgetExhausted",
           message: "Goal budget exhausted. Increase it with /goal budget before resuming.",
         })
-        expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toMatchObject({
+        expect(SessionGoal.fromMetadata((yield* getSession).metadata)).toMatchObject({
           status: "paused",
           budgetExhaustedAt: now,
         })
 
-        const resumed = yield* requestJson<{ goal: { status: string; tokenBudget: number }; replaced: boolean }>(
+        yield* llm.text("partial progress", { usage: { input: 900, output: 100 } })
+        const resumed = yield* requestJson<{ goal: SessionGoal.Info; replaced: boolean }>(
           pathFor(SessionPaths.goal, { sessionID: created.id }),
           {
-            headers: { "x-deveco-directory": test.directory, "content-type": "application/json" },
+            headers,
             method: "POST",
             body: JSON.stringify({ action: "resume", tokenBudget: 2_000 }),
           },
         )
         expect(resumed).toMatchObject({
-          goal: { status: "active", tokenBudget: 2_000 },
+          goal: { status: "active", tokenBudget: 2_000, budgetExhaustedAt: null, usedTokens: 1_000 },
           replaced: false,
         })
-      }),
-    { git: true, config: { formatter: false, lsp: false } },
+        const exhaustedAgain = yield* pollWithTimeout(
+          getSession.pipe(
+            Effect.map((session) => {
+              const goal = SessionGoal.fromMetadata(session.metadata)
+              return goal?.status === "paused" ? goal : undefined
+            }),
+          ),
+          "resumed goal did not use the increased budget",
+          "10 seconds",
+        )
+        expect(exhaustedAgain).toMatchObject({ reason: "token budget exhausted", usedTokens: 2_000 })
+        expect(yield* llm.calls).toBe(1)
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    30_000,
   )
 
   it.instance(
@@ -553,6 +574,80 @@ describe("session HttpApi", () => {
         expect((yield* Session.use.get(created.id)).metadata?.deveco_goal).toBeUndefined()
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live(
+    "resumes a goal after stop or abort interrupts its model request",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+        const headers = { "x-deveco-directory": directory, "content-type": "application/json" }
+        const objective = "finish the interrupted task"
+
+        for (const action of ["stop", "abort"]) {
+          const callsBefore = yield* llm.calls
+          const session = yield* createSession({
+            title: `Interrupted goal: ${action}`,
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }).pipe(provideInstanceEffect(directory))
+          const goalPath = pathFor(SessionPaths.goal, { sessionID: session.id })
+          const history = Session.use.messages({ sessionID: session.id }).pipe(provideInstanceEffect(directory))
+          const goalCommand = (body: object) =>
+            requestJson<{ goal: SessionGoal.Info }>(goalPath, { headers, method: "POST", body: JSON.stringify(body) })
+
+          yield* llm.hang
+          const started = yield* goalCommand({
+            action: "start",
+            objective,
+            model: { providerID: "test", modelID: "test-model" },
+          })
+          yield* awaitWithTimeout(llm.wait(callsBefore + 1), "goal did not start a model request", "10 seconds")
+
+          if (action === "stop") yield* goalCommand({ action: "stop" })
+          if (action === "abort") {
+            yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: session.id }), {
+              headers,
+              method: "POST",
+            })
+          }
+          const interrupted = (yield* history).findLast((message) => message.info.role === "assistant")
+          expect(interrupted?.info).toMatchObject({ error: { name: "MessageAbortedError" } })
+
+          yield* llm.tool("update_goal", { status: "complete", reason: "verified" })
+          yield* llm.text("Goal finished")
+          const resumed = yield* goalCommand({ action: "resume" })
+          expect(resumed.goal).toMatchObject({ status: "active", createdAt: started.goal.createdAt, objective })
+          yield* awaitWithTimeout(llm.wait(callsBefore + 3), `goal did not resume after ${action}`, "10 seconds")
+          yield* pollWithTimeout(
+            requestJson<Record<string, unknown>>(SessionPaths.status, { headers }).pipe(
+              Effect.map((statuses) => (statuses[session.id] === undefined ? true : undefined)),
+            ),
+            "resumed goal did not finish running",
+            "10 seconds",
+          )
+
+          const messages = yield* history
+          const resumePrompt = messages.find((message) => message.info.id === resumed.goal.sourceMessageID)
+          expect(resumePrompt?.info.id).not.toBe(started.goal.sourceMessageID)
+          expect(resumePrompt?.parts).toContainEqual(
+            expect.objectContaining({
+              type: "text",
+              synthetic: true,
+              text: SessionGoal.continuationPrompt(resumed.goal),
+            }),
+          )
+          expect(messages.find((message) => message.info.id === interrupted?.info.id)?.info).toMatchObject({
+            error: { name: "MessageAbortedError" },
+          })
+          expect(JSON.stringify((yield* llm.inputs)[callsBefore + 1])).toContain(
+            "Continue working toward the active goal",
+          )
+          const current = yield* Session.use.get(session.id).pipe(provideInstanceEffect(directory))
+          expect(SessionGoal.fromMetadata(current.metadata)).toMatchObject({ status: "complete", reason: "verified" })
+        }
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    60_000,
   )
 
   it.live("uses the persisted session directory for prompt requests", () =>

@@ -43,6 +43,11 @@ jobs:
           cd packages/opencode
           bun run script/build.ts --target=linux-x64 --skip-install
 
+      - name: Install Harness dependencies
+        run: |
+          cd packages/opencode/dist/deveco-linux-x64
+          npm install --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Package
         id: package
         run: |

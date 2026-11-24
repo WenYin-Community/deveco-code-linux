@@ -11,6 +11,7 @@
  */
 import { $ } from "bun"
 import { Script } from "@opencode-ai/script"
+import { copyLicenses, licenseFiles } from "@opencode-ai/script/license"
 import { fileURLToPath } from "url"
 import path from "path"
 import fs from "fs"
@@ -37,16 +38,11 @@ console.log()
 console.log(">>> [2/2] Publishing CLI packages ...")
 process.chdir(cliDir)
 
-const pkg = (await Bun.file("./package.json").json()) as { name: string; license: string; dependencies: Record<string, string> }
-const devecoCliVersion = pkg.dependencies["@deveco/deveco-cli"]
-if (!devecoCliVersion) throw new Error('Missing dependency "@deveco/deveco-cli"')
-// Build-time pin + published meta dependency (exact x.y.z). Zip/irm still use vendor/homegraph.
-const homegraphVersion = pkg.dependencies.homegraph
-if (!homegraphVersion) throw new Error('Missing dependency "homegraph" (build pin for vendor)')
-if (!/^\d+\.\d+\.\d+$/.test(homegraphVersion)) {
-  throw new Error(
-    `Refuse to build/publish with homegraph@${homegraphVersion} - pin an exact x.y.z (e.g. 1.6.3)`,
-  )
+const pkg = (await Bun.file("./package.json").json()) as {
+  name: string
+  license: string
+  dependencies: Record<string, string>
+  builtinPlugins: Record<string, string>
 }
 const ALLOWED_PLATFORMS = new Set(["darwin-arm64", "darwin-x64", "win32-x64"])
 
@@ -79,7 +75,7 @@ const version = Object.values(binaries)[0]?.version
 await $`mkdir -p ./dist/${pkg.name}`
 await $`cp -r ./bin ./dist/${pkg.name}/bin`
 await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
-await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+await copyLicenses(path.join(cliDir, "dist", pkg.name))
 await Bun.file(`./dist/${pkg.name}/README.md`).write(await Bun.file("../../README.md").text())
 await $`cp ../../CHANGELOG.md ./dist/${pkg.name}/CHANGELOG.md`
 
@@ -97,21 +93,13 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
       license: pkg.license,
       os: ["darwin", "linux", "win32", "openharmony"],
       cpu: ["arm64", "x64"],
-      files: [
-        "bin/**/*",
-        "postinstall.mjs",
-        "LICENSE",
-        "README.md",
-        "CHANGELOG.md",
-      ],
+      files: ["bin/**/*", "postinstall.mjs", "README.md", "CHANGELOG.md", ...licenseFiles],
       optionalDependencies: {
         ...Object.fromEntries(Object.entries(binaries).map(([k, v]) => [k, v.version])),
         [hmosPackageName]: version,
       },
       dependencies: {
-        "@deveco/deveco-cli": devecoCliVersion,
-        // npm vs curl/irm split — same as @deveco/deveco-cli (see publish.ts).
-        homegraph: homegraphVersion,
+        ...pkg.builtinPlugins,
       },
     },
     null,
@@ -147,4 +135,8 @@ if (hasCnpm) {
 console.log()
 console.log("=== Release complete ===")
 console.log(`  @${scope}/deveco-code@${Script.version}`)
-console.log(`  ${Object.keys(binaries).map((n) => `${n}@${Script.version}`).join("\n  ")}`)
+console.log(
+  `  ${Object.keys(binaries)
+    .map((n) => `${n}@${Script.version}`)
+    .join("\n  ")}`,
+)

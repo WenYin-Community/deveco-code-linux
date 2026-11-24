@@ -19,7 +19,6 @@ import { CloudflareAIGatewayAuthPlugin, CloudflareWorkersAuthPlugin } from "./cl
 import { AzureAuthPlugin } from "./azure"
 import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { DevEcoAuthPlugin } from "./deveco"
-import { DevEcoCliEnvPlugin } from "./deveco-cli-env"
 import { HdcGuardEnvPlugin } from "./hdc-guard-env"
 import AnalyticsPlugin from "./analytics/analytics-plugin"
 import AnalyticsMagpiePlugin from "./analytics-magpie/analytics-plugin"
@@ -31,15 +30,19 @@ import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { errorMessage } from "@/util/error"
 import { PluginLoader } from "./loader"
+import { PluginLoadStatus } from "./load-status"
 import { isPathPluginSpec, parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstallationChannel } from "@opencode-ai/core/installation/version"
+import { BuiltinHarness } from "./builtin-harness"
+import { SessionCwdPlugin } from "./session-cwd"
 
 type State = {
   hooks: Hooks[]
+  resultObservers: Hooks[]
 }
 
 // Hook names that follow the (input, output) => Promise<void> trigger pattern
@@ -83,7 +86,6 @@ function internalPlugins(flags: RuntimeFlags.Info): PluginInstance[] {
     AzureAuthPlugin,
     DigitalOceanAuthPlugin,
     DevEcoAuthPlugin,
-    DevEcoCliEnvPlugin,
     HdcGuardEnvPlugin,
     AnalyticsPlugin,
     AnalyticsMagpiePlugin,
@@ -141,7 +143,9 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("Plugin.state")(function* (ctx) {
-        const hooks: Hooks[] = []
+        // Explicit custom tools still need the host adapter when default plugins are disabled.
+        const resultObservers: Hooks[] = [yield* Effect.promise(SessionCwdPlugin)]
+        const hooks: Hooks[] = [...resultObservers]
         const bridge = yield* EffectBridge.make()
 
         function publishPluginError(message: string) {
@@ -183,10 +187,31 @@ export const layer = Layer.effect(
             Effect.tapError((error) => Effect.logError("failed to load internal plugin", { name: plugin.name, error })),
             Effect.option,
           )
-          if (init._tag === "Some") hooks.push(init.value)
+          if (init._tag === "Some") {
+            hooks.push(init.value)
+            if (plugin === AnalyticsPlugin || plugin === AnalyticsMagpiePlugin) resultObservers.push(init.value)
+          }
         }
 
-        const plugins = flags.pure ? [] : (cfg.plugin_origins ?? [])
+        const harness = yield* Effect.try({
+          try: () => BuiltinHarness.origin(flags),
+          catch: errorMessage,
+        }).pipe(
+          Effect.catch((error) => {
+            publishPluginError(`Failed to load built-in Harness: ${error}`)
+            return Effect.succeed(undefined)
+          }),
+        )
+        if (harness) {
+          yield* Effect.logInfo("loading built-in Harness", {
+            package: BuiltinHarness.PACKAGE,
+            version: BuiltinHarness.VERSION,
+            path: harness.spec,
+          })
+        }
+        // Built-in origins enter the normal loader without changing cfg.plugin
+        // or writing a user configuration file.
+        const plugins = [...(harness ? [harness] : []), ...(flags.pure ? [] : (cfg.plugin_origins ?? []))]
         if (flags.pure && cfg.plugin_origins?.length) {
         }
         // File URL and path plugins don't need npm packages installed — only
@@ -200,9 +225,15 @@ export const layer = Layer.effect(
             kind: "server",
             report: {
               start(candidate) {},
-              missing(candidate, _retry, message) {},
+              missing(candidate, _retry, message) {
+                PluginLoadStatus.record(ctx.directory, candidate.plan.spec, {
+                  loadStatus: "missing",
+                  failureStage: "",
+                })
+              },
               error(candidate, _retry, stage, error, resolved) {
                 const spec = candidate.plan.spec
+                PluginLoadStatus.record(ctx.directory, spec, { loadStatus: "failed", failureStage: stage })
                 const cause = error instanceof Error ? (error.cause ?? error) : error
                 const message = stage === "load" ? errorMessage(error) : errorMessage(cause)
 
@@ -227,14 +258,24 @@ export const layer = Layer.effect(
             },
           }),
         )
+        let harnessLoaded = false
         for (const load of loaded) {
           if (!load) continue
 
           // Keep plugin execution sequential so hook registration and execution
           // order remains deterministic across plugin runs.
           yield* Effect.tryPromise({
-            try: () => applyPlugin(load, input, hooks),
+            try: async () => {
+              const isHarness = (load.mod.default as { id?: unknown } | undefined)?.id === BuiltinHarness.ID
+              if (isHarness && harnessLoaded) return
+              await applyPlugin(load, input, hooks)
+              PluginLoadStatus.record(ctx.directory, load.spec, { loadStatus: "loaded", failureStage: "" })
+              if (isHarness) harnessLoaded = true
+            },
             catch: (err) => {
+              // The module imported fine but its server entrypoint failed: a plugin-side failure,
+              // not a loader failure, so it is reported as its own stage.
+              PluginLoadStatus.record(ctx.directory, load.spec, { loadStatus: "failed", failureStage: "server" })
               const message = errorMessage(err)
               return message
             },
@@ -272,6 +313,9 @@ export const layer = Layer.effect(
           })
         })
         yield* Effect.addFinalizer(() => unsubscribe)
+        // A server can open and dispose many directories, so the records of this one are dropped
+        // with the instance instead of living until the process exits.
+        yield* Effect.addFinalizer(() => Effect.sync(() => PluginLoadStatus.clear(ctx.directory)))
 
         yield* Effect.addFinalizer(() =>
           Effect.forEach(
@@ -288,7 +332,7 @@ export const layer = Layer.effect(
           ),
         )
 
-        return { hooks }
+        return { hooks, resultObservers }
       }),
     )
 
@@ -299,7 +343,13 @@ export const layer = Layer.effect(
     >(name: Name, input: Input, output: Output) {
       if (!name) return output
       const s = yield* InstanceState.get(state)
-      for (const hook of s.hooks) {
+      // Result consumers run after plugins have enriched the output. Other hooks
+      // retain their registration order, including timing, events and disposal.
+      const hooks =
+        name === "tool.execute.after"
+          ? [...s.hooks.filter((hook) => !s.resultObservers.includes(hook)), ...s.resultObservers]
+          : s.hooks
+      for (const hook of hooks) {
         const fn = hook[name] as any
         if (!fn) continue
         yield* Effect.promise(async () => fn(input, output))

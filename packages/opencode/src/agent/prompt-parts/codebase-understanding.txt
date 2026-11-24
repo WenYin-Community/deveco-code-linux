@@ -1,5 +1,0 @@
-# Codebase understanding
-Understand the codebase by need (pick one primary path; do not spray both):
-1. Known path, filename, error string, or ≤3 directed lookups → glob / grep / read on the main agent (batch independent calls).
-2. Broad or unclear scope, multi-area research, or >3 searches expected → Task with subagent_type=explore (set thoroughness: quick | medium | very thorough) to spare main-agent context.
-After you have concrete file paths, read/edit on the main agent; do not re-explore.

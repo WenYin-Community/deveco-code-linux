@@ -5,14 +5,11 @@ import type { RuntimeFlags } from "@/effect/runtime-flags"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import type { Agent } from "@/agent/agent"
-import { AgentRules } from "@/agent/rules"
-import { AgentPromptParts, agentNeedsHomegraphPrompt } from "@/agent/prompt-parts"
-import { probeHomegraphReady } from "@/mcp/homegraph-ready"
-import type { MessageV2 } from "../message-v2"
 import type { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "../system"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import { Runtime } from "@opencode-ai/core/runtime"
 import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
@@ -58,18 +55,10 @@ const mergeOptions = (
   source: Record<string, unknown> | undefined,
 ): Record<string, unknown> => mergeDeep(target, source ?? {}) as Record<string, unknown>
 
-function buildSystemParts(
-  input: PrepareInput,
-  homegraph: { ready: boolean; source?: "product" | "user" },
-): string[] {
+function buildSystemParts(input: PrepareInput): string[] {
   return [
     [
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
-      ...AgentPromptParts.forAgent(input.agent, {
-        homegraphReady: homegraph.ready,
-        homegraphSource: homegraph.source,
-      }),
-      ...AgentRules.forAgent(input.model, input.agent),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
     ]
@@ -148,12 +137,17 @@ export function devecoAffinityHeaders(
   input: { sessionID: string; parentSessionID?: string; messageID: string },
   projectID: string | undefined,
 ): Record<string, string> {
+  const source = Runtime.current.analyticsSource
+  const pluginVersion = process.env.DEVECO_PLUGIN_VERSION?.trim() ?? "unknown"
   return {
     ...(projectID ? { "x-deveco-project": projectID } : {}),
     "x-deveco-session": input.sessionID,
     ...(input.parentSessionID ? { "x-deveco-parent-session": input.parentSessionID } : {}),
     "x-deveco-task": input.messageID,
-    "x-deveco-client": `deveco-code@${InstallationVersion}`,
+    "x-deveco-client":
+      source.sourceType === "DevEco-Code-Plugin"
+        ? `deveco-code-plugin@${pluginVersion}`
+        : `deveco-code@${InstallationVersion}`,
     "User-Agent": USER_AGENT,
   }
 }
@@ -210,12 +204,7 @@ function sortedTools(tools: Record<string, Tool>): Record<string, Tool> {
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
-  // Skip readiness probe for agents that never inject the HG prompt part.
-  const homegraph = agentNeedsHomegraphPrompt(input.agent.name)
-    ? yield* probeHomegraphReady
-    : { ready: false as const, source: undefined }
-
-  const system = buildSystemParts(input, homegraph)
+  const system = buildSystemParts(input)
   const header = system[0]
   yield* input.plugin.trigger(
     "experimental.chat.system.transform",
@@ -233,8 +222,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const tools = resolveTools(input)
   ensureCopilotNoopTool(input, tools)
 
-  const needsProject =
-    input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
+  const needsProject = input.model.providerID.startsWith("opencode") || input.model.providerID.startsWith("deveco")
   const projectID = needsProject ? (yield* InstanceState.context).project.id : undefined
 
   return {

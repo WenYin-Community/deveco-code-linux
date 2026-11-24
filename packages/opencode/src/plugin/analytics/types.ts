@@ -1,4 +1,5 @@
 import HuaweiEndpoints from "../../../huawei-endpoints.json"
+import type { D2aWorkflowAnalyticsEvent } from "./d2a"
 
 export type AnalyticsSourceType = "DevEco-Code-Cli" | "DevEco-Code-Plugin"
 
@@ -86,9 +87,7 @@ export interface AnalyticsEnvironmentFields {
   os_version: string
 }
 
-// Build result tracking for devecocli build executions.
-// Only counts calls where the tool execution itself succeeded (isSuccess=true),
-// so environment failures (DevEco not found, hvigor misconfigured) are excluded.
+// Build result tracking from Harness CLI events.
 export interface BuildResults {
   // null until the first devecocli build execution; then fixed to that result
   isFirstBuildSuccess: boolean | null
@@ -96,11 +95,9 @@ export interface BuildResults {
   isFinalBuildSuccess: boolean | null
   // number of devecocli build executions
   buildCount: number
-  // null until the first successful build_project tool execution; then fixed to that call's elapsed time.
-  // Elapsed measures prompt submission (startSession) to that build call's completion — not the build's own
-  // duration, which toolExecutions already tracks — and pairs with isFirstBuildSuccess (build may have failed).
+  // Elapsed from prompt submission to the first recorded build completion.
   firstBuildElapsed: number | null
-  // null until the first successful build_project tool execution; then always overwritten by the latest call's elapsed time
+  // Elapsed from prompt submission to the latest recorded build completion.
   finalBuildElapsed: number | null
 }
 
@@ -128,6 +125,11 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   workflow: string
   isFirstBuildSuccess: boolean | null
   isFinalBuildSuccess: boolean | null
+  // devecocli build executions counted in this window: every recorded build counts, so a first
+  // failure retried successfully reports 2. Success, failure and retries all count; deploy and
+  // type-check runs never do. Optional because events queued before the field existed must keep
+  // uploading: a missing key means "not measured", a measured zero is 0.
+  buildCount?: number
   // Model the last successful verify_ui call of this event window was actually bound to
   // (the ui-verification MCP child's model), null when verify_ui was never called or its
   // params could not be resolved. The uploader serializes null as the string "null".
@@ -151,7 +153,10 @@ export interface AiSessionEvent extends AnalyticsEnvironmentFields {
   finalBuildElapsed: number | null
 }
 
-export interface AiCodeAttributionEvent {
+// Line totals one attribution window aggregated: the project they belong to plus the four
+// disjoint buckets. The tracker reports exactly this shape, and it is also the legacy shape older
+// builds uploaded on its own, so queued events carrying it must stay readable.
+export interface CodeAttributionTotals {
   projectId: string
   aiGeneratedLines: number
   humanGeneratedLines: number
@@ -159,11 +164,24 @@ export interface AiCodeAttributionEvent {
   totalGeneratedLines: number
 }
 
-// One build_project execution, collected per turn for the DevEcoCodeBuild sidecar event.
-// Carries the heavy per-build payloads (log preview, error code) that AiSessionEvent's
-// toolExecutions deliberately excludes.
+// Current wire shape of DevEcoCodeAttribution: the line totals plus the same environment, timing
+// and session fields DevEcoCodeSlash carries, so attribution rows can be sliced by client/os/session
+// without joining another event.
+export interface DevEcoCodeAttributionEvent extends AnalyticsEnvironmentFields, CodeAttributionTotals {
+  // Milliseconds since the epoch, captured when the aggregate is submitted. The wire-level
+  // timestamp of the upload is the upload time, which is a different value: keep both.
+  timestamp: number
+  sessionid: string
+}
+
+// What the queue hands around: the current full event, or the 5-key totals that an older build
+// queued before the environment fields landed. The emitter always writes the full shape (see
+// createAttribution in analytics-plugin.ts); only the storage validator and the tracker's submit
+// contract tolerate the legacy totals, because a rejected shape is dropped from the queue.
+export type AiCodeAttributionEvent = DevEcoCodeAttributionEvent | CodeAttributionTotals
+
+// Historical build detail payload retained for persisted DevEcoCodeBuild events.
 export interface BuildProjectInfo {
-  // always "build_project"; kept explicit so future build-flavored tools stay self-describing
   toolName: string
   duration: number
   // Build outcome (same predicate as the session event's isFirstBuildSuccess/isFinalBuildSuccess):
@@ -191,31 +209,6 @@ export interface BuildProjectAnalyticsEvent extends AnalyticsEnvironmentFields {
   buildProjectInfo: BuildProjectInfo[]
 }
 
-export type UiVerificationSubAction = "run" | "log" | "screenshot"
-
-export interface UiVerificationOperationDetail {
-  subAction: UiVerificationSubAction
-  modelName?: string
-  freshStart?: boolean
-  deviceType?: string
-  bundleName?: string
-  planLen?: number
-  verificationSuccess?: boolean
-  stepExecuted?: number
-  stepTotalDurationMs?: number
-  stepReused?: number | null
-  toolUsageDist?: Record<string, number>
-  screenshotCount?: number
-  tokenUsage?: number
-  failType?: string | null
-}
-
-export interface UiVerificationAnalyticsEvent extends AnalyticsEnvironmentFields {
-  sessionid: string
-  messageId: string
-  event_detail: UiVerificationOperationDetail
-}
-
 // Upper bound for commandName, shared by the emitter (truncates) and the queue validator
 // (rejects). Config commands, MCP prompts and skills are named outside this repo, so the name can
 // be arbitrary long text.
@@ -234,12 +227,90 @@ export interface DevEcoCodeSlashEvent extends AnalyticsEnvironmentFields {
   commandName: string
 }
 
+export const PLUGIN_ENTRY_SOURCES = ["npm", "local"] as const
+export const PLUGIN_ENTRY_SCOPES = ["global", "project"] as const
+export const PLUGIN_CONFIG_SOURCES = [
+  "user-config",
+  "project-config",
+  "remote-config",
+  "env-config",
+  "managed-config",
+] as const
+export const PLUGIN_ENTRY_LOAD_STATUSES = ["loaded", "failed", "missing", "skipped", "unknown"] as const
+// "" means no stage applies (loaded, skipped, missing), so it is a value of the stage, not a gap.
+export const PLUGIN_ENTRY_FAILURE_STAGES = [
+  "",
+  "install",
+  "entry",
+  "compatibility",
+  "load",
+  "server",
+  "deprecated",
+] as const
+
+export type PluginEntrySource = (typeof PLUGIN_ENTRY_SOURCES)[number]
+export type PluginEntryScope = (typeof PLUGIN_ENTRY_SCOPES)[number]
+export type PluginConfigSource = (typeof PLUGIN_CONFIG_SOURCES)[number]
+export type PluginEntryLoadStatus = (typeof PLUGIN_ENTRY_LOAD_STATUSES)[number]
+// Not every stage is a loader.ts Report stage: "server" is the server-side plugin layer rejecting a
+// plugin it did load, and "deprecated" is decided from the inventory when no record exists at all.
+export type PluginEntryFailureStage = (typeof PLUGIN_ENTRY_FAILURE_STAGES)[number]
+
+// One declared plugin, as the platform sees it. Deliberately excludes the plugin path, its options
+// content and any error text: the event answers "is it installed / does it load / at which stage",
+// nothing that could identify the user's project or reproduce their configuration.
+export interface PluginEntryInfo {
+  name: string
+  version: string
+  source: PluginEntrySource
+  scope: PluginEntryScope
+  configSource: PluginConfigSource
+  installed: boolean
+  loadStatus: PluginEntryLoadStatus
+  failureStage: PluginEntryFailureStage
+  hasOptions: boolean
+}
+
+export interface PluginInventorySummary {
+  pluginCount: number
+  installedCount: number
+  loadedCount: number
+  failedCount: number
+  npmCount: number
+  localCount: number
+}
+
+// Inventory of every plugin the instance declared, enqueued once per directory instance when the
+// plugin layer finishes loading.
+export interface DevEcoCodePluginEvent extends AnalyticsEnvironmentFields, PluginInventorySummary {
+  plugins: PluginEntryInfo[]
+}
+
+// Summary counts are always derived from the entries, so an event can never contradict its own
+// detail list. failedCount counts both a load error and a declared plugin whose package is absent:
+// product-wise "the plugin is not working" is one question. loadedCount counts only loaded entries,
+// so loaded + failed + skipped + unknown <= pluginCount with the remainder being unresolved states.
+export function derivePluginSummary(entries: readonly PluginEntryInfo[]): PluginInventorySummary {
+  return {
+    pluginCount: entries.length,
+    installedCount: entries.filter((entry) => entry.installed).length,
+    loadedCount: entries.filter((entry) => entry.loadStatus === "loaded").length,
+    failedCount: entries.filter((entry) => entry.loadStatus === "failed" || entry.loadStatus === "missing").length,
+    npmCount: entries.filter((entry) => entry.source === "npm").length,
+    localCount: entries.filter((entry) => entry.source === "local").length,
+  }
+}
+
 export const ANALYTICS_ACTION = {
   AI_SESSION: "DevEcoCodeSession",
   AI_CODE_ATTRIBUTION: "DevEcoCodeAttribution",
   BUILD_PROJECT: "DevEcoCodeBuild",
-  UI_VERIFICATION: "DevEcoCodeVerify",
   SLASH_COMMAND: "DevEcoCodeSlash",
+  // D2A 交付事件；eventId = runId，接收端按 action + detail.eventId 去重。
+  D2A: "DevEcoCodeD2A",
+  // 升级前入队的 D2A 事件沿用原 action 继续发送，读取与发送都要兼容。
+  D2A_WORKFLOW: "DevEcoCodeD2AWorkflow",
+  DEV_ECO_CODE_PLUGIN: "DevEcoCodePlugin",
 } as const
 
 export type AnalyticsAction = (typeof ANALYTICS_ACTION)[keyof typeof ANALYTICS_ACTION]
@@ -258,12 +329,20 @@ export type AnalyticsSubmission =
       event: BuildProjectAnalyticsEvent
     }
   | {
-      action: typeof ANALYTICS_ACTION.UI_VERIFICATION
-      event: UiVerificationAnalyticsEvent
-    }
-  | {
       action: typeof ANALYTICS_ACTION.SLASH_COMMAND
       event: DevEcoCodeSlashEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.D2A
+      event: D2aWorkflowAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.D2A_WORKFLOW
+      event: D2aWorkflowAnalyticsEvent
+    }
+  | {
+      action: typeof ANALYTICS_ACTION.DEV_ECO_CODE_PLUGIN
+      event: DevEcoCodePluginEvent
     }
 
 export interface AnalyticsTransportFields {
@@ -297,7 +376,6 @@ export interface SessionContext {
   toolCounts: Map<string, { name: string; category: ToolBucket; count: number }>
   // devecocli invocation counts keyed by the resolved two-level name ("docs.search").
   devecoCliCommandCounts: Map<string, number>
-  buildProjectInfo: BuildProjectInfo[]
   // Last observed workflow signal; kept for the workflow field's existing last-write-wins semantics.
   workflow: string
   // Every distinct workflow signal observed in this window, used to derive taskType once at
@@ -355,7 +433,6 @@ export const BUILTIN_TOOLS = new Set([
   "spec_write",
   "hdc_log",
   "switch_cwd",
-  "build_project",
   "start_app",
   "verify_ui",
   "get_ui_verification_log",

@@ -10,6 +10,7 @@
 - [工作流](#工作流)
 - [下一轮准入（第 2 至 `maxRounds` 轮评分前执行）](#下一轮准入第-2-至-maxrounds-轮评分前执行)
 - [轮次证据与恢复](#轮次证据与恢复)
+- [总结阶段单次交付复评](#总结阶段单次交付复评)
 - [输出要求](#输出要求)
 - [停止条件](#停止条件)
 
@@ -77,7 +78,7 @@
    - 本轮评分产物有效且上述完整结果返回后，才将本轮内部调用更新为 `status=completed`，随后进入第 7 步。脚本分数已经达标或问题列表为空，也不能提前跳过对比和分析。
 
 7. 根据本次评分决定结束还是修复：
-   - Round 1 是基线评分，Round 2—`maxRounds` 验证上一轮评分之后的实际修改。最多 `maxRounds` 次有效评分，即基线之后最多 `maxRounds − 1` 次修复验证，不要求凑满轮数上限。
+   - Round 1 是基线评分，Round 2—`maxRounds` 验证上一轮评分之后的实际修改。每轮评分对应**该轮截图时实际运行的页面**：第 N 轮评分衡量的是该轮截图那一刻实际部署运行的实现（包含第 N−1 轮之后落地的修复）；第 N 轮评分之后才应用的修复属于第 N+1 轮候选页面，不得回填进第 N 轮。最多 `maxRounds` 次有效评分，即基线之后最多 `maxRounds − 1` 次修复验证，不要求凑满轮数上限。
    - 读取本轮脚本输出 `score.json` 的 `aggregate.final_baseline_score`，作为本轮阈值判定分数。达到阈值时以 `score-threshold-reached` 结束，不再修改代码。子能力返回的分析 `overall` 用于解释还原质量，不能替换该脚本分数。
    - 未达到阈值且还有评分次数时，下一步是修复：阅读本轮问题，检查相关源码，选择 1—3 个最值得处理的问题并实际修改；随后构建、部署、进入相同目标页面和状态、重新截图，再进行下一次评分。完整动作按下方“下一轮准入”执行，不能省略中间步骤。
    - 只有第 6 步的完整评估完成后才计入一轮。仅提出建议、修改注释或格式、重复截图和重复运行评分都不算完成一次修复验证。
@@ -105,6 +106,29 @@
 - 第 1 轮的 `repair` 为 null；第 N≥2 轮记录 `repair.fromRound=N-1`、`issueIds`、`hypothesis`、`expectedVisualChange`、`changedFiles`（path、beforeSha256、afterSha256）、`diffPath`、`evidenceCheck`。`diffPath` 等证据路径相对调用方 runDir；源码路径相对工程根目录。
 - 把“本轮验证了什么”与“下一轮准备修什么”分开。每轮简短汇报：`Round N / score / 验证的 issueId 与修改文件 / 观察到的变化 / 下一步或阻塞原因`，避免将计划当成已经完成的动作。
 - 恢复时先核验最后一个有效评分及其证据，继续尚未完成的修复、构建或截图步骤。不能为了补齐轮次重新评分同一截图，也不能重置已有分数和计数；发现旧记录缺少证据时说明不可信轮次，不能补造日志后宣称 completed。
+
+## 总结阶段单次交付复评
+
+Full 总结阶段（Figma/MasterGo/蓝湖阶段 6、Pixso 阶段 10）在交付前需要确认最终采用的页面。当总结阶段修改了影响渲染的实现，或无法依据现有恢复与构建部署记录核实某个历史候选页面就是当时评分的完整实现时，按本节对**当前交付页面**做一次单轮评分。本节复用第 6 步的单轮评分能力，不重新进入多轮修复循环：
+
+1. 按第 1—6 步的输入检查、真实页面获取、系统区配置和可比性检查要求，对当前交付页面重新构建、部署，进入与校准相同的目标路由和状态，并获取新截图。
+2. 复用单轮评分能力：按注册表加载 `hmos-d2a-ui-reconstruction-score` 并完整执行一次单轮评分。评分产物保存在独立目录，例如 `visual-calibration/final-delivery/score/`；实现截图保存在 `visual-calibration/final-delivery/candidate.png`；同时保留本轮构建日志与部署日志证据（例如 `visual-calibration/final-delivery/build-log.md`、`visual-calibration/final-delivery/deployment-log.md`）。
+3. 成功解析本轮 `score.json` 与 `metrics.json` 并确认 `aggregate.final_baseline_score` 为 0—100 的有限数值后，向 run 根目录写入 `final-visual-score.json`：
+
+```json
+{
+  "status": "recorded",
+  "source": "delivery_check",
+  "scoreJson": "visual-calibration/final-delivery/score/score.json",
+  "metricsJson": "visual-calibration/final-delivery/score/pairs/<pairId>/metrics.json",
+  "candidate": "visual-calibration/final-delivery/candidate.png",
+  "buildLog": "visual-calibration/final-delivery/build-log.md",
+  "deploymentLog": "visual-calibration/final-delivery/deployment-log.md"
+}
+```
+
+4. 所有路径一律相对 run 目录，不得写入 run 外的绝对路径；Controller 会核验这些文件位于 run 内，并从 `scoreJson` 读取最终分数。
+5. 交付复评只为当前页面取一次分：不启动新的修复循环，不增加 `roundsCompleted` 或修正次数，也不影响校准报告的既有结论。复评失败、评分文件越界或无法解析时，写 `{ "status": "unavailable" }`，保留缺失状态并按原有业务验收规则处理；交付产物写入后如再次修改页面，须按相同规则重新取得有效评分并覆盖该文件，再提交完成。
 
 ## 输出要求
 

@@ -257,7 +257,6 @@ const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
 const it = testEffect(MCP.defaultLayer)
 
 /** Isolate generic MCP tests from product HomeGraph inject (vendor may be absent on CI). */
-const NO_HOMEGRAPH = { homegraph: { enabled: false as const } }
 
 function statusName(status: Record<string, MCPNS.Status> | MCPNS.Status, server: string) {
   if ("status" in status) return status.status
@@ -283,7 +282,7 @@ it.instance(
         expect(result).toEqual({ roots: [{ uri: pathToFileURL(directory).href }] })
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -297,7 +296,7 @@ it.instance(
         expect(stdioOptsByName.get("rel-cwd")?.cwd).toBe(path.resolve(directory, "plugins/sub"))
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -331,7 +330,7 @@ it.instance(
         expect(serverState.listToolsCalls).toBe(1)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -370,7 +369,7 @@ it.instance(
         expect(serverState.listResourcesCalls).toBe(2)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -394,7 +393,7 @@ it.instance(
         expect(yield* mcp.tools()).toEqual({})
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -421,7 +420,7 @@ it.instance(
         expect(serverState.listPromptsCalls).toBe(2)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -459,7 +458,7 @@ it.instance(
         expect(serverState.listToolsCalls).toBe(2)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -495,7 +494,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "disc-server": {
           type: "local",
           command: ["echo", "test"],
@@ -534,7 +532,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "reconn-server": {
           type: "local",
           command: ["echo", "test"],
@@ -579,7 +576,7 @@ it.instance(
         expect(secondState.closed).toBe(false)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -625,7 +622,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "good-server": {
           type: "local",
           command: ["echo", "good"],
@@ -661,7 +657,7 @@ it.instance(
         expect(serverState.closed).toBe(true)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -695,7 +691,7 @@ it.instance(
         expect(serverState.requestCalls).toBe(1)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -718,7 +714,7 @@ it.instance(
         expect(serverState.requestCalls).toBe(0)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -748,7 +744,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "disabled-server": {
           type: "local",
           command: ["echo", "test"],
@@ -787,7 +782,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "prompt-server": {
           type: "local",
           command: ["echo", "test"],
@@ -821,7 +815,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "resource-server": {
           type: "local",
           command: ["echo", "test"],
@@ -851,7 +844,7 @@ it.instance(
         expect(serverState.readResourceTimeout).toBe(2500)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH }, experimental: { mcp_timeout: 5000 } } },
+  { config: { mcp: {}, experimental: { mcp_timeout: 5000 } } },
 )
 
 it.instance(
@@ -877,7 +870,7 @@ it.instance(
         expect(serverState.listPromptsCalls).toBe(0)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -903,7 +896,7 @@ it.instance(
         expect(serverState.listResourcesCalls).toBe(0)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -929,7 +922,7 @@ it.instance(
         expect(serverState.listResourcesCalls).toBe(0)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 it.instance(
@@ -955,7 +948,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "prompt-disc-server": {
           type: "local",
           command: ["echo", "test"],
@@ -983,7 +975,7 @@ it.instance(
         expect(status["nonexistent"]).toBeUndefined()
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -1002,7 +994,7 @@ it.instance(
         }
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -1018,7 +1010,7 @@ it.instance(
         expect(Object.keys(tools).length).toBe(0)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -1054,7 +1046,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "fail-connect": {
           type: "local",
           command: ["echo", "test"],
@@ -1126,7 +1117,6 @@ it.instance(
   {
     config: {
       mcp: {
-        ...NO_HOMEGRAPH,
         "my.special-server": {
           type: "local",
           command: ["echo", "test"],
@@ -1162,7 +1152,7 @@ it.instance(
         expect(transportCloseCount).toBeGreaterThanOrEqual(1)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -1191,7 +1181,7 @@ it.instance(
         expect(transportCloseCount).toBeGreaterThanOrEqual(1)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )
 
 // ========================================================================
@@ -1221,5 +1211,5 @@ it.instance(
         expect(transportCloseCount).toBeGreaterThanOrEqual(2)
       }),
     ),
-  { config: { mcp: { ...NO_HOMEGRAPH } } },
+  { config: { mcp: {} } },
 )

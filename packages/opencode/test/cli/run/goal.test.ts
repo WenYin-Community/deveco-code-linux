@@ -33,16 +33,17 @@ afterAll(() =>
 )
 
 describe("local Goal lifecycle", () => {
-  it.live(
-    "guards busy and unfinished sessions and pauses on interruption at both boundaries",
-    () =>
-      Effect.gen(function* () {
-        const llm = yield* TestLLMServer
-        return yield* provideTmpdirInstance(
-          (directory) =>
-            Effect.gen(function* () {
-              for (const boundary of ["starting", "executing"] as const) {
-                yield* llm.reset
+  // Separate fixtures prevent a late request from the starting case from
+  // consuming the fake provider's response for the executing case.
+  for (const boundary of ["starting", "executing"] as const) {
+    it.live(
+      `guards busy and unfinished sessions and pauses on interruption at the ${boundary} boundary`,
+      () =>
+        Effect.gen(function* () {
+          const llm = yield* TestLLMServer
+          return yield* provideTmpdirInstance(
+            (directory) =>
+              Effect.gen(function* () {
                 const controller = new AbortController()
                 const client = createOpencodeClient({
                   baseUrl: "http://opencode.internal",
@@ -87,9 +88,16 @@ describe("local Goal lifecycle", () => {
                 ).pipe(Effect.forkChild)
                 if (boundary === "executing") {
                   yield* awaitWithTimeout(
-                    Effect.promise(() => running.promise),
+                    Effect.raceFirst(
+                      Effect.promise(() => running.promise),
+                      Fiber.join(task).pipe(
+                        Effect.flatMap((result) =>
+                          Effect.fail(new Error(`Goal settled before the provider started (exit ${result.exitCode})`)),
+                        ),
+                      ),
+                    ),
                     "provider never started",
-                    "30 seconds",
+                    "45 seconds",
                   )
                   yield* Effect.promise(async () => {
                     await expect(
@@ -129,11 +137,11 @@ describe("local Goal lifecycle", () => {
                   client.session.get({ sessionID: session.data.id }, { throwOnError: true }),
                 )
                 expect(SessionGoal.fromMetadata(unchanged.data.metadata)?.objective).toBe("interruptible goal")
-              }
-            }),
-          { config: testProviderConfig(llm.url) },
-        )
-      }).pipe(Effect.provide(TestLLMServer.layer)),
-    60_000,
-  )
+              }),
+            { config: testProviderConfig(llm.url) },
+          )
+        }).pipe(Effect.provide(Layer.fresh(TestLLMServer.layer))),
+      90_000,
+    )
+  }
 })

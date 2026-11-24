@@ -4,13 +4,25 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionGoal } from "@/session/goal"
 import { Session } from "@/session/session"
-import { MessageID } from "@/session/schema"
+import { MessageID, type SessionID } from "@/session/schema"
 import { testEffect } from "../lib/effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
 const it = testEffect(LayerNode.buildLayer(LayerNode.group([SessionGoal.node, Session.node, SessionProjector.node])))
+ 
+const addUserMessage = (sessions: Session.Interface, sessionID: SessionID) =>
+  sessions
+    .updateMessage({
+      id: MessageID.ascending(),
+      sessionID,
+      role: "user",
+      time: { created: Date.now() },
+      agent: "build",
+      model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
+    })
+    .pipe(Effect.map((message) => message.id))
 
 describe("session goal", () => {
   it.instance("persists lifecycle state in session metadata", () =>
@@ -38,7 +50,13 @@ describe("session goal", () => {
       expect(paused?.sourceMessageID).toBeNull()
       expect(paused?.usedTokens).toBe(0)
 
-      const resumed = yield* goals.resume(session.id)
+      const admissionFailure = new Error("failed to write continuation")
+      expect(
+        yield* goals.resume(session.id, { admitPrompt: () => Effect.fail(admissionFailure) }).pipe(Effect.flip),
+      ).toBe(admissionFailure)
+      expect(yield* goals.get(session.id)).toEqual(paused)
+
+      const resumed = yield* goals.resume(session.id, { admitPrompt: () => addUserMessage(sessions, session.id) })
       expect(resumed?.status).toBe("active")
       expect(resumed?.activeSince).not.toBeNull()
 
@@ -108,41 +126,33 @@ describe("session goal", () => {
       expect(result.goal?.budgetExhaustedAt).not.toBeNull()
       expect(result.goal?.reason).toBe("token budget exhausted")
 
-      const resumed = yield* goals.resume(session.id)
+      const admitPrompt = () => addUserMessage(sessions, session.id)
+      const resumed = yield* goals.resume(session.id, { admitPrompt })
       expect(resumed?.status).toBe("paused")
       expect(resumed?.budgetExhaustedAt).not.toBeNull()
 
-      const stillExhausted = yield* goals.resume(session.id, 1_000)
+      const stillExhausted = yield* goals.resume(session.id, { tokenBudget: 1_000, admitPrompt })
       expect(stillExhausted?.status).toBe("paused")
+      expect(yield* sessions.messages({ sessionID: session.id })).toHaveLength(1)
 
-      const resumedWithMoreBudget = yield* goals.resume(session.id, 2_000)
+      const resumedWithMoreBudget = yield* goals.resume(session.id, { tokenBudget: 2_000, admitPrompt })
       expect(resumedWithMoreBudget?.status).toBe("active")
       expect(resumedWithMoreBudget?.tokenBudget).toBe(2_000)
       expect(resumedWithMoreBudget?.budgetExhaustedAt).toBeNull()
+      expect(yield* goals.tokenUsage(session.id)).toBe(1_000)
     }),
   )
 
-  it.instance("anchors a resumed goal to the latest user message", () =>
+  it.instance("anchors a resumed goal to the admitted continuation", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const goals = yield* SessionGoal.Service
       const session = yield* sessions.create({})
       const started = yield* goals.start(session.id, "resumed goal")
-      const userID = MessageID.ascending()
-      yield* sessions.updateMessage({
-        id: userID,
-        sessionID: session.id,
-        role: "user",
-        time: { created: Date.now() },
-        agent: "build",
-        model: {
-          providerID: ProviderV2.ID.make("test"),
-          modelID: ModelV2.ID.make("test-model"),
-        },
-      } satisfies SessionV1.User)
+      const userID = yield* addUserMessage(sessions, session.id)
       yield* goals.bindPrompt({ sessionID: session.id, createdAt: started.goal.createdAt, messageID: userID })
 
-      yield* sessions.updateMessage({
+      const previousAssistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         sessionID: session.id,
         parentID: userID,
@@ -162,15 +172,18 @@ describe("session goal", () => {
         time: { created: Date.now(), completed: Date.now() },
       } satisfies SessionV1.Assistant)
 
-      yield* goals.pause(session.id, "token budget exhausted")
-      const resumed = yield* goals.resume(session.id)
-      expect(resumed?.sourceMessageID).toBe(userID)
+      yield* goals.pause(session.id, "stopped by user")
+      const resumed = yield* goals.resume(session.id, { admitPrompt: () => addUserMessage(sessions, session.id) })
+      const resumeParent = resumed?.sourceMessageID
+      expect(resumeParent).not.toBe(userID)
+      if (!resumeParent) throw new Error("missing continuation prompt")
+      expect(yield* goals.canUpdateFrom(session.id, previousAssistant.id)).toBe(false)
 
       const resumedAssistantID = MessageID.ascending()
       yield* sessions.updateMessage({
         id: resumedAssistantID,
         sessionID: session.id,
-        parentID: userID,
+        parentID: resumeParent,
         role: "assistant",
         mode: "build",
         agent: "build",
@@ -311,7 +324,7 @@ describe("session goal", () => {
       yield* assistant(pausedParent, 500)
       expect(yield* goals.tokenUsage(session.id)).toBe(100)
 
-      const resumed = yield* goals.resume(session.id)
+      const resumed = yield* goals.resume(session.id, { admitPrompt: () => addUserMessage(sessions, session.id) })
       expect(resumed?.status).toBe("active")
       expect(resumed?.usedTokens).toBe(100)
       expect(yield* goals.tokenUsage(session.id)).toBe(100)

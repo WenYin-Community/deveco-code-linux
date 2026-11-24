@@ -2,7 +2,7 @@
 
 先读取并遵守 `references/runtime-contract.md` 中的 Controller、Todo、Gate、blocked 和恢复规则。MasterGo 使用独立来源 mastergo，Full 六阶段、Fast 五阶段；init 增加 --source mastergo。原 Pixso/Figma catalog 及既有摘要不变。
 
-来源专用输入见 `input-contract.md`。阶段 1 使用官方 MCP 并导入真实输入；阶段 2 使用 mastergo-to-arkui 能力。Full 阶段 2 request → 用户确认 → accepted → resume_confirmed_stage → 实现、构建 → passed；Fast 自动采用方案。Full 确认后的输入/方案不得改变，修订需重新确认。
+来源专用输入见 `input-contract.md`。`init` 前完成 `mcp-setup.md` 的来源预检（桌面客户端本地服务可用性）：`available` 用默认混合取数，`unavailable` 按该指引的判定顺序（Magic 可用→纯 Magic + 手工导出截图；Magic 不可用→社区通道可行则引导，否则 blocked）由用户选定，并由阶段 1 记录进 `requirement-clarification.json` 的 `mastergo.channel`；阶段 1 按该记录执行，预检判可达而阶段 1 真实读取失败时按 mcp-setup 的两条路径重新取得用户选择（见 `acquire.md` §5）。阶段 1 使用官方 MCP 并导入真实输入；阶段 2 使用 mastergo-to-arkui 能力。Full 阶段 2 request → 用户确认 → accepted → resume_confirmed_stage → 实现、构建 → passed；Fast 自动采用方案。Full 确认后的输入/方案不得改变，修订需重新确认。
 
 阶段 3/4 与 Full 阶段 5、总结直接读取对应 Figma 原阶段文件，按 MasterGo wrapper 映射来源字段。能力名、HDS 决策、业务状态补全、导航/Index 保护、评分阈值与轮数规则不变。Full 默认启用评分，只有显式 enabled=false 才能 skipped；Fast 不声称视觉评分完成。
 

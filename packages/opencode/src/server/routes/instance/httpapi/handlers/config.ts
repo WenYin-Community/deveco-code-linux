@@ -1,5 +1,6 @@
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
+import { getTaskDefaultModelMap } from "@/plugin/deveco-models"
 import * as InstanceState from "@/effect/instance-state"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -12,7 +13,22 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
     const configSvc = yield* Config.Service
 
     const get = Effect.fn("ConfigHttpApi.get")(function* () {
-      return yield* configSvc.get()
+      const config = yield* configSvc.get()
+      const provider = config.provider?.deveco
+      if (provider?.options?.task_default_model_map !== undefined) return config
+      const defaults = getTaskDefaultModelMap()
+      if (!defaults || Object.keys(defaults).length === 0) return config
+      // Export runtime defaults without initializing providers or mutating configuration.
+      return {
+        ...config,
+        provider: {
+          ...config.provider,
+          deveco: {
+            ...provider,
+            options: { ...provider?.options, task_default_model_map: { ...defaults } },
+          },
+        },
+      }
     })
 
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {

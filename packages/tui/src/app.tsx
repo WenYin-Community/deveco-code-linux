@@ -12,6 +12,7 @@ import { createCliRenderer, MouseButton, type CliRenderer } from "@opentui/core"
 import "./util/fix-mouse-events"
 import { RouteProvider, useRoute } from "./context/route"
 import {
+  type JSX,
   type ParentProps,
   Switch,
   Match,
@@ -65,6 +66,7 @@ import { DialogAlert } from "./ui/dialog-alert"
 import { ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
+import { AnnouncementsProvider, useAnnouncements } from "./context/announcements"
 import { I18nProvider, useI18n } from "./i18n"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
@@ -310,22 +312,24 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                     <ThemeProvider mode={mode}>
                                                       <LocalProvider>
                                                         <PromptStashProvider>
-                                                          <DialogProvider>
-                                                            <FrecencyProvider>
-                                                              <PromptHistoryProvider>
-                                                                <PromptRefProvider>
-                                                                  <EditorContextProvider>
-                                                                    <BtwProvider>
-                                                                      <App
-                                                                        onSnapshot={input.onSnapshot}
-                                                                        pluginHost={input.pluginHost}
-                                                                      />
-                                                                    </BtwProvider>
-                                                                  </EditorContextProvider>
-                                                                </PromptRefProvider>
-                                                              </PromptHistoryProvider>
-                                                            </FrecencyProvider>
-                                                          </DialogProvider>
+                                                          <AnnouncementsProvider>
+                                                            <DialogProvider>
+                                                              <FrecencyProvider>
+                                                                <PromptHistoryProvider>
+                                                                  <PromptRefProvider>
+                                                                    <EditorContextProvider>
+                                                                      <BtwProvider>
+                                                                        <App
+                                                                          onSnapshot={input.onSnapshot}
+                                                                          pluginHost={input.pluginHost}
+                                                                        />
+                                                                      </BtwProvider>
+                                                                    </EditorContextProvider>
+                                                                  </PromptRefProvider>
+                                                                </PromptHistoryProvider>
+                                                              </FrecencyProvider>
+                                                            </DialogProvider>
+                                                          </AnnouncementsProvider>
                                                         </PromptStashProvider>
                                                       </LocalProvider>
                                                     </ThemeProvider>
@@ -374,6 +378,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const local = useLocal()
   const { t, lng } = useI18n()
   const kv = useKV()
+  const announcements = useAnnouncements()
   const keymap = useOpencodeKeymap()
   const event = useEvent()
   const sdk = useSDK()
@@ -510,15 +515,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   // Show crash log collection dialog after UI is fully loaded
-  let crashDialogShown = false
+  const [startupDialogsSettled, setStartupDialogsSettled] = createSignal(false)
   createEffect(() => {
-    if (crashDialogShown || sync.status !== "complete") return
-    if (getDevEcoExtensions().consumeCrashInfo?.() === false) return
-    crashDialogShown = true
-    const CollectDialog = getDevEcoExtensions().collectDialog
-    if (CollectDialog) {
+    if (startupDialogsSettled() || sync.status !== "complete") return
+    const extensions = getDevEcoExtensions()
+    const CollectDialog = extensions.collectDialog
+    if (extensions.consumeCrashInfo?.() !== false && CollectDialog) {
       dialog.replace(() => <CollectDialog triggerType="00002" />)
     }
+    setStartupDialogsSettled(true)
   })
 
   let continued = false
@@ -565,6 +570,50 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     open(url).catch(() => {})
     dialog.clear()
   }
+  const [pendingAnnouncementPrompt, setPendingAnnouncementPrompt] = createSignal(false)
+  let announcementDialogRequest = 0
+  let announcementDialogOpen = false
+  const openAnnouncements = (automatic = false) => {
+    if (!announcements.agreementAccepted() || announcementDialogOpen) return
+    const request = ++announcementDialogRequest
+    if (!automatic) setPendingAnnouncementPrompt(false)
+    void import("./component/dialog-announcements").then(({ DialogAnnouncements }) => {
+      if (request !== announcementDialogRequest || !announcements.agreementAccepted()) return
+      if (automatic) {
+        if (announcements.unread() === 0 || announcementDialogOpen) return
+        if (!dialog.canOpenAutomatic) {
+          setPendingAnnouncementPrompt(true)
+          return
+        }
+      }
+      const replace = (render: () => JSX.Element) =>
+        batch(() => {
+          dialog.replace(render, () => {
+            announcementDialogOpen = false
+          })
+          announcementDialogOpen = true
+        })
+      replace(() => <DialogAnnouncements replace={replace} openSingleUnread={automatic} />)
+    })
+  }
+  createEffect(() => {
+    const version = announcements.promptVersion
+    if (!announcements.agreementAccepted() || version === 0) return
+    announcements.ackPrompt(version)
+    if (announcementDialogOpen) return
+    setPendingAnnouncementPrompt(true)
+  })
+  createEffect(() => {
+    if (!announcements.agreementAccepted()) {
+      announcementDialogRequest++
+      setPendingAnnouncementPrompt(false)
+      if (announcementDialogOpen) dialog.clear()
+      return
+    }
+    if (!ready() || !startupDialogsSettled() || !pendingAnnouncementPrompt() || !dialog.canOpenAutomatic) return
+    setPendingAnnouncementPrompt(false)
+    openAnnouncements(true)
+  })
   const currentWorktreeWorkspace = createMemo(() => {
     const workspaceID = project.workspace.current()
     if (!workspaceID) return
@@ -881,6 +930,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           dialog.clear()
         },
         category: t("category.system"),
+      },
+      {
+        name: "announcements.open",
+        title: t("command.announcements"),
+        category: t("category.system"),
+        slashName: "announcements",
+        slashAliases: ["announcement"],
+        enabled: announcements.agreementAccepted,
+        run: () => openAnnouncements(),
       },
       {
         name: "release.notes",
@@ -1222,6 +1280,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
     const extensions = getDevEcoExtensions()
     if (extensions.agreementReviewDialog && extensions.isAgreementReviewError?.(message)) {
+      announcements.setAgreement()
       const AgreementReviewDialog = extensions.agreementReviewDialog
       dialog.replace(() => (
         <AgreementReviewDialog

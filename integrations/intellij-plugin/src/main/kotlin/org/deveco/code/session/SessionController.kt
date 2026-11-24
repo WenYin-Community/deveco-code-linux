@@ -8,7 +8,6 @@ import androidx.compose.runtime.setValue
 import com.agentclientprotocol.model.*
 import com.intellij.ide.SaveAndSyncHandler
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
@@ -72,11 +71,15 @@ import org.deveco.code.session.model.forwardedDefaultEffort
 import org.deveco.code.session.model.hasVisibleUserParts
 import org.deveco.code.session.model.mergeSnapshotItems
 import org.deveco.code.session.model.renderSessionSnapshot
+import org.deveco.code.session.configuration.filterSessionModels
+import org.deveco.code.session.configuration.isDefaultModelChoice
+import org.deveco.code.session.configuration.planModelSelection
+import org.deveco.code.session.update.SessionUpdateQueue
+import org.deveco.code.session.update.SessionUpdateRouter
 import org.deveco.code.session.ui.composer.isTextLikeMimeType
 import java.io.File
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -317,21 +320,7 @@ internal class SessionController(
         // Matches queue position in backend messages: "position N of the queue"
         private val QUEUE_POSITION_REGEX = Regex("position\\s+(\\d+)\\s+of\\s+the\\s+queue", RegexOption.IGNORE_CASE)
 
-        // 默认模型：新建/首次打开项目（本项目从未配置过模型）时自动选择 GLM-5.3，而非 Auto 或后端默认模型
-        private const val DEFAULT_MODEL_NAME = "GLM-5.3"
-
-        // 精确匹配 "DevEco Code/GLM-5.3" 或 "DevEco Code\GLM-5.3"（大小写不敏感），
-        // 排除其他来源的同名模型（如 Alibaba(China)/GLM-5.3）
-        private fun isDefaultModelChoice(choice: ModelChoice): Boolean {
-            val normalized = choice.name.replace('\\', '/')
-            val prefix = "deveco code/"
-            return normalized.length > prefix.length &&
-                normalized.substring(0, prefix.length).equals(prefix, ignoreCase = true) &&
-                normalized.substring(prefix.length).equals(DEFAULT_MODEL_NAME, ignoreCase = true)
-        }
-
         private const val MAX_PROMPT_HISTORY = 50
-        private const val MAX_SESSION_UPDATES_PER_EDT_TURN = 64
         private const val MAX_TITLE_LEN = 50
         private const val COMPACTION_RATIO_THRESHOLD = 0.70
 
@@ -364,6 +353,21 @@ internal class SessionController(
     val permissionResults = mutableStateMapOf<String, String>()
     private val deniedPermissions = mutableStateMapOf<String, Boolean>()
     val permissionDeniedIds: Set<String> get() = deniedPermissions.keys
+    // Permission ids with a localized action noun (session.permission.label.<id>);
+    // anything else keeps the generic title carrying the raw id.
+    private val permissionLabelIds = setOf(
+        "external_directory",
+        "bash",
+        "shell",
+        "edit",
+        "write",
+        "apply_patch",
+        "read",
+        "webfetch",
+        "grep",
+        "glob",
+        "doom_loop",
+    )
     val pendingElicitation = mutableStateOf<ElicitationItem?>(null)
     val attachments = mutableStateListOf<AttachmentItem>()
 
@@ -1093,15 +1097,12 @@ internal class SessionController(
         val blacklistedIds = modelStore.getBlacklist()
             .map { "${it.providerId}/${it.modelId}" }
             .toSet()
-        rawModels = if (connectedProviderIds.isNotEmpty() || manualProviderIds.isNotEmpty()) {
-            backendModels.filter {
-                (it.providerId.lowercase() in connectedProviderIds ||
-                    it.providerId.lowercase() in manualProviderIds) &&
-                    it.id !in blacklistedIds
-            }
-        } else {
-            backendModels.filter { it.id !in blacklistedIds }
-        }
+        rawModels = filterSessionModels(
+            backendModels = backendModels,
+            connectedProviderIds = connectedProviderIds,
+            manualProviderIds = manualProviderIds,
+            blacklistedModelIds = blacklistedIds,
+        )
         models = rawModels
         log.debug("rebuildRawModels: backendModels=${backendModels.size} cachedCatalogProviders=${connectedProviderIds} manualProviders=${manualProviderIds} blacklisted=${blacklistedIds.size} models=${models.size} modelIds=${models.map { it.id }}")
     }
@@ -2398,6 +2399,19 @@ internal class SessionController(
         setSelected = { selectedMode = it },
     ) { mode -> service.setSessionMode(sessionId, mode.id) }
 
+    /**
+     * Mirrors a mode an external writer already landed on the backend into the selector.
+     * `session/set_mode` does not push `current_mode_update` — only the plan_enter/plan_exit
+     * tools do (`packages/opencode/src/acp/event.ts`, `syncMode`) — so without this the
+     * selector would keep showing the mode the user left it in even though the backend
+     * already switched. Idempotent by design: the write it fires carries the value the
+     * external writer just landed, and a no-op while the mode list is unloaded.
+     */
+    fun mirrorModeSelection(mode: String?) {
+        if (mode == null || selectedMode?.id == mode) return
+        selectMode(mode)
+    }
+
     private fun <T : LabeledChoice> selectOption(
         id: String,
         options: List<T>,
@@ -2847,267 +2861,192 @@ internal class SessionController(
         }
     }
 
-    private fun onSessionUpdate(notification: AcpSessionUpdate) {
-        // Filter on the calling thread so other sessions' notifications never reach
-        // the EDT. Drain a bounded batch per event-loop turn so a fast token stream
-        // cannot monopolize the EDT and prevent IDE modal windows from opening.
-        if (notification.sessionId.value != sessionId) return
-        enqueueSessionUiUpdate {
-            // Turn events flowing while a stop is pending prove the cancel lost
-            // the pipe-order race: startPrompt launches asynchronously, so a
-            // cancel sent around dispatch can still reach the server BEFORE the
-            // prompt is written and gets processed against an idle session.
-            // Flowing events prove the prompt is now admitted — a re-sent cancel
-            // queues behind it and aborts the live turn. Release the stop button
-            // too: if the re-send fails as well, a clickable button is the
-            // user's escape hatch instead of an unstop turn.
-            if (stopRequested && stopping && responding) {
-                stopping = false
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    runCatching { service.cancelSession(sessionId) }
-                        .onFailure { log.warn("Cancel re-send on live turn events failed, sessionId=$sessionId", it) }
-                }
-            }
-            // A session/update event means the backend resumed normal operation
-            // (queue resolved, or 429 retry recovered). Clear the notices so
-            // they don't persist through the rest of the turn.
-            if (retryNotice != null) {
-                retryNotice = null
-            }
-            handleSessionUpdate(notification.update)
-        }
-    }
-
-    private val pendingSessionUiUpdates = ConcurrentLinkedQueue<() -> Unit>()
-    private val sessionUpdateDrainScheduled = AtomicBoolean(false)
+    private val sessionUpdateQueue = SessionUpdateQueue(
+        isDisposed = { disposed },
+        reportFailure = { message, error -> log.error("$message, sessionId=$sessionId", error) },
+    )
+    private val sessionUpdateRouter = SessionUpdateRouter(
+        sessionId = { sessionId },
+        queue = sessionUpdateQueue,
+        onLiveTurnEvent = ::handleLiveTurnEvent,
+        isSessionLoading = { sessionLoading },
+        isPrompting = { prompting },
+        isStopped = { stopped },
+        isCompacting = { compacting },
+        finishThought = ::finishThought,
+        onAgentMessage = ::handleAgentMessage,
+        onUserMessage = ::handleUserMessage,
+        onThought = ::handleThought,
+        onToolCall = ::handleToolUpdate,
+        applyCurrentMode = { modeId ->
+            selectedMode = modes.firstOrNull { it.id == modeId }
+        },
+        updateConfigOptions = { options -> updateConfigOptions(options) },
+        acceptAvailableCommands = ::applyAvailableCommands,
+        handleUsageUpdate = ::handleUsageUpdate,
+        reportOrderingWarning = { message -> log.warn(message) },
+        log = log,
+    )
 
     private fun enqueueSessionUiUpdate(action: () -> Unit) {
-        pendingSessionUiUpdates.add(action)
-        scheduleSessionUpdateDrain()
+        sessionUpdateQueue.enqueue(action)
     }
 
-    private fun scheduleSessionUpdateDrain() {
-        if (!sessionUpdateDrainScheduled.compareAndSet(false, true)) return
-        // ModalityState.any(): a one-arg invokeLater from a background thread is
-        // NON_MODAL and would be deferred while any modal dialog (e.g. IDE Settings)
-        // is open, freezing live conversation updates behind it. The drain only writes
-        // snapshot state, so running during modality is safe.
-        ApplicationManager.getApplication().invokeLater({
-            if (disposed) {
-                pendingSessionUiUpdates.clear()
-                sessionUpdateDrainScheduled.set(false)
-                return@invokeLater
-            }
-            repeat(MAX_SESSION_UPDATES_PER_EDT_TURN) {
-                val action = pendingSessionUiUpdates.poll() ?: return@repeat
-                // One failing action must not wedge the drain: the flag reset below is
-                // unreachable through an exception, and a stuck AtomicBoolean would
-                // permanently freeze this session's UI updates.
-                try {
-                    action()
-                } catch (e: Exception) {
-                    log.error("Session update action failed, sessionId=$sessionId", e)
-                }
-            }
-            sessionUpdateDrainScheduled.set(false)
-            if (pendingSessionUiUpdates.isNotEmpty()) scheduleSessionUpdateDrain()
-        }, ModalityState.any())
+    private fun onSessionUpdate(notification: AcpSessionUpdate) {
+        sessionUpdateRouter.accept(notification)
     }
 
-    // Runs on the EDT via the bounded notification drain above.
-    private fun handleSessionUpdate(update: SessionUpdate) {
-        // During backend load, the server replays historical events — the only source of
-        // conversation history. Message-producing events fall through to normal processing;
-        // config/mode/commands/usage are handled inline and return early.
-        if (sessionLoading) {
-            when (update) {
-                is SessionUpdate.CurrentModeUpdate -> {
-                    selectedMode = modes.firstOrNull { it.id == update.currentModeId.value }
-                    return
-                }
-                is SessionUpdate.ConfigOptionUpdate -> {
-                    updateConfigOptions(update.configOptions)
-                    return
-                }
-                is SessionUpdate.AvailableCommandsUpdate -> {
-                    applyAvailableCommands(update)
-                    return
-                }
-                is SessionUpdate.UsageUpdate -> {
-                    handleUsageUpdate(update.used, update.size)
-                    return
-                }
-                // Message-producing events: fall through to normal processing below so the
-                // backend's historical replay populates the UI.
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate -> {
-                }
-                else -> return
-            }
-        } else if (!prompting && !stopped && !compacting) {
-            // Message events outside replay/turn mean the ordering contract in
-            // loadFromBackend() broke — warn so it surfaces in the field.
-            // compacting turns run without prompting=true; stopped turns drop
-            // their tail events below.
-            when (update) {
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate ->
-                    log.warn(
-                        "Message event outside replay/turn: ${update::class.java.simpleName} " +
-                            "for sessionId=$sessionId — replay ordering contract may be violated",
-                    )
-                else -> Unit
+    // Turn events flowing while a stop is pending prove the cancel lost the
+    // pipe-order race: the prompt is now admitted, so re-send the cancel behind
+    // it and release the stop feedback.
+    private fun handleLiveTurnEvent() {
+        if (stopRequested && stopping && responding) {
+            stopping = false
+            ApplicationManager.getApplication().executeOnPooledThread {
+                runCatching { service.cancelSession(sessionId) }
+                    .onFailure { log.warn("Cancel re-send on live turn events failed, sessionId=$sessionId", it) }
             }
         }
-        // After Stop (CancellationException fired), drop any queued-up message-producing
-        // SessionUpdate events still pending on EDT — otherwise they would append
-        // Thinking/Tool/new AGENT chunks AFTER the interrupted AGENT + action bar,
-        // breaking the "action bar at very bottom of the turn" layout.
-        // UsageUpdate(used=0) on the cancel path is already filtered at the publish()
-        // origin (AcpClientConnection.publish), so it never reaches here; non-zero
-        // UsageUpdate that legitimately reports partial billing is still applied below.
-        if (stopped) {
-            when (update) {
-                is SessionUpdate.AgentMessageChunk,
-                is SessionUpdate.AgentThoughtChunk,
-                is SessionUpdate.UserMessageChunk,
-                is SessionUpdate.ToolCall,
-                is SessionUpdate.ToolCallUpdate -> {
-                    log.info("onSessionUpdate STOPPED: dropping ${update::class.java.simpleName} for sessionId=$sessionId")
-                    return
+        // A live event means the backend resumed normal operation (queue
+        // resolved or 429 retry recovered), so stale notices no longer apply.
+        if (retryNotice != null) {
+            retryNotice = null
+        }
+    }
+
+    private fun handleAgentMessage(update: SessionUpdate.AgentMessageChunk) {
+        // ACP mirrors terminal session.error into an agent_message_chunk. Its
+        // text is the same human-readable message the TUI renders. Normal
+        // chunks fall through. The messageId shape selects attribution: live
+        // failures use "error-<eventId>" and keep last-agent semantics, while
+        // replayed failures carry the server message id that owns the error.
+        val msgId = update.messageId?.value
+        val chunkMeta = update._meta as? JsonObject
+        val errorMeta = chunkMeta?.get("error") as? JsonObject
+        // Sticky /debug markers ride the same mirror as agent chunks. They are
+        // status lines, not model output, so render them as SYSTEM markers.
+        val debugStateMeta = chunkMeta?.get("debugState") as? JsonObject
+        val text = (update.content as? ContentBlock.Text)?.text
+        when {
+            debugStateMeta != null -> appendDebugStateMarker(debugStateMeta, text)
+
+            errorMeta != null && !text.isNullOrEmpty() -> {
+                if (msgId != null && !msgId.startsWith("error-")) {
+                    markAgentError(msgId, text)
+                } else {
+                    markLastAgentWithError(text)
                 }
-                else -> Unit
+            }
+
+            else -> (update.content as? ContentBlock.Text)?.let {
+                appendAgent(msgId ?: "streaming-agent", it.text)
             }
         }
-        if (update is SessionUpdate.AgentMessageChunk ||
-            update is SessionUpdate.UserMessageChunk ||
-            update is SessionUpdate.ToolCall) finishThought()
+    }
+
+    private fun handleUserMessage(update: SessionUpdate.UserMessageChunk) {
+        activeAssistantMessageId = null
+        val textContent = update.content as? ContentBlock.Text
+        val internalOnly = textContent != null && isAssistantAudience(textContent)
+        // Internal notifications must be processed even mid-turn, otherwise
+        // background cards keep spinning until the next reload.
+        if (prompting && !internalOnly) return
+
+        SessionStorage.markInteracted(project, sessionId)
+        val msgId = update.messageId?.value
+        if (textContent != null) {
+            val isFirstChunk = msgId == null || !replayMessageIdToIndex.containsKey(msgId)
+            val userMsgIdx = if (isFirstChunk) {
+                val idx = if (internalOnly) -1 else replayUserMsgCount++
+                if (msgId != null) replayMessageIdToIndex[msgId] = idx
+                idx
+            } else {
+                replayMessageIdToIndex[msgId]!!
+            }
+            val origText = replayOrigTexts[userMsgIdx]
+            // Only the first chunk of a messageId creates a message. Later text
+            // and non-text chunks are merged through that same message.
+            if (!isFirstChunk) return
+
+            // Saved typed text wins; skill reverse-matching only rescues turns
+            // that no local decoration covers.
+            val displayText = origText
+                ?: restoreSkillExpansion(textContent.text)
+                ?: textContent.text
+            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
+            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
+            appendMessageNow(
+                ChatRole.USER,
+                MyMessageBundle.message("session.message.you"),
+                displayText,
+                attachments,
+                fileRefs,
+                internalOnly = internalOnly,
+                sourceMessageId = msgId,
+            )
+            if (internalOnly) {
+                // Wire text is authoritative; replay index mappings can skew.
+                mergeBackgroundNotification(textContent.text)
+                return
+            }
+            saveToHistory(displayText, attachments, fileRefs)
+            return
+        }
+
+        // Non-text content chunks need a message when their messageId first
+        // appears so image, resource, and resource-link chips remain visible.
+        if (msgId == null || msgId == replayLastNonTextMsgId || replayMessageIdToIndex.containsKey(msgId)) return
+        replayLastNonTextMsgId = msgId
+        val userMsgIdx = replayUserMsgCount++
+        replayMessageIdToIndex[msgId] = userMsgIdx
+        val displayText = replayOrigTexts[userMsgIdx] ?: ""
+        val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
+        val attachments = replayAttachments[userMsgIdx] ?: emptyList()
+        appendMessageNow(
+            ChatRole.USER,
+            MyMessageBundle.message("session.message.you"),
+            displayText,
+            attachments,
+            fileRefs,
+            sourceMessageId = msgId,
+        )
+        saveToHistory(displayText, attachments, fileRefs)
+    }
+
+    private fun handleThought(update: SessionUpdate.AgentThoughtChunk) {
+        (update.content as? ContentBlock.Text)?.let {
+            appendThought(update.messageId?.value, it.text)
+        }
+    }
+
+    private fun handleToolUpdate(update: SessionUpdate) {
         when (update) {
-            is SessionUpdate.AgentMessageChunk -> {
-                // ACP server mirrors terminal session.error into an
-                // agent_message_chunk (packages/opencode/src/acp/event.ts:
-                // sessionErrorChunk). Its content.text carries the human-readable
-                // message — the same field TUI's formatError reads from
-                // error.data.message. Route these to the error path so the
-                // GUI shows a terminal error card instead of ordinary agent
-                // text, matching the TUI. Normal chunks fall through. The
-                // messageId shape picks the attribution: live failures are
-                // tagged "error-<eventId>" and keep the last-agent semantics;
-                // replayed failures carry the server message id and must be
-                // attributed to that exact message — during replay the last
-                // incomplete AGENT belongs to an earlier turn, and stamping it
-                // both puts the error on a successful reply and displaces that
-                // item after the failed turn's prompt.
-                val msgId = update.messageId?.value
-                val chunkMeta = update._meta as? JsonObject
-                val errorMeta = chunkMeta?.get("error") as? JsonObject
-                // Sticky /debug transcript markers ride the same mirror as
-                // agent chunks tagged _meta.debugState (event.ts:debugStateChunk).
-                // Status lines, not model output — render a SYSTEM marker.
-                val debugStateMeta = chunkMeta?.get("debugState") as? JsonObject
-                val text = (update.content as? ContentBlock.Text)?.text
-                when {
-                    debugStateMeta != null -> appendDebugStateMarker(debugStateMeta, text)
+            is SessionUpdate.ToolCall -> updateTool(
+                ToolUpdate(
+                    update.toolCallId.value,
+                    update.title,
+                    update.kind,
+                    update.status,
+                    update.content,
+                    update.rawInput,
+                    update.rawOutput,
+                    update.locations,
+                ),
+            )
 
-                    errorMeta != null && !text.isNullOrEmpty() -> {
-                        if (msgId != null && !msgId.startsWith("error-")) {
-                            markAgentError(msgId, text)
-                        } else {
-                            markLastAgentWithError(text)
-                        }
-                    }
+            is SessionUpdate.ToolCallUpdate -> updateTool(
+                ToolUpdate(
+                    update.toolCallId.value,
+                    update.title,
+                    update.kind,
+                    update.status,
+                    update.content,
+                    update.rawInput,
+                    update.rawOutput,
+                    update.locations,
+                ),
+            )
 
-                    else -> (update.content as? ContentBlock.Text)?.let {
-                        appendAgent(msgId ?: "streaming-agent", it.text)
-                    }
-                }
-            }
-            is SessionUpdate.UserMessageChunk -> {
-                activeAssistantMessageId = null
-                val textContent = update.content as? ContentBlock.Text
-                val internalOnly = textContent != null && isAssistantAudience(textContent)
-                // Internal notifications must be processed even mid-turn, otherwise
-                // background cards keep spinning until the next reload.
-                if (!prompting || internalOnly) {
-                    SessionStorage.markInteracted(project, sessionId)
-                    val msgId = update.messageId?.value
-                    if (textContent != null) {
-                        // Text content chunk
-                        val isFirstChunk = msgId == null || !replayMessageIdToIndex.containsKey(msgId)
-                        val userMsgIdx = if (isFirstChunk) {
-                            val idx = if (internalOnly) -1 else replayUserMsgCount++
-                            if (msgId != null) replayMessageIdToIndex[msgId] = idx
-                            idx
-                        } else {
-                            replayMessageIdToIndex[msgId]!!
-                        }
-                        val origText = replayOrigTexts[userMsgIdx]
-                        // Only create message for the first chunk of this messageId.
-                        // Subsequent chunks (text or non-text) are skipped to avoid duplicates.
-                        if (isFirstChunk) {
-                            // Saved typed text wins; the skill reverse-match only
-                            // rescues turns no local decoration covers.
-                            val displayText = origText
-                                ?: restoreSkillExpansion(textContent.text)
-                                ?: textContent.text
-                            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
-                            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
-                            appendMessageNow(
-                                ChatRole.USER, MyMessageBundle.message("session.message.you"), displayText, attachments, fileRefs,
-                                internalOnly = internalOnly,
-                                sourceMessageId = msgId,
-                            )
-                            if (internalOnly) {
-                                // Wire text is authoritative; replay index mappings can skew.
-                                mergeBackgroundNotification(textContent.text)
-                            } else {
-                                saveToHistory(displayText, attachments, fileRefs)
-                            }
-                        }
-                    } else {
-                        // Non-text content chunk (image, resource, resource_link).
-                        // Create a message if this is a new messageId so attachment chips show.
-                        if (msgId != null && msgId != replayLastNonTextMsgId && !replayMessageIdToIndex.containsKey(msgId)) {
-                            replayLastNonTextMsgId = msgId
-                            val userMsgIdx = replayUserMsgCount++
-                            replayMessageIdToIndex[msgId] = userMsgIdx
-                            val displayText = replayOrigTexts[userMsgIdx] ?: ""
-                            val fileRefs = replayFileRefs[userMsgIdx] ?: emptyList()
-                            val attachments = replayAttachments[userMsgIdx] ?: emptyList()
-                            appendMessageNow(
-                                ChatRole.USER,
-                                MyMessageBundle.message("session.message.you"),
-                                displayText,
-                                attachments,
-                                fileRefs,
-                                sourceMessageId = msgId,
-                            )
-                            saveToHistory(displayText, attachments, fileRefs)
-                        }
-                    }
-                }
-            }
-            is SessionUpdate.AgentThoughtChunk -> (update.content as? ContentBlock.Text)?.let {
-                appendThought(update.messageId?.value, it.text)
-            }
-            is SessionUpdate.ToolCall -> updateTool(ToolUpdate(
-                update.toolCallId.value, update.title, update.kind, update.status, update.content,
-                update.rawInput, update.rawOutput, update.locations,
-            ))
-            is SessionUpdate.ToolCallUpdate -> updateTool(ToolUpdate(
-                update.toolCallId.value, update.title, update.kind, update.status, update.content,
-                update.rawInput, update.rawOutput, update.locations,
-            ))
-            is SessionUpdate.CurrentModeUpdate ->
-                selectedMode = modes.firstOrNull { it.id == update.currentModeId.value }
-            is SessionUpdate.AvailableCommandsUpdate -> applyAvailableCommands(update)
-            is SessionUpdate.UsageUpdate -> handleUsageUpdate(update.used, update.size)
             else -> Unit
         }
     }
@@ -3608,95 +3547,41 @@ internal class SessionController(
         backendModels = choices
         log.debug("updateModels: sessionId=$sessionId backendModels=${choices.size} ids=${choices.map { it.id }}")
         rebuildRawModels()
-        // A session whose model the user explicitly switched keeps that choice on
-        // reload instead of being reset to the global preferred default. The
-        // locally remembered pick wins over the backend's value: the backend
-        // recomputes a zero-message session's model back to its default on
-        // reload, which would silently discard a pick the user never
-        // exercised with a prompt.
-        // When the manual pick is no longer available, whatever replaces it
-        // below is a CORRECTION of an invalid selection and must reach the
-        // backend even though the session is manual: the manual guard exists
-        // to protect a valid user choice, not to leave the backend silently
-        // prompting with a model the UI has already abandoned (deleted
-        // provider, edited-away model).
-        var correctedFromInvalidPick = false
-        if (modelStore.wasManuallySelected(sessionId)) {
-            val remembered = viewStateStore.get(sessionId)?.selectedModelId
-            val found = remembered?.let { rem -> models.firstOrNull { it.id == rem } }
-                ?: models.firstOrNull { it.id == option.currentValue.value }
-            if (found != null && (selectedModel == null || found.id == selectedModel?.id)) {
-                selectedModel = found
-                // The backend lost the pick (recomputed default on a
-                // zero-message reload): re-assert it so the next prompt uses
-                // what the user actually chose.
-                if (found.id != option.currentValue.value) {
-                    ApplicationManager.getApplication().executeOnPooledThread {
-                        try {
-                            modelConfigId?.let { writeModelAndApplyDefault(it, found.id) }
-                        } catch (e: Exception) {
-                            log.warn("updateModels: re-asserting remembered model failed", e)
-                        }
-                    }
-                }
-                return
-            }
-            // found == null: the manually selected model is no longer in the
-            // session's list (edited/deleted/disconnected). Fall through to
-            // the global/default selection — flagged as a correction.
-            correctedFromInvalidPick = true
-        }
-        var globalModelId = modelStore.getGlobalModelId()
-        // 首次使用（本项目从未配置过模型）时默认选择 GLM-5.3，而非 Auto/后端默认模型。
-        // globalModelConfigured 用于区分"从未配置"与"用户主动选择 Auto"，后者不做默认回填。
-        if (globalModelId == null && !modelStore.isGlobalModelConfigured()) {
-            globalModelId = models.firstOrNull { isDefaultModelChoice(it) }?.also { default ->
-                modelStore.setGlobalModelId(default.id)
-            }?.id
-        }
-        selectedModel = when {
-            globalModelId != null -> resolveStoredModel(globalModelId)
-            else -> models.firstOrNull { it.id == option.currentValue.value }
-        }
-        // globalModelId expired: the preferred model no longer resolves in
-        // this session's list. Only clear the stored preference when the
-        // model is gone from the FULL catalog — a session-filtered miss
-        // (blacklisted model, catalog not yet refreshed) must not wipe a
-        // global-level preference; the session falls back locally and the
-        // preference survives for sessions/refreshes where the model is
-        // visible again.
-        if (globalModelId != null && selectedModel == null) {
-            val ids = modelStore.catalogModelIds()
-            if (!modelStore.catalogEverFed()) {
-                log.debug("updateModels: deferring stale-preference clear for globalModelId={}; catalog not yet fed", globalModelId)
-            } else if (!ModelPreferenceResolver.existsInCatalog(globalModelId, ids)) {
-                modelStore.setGlobalModelId(null)
-            }
-            selectedModel = models.firstOrNull { isDefaultModelChoice(it) } ?: models.firstOrNull()
-        }
+        val plan = planModelSelection(
+            models = models,
+            backendModelId = option.currentValue.value,
+            rememberedModelId = viewStateStore.get(sessionId)?.selectedModelId,
+            manuallySelected = modelStore.wasManuallySelected(sessionId),
+            globalModelId = modelStore.getGlobalModelId(),
+            globalConfigured = modelStore.isGlobalModelConfigured(),
+            catalogModelIds = modelStore.catalogModelIds(),
+            catalogEverFed = modelStore.catalogEverFed(),
+            currentSelectedModelId = selectedModel?.id,
+        )
+        plan.defaultGlobalModelId?.let { modelStore.setGlobalModelId(it) }
+        plan.storedPreferenceUpgradeTo?.let(modelStore::upgradeGlobalModelIdSilently)
+        if (plan.clearGlobalPreference) modelStore.setGlobalModelId(null)
+        selectedModel = plan.selectedModelId?.let { id -> models.firstOrNull { it.id == id } }
         val chosen = selectedModel ?: return
-        if (correctedFromInvalidPick) {
+        if (plan.correctedInvalidPick) {
             // Repoint the remembered pick at the replacement so reloads stop
             // retrying the deleted model.
             viewStateStore.update(sessionId) { existing ->
                 (existing ?: SessionViewState.initial()).copy(selectedModelId = chosen.id)
             }
         }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                // Manual sessions keep their backend model — UNLESS this pass
-                // replaced an invalid pick, in which case the correction must
-                // reach the backend or the next prompt silently uses the
-                // deleted model.
-                if (modelStore.wasManuallySelected(sessionId) && !correctedFromInvalidPick) return@executeOnPooledThread
-                val configId = modelConfigId ?: return@executeOnPooledThread
-                // The backend already holds this value (e.g. just re-asserted
-                // by refreshConfigOptions) — skip the redundant write.
-                if (chosen.id == option.currentValue.value) return@executeOnPooledThread
-                writeModelAndApplyDefault(configId, chosen.id)
-            } catch (e: Exception) {
-                log.warn("updateModels: setSessionConfigOption failed, clearing globalModelId", e)
-                modelStore.setGlobalModelId(null)
+        plan.backendWrite?.let { write ->
+            ApplicationManager.getApplication().executeOnPooledThread {
+                try {
+                    // Re-read the flag here: it can change while this write waits in the pool.
+                    if (modelStore.wasManuallySelected(sessionId) && !plan.correctedInvalidPick && !write.manualReassert) {
+                        return@executeOnPooledThread
+                    }
+                    modelConfigId?.let { writeModelAndApplyDefault(it, write.modelId) }
+                } catch (e: Exception) {
+                    log.warn("updateModels: setSessionConfigOption failed", e)
+                    if (!write.manualReassert) modelStore.setGlobalModelId(null)
+                }
             }
         }
     }
@@ -3812,10 +3697,15 @@ internal class SessionController(
             request.toolCall.title?.contains("云端", ignoreCase = true) == true ||
             request.toolCall.title?.contains("上传", ignoreCase = true) == true
 
-        val requestTitle = if (isSensitive) {
-            MyMessageBundle.message("session.permission.request.warning.title", toolTitle)
-        } else {
-            MyMessageBundle.message("session.permission.request.title", toolTitle)
+        // The backend ships the ask target (path/command/url) in toolCall.rawInput and
+        // locations; surface it so the user authorizes a concrete action, not a rule id.
+        val label = permissionLabel(toolTitle)
+        val detail = permissionDetail(request)
+        val requestTitle = when {
+            isSensitive && label != null -> MyMessageBundle.message("session.permission.request.action.warning.title", label)
+            isSensitive -> MyMessageBundle.message("session.permission.request.warning.title", toolTitle)
+            label != null -> MyMessageBundle.message("session.permission.request.action.title", label)
+            else -> MyMessageBundle.message("session.permission.request.title", toolTitle)
         }
 
         updateUi {
@@ -3823,10 +3713,17 @@ internal class SessionController(
                 messageId,
                 ChatRole.SYSTEM,
                 requestTitle,
-                request.toolCall.title ?: "Permission requested",
+                detail,
             )
             messages += message
-            permissionChoices[messageId] = buildPermissionChoices(request, toolTitle, result, messageId)
+            permissionChoices[messageId] = buildPermissionChoices(
+                request,
+                toolTitle,
+                label,
+                permissionAlwaysScope(toolTitle, request.toolCall),
+                result,
+                messageId,
+            )
         }
         return try {
             result.awaitCancellable()
@@ -3847,6 +3744,8 @@ internal class SessionController(
     private fun buildPermissionChoices(
         request: RequestPermissionRequest,
         toolTitle: String,
+        actionLabel: String?,
+        alwaysScope: String?,
         result: CompletableFuture<RequestPermissionResponse>,
         messageId: String,
     ): List<PermissionChoice> {
@@ -3859,7 +3758,11 @@ internal class SessionController(
                     // Mark as denied for UI display
                     deniedPermissions[messageId] = true
                     // Update the message title to show denied
-                    val deniedTitle = MyMessageBundle.message("session.permission.denied.title", toolTitle)
+                    val deniedTitle = if (actionLabel != null) {
+                        MyMessageBundle.message("session.permission.denied.action.title", actionLabel)
+                    } else {
+                        MyMessageBundle.message("session.permission.denied.title", toolTitle)
+                    }
                     updateUi {
                         val index = messages.indexOfFirst { it.id == messageId }
                         if (index >= 0) {
@@ -3873,11 +3776,21 @@ internal class SessionController(
                     // Store the permission result for success card display
                     permissionResults[messageId] = displayName
                     // Update the message title to show success
-                    val successTitle = MyMessageBundle.message("session.permission.success.title", toolTitle, displayName)
+                    val successTitle = if (actionLabel != null) {
+                        MyMessageBundle.message("session.permission.success.action.title", actionLabel, displayName)
+                    } else {
+                        MyMessageBundle.message("session.permission.success.title", toolTitle, displayName)
+                    }
+                    // "Always allow" persists a per-target rule; say what it covers so a
+                    // later ask for another target does not read as the same ask repeating.
+                    val scope = alwaysScope.takeIf { option.name == "Always allow" }
                     updateUi {
                         val index = messages.indexOfFirst { it.id == messageId }
                         if (index >= 0) {
-                            val updatedMessage = messages[index].copy(title = successTitle)
+                            val updatedMessage = messages[index].copy(
+                                title = successTitle,
+                                text = scope ?: messages[index].text,
+                            )
                             messages[index] = updatedMessage
                         }
                     }
@@ -3890,6 +3803,71 @@ internal class SessionController(
                 }
             }
         }
+    }
+
+    /**
+     * Localized action noun for known permission ids so card titles read as actions
+     * ("该操作需要访问外部目录") instead of embedding the raw rule id. Unknown ids fall
+     * back to the generic title carrying the id verbatim.
+     */
+    private fun permissionLabel(permissionId: String): String? {
+        if (permissionId !in permissionLabelIds) return null
+        return MyMessageBundle.message("session.permission.label.$permissionId")
+    }
+
+    /**
+     * Ask target lines (path/command/url) for the permission card, extracted from the
+     * toolCall the backend already sends: rawInput metadata (flattening a nested
+     * "input" object the way the TUI does) plus locations. Mirrors the TUI mapping in
+     * packages/opencode/src/cli/cmd/run/permission.shared.ts.
+     */
+    private fun permissionDetail(request: RequestPermissionRequest): String {
+        val permissionId = request.toolCall.title ?: return ""
+        val meta = permissionMetadata(request.toolCall.rawInput)
+        fun field(key: String): String? =
+            (meta?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val keys = when (permissionId.lowercase()) {
+            "external_directory" -> listOf("parentDir", "filepath")
+            "bash", "shell" -> listOf("command")
+            "edit", "write", "apply_patch", "read" -> listOf("filepath", "filePath")
+            "webfetch" -> listOf("url")
+            "grep", "glob" -> listOf("path", "pattern")
+            else -> listOf("command", "filepath", "filePath", "path", "url", "parentDir")
+        }
+        val targets = keys.mapNotNull { field(it) }.distinct()
+        val locations = request.toolCall.locations?.mapNotNull { it.path.takeIf(String::isNotBlank) } ?: emptyList()
+        val lines = (targets + locations.filterNot { loc -> targets.any { it.contains(loc) || loc.contains(it) } })
+            .distinct()
+            .take(3)
+        if (lines.isEmpty()) return ""
+        val scoped = permissionId == "external_directory" &&
+            request.options.any { it.name == "Always allow" }
+        if (!scoped) return lines.joinToString("\n")
+        return (lines + MyMessageBundle.message("session.permission.always.hint.external_directory")).joinToString("\n")
+    }
+
+    /**
+     * What an "Always allow" reply persists for external_directory (the backend stores
+     * the parent-directory glob it asked with); null for permissions whose stored
+     * pattern the ACP request does not let us derive.
+     */
+    private fun permissionAlwaysScope(permissionId: String, toolCall: SessionUpdate.ToolCallUpdate): String? {
+        if (permissionId != "external_directory") return null
+        val meta = permissionMetadata(toolCall.rawInput)
+        fun field(key: String): String? =
+            (meta?.get(key) as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val dir = field("parentDir") ?: field("filepath") ?: return null
+        val separator = if (dir.contains('\\')) "\\" else "/"
+        return MyMessageBundle.message(
+            "session.permission.always.scope.external_directory",
+            dir.trimEnd('\\', '/') + separator + "*",
+        )
+    }
+
+    private fun permissionMetadata(rawInput: Any?): JsonObject? {
+        val raw = rawInput as? JsonObject ?: return null
+        val nested = raw["input"] as? JsonObject ?: return raw
+        return JsonObject(raw + nested)
     }
 
     /**

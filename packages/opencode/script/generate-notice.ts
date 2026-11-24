@@ -179,10 +179,7 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-/**
- * HomeGraph vendor tree as shipped into platform packages.
- * Source of truth: committed npm lock used by `vendor-homegraph.ts` (not bun node_modules).
- */
+/** Read the retained HomeGraph vendor lock for third-party license entries. */
 function collectHomegraphVendorFromLock(): PkgInfo[] {
   const lockPath = join(import.meta.dir, "homegraph-vendor-package-lock.json")
   if (!existsSync(lockPath)) {
@@ -266,7 +263,7 @@ function formatPkg(info: PkgInfo): string {
   return `  - ${info.name} (${info.version})`
 }
 
-function generateNotice(deps: Map<string, PkgInfo>): string {
+export function generateNotice(deps: Map<string, PkgInfo>): string {
   const lines: string[] = []
 
   lines.push("NOTICE")
@@ -274,7 +271,15 @@ function generateNotice(deps: Map<string, PkgInfo>): string {
   lines.push("DevEco Code")
   lines.push("Copyright (c) 2025-present DevEco Code Contributors")
   lines.push("")
-  lines.push("This project is licensed under the MIT License.")
+  lines.push("DevEco Code is distributed under the Apache License 2.0 (LICENSE).")
+  lines.push("See LICENSING.md for the scope of the Apache-2.0 sublicense.")
+  lines.push("The original MIT license and copyright notices are in LICENSES/MIT.txt.")
+  lines.push("")
+  lines.push("This project is derived from OpenCode (https://github.com/anomalyco/opencode)")
+  lines.push("and includes modifications for HarmonyOS development and DevEco integration.")
+  lines.push("Copyright (c) 2025 opencode")
+  lines.push("")
+  lines.push("Third-party components retain their respective licenses and notices.")
   lines.push("")
   lines.push("===================================================================")
   lines.push("THIRD-PARTY SOFTWARE NOTICES AND INFORMATION")
@@ -379,4 +384,4 @@ function main() {
   console.log(`  Total: ${matched.size}`)
 }
 
-main()
+if (import.meta.main) main()

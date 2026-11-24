@@ -1,6 +1,7 @@
 package org.deveco.code.acp
 
 import com.intellij.openapi.diagnostic.Logger
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -34,6 +35,12 @@ internal object AcpToolInputParser {
             "(?:<summary>[\\s\\S]*?</summary>\\s*)?" +
             "<(task_result|task_error)>([\\s\\S]*?)</\\3>\\s*</task>$",
     )
+
+    /** Tool name from ACP `_meta.tool_name`, the metadata key the backend fills. */
+    fun toolNameFromMeta(meta: JsonElement?): String? = (meta as? JsonObject)
+        ?.get("tool_name")
+        ?.let { (it as? JsonPrimitive)?.contentOrNull }
+        ?.takeIf { it.isNotBlank() }
 
     /** Parses the `<task …>` wrapper; [TaskWrapper.id] is the child session id. */
     fun parseTaskWrapper(text: String): TaskWrapper? {

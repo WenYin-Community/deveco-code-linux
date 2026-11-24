@@ -1,7 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/package",
   "name": "@opencode-ai/script",
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "bun run typecheck && bun test",
+    "typecheck": "tsgo --noEmit"
+  },
   "dependencies": {
     "semver": "^7.6.3"
   },
@@ -10,6 +14,7 @@
     "@types/semver": "^7.5.8"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./license": "./src/license.ts"
   }
 }

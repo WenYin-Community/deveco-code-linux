@@ -24,6 +24,15 @@ If you are unsure if a PR would be accepted, feel free to ask a maintainer or lo
 
 Want to take on an issue? Leave a comment and a maintainer may assign it to you unless it is something we are already working on.
 
+## Licensing of Contributions
+
+Original project contributions, including new files and changes to existing files,
+are licensed under [Apache-2.0](LICENSE). Only submit contributions you have the
+right to license under these terms. The repository policy covers new original
+files without an individual license header. Preserve existing copyright and
+license notices, and include the applicable licenses and attribution when
+importing third-party material. See [LICENSING.md](LICENSING.md).
+
 ## Adding New Providers
 
 New providers shouldn't require many if ANY code changes. If you want to add support for a new provider, the models database is maintained alongside this repository. Submit a PR with your provider configuration.

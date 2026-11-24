@@ -2,6 +2,7 @@ package org.deveco.code.sessions
 
 import org.deveco.code.acp.AcpClientService
 import org.deveco.code.action.DevEcoSessionActions
+import org.deveco.code.action.PendingChatHandoff
 import org.deveco.code.DevEcoTheme
 import org.deveco.code.MyMessageBundle
 import org.deveco.code.util.errorMessage
@@ -514,14 +515,17 @@ internal class SessionOps(
 
             project.runInEdt {
                 if (alive) {
-                    // Reopen the tab; SessionFileEditor.init will consume pendingFileReference
-                    // and set lastJumpSessionId
-                    sessionActions.pendingFileReference = fileRef
+                    // Reopen the tab; SessionFileEditor.init will consume the handoff
+                    // and set lastJumpSessionId. Keyed to the session so only the editor
+                    // that binds it can take it while the tab is still loading.
+                    sessionActions.stageHandoff(sessionId, PendingChatHandoff(fileReference = fileRef))
                     openSession(sessionId, MyMessageBundle.message("toolwindow.deveco.new.title"))
                 } else {
-                    // Session was deleted → create a new one
+                    // Session was deleted → create a new one; its id does not exist yet, so
+                    // the handoff addresses whichever session the creation produces, which
+                    // rekeys it before the tab opens.
                     sessionActions.lastJumpSessionId = null
-                    sessionActions.pendingFileReference = fileRef
+                    sessionActions.stageNextSessionHandoff(PendingChatHandoff(fileReference = fileRef))
                     createNewSession(onStateChange = onStateChange, onRefresh = onRefresh)
                 }
             }
@@ -617,6 +621,10 @@ internal class SessionOps(
                 if (existing != null && existing in beforeIds) {
                     project.runInEdt {
                         onStateChange { it.copy(busy = false, error = null) }
+                        // Promote the next-session handoff to the reused session before
+                        // the tab opens, so the constructed or re-bound editor consumes a
+                        // keyed handoff instead of leaving the slot to a later editor.
+                        sessionActions.rekeyNextSessionHandoff(existing)
                         openSession(existing, MyMessageBundle.message("toolwindow.deveco.new.title"), focusEditor = false)
                         onRefresh()
                     }
@@ -645,6 +653,7 @@ internal class SessionOps(
                             error = null,
                         )
                     }
+                    sessionActions.rekeyNextSessionHandoff(id)
                     openSession(id, MyMessageBundle.message("toolwindow.deveco.new.title"), focusEditor = false)
                     onRefresh()
                 }
@@ -659,6 +668,7 @@ internal class SessionOps(
                     SessionStorage.addNewSession(project, orphan.sessionId.value)
                     project.runInEdt {
                         onStateChange { it.copy(busy = false, error = null) }
+                        sessionActions.rekeyNextSessionHandoff(orphan.sessionId.value)
                         openSession(orphan.sessionId.value, MyMessageBundle.message("toolwindow.deveco.new.title"), focusEditor = false)
                         onRefresh()
                     }

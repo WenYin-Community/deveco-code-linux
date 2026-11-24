@@ -82,7 +82,6 @@ internal fun UserMessage(
                     .align(Alignment.TopEnd)
                     .clip(RoundedCornerShape(DevEcoTheme.userBubbleRadius.dp))
                     .background(DevEcoTheme.userBubbleBg)
-                    .border(1.dp, DevEcoTheme.userBubbleBorder, RoundedCornerShape(DevEcoTheme.userBubbleRadius.dp))
                     .padding(
                         horizontal = DevEcoTheme.userBubblePaddingH.dp,
                         vertical = DevEcoTheme.userBubblePaddingV.dp,
@@ -106,8 +105,15 @@ internal fun UserMessage(
                         modifier = Modifier.then(if (hasTextAfter) Modifier.padding(bottom = 6.dp) else Modifier),
                     )
                 }
+                // User bubble is deliberately plain text: no markdown rendering, so typed
+                // line breaks and log/path content show exactly as entered.
                 if (item.text.isNotBlank()) {
-                    MarkdownWithCodeBlocks(text = item.text, modifier = Modifier.wrapContentWidth())
+                    Text(
+                        text = item.text,
+                        color = DevEcoTheme.foreground,
+                        fontSize = 14.sp,
+                        modifier = Modifier.wrapContentWidth(),
+                    )
                 }
             }
 
@@ -146,16 +152,6 @@ internal fun UserMessage(
                 // this item while the overlay shows or the next message covers it.
                 LaunchedEffect(overlayVisible) { onOverlayLift?.invoke(overlayVisible) }
                 DisposableEffect(Unit) { onDispose { onOverlayLift?.invoke(false) } }
-
-                var showCopyTooltip by remember { mutableStateOf(false) }
-                LaunchedEffect(copyHovered) {
-                    if (copyHovered) {
-                        delay(500L)
-                        showCopyTooltip = true
-                    } else {
-                        showCopyTooltip = false
-                    }
-                }
 
                 // Keyed on tick so the relative time re-formats every minute; reading
                 // tick here (not as a bare statement) registers the snapshot read.
@@ -221,7 +217,8 @@ internal fun UserMessage(
                             },
                             tint = DevEcoTheme.muted.copy(alpha = DevEcoTheme.mutedActionAlpha),
                             hoverTint = DevEcoTheme.linkAccent,
-                            tooltipText = if (overlayVisible && showCopyTooltip) MyMessageBundle.message("message.tooltip.copy") else null,
+                            hoverBackground = DevEcoTheme.copyActionHoverBackground,
+                            tooltipText = if (overlayVisible) MyMessageBundle.message("message.tooltip.copy") else null,
                         ) { _ ->
                             if (copied) {
                                 Icon(
